@@ -6,6 +6,7 @@
 
 #include "gamez/zrender/zrndr_blit.h"
 #include "platform/prepared_hud.h"
+#include "platform/prepared_menu_background.h"
 #include "platform/render3d.h"
 
 namespace sdlfe {
@@ -25,6 +26,8 @@ class GpuHud final : public zrndr::DrawObserver {
  public:
   static constexpr uint64_t kMaxFrameResolvedBytes = 32ULL * 1024 * 1024;
   static constexpr uint64_t kMaxFrameResolvedRegions = 4096;
+  static constexpr size_t kDefaultMaxCachedResources = kMaxFrameResolvedRegions + 512;
+  static constexpr uint64_t kDefaultMaxCachedResourceBytes = 256ULL * 1024 * 1024;
   static constexpr size_t kMaxReasonKeys = 32;
 
   struct FrameStats {
@@ -40,6 +43,23 @@ class GpuHud final : public zrndr::DrawObserver {
   void begin(const uint16_t* target, int width, int height, int pitch, int output_height);
   // Records menu coverage without uploading textures or submitting GPU draws.
   bool begin_observation(const uint16_t* target, int width, int height, int pitch, int output_height);
+  // Records a live menu command list for deferred replay during present_16.
+  bool begin_menu(const uint16_t* target, int width, int height, int pitch, int output_height,
+                  bool skip_background_source = false);
+  // Detaches the observer at the end of a menu frame while retaining the sealed command list.
+  bool seal_menu();
+  // Collects distinct texture handles referenced by the sealed menu command list for preflight.
+  void collect_menu_textures(std::vector<int32_t>* out) const;
+  // Marks a preflight failure on the sealed menu frame and clears its retained command list.
+  void record_menu_preflight_failure();
+  // Submits a sealed menu command list inside the active canvas scene or a full canvas pass.
+  bool submit_menu(const platform::MenuBackgroundLayerRect* destination = nullptr,
+                   bool manage_scene = true);
+  bool menu_sealed() const { return menu_sealed_; }
+  bool menu_empty() const { return commands_.empty(); }
+  uint64_t menu_background_skipped() const { return menu_background_skipped_; }
+  void set_resource_cache_limits(size_t max_resources, uint64_t max_bytes);
+  size_t cached_resource_count() const { return resources_.size(); }
   bool finish();
   void cancel();
   const FrameStats& frame_stats() const { return frame_stats_; }
@@ -69,7 +89,10 @@ class GpuHud final : public zrndr::DrawObserver {
     platform::TextureFilter filter{platform::TextureFilter::kDefault};
   };
   void begin_frame(const uint16_t* target, int width, int height, int pitch, int output_height,
-                   bool observation_only);
+                   bool observation_only, bool menu_mode = false,
+                   bool skip_background_source = false);
+  void evict_old_resources();
+  void remove_resolved_cache_entry(const platform::HudImage* image);
   bool position(const uint16_t* pointer, int& x, int& y) const;
   int texture(const std::shared_ptr<const platform::HudImage>& image);
   void rectangle(float x0, float y0, float x1, float y1, uint32_t colour, int texture = -1,
@@ -83,6 +106,7 @@ class GpuHud final : public zrndr::DrawObserver {
   platform::HudArtwork artwork_;
   std::map<uint64_t, std::string> artwork_roots_;
   std::map<const platform::HudImage*, Resource> resources_;
+  std::map<uint64_t, std::vector<std::shared_ptr<const platform::HudImage>>> resolved_cache_;
   std::map<const zimg::Texture*, Source> sources_;
   std::vector<platform::TLVertex> vertices_;
   std::vector<Command> commands_;
@@ -91,11 +115,18 @@ class GpuHud final : public zrndr::DrawObserver {
   float density_{1};
   uint64_t frame_{}, layers_{}, images_{}, hits_{}, text_hits_{}, points_{}, spans_{},
       resolved_regions_{};
+  size_t max_cached_resources_{kDefaultMaxCachedResources};
+  uint64_t max_cached_resource_bytes_{kDefaultMaxCachedResourceBytes};
   uint64_t resource_bytes_{};
   uint64_t frame_resolved_bytes_{};
   uint64_t frame_resolved_regions_{};
   bool shadow_layer_{};
   bool observation_only_{};
+  bool menu_mode_{};
+  bool menu_sealed_{};
+  bool skip_menu_background_source_{};
+  bool menu_foreground_seen_{};
+  uint64_t menu_background_skipped_{};
   uint64_t observed_draws_{};
   FrameStats frame_stats_;
   uint64_t shadow_layers_{};

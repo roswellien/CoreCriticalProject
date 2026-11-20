@@ -2032,7 +2032,8 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
           int ww = 0, wh = 0;
           window.client_size(&ww, &wh);
           float wx = 0, wy = 0;
-          sdlfe::frame_to_window(px, py, static_cast<float>(ww), static_cast<float>(wh), window.shape(), &wx, &wy);
+          sdlfe::frame_to_window(px, py, static_cast<float>(ww), static_cast<float>(wh),
+                                input.effective_shape(), &wx, &wy);
           if (menu_frames == c.frame) {
             zin::mouse_set((px - dw / 2) / (dw / 2), (py - dh / 2) / (dh / 2));
             // Windowed menus follow SDL's absolute cursor. Keep the synthetic

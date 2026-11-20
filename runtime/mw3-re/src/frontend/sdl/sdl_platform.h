@@ -118,6 +118,8 @@ class SdlScreen2D : public platform::Screen2D {
   int32_t texture_ = -1;
   int tw_ = 0, th_ = 0;
   std::vector<uint8_t> rgba_;
+  // The compositor shares texture_; only a native upload can validate these cached bytes.
+  bool native_texture_current_ = false;
   std::vector<uint32_t> menu_composed_;
   platform::PreparedMenuBackgroundComposer menu_composer_;
   platform::PreparedMenuBackgroundComposer menu_gpu_composer_;
@@ -128,16 +130,28 @@ class SdlScreen2D : public platform::Screen2D {
   uint64_t menu_gpu_uploaded_revision_ = 0;
   bool menu_use_gpu_ = true;
   bool menu_gpu_available_ = true;
+  bool hud_overlay_enabled_ = false;
+  unsigned menu_hd_bound_width_ = 0;
+  unsigned menu_hd_bound_height_ = 0;
   std::chrono::steady_clock::time_point menu_background_report_start_ = std::chrono::steady_clock::now();
   unsigned menu_background_report_frames_ = 0, menu_background_report_hits_ = 0, menu_background_report_gpu_frames_ = 0;
   double menu_background_report_milliseconds_ = 0;
   double menu_background_report_gpu_milliseconds_ = 0;
   bool menu_observation_active_{};
   bool menu_observation_enabled_{};
+  bool menu_layout_active_{};
+  bool menu_gpu_recording_{};
+  bool menu_gpu_sealed_{};
+  const uint16_t* menu_gpu_target_{};
+  int menu_gpu_recorded_width_{};
+  int menu_gpu_recorded_height_{};
+  int menu_gpu_recorded_pitch_{};
   std::chrono::steady_clock::time_point menu_report_start_{};
   uint64_t menu_report_frames_{}, menu_report_images_{}, menu_report_text_hits_{},
       menu_report_fallbacks_{};
   std::map<std::string, uint64_t> menu_report_shadow_reasons_;
+  bool live_menu_gpu_enabled() const;
+  void set_menu_layout_active(bool active) noexcept;
 };
 
 // GetTickCount from the game's start, and Sleep. With `frame_ms` (ours,

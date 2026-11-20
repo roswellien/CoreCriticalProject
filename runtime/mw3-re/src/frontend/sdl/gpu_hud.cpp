@@ -102,20 +102,65 @@ GpuHud::~GpuHud() {
                  static_cast<unsigned long long>(count));
 }
 void GpuHud::begin(const uint16_t* target, int width, int height, int pitch, int output_height) {
-  begin_frame(target, width, height, pitch, output_height, false);
+  begin_frame(target, width, height, pitch, output_height, false, false, false);
 }
 bool GpuHud::begin_observation(const uint16_t* target, int width, int height, int pitch,
                                int output_height) {
   // Observation is a diagnostic: it never throws and never competes for the draw observer.
   // When another target already owns it, or the target is unusable, skip this frame.
   if (zrndr::draw_observer() || !target || width <= 0 || height <= 0 || width > 8192 ||
-      height > 8192 || pitch < int64_t(width) * 2)
+      height > 8192 || pitch < int64_t(width) * 2 || (pitch & 1) != 0)
     return false;
-  begin_frame(target, width, height, pitch, output_height, true);
+  begin_frame(target, width, height, pitch, output_height, true, false, false);
   return true;
 }
+bool GpuHud::begin_menu(const uint16_t* target, int width, int height, int pitch, int output_height,
+                        bool skip_background_source) {
+  // Menu recording never throws out of frame clear and never competes for an active draw observer.
+  if (zrndr::draw_observer() || !target || width <= 0 || height <= 0 || width > 8192 ||
+      height > 8192 || pitch < int64_t(width) * 2 || (pitch & 1) != 0)
+    return false;
+  begin_frame(target, width, height, pitch, output_height, false, true, skip_background_source);
+  return true;
+}
+void GpuHud::set_resource_cache_limits(size_t max_resources, uint64_t max_bytes) {
+  max_cached_resources_ = std::max<size_t>(1, max_resources);
+  max_cached_resource_bytes_ = std::max<uint64_t>(4, max_bytes);
+  evict_old_resources();
+}
+void GpuHud::remove_resolved_cache_entry(const platform::HudImage* image) {
+  for (auto it = resolved_cache_.begin(); it != resolved_cache_.end();) {
+    auto& bucket = it->second;
+    bucket.erase(std::remove_if(bucket.begin(), bucket.end(),
+                                [image](const auto& entry) { return entry.get() == image; }),
+                 bucket.end());
+    if (bucket.empty())
+      it = resolved_cache_.erase(it);
+    else
+      ++it;
+  }
+}
+void GpuHud::evict_old_resources() {
+  while (resources_.size() > max_cached_resources_ ||
+         resource_bytes_ > max_cached_resource_bytes_) {
+    auto oldest = resources_.end();
+    for (auto it = resources_.begin(); it != resources_.end(); ++it) {
+      // Never evict textures referenced by the current frame.
+      if (it->second.used >= frame_) continue;
+      if (oldest == resources_.end() || it->second.used < oldest->second.used) {
+        oldest = it;
+      }
+    }
+    if (oldest == resources_.end()) break;
+    remove_resolved_cache_entry(oldest->first);
+    renderer_.release_texture(oldest->second.texture);
+    resource_bytes_ -= oldest->second.image->pixels.size() * sizeof(uint32_t);
+    resources_.erase(oldest);
+  }
+}
 void GpuHud::begin_frame(const uint16_t* target, int width, int height, int pitch,
-                         int output_height, bool observation_only) {
+                         int output_height, bool observation_only, bool menu_mode,
+                         bool skip_background_source) {
   FloatScope scope;
   if (zrndr::draw_observer()) throw std::runtime_error("Nested GPU HUD target");
   if (!target || width <= 0 || height <= 0 || width > 8192 || height > 8192 ||
@@ -127,6 +172,11 @@ void GpuHud::begin_frame(const uint16_t* target, int width, int height, int pitc
   pitch_ = pitch;
   shadow_layer_ = false;
   observation_only_ = observation_only;
+  menu_mode_ = menu_mode;
+  menu_sealed_ = false;
+  skip_menu_background_source_ = menu_mode && skip_background_source;
+  menu_foreground_seen_ = false;
+  menu_background_skipped_ = 0;
   observed_draws_ = 0;
   frame_resolved_bytes_ = 0;
   frame_resolved_regions_ = 0;
@@ -136,14 +186,7 @@ void GpuHud::begin_frame(const uint16_t* target, int width, int height, int pitc
   commands_.clear();
   ++frame_;
   if (!observation_only_) {
-    while (resources_.size() > 512 || resource_bytes_ > 256 * 1024 * 1024) {
-      auto oldest = std::min_element(
-          resources_.begin(), resources_.end(),
-          [](const auto& a, const auto& b) { return a.second.used < b.second.used; });
-      renderer_.release_texture(oldest->second.texture);
-      resource_bytes_ -= oldest->second.image->pixels.size() * sizeof(uint32_t);
-      resources_.erase(oldest);
-    }
+    evict_old_resources();
     uint64_t source_bytes = 0;
     for (const auto& source : sources_)
       source_bytes += source.second.image->pixels.size() * sizeof(uint32_t);
@@ -157,15 +200,131 @@ void GpuHud::cancel() {
   vertices_.clear();
   commands_.clear();
   observation_only_ = false;
+  menu_mode_ = false;
+  menu_sealed_ = false;
+  skip_menu_background_source_ = false;
+  menu_foreground_seen_ = false;
+  menu_background_skipped_ = 0;
   frame_resolved_bytes_ = 0;
   frame_resolved_regions_ = 0;
   frame_stats_ = {};
 }
+bool GpuHud::seal_menu() {
+  if (!target_ || !menu_mode_) return false;
+  FloatScope scope;
+  if (zrndr::draw_observer() == this) zrndr::set_draw_observer(nullptr);
+  target_ = nullptr;
+  if (shadow_layer_) {
+    ++shadow_layers_;
+    frame_stats_.fallback = true;
+    vertices_.clear();
+    commands_.clear();
+    menu_mode_ = false;
+    menu_sealed_ = false;
+    return false;
+  }
+  if (commands_.empty() && menu_background_skipped_ == 0) {
+    frame_stats_.fallback = false;
+    menu_mode_ = false;
+    menu_sealed_ = false;
+    return false;
+  }
+  frame_stats_.fallback = false;
+  menu_sealed_ = true;
+  return true;
+}
+void GpuHud::collect_menu_textures(std::vector<int32_t>* out) const {
+  if (!out || !menu_sealed_) return;
+  for (const auto& command : commands_) {
+    if (command.texture >= 0 &&
+        std::find(out->begin(), out->end(), command.texture) == out->end()) {
+      out->push_back(command.texture);
+    }
+  }
+}
+void GpuHud::record_menu_preflight_failure() {
+  record_shadow_reason("texture preflight failed");
+  ++shadow_layers_;
+  frame_stats_.fallback = true;
+  vertices_.clear();
+  commands_.clear();
+  menu_mode_ = false;
+  menu_sealed_ = false;
+}
+bool GpuHud::submit_menu(const platform::MenuBackgroundLayerRect* destination, bool manage_scene) {
+  if (!menu_sealed_) return false;
+  FloatScope scope;
+  menu_sealed_ = false;
+  menu_mode_ = false;
+  if (shadow_layer_) {
+    ++shadow_layers_;
+    frame_stats_.fallback = true;
+    vertices_.clear();
+    commands_.clear();
+    return false;
+  }
+  if (commands_.empty() && menu_background_skipped_ == 0) return false;
+  if (manage_scene) {
+    try {
+      std::vector<int32_t> preflight_textures;
+      for (const auto& command : commands_) {
+        if (command.texture >= 0 &&
+            std::find(preflight_textures.begin(), preflight_textures.end(), command.texture) ==
+                preflight_textures.end()) {
+          preflight_textures.push_back(command.texture);
+        }
+      }
+      if (!preflight_textures.empty()) {
+        renderer_.prepare_canvas_textures(preflight_textures);
+      }
+    } catch (...) {
+      record_menu_preflight_failure();
+      return false;
+    }
+  }
+  if (destination && width_ > 0 && height_ > 0) {
+    const float scale_x = destination->width / float(width_);
+    const float scale_y = destination->height / float(height_);
+    for (auto& vertex : vertices_) {
+      vertex.sx = destination->x + vertex.sx * scale_x;
+      vertex.sy = destination->y + vertex.sy * scale_y;
+    }
+  }
+  int saved_x = 0, saved_y = 0, saved_width = 0, saved_height = 0;
+  if (manage_scene) {
+    renderer_.flush();
+    renderer_.viewport(&saved_x, &saved_y, &saved_width, &saved_height);
+    renderer_.set_viewport(0, 0, width_, height_);
+    renderer_.begin_canvas_scene();
+  }
+  for (const auto& command : commands_) {
+    platform::DrawState state;
+    state.texture = command.texture;
+    state.blend = true;
+    state.depth_always = true;
+    state.depth_write = false;
+    state.sharp = command.sharp;
+    state.filter = command.filter;
+    state.address_u = state.address_v = 3;
+    renderer_.draw(command.primitive, vertices_.data() + command.first,
+                   static_cast<int>(command.count), state);
+  }
+  if (manage_scene) {
+    renderer_.end_scene();
+    renderer_.set_viewport(saved_x, saved_y, saved_width, saved_height);
+  }
+  ++layers_;
+  vertices_.clear();
+  commands_.clear();
+  return true;
+}
 bool GpuHud::finish() {
   if (!target_) return false;
   FloatScope scope;
-  zrndr::set_draw_observer(nullptr);
+  if (zrndr::draw_observer() == this) zrndr::set_draw_observer(nullptr);
   target_ = nullptr;
+  menu_mode_ = false;
+  menu_sealed_ = false;
   if (shadow_layer_) {
     if (!observation_only_) ++shadow_layers_;
     frame_stats_.fallback = true;
@@ -286,21 +445,67 @@ void GpuHud::resolved_region(const uint16_t* destination, uint32_t width, uint32
   frame_resolved_bytes_ += bytes;
   ++observed_draws_;
   ++frame_stats_.resolved_regions;
+  menu_foreground_seen_ = true;
   if (observation_only_) return;
   try {
-    auto resolved = std::make_shared<platform::HudImage>();
-    resolved->width = width;
-    resolved->height = height;
-    resolved->pixels.resize(size_t(width) * height);
     const auto* base_bytes = reinterpret_cast<const uint8_t*>(destination);
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    fold(hash, width);
+    fold(hash, height);
     for (uint32_t row = 0; row < height; ++row) {
-      const auto* src_row = reinterpret_cast<const uint16_t*>(base_bytes + size_t(row) * pitch_bytes);
-      uint32_t* dst_row = resolved->pixels.data() + size_t(row) * width;
+      const auto* src_row =
+          reinterpret_cast<const uint16_t*>(base_bytes + size_t(row) * pitch_bytes);
       for (uint32_t col = 0; col < width; ++col) {
-        dst_row[col] = rgba(src_row[col], 255);
+        const uint16_t px = src_row[col];
+        hash ^= uint8_t(px & 0xffu);
+        hash *= 0x100000001b3ULL;
+        hash ^= uint8_t(px >> 8);
+        hash *= 0x100000001b3ULL;
       }
     }
-    const int handle = texture(resolved);
+    std::shared_ptr<const platform::HudImage> resolved;
+    auto bucket_it = resolved_cache_.find(hash);
+    if (bucket_it != resolved_cache_.end()) {
+      for (const auto& candidate : bucket_it->second) {
+        if (candidate->width != width || candidate->height != height) continue;
+        bool match = true;
+        for (uint32_t row = 0; row < height && match; ++row) {
+          const auto* src_row =
+              reinterpret_cast<const uint16_t*>(base_bytes + size_t(row) * pitch_bytes);
+          const uint32_t* dst_row = candidate->pixels.data() + size_t(row) * width;
+          for (uint32_t col = 0; col < width; ++col) {
+            if (dst_row[col] != rgba(src_row[col], 255)) {
+              match = false;
+              break;
+            }
+          }
+        }
+        if (match) {
+          resolved = candidate;
+          break;
+        }
+      }
+    }
+    int handle = -1;
+    if (resolved) {
+      handle = texture(resolved);
+    } else {
+      auto created = std::make_shared<platform::HudImage>();
+      created->width = width;
+      created->height = height;
+      created->pixels.resize(size_t(width) * height);
+      for (uint32_t row = 0; row < height; ++row) {
+        const auto* src_row =
+            reinterpret_cast<const uint16_t*>(base_bytes + size_t(row) * pitch_bytes);
+        uint32_t* dst_row = created->pixels.data() + size_t(row) * width;
+        for (uint32_t col = 0; col < width; ++col) {
+          dst_row[col] = rgba(src_row[col], 255);
+        }
+      }
+      resolved = std::move(created);
+      handle = texture(resolved);
+      resolved_cache_[hash].push_back(resolved);
+    }
     rectangle(float(x), float(y), float(x + int(width)), float(y + int(height)), 0xffffffffu,
               handle, 0.f, 0.f, 1.f, 1.f, platform::TextureFilter::kNearest);
     ++resolved_regions_;
@@ -325,6 +530,7 @@ int GpuHud::texture(const std::shared_ptr<const platform::HudImage>& image) {
     throw;
   }
   resource_bytes_ += image->pixels.size() * sizeof(uint32_t);
+  evict_old_resources();
   return handle;
 }
 void GpuHud::append(platform::TLVertex vertex, int image, platform::Primitive primitive,
@@ -360,10 +566,11 @@ void GpuHud::pixel(const uint16_t* destination, uint16_t colour) {
     framebuffer_write(target_, "RGB555 target");
     return;
   }
-  if (colour == 0xf81f) {
+  if (!menu_mode_ && colour == 0xf81f) {
     framebuffer_write(target_, "layer erase");
     return;
   }
+  menu_foreground_seen_ = true;
   ++observed_draws_;
   if (observation_only_) return;
   FloatScope scope;
@@ -395,16 +602,17 @@ void GpuHud::span(const uint16_t* destination, uint32_t count, uint16_t colour) 
     return;
   }
   if (count > unsigned(width_ - x)) {
-    if (observation_only_) {
+    if (observation_only_ || menu_mode_) {
       framebuffer_write(target_, "span crosses target bounds");
       return;
     }
     throw std::runtime_error("GPU HUD span crosses target bounds");
   }
-  if (colour == 0xf81f) {
+  if (!menu_mode_ && colour == 0xf81f) {
     framebuffer_write(target_, "layer erase");
     return;
   }
+  menu_foreground_seen_ = true;
   ++observed_draws_;
   if (observation_only_) return;
   FloatScope scope;
@@ -425,7 +633,7 @@ void GpuHud::image(const zimg::Texture* source, int32_t x, int32_t y, uint16_t k
   if (!source || !source->pixels || source->width <= 0 || source->height <= 0 ||
       source->width > 2048 || source->height > 2048 || source->width_again < source->width ||
       (source->palette && source->palette_count <= 0)) {
-    if (observation_only_) {
+    if (observation_only_ || menu_mode_) {
       framebuffer_write(target_, "unsupported image");
       return;
     }
@@ -445,6 +653,27 @@ void GpuHud::image(const zimg::Texture* source, int32_t x, int32_t y, uint16_t k
   right = std::min(right, left + width_ - destination_x);
   bottom = std::min(bottom, top + height_ - destination_y);
   if (right <= left || bottom <= top) return;
+  if (menu_mode_) {
+    const zimg::Texture* bg_source = zrndr::menu_background_source();
+    if (bg_source && source == bg_source) {
+      if (menu_foreground_seen_) {
+        record_shadow_reason("late menu background");
+        return;
+      }
+      if (skip_menu_background_source_) {
+        if (source->palette || source->alpha || (source->flags & zimg::kAlpha)) {
+          record_shadow_reason("invalid menu background source");
+          return;
+        }
+        ++menu_background_skipped_;
+        ++observed_draws_;
+        ++frame_stats_.images;
+        return;
+      }
+    } else {
+      menu_foreground_seen_ = true;
+    }
+  }
   if (observation_only_) {
     // Only the visible crop is checked, and no text is rasterised or cached: observation
     // must stay cheap because it runs for every menu blit.
@@ -477,65 +706,113 @@ void GpuHud::image(const zimg::Texture* source, int32_t x, int32_t y, uint16_t k
     return;
   }
   FloatScope scope;
-  std::vector<uint16_t> normalized(size_t(source->width) * source->height);
+  const bool check_artwork = !menu_mode_ && !artwork_.empty();
+  std::vector<uint16_t> normalized;
+  if (check_artwork) normalized.resize(size_t(source->width) * source->height);
   uint64_t hash = 0xcbf29ce484222325ULL;
   fold(hash, source->width);
   fold(hash, source->height);
-  auto image = std::make_shared<platform::HudImage>();
-  image->width = source->width;
-  image->height = source->height;
-  image->pixels.resize(normalized.size());
+  auto cached = sources_.find(source);
+  const platform::HudImage* cached_img =
+      (cached != sources_.end() &&
+       cached->second.image->width == static_cast<uint32_t>(source->width) &&
+       cached->second.image->height == static_cast<uint32_t>(source->height))
+          ? cached->second.image.get()
+          : nullptr;
+  bool cached_pixels_match = (cached_img != nullptr);
+  std::shared_ptr<platform::HudImage> image;
+  if (!cached_pixels_match) {
+    image = std::make_shared<platform::HudImage>();
+    image->width = source->width;
+    image->height = source->height;
+    image->pixels.resize(size_t(source->width) * source->height);
+  }
   for (int row = 0; row < source->height; ++row)
     for (int column = 0; column < source->width; ++column) {
       const size_t at = size_t(row) * source->width_again + column,
                    into = size_t(row) * source->width + column;
       unsigned index = 0;
       if (source->palette) index = static_cast<const uint8_t*>(source->pixels)[at];
-      if (source->palette && index >= unsigned(source->palette_count))
+      if (source->palette && index >= unsigned(source->palette_count)) {
+        if (menu_mode_) {
+          framebuffer_write(target_, "invalid image palette");
+          return;
+        }
         throw std::runtime_error("GPU HUD palette index is invalid");
+      }
       const uint16_t pixel = source->palette ? source->palette[index]
                                              : static_cast<const uint16_t*>(source->pixels)[at];
       unsigned alpha = source->alpha ? source->alpha[at] : 255;
       if (!source->alpha && (source->flags & zimg::kAlpha) &&
           (source->palette ? index : pixel) == key)
         alpha = 0;
-      normalized[into] = alpha ? pixel : 0;
+      if (check_artwork) normalized[into] = alpha ? pixel : 0;
       fold(hash, uint32_t(pixel) | alpha << 16);
       if (alpha <= 3)
         alpha = 0;
       else if (alpha >= 252)
         alpha = 255;
-      if (pixel == 0xf81f && alpha == 255) {
+      if (!menu_mode_ && pixel == 0xf81f && alpha == 255) {
         framebuffer_write(target_, "unkeyed layer erase");
         return;
       }
-      image->pixels[into] = rgba(pixel, alpha);
+      const uint32_t converted = rgba(pixel, alpha);
+      if (cached_pixels_match) {
+        if (cached_img->pixels[into] != converted) {
+          cached_pixels_match = false;
+          image = std::make_shared<platform::HudImage>();
+          image->width = source->width;
+          image->height = source->height;
+          image->pixels.resize(size_t(source->width) * source->height);
+          std::copy_n(cached_img->pixels.data(), into, image->pixels.data());
+          image->pixels[into] = converted;
+        }
+      } else {
+        image->pixels[into] = converted;
+      }
     }
   std::shared_ptr<const platform::HudImage> selected;
-  const auto enhanced =
-      options_.text ? ztwod::host().hud_text_image(source, density_, key) : nullptr;
+  const auto enhanced = (!menu_mode_ && options_.text)
+                            ? ztwod::host().hud_text_image(source, density_, key)
+                            : nullptr;
   if (enhanced) {
     selected = std::move(enhanced);
     ++text_hits_;
     ++frame_stats_.text_hits;
-  } else if (auto found =
-                 artwork_.find(platform::hud_identity(source->width, source->height, normalized));
-             found != artwork_.end()) {
-    selected = found->second;
-    ++hits_;
-  } else {
-    auto cached = sources_.find(source);
-    if (cached != sources_.end() && cached->second.hash == hash)
+  } else if (check_artwork) {
+    if (auto found =
+            artwork_.find(platform::hud_identity(source->width, source->height, normalized));
+        found != artwork_.end()) {
+      selected = found->second;
+      ++hits_;
+    }
+  }
+  if (!selected) {
+    if (cached_pixels_match && cached->second.hash == hash) {
       selected = cached->second.image;
-    else {
+    } else {
+      if (!image) {
+        image = std::make_shared<platform::HudImage>(*cached_img);
+      }
       selected = std::move(image);
       sources_[source] = {hash, selected};
     }
   }
+  int handle = -1;
+  if (menu_mode_) {
+    try {
+      handle = texture(selected);
+    } catch (...) {
+      record_shadow_reason("texture allocation failed");
+      return;
+    }
+  } else {
+    handle = texture(selected);
+  }
   const float du = (selected->u1 - selected->u0) / source->width,
               dv = (selected->v1 - selected->v0) / source->height;
   rectangle(float(destination_x), float(destination_y), float(destination_x + right - left),
-            float(destination_y + bottom - top), 0xffffffffu, texture(selected),
+            float(destination_y + bottom - top), 0xffffffffu, handle,
             selected->u0 + left * du, selected->v0 + top * dv, selected->u0 + right * du,
             selected->v0 + bottom * dv);
   ++images_;
