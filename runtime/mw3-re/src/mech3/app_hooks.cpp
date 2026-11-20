@@ -238,7 +238,10 @@ void Engine::set_shadow_parts(int32_t v) { mech3::set_shadow_parts(v); }
 int32_t Engine::shadow() { return mech3::shadow(); }
 void Engine::set_shadow(int32_t v) { mech3::set_shadow(v); }
 void Engine::set_gfx_flags(int32_t v) { mech3::set_gfx_flags(v); }
-void Engine::set_in_game_vmode(int32_t v) { options().in_game_vmode = v; }
+void Engine::set_in_game_vmode(int32_t v) {
+  options().in_game_vmode = v;
+  mech3::note_player_screen_choice();  // ours: a launcher size no longer overrides what is saved
+}
 
 // Mech3.exe 1.2 @ 0x004ab860: software 3..5 (320x240 doubled to 640x480);
 // a 3D card 5 up to 7 (1024x768), 6 below 3 x 1.5 MB of free video memory,

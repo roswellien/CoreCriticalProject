@@ -45,6 +45,7 @@ struct LaunchScreen {
   bool active = false;
   int32_t vmode = 0, width = 0, height = 0;
   int32_t saved_vmode = 0, saved_width = 0, saved_height = 0;
+  bool player_chose = false;  // note_player_screen_choice during the run
 };
 LaunchScreen g_launch_screen;
 }  // namespace
@@ -795,15 +796,16 @@ int32_t load_options(const char* path) {
   return 1;
 }
 
+void note_player_screen_choice() { g_launch_screen.player_chose = true; }
+
 void launch_screen_for_save(bool saved) {
   Options& o = g_options;
   LaunchScreen& launch = g_launch_screen;
   if (!launch.active) return;
   if (saved) {
-    // A different mode or size now is the player's own choice: it is saved, and the launcher's
-    // size no longer applies.
-    if (o.in_game_vmode != launch.vmode || o.screen_w != launch.width ||
-        o.screen_h != launch.height) {
+    // A mode the player chose in the game is saved as it stands, even when it equals the
+    // launcher's: the choice, not the value, decides (note_player_screen_choice).
+    if (launch.player_chose) {
       launch.active = false;
       return;
     }

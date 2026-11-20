@@ -503,6 +503,30 @@ void menu_background_checks(const std::filesystem::path& directory) {
     require(recorder.draws.size() == before + 4 && recorder.draws[before + 1].state.additive &&
                 recorder.draws[before + 2].state.subtract,
             "Negative added light left the GPU path or lost its subtract pass");
+    {
+      // A resize (8x8 to 8x6 maps) recreates the needed maps at the new size and releases the
+      // unneeded ones, whose old-size textures must not be reused when a later frame needs them.
+      const auto images_before_resize = recorder.images.size();
+      const auto released_before_resize = recorder.released.size();
+      frame.fill(uint16_t((8 << 11) | (16 << 5) | 8));
+      screen.present_16(frame.data(), 8, 6, 16, true);
+      // Attenuate and overlay are made again at 8x6; boost, add and subtract (8x8) are dropped.
+      require(recorder.images.size() == images_before_resize + 2 &&
+                  recorder.released.size() == released_before_resize + 5 &&
+                  recorder.images.back().size() == 48,
+              "A menu resize kept old-size map textures or did not remake the needed ones");
+      frame.fill(uint16_t((12 << 11) | (25 << 5) | 12));
+      frame[9] = uint16_t((11 << 11) | (45 << 5) | 12);
+      const auto draws_before = recorder.draws.size();
+      screen.present_16(frame.data(), 8, 6, 16, true);
+      require(recorder.images.size() == images_before_resize + 4 &&
+                  recorder.images[recorder.images.size() - 1].size() == 48 &&
+                  recorder.images[recorder.images.size() - 2].size() == 48 &&
+                  recorder.draws.size() == draws_before + 4 &&
+                  recorder.draws[draws_before + 2].state.subtract,
+              "Maps needed again after a resize were not remade and uploaded at the new size");
+      screen.present_16(frame.data(), 8, 8, 16, true);  // back to 8x8 for the checks below
+    }
     before = recorder.draws.size();
     const auto images_before_fallback = recorder.images.size();
     record_nonuniform_pieces();
