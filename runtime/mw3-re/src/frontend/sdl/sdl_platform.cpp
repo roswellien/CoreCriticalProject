@@ -17,6 +17,7 @@
 #include <stdexcept>
 
 #include "frontend/sdl/sdl_input.h"
+#include "frontend/sdl/menu_sprites.h"
 #include "gamez/zrender/zrndr_blit.h"
 #include "gamez/zgame/zgameapp.h"
 #include "gamez/zsound/zsnd_cd.h"
@@ -881,9 +882,8 @@ void SdlScreen2D::begin_menu_observation(const uint16_t* target, int width, int 
   const bool live_enabled = live_menu_gpu_enabled();
   set_menu_layout_active(live_enabled);
   if (!hud_) return;
-  int output_height = height;
+  int output_width = width, output_height = height;
   if (hud_window_) {
-    int output_width = 0;
     SDL_GetWindowSizeInPixels(hud_window_, &output_width, &output_height);
     const FrameShape base_shape = hud_shape_ ? *hud_shape_ : FrameShape{};
     const FitRect fit = live_enabled
@@ -905,6 +905,9 @@ void SdlScreen2D::begin_menu_observation(const uint16_t* target, int width, int 
   const bool skip_bg =
       menu_background_ != nullptr && menu_use_gpu_ && menu_gpu_available_ && menu_hd_texture_ >= 0;
   if (!hud_->begin_menu(target, width, height, pitch, output_height, skip_bg)) return;
+  // HD menu stage D: draw menu text and sprites at the scale the 4:3 menu is shown at, so they
+  // are rasterised for the output instead of being upscaled with the native canvas.
+  hud_->set_menu_presentation(menu_presentation_scale(width, height, output_width, output_height));
   menu_gpu_recording_ = true;
   menu_gpu_sealed_ = false;
   menu_gpu_target_ = target;

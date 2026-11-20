@@ -2035,6 +2035,14 @@ void part1_live_menu_checks(const std::filesystem::path& directory) {
                   shape.menu_layout_active,
               "MW3_MENU_GPU=1 did not use the live GPU menu replay path");
 
+      // 3a'. The live begin path opts each recorded menu frame into HD menu stage D, so text and
+      //      sprites are drawn from output-scale sources. GpuHud reports that state through
+      //      wants_source_alpha_images(), which is true only while stage D is active.
+      screen.begin_menu_observation(frame_buf.data(), width, height, pitch_bytes);
+      require(zrndr::draw_observer() && zrndr::draw_observer()->wants_source_alpha_images(),
+              "Live GPU menu begin did not opt the frame into HD menu stage D");
+      screen.cancel_menu_observation();
+
       // 3b. Late background blit after a foreground draw is rejected rather than reordered,
       //     falling back to the complete CPU frame (1 draw) while keeping menu_layout_active.
       zrndr::begin_menu_background_frame();

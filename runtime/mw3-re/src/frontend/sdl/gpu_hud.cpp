@@ -177,6 +177,7 @@ void GpuHud::begin_frame(const uint16_t* target, int width, int height, int pitc
   skip_menu_background_source_ = menu_mode && skip_background_source;
   menu_foreground_seen_ = false;
   menu_background_skipped_ = 0;
+  menu_presentation_ = {};  // HD menu stage D is opted into per frame
   observed_draws_ = 0;
   frame_resolved_bytes_ = 0;
   frame_resolved_regions_ = 0;
@@ -633,7 +634,7 @@ void GpuHud::image(const zimg::Texture* source, int32_t x, int32_t y, uint16_t k
   if (!source || !source->pixels || source->width <= 0 || source->height <= 0 ||
       source->width > 2048 || source->height > 2048 || source->width_again < source->width ||
       (source->palette && source->palette_count <= 0)) {
-    if (observation_only_ || menu_mode_) {
+    if (observation_only_ || menu_mode_ || menu_presentation_.active) {
       framebuffer_write(target_, "unsupported image");
       return;
     }
@@ -674,6 +675,11 @@ void GpuHud::image(const zimg::Texture* source, int32_t x, int32_t y, uint16_t k
       menu_foreground_seen_ = true;
     }
   }
+  // HD menu stage D (gpu_hud_menu_sprites.cpp): menu text and sprites from
+  // output-resolution sources. Returns false for images it leaves to this path.
+  if (menu_presentation_.active && !observation_only_ &&
+      draw_menu_sprite(source, key, destination_x, destination_y, left, top, right, bottom))
+    return;
   if (observation_only_) {
     // Only the visible crop is checked, and no text is rasterised or cached: observation
     // must stay cheap because it runs for every menu blit.

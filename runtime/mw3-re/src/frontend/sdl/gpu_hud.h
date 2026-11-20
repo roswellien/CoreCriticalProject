@@ -19,6 +19,8 @@ struct HudOptions {
   bool text = true;
   // Diagnostic only: count what the menu draws without changing it. Off by default.
   bool observe_menu = false;
+  // HD menu stage D (menu_sprites.h). Also off when MW3_HD_MENU_SPRITES=0.
+  bool menu_sprites = true;
 };
 // An instance-owned HUD draw list. The original canvas remains a CPU shadow
 // for native reads; display uses owned GPU images and ordered primitives.
@@ -34,6 +36,8 @@ class GpuHud final : public zrndr::DrawObserver {
     uint64_t images{};
     uint64_t text_hits{};
     uint64_t resolved_regions{};
+    // HD menu stage D: images drawn from a registered high-resolution artwork pack.
+    uint64_t artwork_hits{};
     bool fallback{};
     std::map<std::string, uint64_t> shadow_reasons;
   };
@@ -71,7 +75,34 @@ class GpuHud final : public zrndr::DrawObserver {
                        uint32_t pitch_bytes, const char* operation) override;
   void framebuffer_write(const void* target, const char* operation) override;
 
+  // HD menu stage D (gpu_hud_menu_sprites.cpp, menu_sprites.h). Called after a
+  // begin for a menu frame: until the frame ends, menu text and sprites are
+  // drawn from output-resolution sources (text re-rasterised at menu_scale,
+  // registered artwork, else the native image) instead of native pixels, and
+  // blit16 reports alpha-plane images as images rather than resolved regions.
+  // Does nothing when HudOptions::menu_sprites is false or MW3_HD_MENU_SPRITES
+  // is 0. The presenter passes menu_presentation_scale() for the frame.
+  void set_menu_presentation(float menu_scale);
+  bool menu_presentation_active() const { return menu_presentation_.active; }
+  bool wants_source_alpha_images() const override;
+
  private:
+  // HD menu stage D state for the current frame; begin_frame resets it.
+  struct MenuPresentation {
+    bool active{};
+    float scale{1};
+  };
+  // Draws one menu image for stage D. Returns false when the ordinary image
+  // path should draw it instead (the menu background source, owned by stage C).
+  bool draw_menu_sprite(const zimg::Texture* source, uint16_t key, int64_t destination_x,
+                        int64_t destination_y, int64_t left, int64_t top, int64_t right,
+                        int64_t bottom);
+  void log_menu_artwork_miss(uint64_t identity, int width, int height);
+  MenuPresentation menu_presentation_;
+  std::set<uint64_t> logged_menu_artwork_misses_;
+  bool menu_artwork_miss_limit_logged_{};
+  bool menu_text_failure_logged_{};
+
   struct Resource {
     std::shared_ptr<const platform::HudImage> image;
     int texture;
