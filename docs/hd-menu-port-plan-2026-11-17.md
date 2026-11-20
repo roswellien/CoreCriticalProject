@@ -205,6 +205,19 @@ the frame. Until that call exists, menu frames look as before.
 - **Checks.** `mw3menu_sprite_checks` (`runtime/mw3-re/tests/test_menu_sprites.cpp`); run it with
   `--fonts DIR` to include the two-colour text raster check, which needs Arial.
 
+## Live GPU menu switch (2026-11-20)
+
+- **On by default.** Menu frames are recorded from each flip (the menus redraw without clearing
+  the canvas) and presented as GPU quads over the full-window HD background, with stage D's
+  text and sprites. A frame whose draw list is rejected or incomplete presents the complete
+  current CPU shadow instead.
+- **4:3 layout.** Menu screens use a 640x480 (mode 5) canvas centred in the window; the
+  background still fills the window, and text, cursor and input use the same menu transform.
+- **Escape hatches.** `MW3_MENU_GPU=0` (also `off`, `false`, `no`) returns to the old Stage C
+  compositor/native presentation; any other value, or none, keeps the live path.
+  `MW3_MENU_WIDE=1` restores the old wide menu canvas when the wide-menus option is on.
+  `--cc-menu-background-renderer cpu` and `--cc-menu-observe` also keep the old presentation.
+
 ## Risks and live-only validation
 
 - The observer reports only draws made while it is installed. Starting it at

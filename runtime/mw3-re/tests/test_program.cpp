@@ -13,6 +13,8 @@
 #include <chrono>
 #include <cmath>
 #include <algorithm>
+#include <cstdlib>
+#include "frontend/sdl/sdl_fit.h"
 #include <map>
 #include <cstdio>
 #include <cstring>
@@ -26391,12 +26393,36 @@ OptionsPlace c1m1_options_place(int32_t mode) {
 // in a mission at 16:9 with the wide menus: each screen's canvas, origin and
 // its ACCEPT's rect, and the controls' DEFAULT buttons.
 namespace {
+struct ScopedMenuWideEnv {
+  std::string saved_value;
+  bool had_saved = false;
+  explicit ScopedMenuWideEnv(const char* value) {
+    if (const char* current = std::getenv("MW3_MENU_WIDE")) {
+      had_saved = true;
+      saved_value = current;
+    }
+    set(value);
+  }
+  void set(const char* value) {
+#if defined(_WIN32)
+    _putenv_s("MW3_MENU_WIDE", value ? value : "");
+#else
+    if (value)
+      setenv("MW3_MENU_WIDE", value, 1);
+    else
+      unsetenv("MW3_MENU_WIDE");
+#endif
+  }
+  ~ScopedMenuWideEnv() { set(had_saved ? saved_value.c_str() : nullptr); }
+};
+
 struct ControlsTrip {
   int32_t game_w = -1, game_origin = -1, ctl_w = -1, ctl_origin = -1;
   int32_t game_accept[4] = {}, ctl_accept[4] = {}, ctl_reset[4] = {};
   int32_t ctl_bg_w = -1, ctl_bg_x = -1, game_bg_w = -1;  // the backgrounds' image widths, the controls' x
 };
 ControlsTrip c1m1_controls_trip(int32_t mode, bool wide) {
+  ScopedMenuWideEnv wide_env("1");
   ControlsTrip out;
   const zfix::Options saved_fix = zfix::options();
   zfix::options().any_resolution = true;
@@ -26594,6 +26620,7 @@ struct WideMenus {
   int32_t tm_ok = -1, tm_backdrop = -1;  // the new team's dialog
 };
 WideMenus wide_menus_run(bool wide, int32_t frame_width = 0, int32_t frame_height = 0, bool fast = false) {
+  ScopedMenuWideEnv wide_env("1");
   WideMenus out;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -26922,6 +26949,7 @@ struct ReshapeMore {
 };
 std::vector<ReshapeSeen> menu_reshape_run(const std::vector<ReshapeStep>& steps, int32_t* width0, int32_t* credits0,
                                           int32_t* accept0, ReshapeSeen* first = nullptr, ReshapeMore* more = nullptr) {
+  ScopedMenuWideEnv wide_env("1");
   std::vector<ReshapeSeen> seen;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -27159,11 +27187,12 @@ TEST(menus_take_a_picked_mode_inside_an_entry_headless) {
   EXPECT(e.entry_width == 853);
 }
 
-// 16:9 menus are on by default (Owen, 2026-10-31): with nothing set, the
-// menus take a wide in-mission mode (13: 853x480), and stay 640x480 (mode 5)
-// when that mode is 4:3 (5, or 10: 1600x1200); widemenus=0 or
-// --no-wide-menus turn it off.
+// Menus keep a 640x480 (4:3, mode 5) logical layout by default so buttons,
+// text and cursor stay in the centered 4:3 area while the GPU background covers
+// the full window and in-mission canvas modes stay unchanged. MW3_MENU_WIDE=1
+// restores the legacy wide-menu canvas when wide_menus is enabled.
 TEST(menus_wide_follow_the_selected_aspect) {
+  ScopedMenuWideEnv wide_env(nullptr);
   const zfix::Options keep = zfix::options();
   zfix::options() = zfix::Options{};
   EXPECT(zfix::options().wide_menus);
@@ -27177,8 +27206,97 @@ TEST(menus_wide_follow_the_selected_aspect) {
     return e.menu_vmode();
   };
   zfix::options().any_resolution = true;
-  const int32_t wide = menus_at(13), plain = menus_at(5), tall = menus_at(10);
   const auto saved_options = mech3::options();
+
+  // Default (MW3_MENU_WIDE unset) and MW3_MENU_WIDE=0 keep menus at mode 5
+  // (640x480) independently of wide_menus, while in-mission canvas sizes
+  // (853x480 at 1920x1080, 1147x480 at 3440x1440) remain intact.
+  for (const char* env_val : {static_cast<const char*>(nullptr), "0", "false"}) {
+    wide_env.set(env_val);
+    EXPECT(menus_at(13) == 5 && menus_at(5) == 5 && menus_at(10) == 5);
+    int32_t mission_fw = 0, mission_fh = 0, mission_cw = 0, mission_ch = 0;
+    EXPECT(mech3::vmode_size(13, &mission_fw, &mission_fh) &&
+           mech3::vmode_canvas(13, &mission_cw, &mission_ch) &&
+           mission_fw == 1920 && mission_fh == 1080 &&
+           mission_cw == 853 && mission_ch == 480);
+    int32_t menu_fw = 0, menu_fh = 0, menu_cw = 0, menu_ch = 0;
+    EXPECT(mech3::vmode_size(menus_at(13), &menu_fw, &menu_fh) &&
+           mech3::vmode_canvas(menus_at(13), &menu_cw, &menu_ch) &&
+           menu_fw == 640 && menu_fh == 480 && menu_cw == 640 && menu_ch == 480);
+
+    mech3::options().screen_w = 3440, mech3::options().screen_h = 1440;
+    EXPECT(menus_at(mech3::kCustomVMode) == 5);
+    EXPECT(mech3::vmode_size(mech3::kCustomVMode, &mission_fw, &mission_fh) &&
+           mech3::vmode_canvas(mech3::kCustomVMode, &mission_cw, &mission_ch) &&
+           mission_fw == 3440 && mission_fh == 1440 &&
+           mission_cw == 1147 && mission_ch == 480);
+    mech3::options().screen_w = 5120, mech3::options().screen_h = 1440;
+    EXPECT(menus_at(mech3::kCustomVMode) == 5);
+  }
+  mech3::options() = saved_options;
+
+  // At 3440x1440 and 1920x1080, the default 640x480 menu mode centers the 4:3
+  // menu in the window and maps cursor/hit-test coordinates to that 4:3 area,
+  // while the in-game mission shape still spans the full window.
+  {
+    sdlfe::FrameShape menu_shape;
+    menu_shape.frame_w = 640;
+    menu_shape.frame_h = 480;
+    menu_shape.canvas_w = 640;
+    menu_shape.canvas_h = 480;
+    menu_shape.fit = true;
+
+    const sdlfe::FitRect fit_uw = sdlfe::fit_rect(3440.0f, 1440.0f, menu_shape);
+    const sdlfe::FitRect mfit_uw = sdlfe::menu_fit_rect(3440.0f, 1440.0f, menu_shape);
+    EXPECT(std::fabs(fit_uw.x - 760.0f) < 1e-4f && std::fabs(fit_uw.y - 0.0f) < 1e-4f &&
+           std::fabs(fit_uw.w - 1920.0f) < 1e-4f && std::fabs(fit_uw.h - 1440.0f) < 1e-4f);
+    EXPECT(std::fabs(mfit_uw.x - 760.0f) < 1e-4f && std::fabs(mfit_uw.y - 0.0f) < 1e-4f &&
+           std::fabs(mfit_uw.w - 1920.0f) < 1e-4f && std::fabs(mfit_uw.h - 1440.0f) < 1e-4f);
+    float fx0 = -1.0f, fy0 = -1.0f, fx1 = -1.0f, fy1 = -1.0f;
+    sdlfe::window_to_frame(760.0f, 0.0f, 3440.0f, 1440.0f, menu_shape, &fx0, &fy0);
+    sdlfe::window_to_frame(760.0f + 1920.0f, 1440.0f, 3440.0f, 1440.0f, menu_shape, &fx1, &fy1);
+    EXPECT(std::fabs(fx0 - 0.0f) < 1e-4f && std::fabs(fy0 - 0.0f) < 1e-4f &&
+           std::fabs(fx1 - 640.0f) < 1e-4f && std::fabs(fy1 - 480.0f) < 1e-4f &&
+           std::fabs(sdlfe::mickey_scale(3440.0f, 1440.0f, menu_shape) - (640.0f / 1920.0f)) < 1e-5f);
+
+    const sdlfe::FitRect fit_hd = sdlfe::fit_rect(1920.0f, 1080.0f, menu_shape);
+    const sdlfe::FitRect mfit_hd = sdlfe::menu_fit_rect(1920.0f, 1080.0f, menu_shape);
+    EXPECT(std::fabs(fit_hd.x - 240.0f) < 1e-4f && std::fabs(fit_hd.y - 0.0f) < 1e-4f &&
+           std::fabs(fit_hd.w - 1440.0f) < 1e-4f && std::fabs(fit_hd.h - 1080.0f) < 1e-4f);
+    EXPECT(std::fabs(mfit_hd.x - 240.0f) < 1e-4f && std::fabs(mfit_hd.y - 0.0f) < 1e-4f &&
+           std::fabs(mfit_hd.w - 1440.0f) < 1e-4f && std::fabs(mfit_hd.h - 1080.0f) < 1e-4f);
+    sdlfe::window_to_frame(240.0f, 0.0f, 1920.0f, 1080.0f, menu_shape, &fx0, &fy0);
+    sdlfe::window_to_frame(240.0f + 1440.0f, 1080.0f, 1920.0f, 1080.0f, menu_shape, &fx1, &fy1);
+    EXPECT(std::fabs(fx0 - 0.0f) < 1e-4f && std::fabs(fy0 - 0.0f) < 1e-4f &&
+           std::fabs(fx1 - 640.0f) < 1e-4f && std::fabs(fy1 - 480.0f) < 1e-4f &&
+           std::fabs(sdlfe::mickey_scale(1920.0f, 1080.0f, menu_shape) - (640.0f / 1440.0f)) < 1e-5f);
+
+    sdlfe::FrameShape mission_uw;
+    mission_uw.frame_w = 3440, mission_uw.frame_h = 1440;
+    mission_uw.canvas_w = 1147, mission_uw.canvas_h = 480;
+    mission_uw.fit = true;
+    const sdlfe::FitRect mission_fit_uw = sdlfe::fit_rect(3440.0f, 1440.0f, mission_uw);
+    EXPECT(std::fabs(mission_fit_uw.x - 0.0f) < 1e-4f && std::fabs(mission_fit_uw.y - 0.0f) < 1e-4f &&
+           std::fabs(mission_fit_uw.w - 3440.0f) < 1e-4f && std::fabs(mission_fit_uw.h - 1440.0f) < 1e-4f);
+
+    sdlfe::FrameShape mission_hd;
+    mission_hd.frame_w = 1920, mission_hd.frame_h = 1080;
+    mission_hd.canvas_w = 853, mission_hd.canvas_h = 480;
+    mission_hd.fit = true;
+    const sdlfe::FitRect mission_fit_hd = sdlfe::fit_rect(1920.0f, 1080.0f, mission_hd);
+    EXPECT(std::fabs(mission_fit_hd.x - 0.0f) < 1e-4f && std::fabs(mission_fit_hd.y - 0.0f) < 1e-4f &&
+           std::fabs(mission_fit_hd.w - 1920.0f) < 1e-4f && std::fabs(mission_fit_hd.h - 1080.0f) < 1e-4f);
+  }
+
+  // Escape hatch MW3_MENU_WIDE=1 enables legacy wide menus when wide_menus is on.
+  wide_env.set("1");
+  const int32_t wide = menus_at(13), plain = menus_at(5), tall = menus_at(10);
+  // The value is matched in any letter case, as MW3_MENU_GPU is.
+  for (const char* env_val : {"TRUE", "On", "yes"}) {
+    wide_env.set(env_val);
+    EXPECT(menus_at(13) == 13);
+  }
+  wide_env.set("1");
   for (const auto& shape : {std::array<int32_t, 2>{3440, 1440}, {5120, 1440}}) {
     mech3::options().screen_w = shape[0], mech3::options().screen_h = shape[1];
     EXPECT(menus_at(mech3::kCustomVMode) == mech3::kCustomVMode);

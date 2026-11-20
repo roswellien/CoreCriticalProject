@@ -108,6 +108,11 @@ class SdlScreen2D : public platform::Screen2D {
   void overlay_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, uint16_t key,
                   const uint8_t* alpha, const uint16_t* colour) override;
   int frames = 0;  // frames shown
+  // True while the mission's own state runs (not a menu or the pause); the same signal
+  // SdlInput::in_mission uses. The live GPU menu and its 4:3 menu layout never apply then, so a
+  // 2D-only frame presented during a mission keeps the mission's frame shape, matching input.
+  // Unset means "not in a mission" (tests and hosts without missions).
+  std::function<bool()> in_mission;
 
  private:
   void upload(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, bool keyed, uint16_t key,
@@ -124,6 +129,8 @@ class SdlScreen2D : public platform::Screen2D {
   int32_t texture_ = -1;
   int tw_ = 0, th_ = 0;
   std::vector<uint8_t> rgba_;
+  // The compositor shares texture_; only a native upload can validate these cached bytes.
+  bool native_texture_current_ = false;
   std::vector<uint32_t> menu_composed_;
   platform::PreparedMenuBackgroundComposer menu_composer_;
   platform::PreparedMenuBackgroundComposer menu_gpu_composer_;
@@ -135,16 +142,28 @@ class SdlScreen2D : public platform::Screen2D {
   std::array<uint64_t, platform::kMenuGpuMapCount> menu_gpu_uploaded_revisions_{};
   bool menu_use_gpu_ = true;
   bool menu_gpu_available_ = true;
+  bool hud_overlay_enabled_ = false;
+  unsigned menu_hd_bound_width_ = 0;
+  unsigned menu_hd_bound_height_ = 0;
   std::chrono::steady_clock::time_point menu_background_report_start_ = std::chrono::steady_clock::now();
   unsigned menu_background_report_frames_ = 0, menu_background_report_hits_ = 0, menu_background_report_gpu_frames_ = 0;
   double menu_background_report_milliseconds_ = 0;
   double menu_background_report_gpu_milliseconds_ = 0;
   bool menu_observation_active_{};
   bool menu_observation_enabled_{};
+  bool menu_layout_active_{};
+  bool menu_gpu_recording_{};
+  bool menu_gpu_sealed_{};
+  const uint16_t* menu_gpu_target_{};
+  int menu_gpu_recorded_width_{};
+  int menu_gpu_recorded_height_{};
+  int menu_gpu_recorded_pitch_{};
   std::chrono::steady_clock::time_point menu_report_start_{};
   uint64_t menu_report_frames_{}, menu_report_images_{}, menu_report_text_hits_{},
       menu_report_fallbacks_{};
   std::map<std::string, uint64_t> menu_report_shadow_reasons_;
+  bool live_menu_gpu_enabled() const;
+  void set_menu_layout_active(bool active) noexcept;
 };
 
 // GetTickCount from the game's start, and Sleep. With `frame_ms` (ours,

@@ -274,6 +274,7 @@ GameEngine::GameEngine(const Platform& p, std::string command_line)
 }
 
 GameEngine::~GameEngine() {
+  if (p_.screen) p_.screen->cancel_menu_observation();
   game_box() = nullptr;  // ours (upgrades/game_boxes.h): the game's box is gone with the engine
   if (force_) program_force_feedback(nullptr), force_.reset();  // an engine gone without the app's stop: its calls off
   delete_screens();
@@ -738,6 +739,7 @@ void GameEngine::screen_size(int32_t w, int32_t h, int32_t frame_w, int32_t fram
   t.base = reinterpret_cast<uint8_t*>(buffer_.data());
   t.width = static_cast<uint32_t>(width_), t.height = static_cast<uint32_t>(height_);
   t.pitch = static_cast<uint32_t>(width_ * 2);
+  t.format = 6;
   zrndr::set_finish_target(buffer_.data(), width_, height_, width_ * 2);
   // The 3D's viewport the frame (the 2D layers set their own, the canvas's; resolution.md step 4).
   zvid::set_producer_canvas_rect(0, 0, frame_w > 0 ? frame_w : w, frame_h > 0 ? frame_h : h);
@@ -752,6 +754,12 @@ void GameEngine::screen_size(int32_t w, int32_t h, int32_t frame_w, int32_t fram
   zvid::reset_tint_quad();
   zvid::set_fog(1);             // 0x0057b05a: fog on from the device's setup
   zvid::set_tint_depth(0.99f);  // 0x3f7d70a4
+  // Menu screens draw into buffer_ without calling video_clear first, so arm
+  // observation whenever a new canvas is allocated and after each flip.
+  if (p_.screen) p_.screen->cancel_menu_observation();
+  zrndr::begin_menu_background_frame();
+  if (p_.screen)
+    p_.screen->begin_menu_observation(buffer_.data(), width_, height_, width_ * 2);
 }
 
 // 0x00576c80: zVideo's sizes for the mode (0x0057a1a0: 5..10 as the options'
@@ -826,14 +834,21 @@ void GameEngine::video_clear(Handle) {
 // 0x00576ea0: the back buffer to the screen.
 // A frame whose 3D scene was drawn (the Core state's) shows that instead.
 void GameEngine::video_flip(int32_t, int32_t, int32_t, int32_t) {
-  struct CancelMenuObservation {
-    platform::Screen2D* screen;
-    ~CancelMenuObservation() {
-      if (screen) screen->cancel_menu_observation();
+  struct MenuFrameBoundary {
+    GameEngine* engine;
+    ~MenuFrameBoundary() {
+      if (engine->p_.screen) engine->p_.screen->cancel_menu_observation();
       // Whatever path presented the frame, its background pieces are now consumed.
+      // Advance the frame boundary and arm observation for the next menu frame, since
+      // real menus redraw and flip without calling video_clear.
       zrndr::end_menu_background_frame();
+      zrndr::begin_menu_background_frame();
+      if (engine->p_.screen && !engine->buffer_.empty() && engine->width_ > 0 && engine->height_ > 0) {
+        engine->p_.screen->begin_menu_observation(
+            engine->buffer_.data(), engine->width_, engine->height_, engine->width_ * 2);
+      }
     }
-  } cancel_menu_observation{p_.screen};
+  } menu_frame_boundary{this};
   // FIX (B), playtest W25: a message box over a GPU frame shows over that
   // frame at its own size, not over the 16-bit buffer's copy of it (the
   // buffer's size: the menus' 640x480, low-res at 16:9 or in the lab).

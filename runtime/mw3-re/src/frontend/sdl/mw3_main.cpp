@@ -1530,6 +1530,9 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     // mission's can be let go (sdl_input.h); fullscreen and hidden runs hold it.
     input.windowed = [&window, hidden = a.hidden] { return !hidden && !window.fullscreen(); };
     input.in_mission = [&app] { return app.current() == &mech3::states().core; };
+    // Through input: FrontendAppLifetime clears input.in_mission before the app is destroyed,
+    // and input outlives the screen.
+    screen.in_mission = [&input] { return input.in_mission && input.in_mission(); };
     // Ours (#289): the 3D replay's mouse is the viewer's (clicks pick mechs,
     // the seek bar), never the mission's, so it is left free as the editor's.
     input.pointer_free = [replay = !a.watch.replay3d_path.empty()] {
@@ -2094,7 +2097,8 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
           int ww = 0, wh = 0;
           window.client_size(&ww, &wh);
           float wx = 0, wy = 0;
-          sdlfe::frame_to_window(px, py, static_cast<float>(ww), static_cast<float>(wh), window.shape(), &wx, &wy);
+          sdlfe::frame_to_window(px, py, static_cast<float>(ww), static_cast<float>(wh),
+                                input.effective_shape(), &wx, &wy);
           if (menu_frames == c.frame) {
             zin::mouse_set((px - dw / 2) / (dw / 2), (py - dh / 2) / (dh / 2));
             // Windowed menus follow SDL's absolute cursor. Keep the synthetic
