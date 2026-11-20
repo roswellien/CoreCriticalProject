@@ -11871,10 +11871,11 @@ TEST(settings_launcher_size_wins_for_the_run_and_is_not_saved) {
     int32_t w = 0, h = 0, cw = 0, ch = 0;
     EXPECT(mech3::vmode_size(16, &w, &h) && w == 1920 && h == 1080);
     EXPECT(mech3::vmode_canvas(16, &cw, &ch) && cw == 853 && ch == 480);  // 16:9, not 21:9
-    mech3::launch_screen_for_save(true);
-    EXPECT(zreg::write_all() == 1);
-    mech3::launch_screen_for_save(false);
-    EXPECT(mech3::options().screen_w == 1920);  // the run keeps the launcher's size
+    // controls_write_settings is the only zreg::write_all caller (the exit's save_options and
+    // the options screen's settings_write), so it is the write the launcher's size must skip.
+    EXPECT(mech3::controls_write_settings() == 1);
+    EXPECT(mech3::options().in_game_vmode == 16 &&
+           mech3::options().screen_w == 1920);  // the run keeps the launcher's size
     finish();
   }
   {
@@ -11884,17 +11885,31 @@ TEST(settings_launcher_size_wins_for_the_run_and_is_not_saved) {
     finish();
   }
   {
-    auto reg = start(nullptr, 1920, 1080);  // the player picks 2560x1440 during the run
-    mech3::options().screen_w = 2560, mech3::options().screen_h = 1440;
-    mech3::launch_screen_for_save(true);
-    EXPECT(zreg::write_all() == 1);
-    mech3::launch_screen_for_save(false);
-    EXPECT(mech3::options().screen_w == 2560);
+    // The player confirms exactly the launcher's mode and size in the game (the graphics
+    // screen's OK sets InGameVMode through Engine::set_in_game_vmode). The values equal the
+    // launcher's, but the choice is the player's, so they are saved.
+    auto reg = start(nullptr, 1920, 1080);
+    mech3::note_player_screen_choice();
+    EXPECT(mech3::controls_write_settings() == 1);
+    EXPECT(mech3::options().in_game_vmode == 16 && mech3::options().screen_w == 1920);
     finish();
   }
   {
     auto reg = start(nullptr, 0, 0);
-    EXPECT(mech3::options().screen_w == 2560 && mech3::options().screen_h == 1440);
+    const mech3::Options o = mech3::options();
+    EXPECT(o.in_game_vmode == 16 && o.screen_w == 1920 && o.screen_h == 1080);
+    finish();
+  }
+  {
+    auto reg = start(nullptr, 2560, 1440);  // the player picks the 1920x1080 preset (13)
+    mech3::options().in_game_vmode = 13;
+    mech3::note_player_screen_choice();
+    EXPECT(mech3::controls_write_settings() == 1);
+    finish();
+  }
+  {
+    auto reg = start(nullptr, 0, 0);
+    EXPECT(mech3::options().in_game_vmode == 13);
     finish();
   }
   zfix::options().any_resolution = keep_fix;

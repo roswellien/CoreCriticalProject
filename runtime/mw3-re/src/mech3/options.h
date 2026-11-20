@@ -279,6 +279,9 @@ void save_options();                        // 0x0040cb20  the store saved, the 
 // launcher's per-run size (saved true), then the run's size back (saved false). A size the
 // player picks in the game during the run is saved as usual.
 void launch_screen_for_save(bool saved);
+// Ours, FIX (B): the player set InGameVMode in the game (the graphics screen's OK, Shift+V).
+// From then on the run's mode and size are saved as they stand, the launcher's size included.
+void note_player_screen_choice();
 // detail.zrd's value for `name` on this machine (0x0040c3b0): the first entry
 // whose condition holds, else `def` (also without a file).
 int32_t detail_value(zrdr::Node* root, const char* name, int32_t def);
