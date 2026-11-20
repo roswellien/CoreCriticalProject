@@ -67,13 +67,15 @@ fragment float4 fs_flat(Out in [[stage_in]], constant F& f [[buffer(0)]]) {
 
 uint32_t key_of(const platform::DrawState& s, bool textured) {
   return textured | s.blend << 1 | s.multiply << 2 | s.depth_write << 3 |
-         s.depth_always << 4 | s.wireframe << 5 | s.additive << 6;
+         s.depth_always << 4 | s.wireframe << 5 | s.additive << 6 | s.brighten << 7 |
+         s.subtract << 8;
 }
 
 bool same(const platform::DrawState& a, const platform::DrawState& b) {
   return a.texture == b.texture && a.address_u == b.address_u &&
          a.address_v == b.address_v && a.blend == b.blend &&
-         a.multiply == b.multiply && a.additive == b.additive && a.depth_write == b.depth_write &&
+         a.multiply == b.multiply && a.additive == b.additive && a.brighten == b.brighten &&
+         a.subtract == b.subtract && a.depth_write == b.depth_write &&
          a.depth_always == b.depth_always &&
          a.alpha_modulate == b.alpha_modulate && a.fog == b.fog &&
          a.wireframe == b.wireframe && a.sharp == b.sharp && a.filter == b.filter;
@@ -179,6 +181,13 @@ SDL_GPUGraphicsPipeline* SdlRender3D::pipeline(const platform::DrawState& s, boo
     if (s.multiply) {  // SRCBLEND ZERO, DESTBLEND SRCCOLOR
       ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
       ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_COLOR;
+    } else if (s.brighten) {  // DESTCOLOR, ONE: destination * (1 + source)
+      ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_DST_COLOR;
+      ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    } else if (s.subtract) {  // ONE, ONE, reverse subtract: destination - source
+      ct.blend_state.color_blend_op = SDL_GPU_BLENDOP_REVERSE_SUBTRACT;
+      ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+      ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
     } else if (s.additive) {  // ONE, ONE
       ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
       ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;

@@ -1681,9 +1681,19 @@ private:
             viewport[2], viewport[3], scene_.width, scene_.height, int(hud));
       }
     }
+    // D3DBLEND factors; 14 is ours: ONE, ONE through a reverse subtract (vk_scene's pipeline).
+    uint8_t source_factor = 5, destination_factor = 6;
+    if (state.multiply)
+      source_factor = 1, destination_factor = 3;
+    else if (state.brighten)
+      source_factor = 9, destination_factor = 2;
+    else if (state.subtract)
+      source_factor = vk::kReverseSubtractBlend, destination_factor = 2;
+    else if (state.additive)
+      source_factor = 2, destination_factor = 2;
     draw.key = {uint8_t(state.blend || state.multiply),
-                uint8_t(state.multiply ? 1 : state.additive ? 2 : 5),
-                uint8_t(state.multiply ? 3 : state.additive ? 2 : 6),
+                source_factor,
+                destination_factor,
                 1,
                 uint8_t(state.depth_always ? 8 : 7),
                 uint8_t(state.depth_write),

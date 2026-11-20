@@ -108,6 +108,9 @@ struct TextureRef {
 };
 // Fixed-function state that selects a pipeline: blend enable/source/destination
 // (D3DBLEND), depth enable/function (D3DCMP)/write, cull mode (D3DCULL).
+// A PipelineKey source factor past D3DBLEND's range: source and destination ONE combined by
+// VK_BLEND_OP_REVERSE_SUBTRACT (destination - source), for the HD menu's negative added light.
+constexpr std::uint8_t kReverseSubtractBlend = 14;
 struct PipelineKey {
   std::uint8_t blend, src, dst, zenable, zfunc, zwrite, cull,
       points = 0; // points: D3DPT_POINTLIST input assembly
@@ -4541,7 +4544,10 @@ private:
     cb.colorWriteMask = 15;
     cb.blendEnable = k.blend;
     unsigned src = k.src, dst = k.dst;
-    if (src == 12) {
+    if (src == kReverseSubtractBlend) {
+      src = dst = 2;
+      cb.colorBlendOp = VK_BLEND_OP_REVERSE_SUBTRACT;
+    } else if (src == 12) {
       src = 5;
       dst = 6;
     } else if (src == 13) {

@@ -393,7 +393,8 @@ void menu_background_checks(const std::filesystem::path& directory) {
     }
     void prepare_canvas_textures(const std::vector<int32_t> &textures) override {
         ++preflight_attempts;
-        require(textures.size() == 4 || textures.size() == 1,
+        // GPU: the HD image and the maps whose passes are needed (2 to 6); CPU: the composition.
+        require((textures.size() >= 3 && textures.size() <= 7) || textures.size() == 1,
                 "Menu did not preflight its image and maps (GPU) or its composed texture (CPU)");
         if (throw_next_preflight) {
             throw_next_preflight = false;
@@ -426,6 +427,18 @@ void menu_background_checks(const std::filesystem::path& directory) {
   zrndr::begin_menu_background_frame();
   zrndr::target2d() = {reinterpret_cast<uint8_t*>(frame.data()), 8, 8, 16, 6};
   zrndr::blit16(&source, 0, 0, 0, nullptr);
+  // The GPU path covers every gain and added light; only pieces that are not one wrapped
+  // rectangle (here the right half repeats the left half's source) still need the CPU.
+  const auto record_whole_background = [&] {
+    zrndr::end_menu_background_frame();
+    zrndr::blit16(&source, 0, 0, 0, nullptr);
+  };
+  const auto record_nonuniform_pieces = [&] {
+    const zrndr::BlitRect left_half{0, 0, 4, 8};
+    zrndr::end_menu_background_frame();
+    zrndr::blit16(&source, 0, 0, 0, &left_half);
+    zrndr::blit16(&source, 4, 0, 0, &left_half);
+  };
   frame.fill(uint16_t((8 << 11) | (16 << 5) | 8));
   sdlfe::HudOptions options;
   options.menu_background = path.string();
@@ -450,8 +463,9 @@ void menu_background_checks(const std::filesystem::path& directory) {
     require(recorder.images.size() == 1 && recorder.images[0].size() == 256,
             "HD menu image was not uploaded once during screen construction");
     present_preserving_float_state(screen);
-    require(recorder.images.size() == 4 && recorder.updates == 0 && recorder.draws.size() == 4,
-            "GPU menu did not upload three frame-sized maps and draw four passes");
+    // A uniformly dimmed menu needs only the attenuation and overlay maps.
+    require(recorder.images.size() == 3 && recorder.updates == 0 && recorder.draws.size() == 3,
+            "GPU menu did not upload two frame-sized maps and draw three passes");
     require(recorder.shape == &shape && recorder.x == 3 && recorder.y == 4 &&
                 recorder.w == 5 && recorder.h == 6,
             "Menu presentation did not restore the world shape and viewport");
@@ -460,11 +474,11 @@ void menu_background_checks(const std::filesystem::path& directory) {
     require(recorder.draws[0].state.filter == platform::TextureFilter::kLinear &&
                 recorder.draws[0].state.address_u == 1 &&
                 recorder.draws[1].state.filter == platform::TextureFilter::kNearest &&
-                recorder.draws[1].state.multiply && recorder.draws[2].state.additive &&
-                recorder.draws[3].state.blend,
+                recorder.draws[1].state.multiply && !recorder.draws[2].state.additive &&
+                recorder.draws[2].state.blend,
             "GPU menu lost repeat sampling, exact map sampling or blend order");
     screen.present_16(frame.data(), 8, 8, 16, true);
-    require(recorder.images.size() == 4 && recorder.updates == 0,
+    require(recorder.images.size() == 3 && recorder.updates == 0,
             "Unchanged GPU menu uploaded textures on a cache hit");
     const auto draws_before_invalid_stride = recorder.draws.size();
     screen.present_16(frame.data(), 8, 8, 15, true);
@@ -472,13 +486,32 @@ void menu_background_checks(const std::filesystem::path& directory) {
             "Menu read an invalid native stride instead of rejecting it without throwing");
     frame[0] = 0xf81f;
     present_preserving_float_state(screen);
-    require(recorder.images.size() == 4 && recorder.updates == 3,
+    require(recorder.images.size() == 3 && recorder.updates == 2,
             "Changed GPU menu failed to update its maps or uploaded the immutable HD image");
-    const auto before_fallback = recorder.draws.size();
+    // Brightening (gain above 1) stays on the GPU: a boost map replaces the attenuation pass.
+    auto before = recorder.draws.size();
     frame.fill(uint16_t((14 << 11) | (29 << 5) | 14));
     screen.present_16(frame.data(), 8, 8, 16, true);
-    require(recorder.draws.size() == before_fallback + 1 && recorder.images.size() == 5,
-            "Unsupported GPU gain did not select CPU composition");
+    require(recorder.draws.size() == before + 3 && recorder.images.size() == 4 &&
+                recorder.draws[before + 1].state.brighten && recorder.draws[before + 1].state.blend,
+            "A brightened menu left the GPU path or lost its boost pass");
+    // Lowered red under added light stays on the GPU too, through the subtract pass.
+    before = recorder.draws.size();
+    frame.fill(uint16_t((12 << 11) | (25 << 5) | 12));
+    frame[9] = uint16_t((11 << 11) | (45 << 5) | 12);
+    screen.present_16(frame.data(), 8, 8, 16, true);
+    require(recorder.draws.size() == before + 4 && recorder.draws[before + 1].state.additive &&
+                recorder.draws[before + 2].state.subtract,
+            "Negative added light left the GPU path or lost its subtract pass");
+    before = recorder.draws.size();
+    const auto images_before_fallback = recorder.images.size();
+    record_nonuniform_pieces();
+    frame.fill(uint16_t((8 << 11) | (16 << 5) | 8));
+    screen.present_16(frame.data(), 8, 8, 16, true);
+    require(recorder.draws.size() == before + 1 &&
+                recorder.images.size() == images_before_fallback + 1,
+            "A nonuniform source mapping did not select CPU composition");
+    record_whole_background();
   }
   require(recorder.released.size() == recorder.images.size(), "Menu screen leaked GPU resources");
   MenuRecorder cpu;
@@ -568,8 +601,9 @@ void menu_background_checks(const std::filesystem::path& directory) {
       }
   }
   // A narrow fitted menu exposes a surround even without a real SDL window.
-  // Unsupported gain forces fallback while the GPU image is still available.
+  // A nonuniform mapping forces fallback while the GPU image is still available.
   shape.frame_w = 4;
+  record_nonuniform_pieces();
   frame.fill(uint16_t((14 << 11) | (29 << 5) | 14));
   std::vector<uint32_t> cpu_pixels;
   std::vector<platform::TLVertex> cpu_vertices;
@@ -1979,9 +2013,19 @@ void part1_live_menu_checks(const std::filesystem::path& directory) {
       require(!zrndr::draw_observer() && !shape.menu_layout_active,
               "Unset MW3_MENU_GPU enabled live menu recording or active menu layout by default");
       screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
-      require(screen_recorder.draws.size() == 4 && screen_recorder.draws[1].state.multiply &&
-                  screen_recorder.draws[2].state.additive && !shape.menu_layout_active,
-              "Unset MW3_MENU_GPU did not keep legacy 4-pass Stage C menu background composition");
+      // Stage C draws the repeating HD image, then one pass per map the frame needs (#391: two
+      // to six). Every map pass samples a frame-sized map clamped and unfiltered, which the live
+      // path's foreground quads need not do.
+      bool stage_c_map_passes = screen_recorder.draws.size() >= 2 &&
+                                screen_recorder.draws.size() <= 7 &&
+                                screen_recorder.draws[0].state.address_u == 1;
+      for (size_t draw = 1; draw < screen_recorder.draws.size(); ++draw) {
+        const auto& state = screen_recorder.draws[draw].state;
+        if (state.address_u != 3 || state.filter != platform::TextureFilter::kNearest)
+          stage_c_map_passes = false;
+      }
+      require(stage_c_map_passes && !shape.menu_layout_active,
+              "Unset MW3_MENU_GPU did not keep the legacy Stage C menu background composition");
 
       env_guard.set("invalid");
       draw_full_menu_frame();

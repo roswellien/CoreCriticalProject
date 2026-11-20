@@ -24,7 +24,14 @@ struct MenuBackgroundBlit {
   int32_t destination_x{}, destination_y{}, source_x{}, source_y{}, width{}, height{};
 };
 void set_menu_background_source(const zimg::Texture*);
+// A cleared frame: the recorded pieces start again and age out after two frames without one.
 void begin_menu_background_frame();
+// A presented frame (ours, the flip): the next background draw starts a new list of pieces.
+// The menus redraw the scrolling background over the last frame without clearing it, so
+// without this the list grew by every frame's pieces for as long as a menu stayed open.
+// Unlike begin_menu_background_frame, the last pieces stay current: a frame that does not
+// redraw the background (the message box over a menu) still shows them in the buffer.
+void end_menu_background_frame();
 const zimg::Texture* menu_background_source();
 const std::vector<MenuBackgroundBlit>& menu_background_blits();
 // The SDL HUD adapter observes owned draw recipes while the native buffer is

@@ -1351,8 +1351,13 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   window.set_fullscreen(!a.windowed && !a.window_given && !a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty());
   // FIX (B): a first start's mission at the desktop's size; checks and shots keep 640x480.
   // MW3_FIRST_START=1 keeps it on in a check (sdl_first_start_takes_the_desktop).
-  window.set_first_start_desktop((!a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty()) ||
-                                 std::getenv("MW3_FIRST_START") != nullptr);
+  const bool play_run_size = (!a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty()) ||
+                             std::getenv("MW3_FIRST_START") != nullptr;
+  window.set_first_start_desktop(play_run_size);
+  // FIX (B): the launcher passes its resolution as --window WxH; a play run's frame (the menus'
+  // canvas and the mission) follows it rather than a saved or desktop size (resolution.md).
+  if (play_run_size && a.window_given && a.win_w > 0 && a.win_h > 0)
+    window.set_launch_size(a.win_w, a.win_h);
   sdlfe::SdlZinHost zin_host(&input);
   sdlfe::FrontendInputLifetime input_lifetime(zin_host);
   sdlfe::SdlClock clock;

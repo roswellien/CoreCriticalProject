@@ -73,6 +73,12 @@ class Window {
     (void)width, (void)height;
     return false;
   }
+  // FIX (B) layer: the frame size the launcher chose for this run (--window on a play run);
+  // false when none was chosen (fullscreen at the desktop, checks, shots).
+  virtual bool launch_size(int* width, int* height) {
+    (void)width, (void)height;
+    return false;
+  }
 };
 
 // Stands in for the DirectDraw primary surface the menus' 16-bit back buffer

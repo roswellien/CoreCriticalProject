@@ -148,6 +148,11 @@ bool SdlWindow::first_start_size(int* w, int* h) {
   *w = m->w, *h = m->h;
   return true;
 }
+bool SdlWindow::launch_size(int* w, int* h) {
+  if (launch_w_ <= 0 || launch_h_ <= 0) return false;
+  *w = launch_w_, *h = launch_h_;
+  return true;
+}
 void SdlWindow::switch_fullscreen(bool on) {
   if (!window_ || hidden_ || on == fullscreen_) return;
   if (render_) render_->drain();
@@ -440,12 +445,14 @@ bool validate_live_menu_background_uv(const platform::MenuBackgroundImage& hd_ba
 }  // namespace
 
 void draw_menu_background_gpu(FrameRenderer& renderer, int32_t background_texture,
-                              const std::array<int32_t, 3>& textures,
+                              const MenuBackgroundGpuTextures& textures,
                               const platform::MenuBackgroundGpuLayers& layers,
                               const platform::MenuBackgroundLayerRect& rectangle,
                               const platform::MenuBackgroundLayerRect* background_rectangle) {
-  if (layers.status != platform::MenuBackgroundGpuStatus::kReady || background_texture < 0 ||
-      std::any_of(textures.begin(), textures.end(), [](int32_t handle) { return handle < 0; }))
+  bool textures_valid = background_texture >= 0;
+  for (unsigned map = 0; map < platform::kMenuGpuMapCount; ++map)
+    if (layers.used[map] && textures[map] < 0) textures_valid = false;
+  if (layers.status != platform::MenuBackgroundGpuStatus::kReady || !textures_valid)
     throw std::runtime_error("Menu GPU draw requires prepared layers and valid textures");
   platform::DrawState state;
   state.depth_write = false;
@@ -456,19 +463,25 @@ void draw_menu_background_gpu(FrameRenderer& renderer, int32_t background_textur
   const auto background = background_rectangle ? *background_rectangle : rectangle;
   const auto background_uv = platform::menu_background_extend_uv(layers.uv, rectangle, background);
   draw_menu_quad(renderer, background, background_uv, state);
+  // The maps are frame pixels: clamped, unfiltered, one texel per native pixel. Each pass's
+  // blend is listed with platform::MenuBackgroundGpuMap.
   state.address_u = state.address_v = 3;
   state.filter = platform::TextureFilter::kNearest;
-  state.blend = state.multiply = true;
-  state.texture = textures[0];
+  state.blend = true;
   const platform::MenuBackgroundUvRect full{0, 0, 1, 1};
-  draw_menu_quad(renderer, rectangle, full, state);
-  state.multiply = false;
-  state.additive = true;
-  state.texture = textures[1];
-  draw_menu_quad(renderer, rectangle, full, state);
-  state.additive = false;
-  state.texture = textures[2];
-  draw_menu_quad(renderer, rectangle, full, state);
+  const auto draw_map = [&](unsigned map, void (*select_blend)(platform::DrawState&)) {
+    if (!layers.used[map]) return;
+    platform::DrawState pass = state;
+    select_blend(pass);
+    pass.texture = textures[map];
+    draw_menu_quad(renderer, rectangle, full, pass);
+  };
+  draw_map(platform::kMenuGpuAttenuate, [](platform::DrawState& pass) { pass.multiply = true; });
+  draw_map(platform::kMenuGpuBoost, [](platform::DrawState& pass) { pass.brighten = true; });
+  draw_map(platform::kMenuGpuBoostHigh, [](platform::DrawState& pass) { pass.brighten = true; });
+  draw_map(platform::kMenuGpuAdd, [](platform::DrawState& pass) { pass.additive = true; });
+  draw_map(platform::kMenuGpuSubtract, [](platform::DrawState& pass) { pass.subtract = true; });
+  draw_map(platform::kMenuGpuOverlay, [](platform::DrawState&) {});
   renderer.end_scene();
 }
 
@@ -482,15 +495,18 @@ bool SdlScreen2D::prepare_menu_gpu(const uint16_t* pixels, int width, int height
           return false;
       if (menu_gpu_layers_.status != platform::MenuBackgroundGpuStatus::kReady)
           return false;
-      const std::vector<uint32_t> *maps[] = {&menu_gpu_layers_.gain, &menu_gpu_layers_.added,
-                                             &menu_gpu_layers_.overlay};
+      // Only a map whose pass is needed gets a texture, and only a map whose pixels changed is
+      // uploaded again: a scrolling menu usually changes the gain maps alone.
       bool created_texture = false;
-      for (size_t index = 0; index < menu_gpu_textures_.size(); ++index) {
-          auto &texture = menu_gpu_textures_[index];
+      for (unsigned map = 0; map < platform::kMenuGpuMapCount; ++map) {
+          if (!menu_gpu_layers_.used[map])
+              continue;
+          auto &texture = menu_gpu_textures_[map];
+          const bool uploaded = menu_gpu_uploaded_revisions_[map] == menu_gpu_layers_.map_revisions[map];
           const auto action = platform::prepared_menu_texture_action(
-              menu_gpu_uploaded_revision_ == menu_gpu_layers_.revision, texture >= 0,
-              menu_gpu_width_, menu_gpu_height_, unsigned(width), unsigned(height));
-          const auto *bytes = reinterpret_cast<const uint8_t *>(maps[index]->data());
+              uploaded, texture >= 0, menu_gpu_width_, menu_gpu_height_, unsigned(width),
+              unsigned(height));
+          const auto *bytes = reinterpret_cast<const uint8_t *>(menu_gpu_layers_.maps[map].data());
           if (action == platform::PreparedMenuTextureAction::kCreate) {
               created_texture = true;
               if (texture >= 0)
@@ -504,15 +520,28 @@ bool SdlScreen2D::prepare_menu_gpu(const uint16_t* pixels, int width, int height
           } else if (action == platform::PreparedMenuTextureAction::kUpdate) {
               render_->update_texture(texture, width, height, bytes);
           }
+          menu_gpu_uploaded_revisions_[map] = menu_gpu_layers_.map_revisions[map];
+      }
+      // A texture made at an older frame size cannot be reused after a resize, even by a map
+      // that is unused now: drop it so a later frame that needs it makes it again.
+      for (unsigned map = 0; map < platform::kMenuGpuMapCount; ++map) {
+          auto &texture = menu_gpu_textures_[map];
+          if (!menu_gpu_layers_.used[map] && texture >= 0 &&
+              (menu_gpu_width_ != width || menu_gpu_height_ != height)) {
+              render_->release_texture(texture);
+              texture = -1;
+              menu_gpu_uploaded_revisions_[map] = 0;
+          }
       }
       if (created_texture) {
           std::vector<int32_t> textures{menu_hd_texture_};
-          textures.insert(textures.end(), menu_gpu_textures_.begin(), menu_gpu_textures_.end());
+          for (int32_t texture : menu_gpu_textures_)
+              if (texture >= 0)
+                  textures.push_back(texture);
           render_->prepare_canvas_textures(textures);
       }
       menu_gpu_width_ = width;
       menu_gpu_height_ = height;
-      menu_gpu_uploaded_revision_ = menu_gpu_layers_.revision;
       return true;
   } catch (...) {
       menu_gpu_available_ = false;
@@ -569,6 +598,10 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   const bool have_menu = menu_background_ && zrndr::menu_background_source() &&
                          !zrndr::menu_background_blits().empty();
   const char* reason = "requested-cpu";
+  // What the background is drawn at: the GPU path samples the HD image straight into the
+  // window; the CPU path composes a texture at the frame's fit inside the window (capped at
+  // 1080 high) and stretches it over the fitted rectangle.
+  int background_width = window_width, background_height = window_height;
   const bool recorded_live_frame =
       live_menu_gpu_enabled() && pixels == menu_gpu_target_ &&
       width == menu_gpu_recorded_width_ && height == menu_gpu_recorded_height_ &&
@@ -652,6 +685,7 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
           const auto output = platform::menu_background_output_size(width, height, window_width,
                                                                     window_height, 1080);
           const unsigned output_width = output.width, output_height = output.height;
+          background_width = int(output_width), background_height = int(output_height);
           if (menu_composer_.compose(*menu_background_, zrndr::menu_background_source(),
                                      zrndr::menu_background_blits(), pixels, width, height, pitch,
                                      rgb565, output_width, output_height, &menu_composed_,
@@ -765,10 +799,12 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
           (menu_background_report_milliseconds_ - menu_background_report_gpu_milliseconds_) / cpu_frames;
       std::fprintf(stderr,
           "mw3: menu background path=%s reason=%s CPU prepare/upload/submit "
-          "gpu=%.3f ms/frame (%u) cpu=%.3f ms/frame (%u), output=%dx%d maps=%dx%d cache=%u/%u\n",
+          "gpu=%.3f ms/frame (%u) cpu=%.3f ms/frame (%u), output=%dx%d window=%dx%d "
+          "maps=%dx%d cache=%u/%u\n",
           gpu_shown ? "gpu" : "cpu", gpu_shown ? "ready" : reason,
           gpu_average, menu_background_report_gpu_frames_, cpu_average, cpu_frames,
-          window_width, window_height, width, height, menu_background_report_hits_, menu_background_report_frames_);
+          background_width, background_height, window_width, window_height, width, height,
+          menu_background_report_hits_, menu_background_report_frames_);
       menu_background_report_start_ = now;
       menu_background_report_frames_ = menu_background_report_hits_ = menu_background_report_gpu_frames_ = 0;
       menu_background_report_milliseconds_ = 0;

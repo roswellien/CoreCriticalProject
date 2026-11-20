@@ -105,6 +105,13 @@ struct WiredOptionsHooks : OptionsHooks {
     *w = fw, *h = fh;
     return true;
   }
+  bool launch_screen(int32_t* w, int32_t* h) override {
+    platform::Window* win = g_engine ? g_engine->platform_parts().window : nullptr;
+    int lw = 0, lh = 0;
+    if (!win || !win->launch_size(&lw, &lh)) return false;
+    *w = lw, *h = lh;
+    return true;
+  }
   void camera_get_fov(Handle cam, float* x, float* y) override {  // 0x004f3ee0
     *x = *y = 1.0f;
     if (g_engine) zcls::camera_get_fov_angles(static_cast<zcls::Node*>(g_engine->object_of(cam)), x, y);
@@ -801,6 +808,8 @@ void GameEngine::video_flip(int32_t, int32_t, int32_t, int32_t) {
     platform::Screen2D* screen;
     ~CancelMenuObservation() {
       if (screen) screen->cancel_menu_observation();
+      // Whatever path presented the frame, its background pieces are now consumed.
+      zrndr::end_menu_background_frame();
     }
   } cancel_menu_observation{p_.screen};
   // FIX (B), playtest W25: a message box over a GPU frame shows over that
