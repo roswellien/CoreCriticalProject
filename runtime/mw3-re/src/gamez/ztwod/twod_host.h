@@ -56,6 +56,9 @@ class Host : public zgame::Unported {
  public:
   // Optional output-density text artwork. An empty result uses the native image.
   virtual std::shared_ptr<const platform::HudImage> hud_text_image(const zimg::Texture*, float, uint16_t) { return {}; }
+  // True when the image holds text the host drew (DrawTextA into an image DC).
+  // The HD menu path samples such images sharply when it cannot re-rasterise them.
+  virtual bool is_text_image(const zimg::Texture*) { return false; }
   // zImage.
   virtual zimg::Texture* image_get(const char* name);                 // 0x005179d0: cached, by name
   virtual zimg::Texture* image_release(zimg::Texture* image);         // 0x00517b10: returns 0

@@ -41,6 +41,10 @@ class DrawObserver {
     framebuffer_write(destination, operation);
   }
   virtual void framebuffer_write(const void* target, const char* operation) = 0;
+  // HD menu stage D: true when the observer draws alpha-plane images itself
+  // from their source pixels (with blit16's thresholds), so blit16 hands it the
+  // image instead of reporting each blended run as a resolved region.
+  virtual bool wants_source_alpha_images() const { return false; }
 };
 DrawObserver* draw_observer();
 void set_draw_observer(DrawObserver*);
