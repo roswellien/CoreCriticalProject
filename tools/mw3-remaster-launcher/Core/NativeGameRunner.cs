@@ -172,7 +172,8 @@ public sealed class NativeGameRunner
             Pom = settings.PomQuality is "low" or "high",
             PomQuality = settings.PomQuality switch
             {
-                "off" or "low" or "high" => settings.PomQuality,
+                "off" => null,
+                "low" or "high" => settings.PomQuality,
                 _ => throw new InvalidOperationException("Unknown parallax occlusion mapping quality: " + settings.PomQuality)
             },
             Preview = new Mw3RePreviewOptions
