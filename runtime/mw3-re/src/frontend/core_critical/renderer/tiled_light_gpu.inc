@@ -79,7 +79,7 @@ void destroy_tiled() {
     if (b->buffer)
       f.vkDestroyBuffer(device, b->buffer, nullptr);
     if (b->memory)
-      f.vkFreeMemory(device, b->memory, nullptr);
+      release_memory(device, b->memory, nullptr);
     *b = {};
   }
 }

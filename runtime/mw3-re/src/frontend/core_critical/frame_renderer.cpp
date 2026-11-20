@@ -5,6 +5,8 @@
 #include "gamez/zclass/class.h"
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/list.h"
+#include "gamez/zclass/cls_data.h"
+#include "mech3/mech.h"
 #include "gamez/zclass/visual_distance.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zinput/zinput.h"
@@ -683,6 +685,41 @@ public:
     return {entry.width, entry.height, entry.source_width, entry.source_height,
             entry.generated_rgba, entry.pixels};
   }
+  void set_preload_fault_for_test(const vk::PreloadFaultInjection &fault) {
+    drain();
+    renderer_->set_preload_fault(fault);
+  }
+  void set_preload_batch_cap_for_test(std::uint64_t bytes) {
+    drain();
+    renderer_->set_preload_batch_cap_for_test(bytes);
+  }
+  void set_preload_memory_block_cap_for_test(std::uint64_t bytes) {
+    if (worker_)
+      worker_->drain();
+    renderer_->set_preload_memory_block_cap_for_test(bytes);
+  }
+  testing::PreloadTestState preload_state_for_test() {
+    drain();
+    auto result = preload_test_state_;
+    result.last_preload_stopped = renderer_->preload_stopped();
+    result.stop_info = renderer_->preload_stop_info();
+    result.preload_allocation_attempts = renderer_->preload_allocation_attempts();
+    result.preload_allocation_successes = renderer_->preload_allocation_successes();
+    result.batch_submissions = renderer_->preload_batch_submissions();
+    result.peak_batch_bytes = renderer_->preload_peak_bytes();
+    result.pending_count = renderer_->preload_pending_count();
+    result.peak_pending_count = renderer_->preload_peak_pending();
+    result.tracked_device_local_bytes = renderer_->tracked_device_local_bytes();
+    result.live_allocation_count = renderer_->live_allocation_count();
+    for (const auto &receipt : submitted_textures_)
+      result.completed_texture_handles.push_back(int32_t((receipt.first - 1) / 2));
+    return result;
+  }
+  bool texture_receipt_for_test(int32_t handle, bool sharp) {
+    drain();
+    return submitted_textures_.count(std::uint64_t(handle) * 2 + unsigned(sharp) + 1) != 0;
+  }
+  vk::Renderer &backend_for_test() { drain(); return *renderer_; }
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
 #include "prepared_gpu_adapter.inc"
@@ -866,6 +903,9 @@ public:
     } else {
       current_mission_lighting_ = resolved;
     }
+    preload_test_state_ = {};
+    if (renderer_)
+      renderer_->reset_preload();
     preload_mission_normal_textures();
     first_world_preload_pending_ = true;
   }
@@ -1075,25 +1115,7 @@ public:
 
   int32_t create_texture(int width, int height, const uint8_t *rgba,
                          uint8_t) override {
-    if (width <= 0 || height <= 0 || unsigned(width) > texture_limit_ ||
-        unsigned(height) > texture_limit_) {
-      throw std::runtime_error("Invalid mw3-re texture size");
-    }
-    const auto free =
-        std::find_if(textures_.begin(), textures_.end(),
-                     [](const Texture &entry) { return entry.pixels.empty(); });
-    const auto handle = int32_t(free - textures_.begin());
-    if (free == textures_.end()) {
-      textures_.emplace_back();
-    }
-    auto &entry = textures_[handle];
-    entry.width = unsigned(width);
-    entry.height = unsigned(height);
-    mw34::materials::SurfaceKey active_key{};
-    if (mw34::materials::get_active_surface_key(&active_key)) {
-      entry.surface_key = active_key;
-    }
-    entry.group_load_epoch = group_load_epoch_;
+    const auto handle = allocate_texture_slot(width, height);
     update_texture(handle, width, height, rgba);
     return handle;
   }
@@ -1138,19 +1160,7 @@ public:
     entry.pixels.resize(std::size_t(width) * height);
     std::memcpy(entry.pixels.data(), rgba,
                 entry.pixels.size() * sizeof(std::uint32_t));
-    entry.surface_key = source_key;
-    entry.group_load_epoch = group_load_epoch_;
-    entry.version = ++texture_version_;
-    entry.fixture_visual_key.reset();
-    // Preload any matching world normal page once the texture's source identity
-    // is published. No reference to entry is used after this point in case
-    // later texture allocations reallocate textures_.
-    if (source_key.hash != 0)
-      prepared_preload_pending_ = true;
-    if (lighting_.normals && source_key.hash != 0) {
-      VisualFloatScope float_scope;
-      preload_surface_normal(source_key);
-    }
+    publish_texture_update(handle, source_key);
   }
 
   int32_t create_named_texture(const char *name, int width, int height,
@@ -1926,6 +1936,63 @@ private:
 #include "frame_presentation.inc"
 
 private:
+  int32_t allocate_texture_slot(int width, int height) {
+    if (width <= 0 || height <= 0 || unsigned(width) > texture_limit_ ||
+        unsigned(height) > texture_limit_) {
+      throw std::runtime_error("Invalid mw3-re texture size");
+    }
+    const auto free =
+        std::find_if(textures_.begin(), textures_.end(),
+                     [](const Texture &entry) { return entry.pixels.empty(); });
+    const auto handle = int32_t(free - textures_.begin());
+    if (free == textures_.end()) {
+      textures_.emplace_back();
+    }
+    auto &entry = textures_[handle];
+    entry.width = unsigned(width);
+    entry.height = unsigned(height);
+    mw34::materials::SurfaceKey active_key{};
+    if (mw34::materials::get_active_surface_key(&active_key)) {
+      entry.surface_key = active_key;
+    }
+    entry.group_load_epoch = group_load_epoch_;
+    return handle;
+  }
+
+  void publish_texture_update(int32_t handle, const mw34::materials::SurfaceKey &source_key) {
+    auto &entry = textures_.at(handle);
+    entry.surface_key = source_key;
+    entry.group_load_epoch = group_load_epoch_;
+    entry.version = ++texture_version_;
+    entry.fixture_visual_key.reset();
+    // Preload any matching world normal page once the texture's source identity
+    // is published. No reference to entry is used after this point in case
+    // later texture allocations reallocate textures_.
+    if (source_key.hash != 0)
+      prepared_preload_pending_ = true;
+    if (lighting_.normals && source_key.hash != 0) {
+      VisualFloatScope float_scope;
+      preload_surface_normal(source_key);
+    }
+  }
+
+  int32_t create_owned_texture(int width, int height, std::vector<std::uint32_t> pixels) {
+    const auto handle = allocate_texture_slot(width, height);
+    mw34::materials::SurfaceKey source_key{};
+    mw34::materials::get_active_surface_key(&source_key);
+    if (pixels.size() != std::size_t(width) * height)
+      throw std::runtime_error("Invalid mw3-re texture upload");
+    auto &entry = textures_.at(handle);
+    if (entry.scene_index != no_binding || entry.sharp_index != no_binding) {
+      flush();
+    }
+    // Prepared albedo conversion already owns this complete RGBA plane. Keep
+    // that allocation instead of zeroing and copying a second full image.
+    entry.pixels = std::move(pixels);
+    publish_texture_update(handle, source_key);
+    return handle;
+  }
+
   int32_t prepared_texture(const ::platform::prepared::Image &image) {
     const auto found = prepared_textures_.find(&image);
     if (found != prepared_textures_.end()) {
@@ -1934,10 +2001,9 @@ private:
       textures_.at(found->second).group_load_epoch = group_load_epoch_;
       return found->second;
     }
-    const auto pixels = image_pixels(image);
+    auto pixels = image_pixels(image);
     const auto handle =
-        create_texture(int(image.width), int(image.height),
-                       reinterpret_cast<const uint8_t *>(pixels.data()), 1);
+        create_owned_texture(int(image.width), int(image.height), std::move(pixels));
     // The prepared reader preserves a declared hash without checking it. This
     // immutable slot gets an exact key from its complete visible RGB565 plane.
     textures_.at(handle).surface_key = prepared_fixture_key(image);
@@ -2153,25 +2219,23 @@ private:
     return cached.geometry;
   }
 
-  void preload_native_model_geometry() {
+  void preload_native_model_geometry(const std::vector<const zcls::Node *> &nodes) {
     VisualFloatScope guard;
     if (!renderer_ || (geometry_mode_ != cc::geometry::Mode::gpu &&
                        geometry_mode_ != cc::geometry::Mode::partial))
       return;
-    std::unordered_set<const zcls::ListItem *> visited_items;
     std::unordered_set<zmod::Model *> seen_models;
-    for (const zcls::ListItem *item = zcls::list_head(zcls::kAllNodes);
-         item; item = item->next) {
-      if (!visited_items.insert(item).second)
-        throw std::runtime_error("Cycle detected in node list");
-      if (item->removable != 0 || !item->node || !item->node->model)
+    for (const auto *node : nodes) {
+      if (renderer_->preload_stopped())
+        break;
+      if (!node->model)
         continue;
       // Prepared-owned nodes never enter the native GPU draw path.
       ::platform::ModelDrawContext binding_context;
-      binding_context.node = item->node;
+      binding_context.node = node;
       if (prepared_.has_binding(binding_context))
         continue;
-      auto &model = *item->node->model;
+      auto &model = *node->model;
       if (!seen_models.insert(&model).second)
         continue;
       if (!zmod::rigid_source_supported(model, zmod::RigidGeometryEligibility{}))
@@ -2200,35 +2264,118 @@ private:
     }
   }
 
-  static std::vector<std::string> live_node_source_assets() {
-    // Canonical list membership is required because node_alloc adds nodes
-    // to kAllNodes but does not set the world-file kNodeLive bit (which is only
-    // set for world-file slots by cls_zbd.cpp). Iterating kAllNodes directly
-    // captures all live nodes, including MechLib nodes created with object3d_create.
-    std::vector<std::string> source_assets;
-    std::set<std::string> seen_source_assets;
-    std::unordered_set<const zcls::ListItem *> visited_items;
-
-    for (const zcls::ListItem *item = zcls::list_head(zcls::kAllNodes);
-         item != nullptr; item = item->next) {
-      if (!visited_items.insert(item).second) {
+  static std::vector<const zcls::Node *> ordered_live_nodes() {
+    std::vector<const zcls::Node *> nodes;
+    std::unordered_set<const zcls::ListItem *> visited;
+    for (auto *item = zcls::list_head(zcls::kAllNodes); item; item = item->next) {
+      if (!visited.insert(item).second)
         throw std::runtime_error("Malformed cycle detected in kAllNodes list");
-      }
-      if (item->removable != 0 || item->node == nullptr) {
-        continue;
-      }
-      const auto &source_asset = item->node->source_asset;
-      if (!source_asset || source_asset->name.empty()) {
-        continue;
-      }
-      if (seen_source_assets.insert(source_asset->name).second) {
-        source_assets.push_back(source_asset->name);
-      }
+      // Allocated MechLib nodes belong to this canonical list without the
+      // serialized world-file kNodeLive bit. Never filter on that bit.
+      if (!item->removable && item->node)
+        nodes.push_back(item->node);
     }
-    return source_assets;
+    const auto *player = mech3::world().mission_player
+                             ? mech3::world().mission_player : mech3::world().player;
+    const auto *player_node = player ? static_cast<const zcls::Node *>(player->target_node) : nullptr;
+    const auto player_asset = player_node ? player_node->source_asset : nullptr;
+    const auto position = [](const zcls::Node *node) {
+      std::array<double, 3> point{};
+      // Read existing local transforms; selection must not update native poses
+      // or camera state. Unknown/shared ancestry gets a stable lower priority.
+      for (unsigned depth = 0; node && depth < 128; ++depth) {
+        if (node->cls() == 5 && node->data) {
+          const auto *data = static_cast<const zcls::Object3d *>(node->data);
+          const auto x = point[0], y = point[1], z = point[2];
+          for (unsigned axis = 0; axis < 3; ++axis)
+            point[axis] = x * data->get<float>(0x30 + axis * 4) +
+                          y * data->get<float>(0x3c + axis * 4) +
+                          z * data->get<float>(0x48 + axis * 4) +
+                          data->get<float>(0x54 + axis * 4);
+        }
+        if (!node->parent_count())
+          return point;
+        if (node->parent_count() != 1 || !node->parents)
+          break;
+        node = node->parents[0];
+      }
+      return std::array<double, 3>{std::numeric_limits<double>::infinity(), 0, 0};
+    };
+    const auto origin = position(player_node);
+    const auto rank = [&](const zcls::Node *node) {
+      const bool player_owned = player_asset && node->source_asset &&
+                                player_asset->name == node->source_asset->name;
+      const auto point = position(node);
+      double distance = 0;
+      for (unsigned axis = 0; axis < 3; ++axis) {
+        const auto delta = point[axis] - origin[axis];
+        distance += delta * delta;
+      }
+      if (!std::isfinite(distance))
+        distance = std::numeric_limits<double>::infinity();
+      return std::make_pair(player_owned ? 0 : 1, distance);
+    };
+    std::stable_sort(nodes.begin(), nodes.end(), [&](const auto *left, const auto *right) {
+      return rank(left) < rank(right);
+    });
+    return nodes;
   }
 
-  std::uint64_t preload_texture_handle(int32_t handle) {
+  static std::vector<std::string>
+  live_node_source_assets(const std::vector<const zcls::Node *> &nodes) {
+    std::vector<std::string> assets;
+    std::set<std::string> seen;
+    for (const auto *node : nodes)
+      if (node->source_asset && !node->source_asset->name.empty() &&
+          seen.insert(node->source_asset->name).second)
+        assets.push_back(node->source_asset->name);
+    return assets;
+  }
+
+  std::vector<int32_t>
+  live_native_texture_handles(const std::vector<const zcls::Node *> &nodes) const {
+    std::vector<int32_t> handles;
+    std::set<int32_t> seen;
+    const auto append = [&](const zimg::TextureEntry *texture) {
+      if (!texture || !texture->surface)
+        return;
+      const auto handle = static_cast<const zvid::D3DTexture *>(texture->surface)->handle;
+      if (handle < 0 || std::size_t(handle) >= textures_.size())
+        return;
+      const auto &slot = textures_[std::size_t(handle)];
+      if (!slot.pixels.empty() && slot.group_load_epoch == group_load_epoch_ &&
+          slot.surface_key.hash && seen.insert(handle).second)
+        handles.push_back(handle);
+    };
+    for (const auto *node : nodes) {
+      if (!node->model || !node->model->polygons)
+        continue;
+      ::platform::ModelDrawContext context;
+      context.node = node;
+      if (prepared_.has_binding(context))
+        continue; // These original albedos never reach the replaced draw path.
+      for (std::size_t index = 0; index < node->model->count(0x10); ++index) {
+        const auto *material = node->model->polygons[index].material;
+        if (!material || !(material->flags & 1))
+          continue;
+        append(material->texture);
+        if ((material->flags & 4) && material->cycle && material->cycle->textures)
+          for (std::size_t frame = 0; frame < material->cycle->added; ++frame)
+            append(material->cycle->textures[frame]);
+      }
+    }
+    return handles;
+  }
+
+  enum class PreloadTextureStage { prepared, world, native };
+  struct PendingTextureReceipt {
+    std::uint64_t key{};
+    std::array<std::uint64_t, 3> stamp{};
+    std::uint64_t bytes{};
+    PreloadTextureStage stage{};
+  };
+  void preload_texture_handle(int32_t handle, PreloadTextureStage stage,
+                              std::vector<PendingTextureReceipt> &pending) {
     const std::uint64_t texture_key = std::uint64_t(handle) * 2 + 1;
     const auto &entry = textures_.at(std::size_t(handle));
     const unsigned texture_width = entry.width;
@@ -2239,10 +2386,15 @@ private:
     const auto existing_receipt = submitted_textures_.find(texture_key);
     if (existing_receipt != submitted_textures_.end() &&
         existing_receipt->second == receipt_stamp)
-      return 0;
+      return;
 
-    // Upload one transient texture payload at a time without mutating scene
-    // bindings or building an all-textures Scene packet.
+    for (const auto &receipt : pending)
+      if (receipt.key == texture_key && receipt.stamp == receipt_stamp)
+        return;
+    // Reserve the host receipt before accepting GPU work. Publication waits
+    // until explicit successful finalization, including earlier cap flushes.
+    if (pending.size() == pending.capacity())
+      pending.reserve(std::max<std::size_t>(16, pending.size() * 2));
     const std::uint64_t staged_bytes =
         std::uint64_t(entry.pixels.size()) * sizeof(std::uint32_t);
     vk::TextureRef texture_ref{texture_key,
@@ -2252,159 +2404,241 @@ private:
                                vk::TexFormat::rgba8888,
                                {},
                                entry.pixels};
-    renderer_->preload_texture(texture_ref);
-    submitted_textures_[texture_key] = receipt_stamp;
-    return staged_bytes;
+    if (!renderer_->preload_texture(texture_ref)) {
+      preload_test_state_.failed_texture_handle = handle;
+      return;
+    }
+    pending.push_back({texture_key, receipt_stamp, staged_bytes, stage});
+    if (!renderer_->texture_completed(texture_key, texture_version, texture_width, texture_height)) {
+      ++preload_test_state_.pending_texture_receipt_observations;
+      const auto published = submitted_textures_.find(texture_key);
+      if (published != submitted_textures_.end() && published->second == receipt_stamp)
+        ++preload_test_state_.premature_texture_receipts;
+    }
   }
 
-  // Upload matching world normal maps, live-mission prepared model textures,
-  // and current-epoch native CPU albedo textures to the GPU after mission loading
-  // has finished or at the first scene boundary when late actor assets arrive,
-  // so camera turns do not stall on lazy Vulkan image and mip creation.
+  // Warming is optional. Budget/OOM stops the mission's remaining warmup;
+  // real draws retain their existing lazy upload path and exact cache keys.
   void preload_mission_normal_textures() {
     VisualFloatScope guard;
-    const bool preload_world_normals = surface_normals_.preload_pending &&
-                                       lighting_.enabled && lighting_.normals;
-    const bool preload_prepared_assets =
-        prepared_preload_pending_ && !prepared_.empty();
-    if (!surface_normals_.preload_pending && !prepared_preload_pending_) {
+    const bool world_normals = surface_normals_.preload_pending &&
+                               lighting_.enabled && lighting_.normals;
+    const bool prepared_assets = prepared_preload_pending_ && !prepared_.empty();
+    if (!surface_normals_.preload_pending && !prepared_preload_pending_)
       return;
-    }
-    if (!renderer_ || producer_failed_) {
-      surface_normals_.preload_pending = false;
-      prepared_preload_pending_ = false;
+    surface_normals_.preload_pending = false;
+    prepared_preload_pending_ = false;
+    if (!renderer_ || producer_failed_ || renderer_->preload_stopped())
       return;
-    }
-    // The preload settles and records on renderer_ (command pool, fence, queue,
-    // texture/model caches and shared staging) from this producer thread. A
-    // present packet still queued for the menu, briefing or previous mission
-    // would use the same objects on the render worker, so finish those first.
-    // Draining here covers every caller, not just the ones that drain already.
+    struct PreloadTimingGuard {
+      const bool enabled;
+      std::chrono::steady_clock::time_point start_time{};
+
+      explicit PreloadTimingGuard(bool is_enabled) : enabled(is_enabled) {
+        if (!enabled)
+          return;
+        start_time = std::chrono::steady_clock::now();
+        const auto start_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                start_time.time_since_epoch())
+                .count();
+        fprintf(stderr, "[PRELOAD_TIMING] start_us=%lld\n",
+                static_cast<long long>(start_us));
+      }
+
+      ~PreloadTimingGuard() {
+        if (!enabled)
+          return;
+        const auto end_time = std::chrono::steady_clock::now();
+        const auto end_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                end_time.time_since_epoch())
+                .count();
+        const auto elapsed_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                end_time - start_time)
+                .count();
+        fprintf(stderr, "[PRELOAD_TIMING] end_us=%lld elapsed_us=%lld\n",
+                static_cast<long long>(end_us),
+                static_cast<long long>(elapsed_us));
+      }
+    } timing_guard{producer_resource_timing_.enabled};
     if (worker_)
       worker_->drain();
     if (reset_pending_)
       ensure_extent();
-    preload_native_model_geometry();
-
-    // Snapshot original native CPU albedo texture slots before allocating any
-    // new normal or prepared texture handles, preventing recursion or dangling
-    // references across textures_ reallocations.
-    const std::size_t source_texture_count = textures_.size();
-    std::vector<int32_t> native_handles;
-    std::vector<mw34::materials::SurfaceKey> mission_source_keys;
-    native_handles.reserve(source_texture_count);
-    if (preload_world_normals)
-      mission_source_keys.reserve(source_texture_count);
-    for (std::size_t slot_index = 0; slot_index < source_texture_count;
-         ++slot_index) {
-      const auto &slot = textures_[slot_index];
-      if (!slot.pixels.empty() && slot.group_load_epoch == group_load_epoch_ &&
-          slot.surface_key.hash != 0) {
-        native_handles.push_back(static_cast<int32_t>(slot_index));
-        if (preload_world_normals)
-          mission_source_keys.push_back(slot.surface_key);
-      }
-    }
-
-    std::vector<int> unique_normal_indices;
-    if (preload_world_normals) {
-      surface_normals_load();
-
-      std::set<int> seen_normal_indices;
-      for (const auto &source_key : mission_source_keys) {
-        const auto authored = surface_normals_.cache.bindings.find(source_key);
-        if (authored != surface_normals_.cache.bindings.end() &&
-            authored->second < 0)
-          continue;
-        mw34::timing::ScopedDuration decode_timer(
-            producer_resource_timing_.page_decode_target());
-        const int normal_index =
-            surface_normals_.cache.surface_normal_index(source_key, true);
-        surface_normals_.peak_decoded_bytes =
-            std::max(surface_normals_.peak_decoded_bytes,
-                     surface_normals_.cache.world_bytes);
-        if (normal_index >= 0 && seen_normal_indices.insert(normal_index).second)
-          unique_normal_indices.push_back(normal_index);
-      }
-    }
-
-    PreparedTextureResources prepared_resources;
-    if (preload_prepared_assets) {
-      prepared_resources =
-          prepared_.resources_for_assets(live_node_source_assets());
-    }
-
-    // Create normal and prepared texture handles outside any active
-    // source-upload scope.
+    renderer_->begin_preload();
+    struct PreloadGuard {
+      vk::Renderer &renderer;
+      ~PreloadGuard() { renderer.end_preload(); }
+    } preload_guard{*renderer_};
     struct ActiveKeyGuard {
-      mw34::materials::SurfaceKey saved_key{};
-      bool had_active_key{false};
-      ActiveKeyGuard() {
-        had_active_key = mw34::materials::get_active_surface_key(&saved_key);
-        if (had_active_key)
-          mw34::materials::clear_active_surface_key();
-      }
+      mw34::materials::SurfaceKey key{};
+      bool active = mw34::materials::get_active_surface_key(&key);
+      ActiveKeyGuard() { mw34::materials::clear_active_surface_key(); }
       ~ActiveKeyGuard() {
-        if (had_active_key)
-          mw34::materials::set_active_surface_key(saved_key);
+        if (active)
+          mw34::materials::set_active_surface_key(key);
         else
           mw34::materials::clear_active_surface_key();
       }
-    } active_key_guard;
-
-    // Warm current-epoch native CPU albedo handles before normal or prepared handles.
-    std::uint64_t native_staged_bytes = 0;
-    for (const int32_t handle : native_handles) {
-      native_staged_bytes += preload_texture_handle(handle);
-    }
-
-    for (const int normal_index : unique_normal_indices) {
-      const int32_t normal_handle = surface_normal_texture(normal_index);
-      preload_texture_handle(normal_handle);
-    }
-
-    std::size_t selected_normal_count = 0;
-    std::uint64_t prepared_staged_bytes = 0;
-    if (preload_prepared_assets) {
-      // Geometry allocation can exceed a frame even when texture receipts are warm.
-      if (geometry_mode_ == cc::geometry::Mode::gpu ||
-          geometry_mode_ == cc::geometry::Mode::partial) {
-        for (const auto *batch : prepared_resources.rigid_batches) {
-          const auto geometry = prepared_geometry(*batch);
-          renderer_->preload_model_geometry(*geometry);
+    } key_guard;
+    std::uint64_t prepared_bytes = 0, world_bytes = 0, native_bytes = 0;
+    std::uint64_t prepared_cpu_nanoseconds = 0;
+    const auto prepared_cpu_target = producer_resource_timing_.enabled
+                                         ? &prepared_cpu_nanoseconds
+                                         : nullptr;
+    std::vector<PendingTextureReceipt> pending_receipts;
+    std::size_t matched_assets = 0, albedos = 0, normals = 0, native_count = 0;
+    try {
+      const auto nodes = ordered_live_nodes();
+      const auto assets = live_node_source_assets(nodes);
+      const auto native_handles = live_native_texture_handles(nodes);
+      auto normal_handles = native_handles;
+      if (world_normals) {
+        // Live nearby pages go first. Retain the previous ample-memory sweep
+        // for other authenticated source pages to keep the first-turn win;
+        // native albedo images themselves still require a live reference.
+        std::set<int32_t> seen(normal_handles.begin(), normal_handles.end());
+        const auto source_count = textures_.size();
+        for (std::size_t index = 0; index < source_count; ++index) {
+          const auto &slot = textures_[index];
+          if (!slot.pixels.empty() && slot.group_load_epoch == group_load_epoch_ &&
+              slot.surface_key.hash && seen.insert(int32_t(index)).second)
+            normal_handles.push_back(int32_t(index));
         }
       }
-      for (const auto *image : prepared_resources.textures) {
-        const int32_t texture_handle = prepared_texture(*image);
-        prepared_staged_bytes += preload_texture_handle(texture_handle);
-      }
-      selected_normal_count =
-          (lighting_.enabled && lighting_.normals)
-              ? prepared_resources.normals.size()
-              : 0;
-      if (lighting_.enabled && lighting_.normals) {
-        for (const auto *normal : prepared_resources.normals) {
-          const int32_t normal_handle = prepared_normal(*normal);
-          prepared_staged_bytes += preload_texture_handle(normal_handle);
+      preload_test_state_.ordered_prepared_assets = assets;
+      preload_test_state_.ordered_native_handles = native_handles;
+      native_count = native_handles.size();
+
+      // Finish each player/nearby prepared asset before moving to the next:
+      // distant model albedos cannot consume the player's normal-map allowance.
+      if (prepared_assets) {
+        for (const auto &asset : assets) {
+          if (renderer_->preload_stopped())
+            break;
+          const auto resources = prepared_.resources_for_assets({asset});
+          matched_assets += resources.matched_source_assets;
+          albedos += resources.textures.size();
+          normals += lighting_.enabled && lighting_.normals ? resources.normals.size() : 0;
+          if (geometry_mode_ == cc::geometry::Mode::gpu ||
+              geometry_mode_ == cc::geometry::Mode::partial)
+            for (const auto *batch : resources.rigid_batches) {
+              if (renderer_->preload_stopped())
+                break;
+              std::shared_ptr<const vk::ModelGeometry> geometry;
+              {
+                mw34::timing::ScopedDuration cpu_timer(prepared_cpu_target);
+                geometry = prepared_geometry(*batch);
+              }
+              renderer_->preload_model_geometry(*geometry);
+            }
+          for (const auto *image : resources.textures) {
+            if (renderer_->preload_stopped())
+              break;
+            int32_t handle;
+            {
+              mw34::timing::ScopedDuration cpu_timer(prepared_cpu_target);
+              handle = prepared_texture(*image);
+            }
+            preload_texture_handle(handle, PreloadTextureStage::prepared, pending_receipts);
+          }
+          if (lighting_.enabled && lighting_.normals)
+            for (const auto *normal : resources.normals) {
+              if (renderer_->preload_stopped())
+                break;
+              int32_t handle;
+              {
+                mw34::timing::ScopedDuration cpu_timer(prepared_cpu_target);
+                handle = prepared_normal(*normal);
+              }
+              preload_texture_handle(handle, PreloadTextureStage::prepared, pending_receipts);
+            }
         }
       }
+      if (world_normals && !renderer_->preload_stopped()) {
+        surface_normals_load();
+        std::set<int> seen;
+        for (const auto handle : normal_handles) {
+          if (renderer_->preload_stopped())
+            break;
+          // Copy before creating a normal handle can reallocate textures_.
+          const auto key = textures_[std::size_t(handle)].surface_key;
+          const auto authored = surface_normals_.cache.bindings.find(key);
+          if (authored != surface_normals_.cache.bindings.end() && authored->second < 0)
+            continue;
+          int index;
+          {
+            mw34::timing::ScopedDuration timer(producer_resource_timing_.page_decode_target());
+            index = surface_normals_.cache.surface_normal_index(key, true);
+          }
+          surface_normals_.peak_decoded_bytes = std::max(
+              surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
+          if (index >= 0 && seen.insert(index).second)
+            preload_texture_handle(surface_normal_texture(index), PreloadTextureStage::world,
+                                   pending_receipts);
+        }
+      }
+      preload_native_model_geometry(nodes);
+      for (const auto handle : native_handles) {
+        if (renderer_->preload_stopped())
+          break;
+        preload_texture_handle(handle, PreloadTextureStage::native, pending_receipts);
+      }
+    } catch (const std::bad_alloc &) {
+      renderer_->stop_preload_host_allocation();
     }
-
-    if (producer_resource_timing_.enabled) {
-      std::fprintf(
-          stderr,
-          "[RESOURCE_TIMING] owner=producer stage=prepared_preload "
-          "source_assets=%zu albedos=%zu normals=%zu staged_bytes=%llu "
-          "native_textures=%zu native_staged_bytes=%llu\n",
-          prepared_resources.matched_source_assets,
-          prepared_resources.textures.size(), selected_normal_count,
-          static_cast<unsigned long long>(prepared_staged_bytes),
-          native_handles.size(),
-          static_cast<unsigned long long>(native_staged_bytes));
+    // Queue/fence failures remain visible outside optional host-allocation handling.
+    renderer_->finalize_preload();
+    try {
+      for (const auto &receipt : pending_receipts) {
+        if (!renderer_->texture_completed(receipt.key, receipt.stamp[0],
+                                          unsigned(receipt.stamp[1]), unsigned(receipt.stamp[2])))
+          continue;
+        submitted_textures_[receipt.key] = receipt.stamp;
+        switch (receipt.stage) {
+        case PreloadTextureStage::prepared:
+          prepared_bytes += receipt.bytes;
+          break;
+        case PreloadTextureStage::world:
+          world_bytes += receipt.bytes;
+          break;
+        case PreloadTextureStage::native:
+          native_bytes += receipt.bytes;
+          break;
+        }
+      }
+    } catch (const std::bad_alloc &) {
+      renderer_->stop_preload_host_allocation();
     }
-
-    surface_normals_.preload_pending = false;
-    prepared_preload_pending_ = false;
+    preload_test_state_.prepared_staged_bytes += prepared_bytes;
+    preload_test_state_.world_normal_staged_bytes += world_bytes;
+    preload_test_state_.native_staged_bytes += native_bytes;
+    if (renderer_->preload_stopped() && !preload_test_state_.stop_log_lines) {
+      const auto &info = renderer_->preload_stop_info();
+      std::fprintf(stderr,
+                   "[PRELOAD] stopped reason=%s result=%d heap=%u requested=%llu "
+                   "usage=%llu budget=%llu headroom=%llu; remaining=lazy\n",
+                   vk::preload_stop_reason_name(info.reason), int(info.vk_result), info.heap_index,
+                   (unsigned long long)info.requested_bytes, (unsigned long long)info.heap_usage_bytes,
+                   (unsigned long long)info.heap_budget_bytes, (unsigned long long)info.headroom_bytes);
+      ++preload_test_state_.stop_log_lines;
+    }
+    if (producer_resource_timing_.enabled)
+      std::fprintf(stderr,
+                   "[RESOURCE_TIMING] owner=producer stage=prepared_preload "
+                   "source_assets=%zu albedos=%zu normals=%zu staged_bytes=%llu "
+                   "world_staged_bytes=%llu native_textures=%zu native_staged_bytes=%llu "
+                   "batch_submissions=%zu peak_batch_bytes=%llu staging_capacity=%llu\n",
+                   matched_assets, albedos, normals, (unsigned long long)prepared_bytes,
+                   (unsigned long long)world_bytes, native_count, (unsigned long long)native_bytes,
+                   renderer_->preload_batch_submissions(),
+                   (unsigned long long)renderer_->preload_peak_bytes(),
+                   (unsigned long long)renderer_->texture_staging_size());
+    if (producer_resource_timing_.enabled)
+      std::fprintf(stderr, "[PRELOAD_PROFILE] prepared_cpu_us=%llu\n",
+                   (unsigned long long)(prepared_cpu_nanoseconds / 1000));
   }
 
   unsigned bind_texture(int handle, bool sharp) {
@@ -2543,6 +2777,7 @@ private:
       prepared_geometry_;
   std::uint64_t group_load_epoch_{1};
   std::map<int, int32_t> surface_normal_textures_;
+  testing::PreloadTestState preload_test_state_;
   bool prepared_preload_pending_{true};
   bool first_world_preload_pending_{false};
   bool logged_first_normal_trace_{false};
@@ -2779,6 +3014,46 @@ testing::NamedTextureTestState testing::named_texture_state(
     if (!typed)
         throw std::runtime_error("Renderer is not a FrameRenderer");
     return typed->named_texture_state_for_test(handle);
+}
+
+static FrameRenderer &preload_impl(VulkanFrameRenderer &renderer) {
+  auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+  if (!typed)
+    throw std::runtime_error("Renderer is not a FrameRenderer");
+  return *typed;
+}
+void set_preload_fault_injection(VulkanFrameRenderer &renderer, const vk::PreloadFaultInjection &fault) {
+  preload_impl(renderer).set_preload_fault_for_test(fault);
+}
+void set_preload_batch_cap(VulkanFrameRenderer &renderer, std::uint64_t bytes) {
+  preload_impl(renderer).set_preload_batch_cap_for_test(bytes);
+}
+void set_preload_memory_block_cap(VulkanFrameRenderer &renderer, std::uint64_t bytes) {
+  preload_impl(renderer).set_preload_memory_block_cap_for_test(bytes);
+}
+PreloadTestState preload_test_state(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).preload_state_for_test();
+}
+bool has_texture_receipt(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
+  return preload_impl(renderer).texture_receipt_for_test(handle, sharp);
+}
+bool is_texture_gpu_resident(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
+  return preload_impl(renderer).backend_for_test().texture_resident(std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
+}
+bool has_partial_texture_cache_entry(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
+  return preload_impl(renderer).backend_for_test().partial_texture(std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
+}
+bool is_model_geometry_gpu_uploaded(VulkanFrameRenderer &renderer, std::uint64_t key) {
+  return preload_impl(renderer).backend_for_test().model_uploaded(key);
+}
+bool has_partial_model_buffer_entry(VulkanFrameRenderer &renderer, std::uint64_t key) {
+  return preload_impl(renderer).backend_for_test().partial_model(key);
+}
+std::uint64_t shared_texture_staging_size(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).backend_for_test().texture_staging_size();
+}
+bool shared_texture_staging_mapped(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).backend_for_test().texture_staging_mapped();
 }
 
 struct RigidCaptureTestAccess {
