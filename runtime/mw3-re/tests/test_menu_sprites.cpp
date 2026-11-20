@@ -669,6 +669,32 @@ void source_selection_checks(const std::filesystem::path& directory) {
                 recorder.uploads[2].width == 12 &&
                 recorder.draws.back().state.texture == 2,
             "Artwork registered after a miss was not used by the next blit");
+    // An atlas, as the loader can produce: full pixels, the sprite in the right half.
+    auto atlas = std::make_shared<platform::HudImage>();
+    atlas->width = 24;
+    atlas->height = 8;
+    atlas->u0 = .5f;
+    atlas->pixels.assign(24 * 8, 0xff00ff00u);
+    hud.register_menu_artwork(identity, atlas);
+    blit();
+    const auto& atlas_quad = recorder.draws.back().vertices;
+    require(hud.frame_stats().artwork_hits == 1 && recorder.uploads.back().width == 24 &&
+                atlas_quad[0].tu == .5f && atlas_quad[2].tu == 1 && atlas_quad[0].sx == 1 &&
+                atlas_quad[2].sx == 4,
+            "An atlas sub-rectangle artwork image was not drawn from its UV rectangle");
+    auto bad_uv = std::make_shared<platform::HudImage>(*atlas);
+    bad_uv->u1 = 1.5f;
+    auto short_pixels = std::make_shared<platform::HudImage>(*atlas);
+    short_pixels->pixels.resize(10);
+    for (const auto& invalid : {bad_uv, short_pixels}) {
+      bool rejected = false;
+      try {
+        hud.register_menu_artwork(identity, invalid);
+      } catch (const std::runtime_error&) {
+        rejected = true;
+      }
+      require(rejected, "Artwork the loader would reject was registered");
+    }
   }
   // Texture allocation failure falls back to CPU composition with a reason.
   {

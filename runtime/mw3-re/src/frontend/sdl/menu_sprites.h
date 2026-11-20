@@ -74,6 +74,14 @@ MenuSpriteQuad menu_sprite_quad(int64_t destination_x, int64_t destination_y, in
                                 int source_height, const platform::HudImage& image,
                                 platform::TextureFilter filter);
 
+// Whether an artwork image is one the --cc-hud-artwork loader could produce
+// (platform::load_hud_artwork) and the draw path can render: 1..8192 texels a
+// side, a pixel buffer holding the whole texture (width x height, because the
+// whole texture is uploaded; an atlas keeps its full pixels and selects its
+// sprite with the UV rectangle), and finite UVs with 0 <= u0 < u1 <= 1 and
+// 0 <= v0 < v1 <= 1.
+bool menu_artwork_image_valid(const platform::HudImage& image);
+
 // blit16's per-pixel transparency, exactly (Mech3.exe 1.2 @ 0x0055b3c0, RGB565
 // target): an alpha plane value at or below 3 is not drawn and one at or above
 // 0xfc is drawn opaque; without an alpha plane, a colour-keyed image (flag 0x02)

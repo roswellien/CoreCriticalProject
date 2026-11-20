@@ -128,6 +128,17 @@ MenuSpriteQuad menu_sprite_quad(int64_t destination_x, int64_t destination_y, in
   return quad;
 }
 
+bool menu_artwork_image_valid(const platform::HudImage& image) {
+  const bool size_ok = image.width > 0 && image.height > 0 && image.width <= 8192 &&
+                       image.height <= 8192 &&
+                       image.pixels.size() == size_t(image.width) * image.height;
+  const bool uvs_finite = std::isfinite(image.u0) && std::isfinite(image.v0) &&
+                          std::isfinite(image.u1) && std::isfinite(image.v1);
+  const bool uvs_ordered = image.u0 >= 0 && image.v0 >= 0 && image.u0 < image.u1 &&
+                           image.v0 < image.v1 && image.u1 <= 1 && image.v1 <= 1;
+  return size_ok && uvs_finite && uvs_ordered;
+}
+
 unsigned menu_sprite_alpha(bool has_alpha_plane, uint8_t alpha_plane_value, bool keyed,
                            uint16_t compared_value, uint16_t key) {
   if (has_alpha_plane) {
@@ -151,8 +162,7 @@ void GpuHud::set_menu_presentation(float menu_scale) {
 
 void GpuHud::register_menu_artwork(uint64_t identity,
                                    std::shared_ptr<const platform::HudImage> image) {
-  if (!image || image->width == 0 || image->height == 0 ||
-      image->pixels.size() != size_t(image->width) * image->height)
+  if (!image || !menu_artwork_image_valid(*image))
     throw std::runtime_error("Invalid menu artwork image");
   artwork_[identity] = std::move(image);
   ++artwork_generation_;
