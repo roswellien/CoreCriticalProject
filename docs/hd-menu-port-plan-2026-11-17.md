@@ -167,6 +167,44 @@ The stages are A, B, C, D, E as in the delivery sequence above:
    stays as the fallback until tests prove the GPU path), **stage D** (text and sprites at output
    scale) and **stage E** (ultrawide layout and documentation).
 
+## Stage D implementation notes (2026-11-19)
+
+Stage D is implemented as an opt-in step of a GPU HUD menu frame. It changes nothing on its
+own: the presenter that draws the menu through `GpuHud` (the live menu switch, a separate
+branch) calls `GpuHud::set_menu_presentation(menu_presentation_scale(...))` after starting
+the frame. Until that call exists, menu frames look as before.
+
+- **Where menu text and sprites come from.** Every menu bitmap reaches the 16-bit canvas
+  through `ztwod::Host::blit` (`runtime/mw3-re/src/gamez/ztwod/twod_host.cpp`), which is
+  `zrndr::blit16`. Its menu callers are `twod_wintext.cpp` (text images), `twod_object.cpp`
+  (images, buttons, animation frames, backgrounds), `twod_list.cpp` (list fill and empty
+  bars), `twod_dialog.cpp` (the saved backdrop), `briefing.cpp` and `app_fmv.cpp` (movie
+  frames). Text is GDI text drawn into an image by `SdlTwodHost::DrawTextA`; two-colour fonts
+  are then tinted row by row in `FontText::render`. The zFont bitmap-font calls
+  (`Host::font_draw`) are unported and not used on SDL.
+- **Sources, in order.** Text the host can re-rasterise at the menu scale
+  (`hud_text_image`, now including the two-colour row tint); then a registered `MW3H-v1`
+  artwork image whose identity matches (the same contract as the HUD pack, so the launcher's
+  `com.mw3remaster.menu` sprites apply unchanged); then the game's own pixels.
+- **Sampling.** Re-rasterised text and native text images are sampled nearest, so letters stay
+  crisp and the output-scale raster keeps exactly the antialiasing it was made with. Artwork and
+  other native images (photos, portraits, buttons) are sampled linearly; a crop edge inside the
+  image is moved in by half a texel so a sprite sheet cannot bleed into its neighbour frame.
+- **Transparency.** blit16's colour key (pixel, or palette index for indexed images) and its
+  alpha thresholds (0..3 not drawn, 0xfc..0xff opaque) are applied exactly to the texels. Mid
+  alphas blend on the GPU; they match the CPU RGB565 blend within one 565 step. Alpha-plane
+  images are drawn from their source while stage D is active, instead of as stage B's resolved
+  regions.
+- **Scale.** `menu_presentation_scale` is the uniform scale of the centred 640x480 menu in the
+  output (owner decision: text scales with the 4:3 menu), never below 1.
+- **Fallback.** An invalid palette index or a texture allocation failure records a shadow
+  reason and the frame uses CPU composition. A text raster failure keeps the native image and is
+  logged once. Artwork misses are logged once per identity, at most 64 identities.
+- **Escape hatch.** `MW3_HD_MENU_SPRITES=0` (also `off`, `false`, `no`) turns stage D off for a
+  run; `HudOptions::menu_sprites` does the same for tests.
+- **Checks.** `mw3menu_sprite_checks` (`runtime/mw3-re/tests/test_menu_sprites.cpp`); run it with
+  `--fonts DIR` to include the two-colour text raster check, which needs Arial.
+
 ## Risks and live-only validation
 
 - The observer reports only draws made while it is installed. Starting it at
