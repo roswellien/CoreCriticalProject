@@ -29,6 +29,7 @@ enum class Primitive : uint8_t { kPoints = 1, kStrip = 5, kFan = 6 };  // D3DPRI
 
 // Host-only diagnostic values; no native texture or vertex layout is changed.
 enum class DrawQueue : uint8_t { Immediate, Transparent, Overlay };
+enum class TextureFilter : uint8_t { kDefault, kNearest, kLinear };
 struct FlareSpriteDiagnostic {
   int32_t slot = -1;
   float half_size_pixels = 0;  // before clipping, in the producer's screen pixels
@@ -43,6 +44,11 @@ struct DrawState {
   bool blend = false;              // ALPHABLENDENABLE
   bool additive = false;           // SRCBLEND ONE, DESTBLEND ONE
   bool multiply = false;           // the shadow passes: SRCBLEND ZERO, DESTBLEND SRCCOLOR
+  // Ours, the HD menu's gain and added-light maps (platform::MenuBackgroundGpuMap); both need
+  // blend set. brighten: SRCBLEND DESTCOLOR, DESTBLEND ONE (destination * (1 + source)).
+  // subtract: BLENDOP REVSUBTRACT with ONE, ONE (destination - source).
+  bool brighten = false;
+  bool subtract = false;
   bool unsupported_blend = false;  // Source/destination pair outside the modeled modes
   int32_t source_blend = 5, destination_blend = 6;  // D3D factors retained for failure diagnostics
   bool depth_write = true;         // ZWRITEENABLE
@@ -54,6 +60,9 @@ struct DrawState {
   bool color_select = false;       // COLOROP SELECTARG1: the texture's colour alone (shadow passes)
   uint8_t texcoord = 0;            // TEXCOORDINDEX: which UV set of a draw_multi vertex
   bool sharp = false;              // ours: the 2D layer, a texel a game pixel, premultiplied, scaled sharp
+  // Explicit canvas sampling bypasses sharp's fractional edge smoothing.
+  // kDefault preserves every existing world/HUD sampling policy.
+  TextureFilter filter = TextureFilter::kDefault;
   FlareSpriteDiagnostic flare_diagnostic{};
   DrawQueue queue = DrawQueue::Immediate;
 };

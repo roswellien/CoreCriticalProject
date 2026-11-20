@@ -109,6 +109,9 @@ struct TextureRef {
 };
 // Fixed-function state that selects a pipeline: blend enable/source/destination
 // (D3DBLEND), depth enable/function (D3DCMP)/write, cull mode (D3DCULL).
+// A PipelineKey source factor past D3DBLEND's range: source and destination ONE combined by
+// VK_BLEND_OP_REVERSE_SUBTRACT (destination - source), for the HD menu's negative added light.
+constexpr std::uint8_t kReverseSubtractBlend = 14;
 struct PipelineKey {
   std::uint8_t blend, src, dst, zenable, zfunc, zwrite, cull,
       points = 0; // points: D3DPT_POINTLIST input assembly
@@ -1161,6 +1164,50 @@ public:
     scene_pending = true;
   }
   std::uint64_t fxaa_passes{}, af_samplers{}, mip_levels_uploaded{};
+  void prepare_canvas_textures(const std::vector<TextureRef> &references) {
+      // No commands reference these allocations yet. Settle earlier GPU work
+      // before resizing shared staging storage or replacing an image.
+      if (!device)
+          init();
+      settle();
+      VkDeviceSize upload_bytes = 0;
+      for (const auto &reference : references)
+          upload_bytes += VkDeviceSize(reference.width) * reference.height * 4;
+      Buffer replacement;
+      std::vector<std::uint64_t> allocated_keys;
+      const auto release_buffer = [this](Buffer &buffer) {
+          if (buffer.buffer)
+              f.vkDestroyBuffer(device, buffer.buffer, nullptr);
+          if (buffer.memory)
+              f.vkFreeMemory(device, buffer.memory, nullptr);
+          buffer = {};
+      };
+      try {
+          // Keep the previous staging buffer usable if a larger optional upload fails.
+          if (texUpload.size < upload_bytes)
+              ensure(replacement, upload_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
+          for (const auto &reference : references) {
+              auto &texture = textures[reference.key];
+              if (texture.image && texture.width == reference.width &&
+                  texture.height == reference.height) {
+                  continue;
+              }
+              destroy(texture);
+              // Track before create(): a failed allocation can own partial resources.
+              allocated_keys.push_back(reference.key);
+              create(texture, reference.width, reference.height);
+          }
+      } catch (...) {
+          for (const auto key : allocated_keys)
+              destroy(textures.at(key));
+          release_buffer(replacement);
+          throw;
+      }
+      if (replacement.buffer) {
+          release_buffer(texUpload);
+          texUpload = replacement;
+      }
+  }
   std::uint64_t emission_draw_records{}, emission_payloads{};
   // Query the actual scene/presenter device, avoiding a throwaway render device
   // when enhanced texture banks need dimensions beyond the original 256 cap.
@@ -4736,7 +4783,10 @@ private:
     cb.colorWriteMask = 15;
     cb.blendEnable = k.blend;
     unsigned src = k.src, dst = k.dst;
-    if (src == 12) {
+    if (src == kReverseSubtractBlend) {
+      src = dst = 2;
+      cb.colorBlendOp = VK_BLEND_OP_REVERSE_SUBTRACT;
+    } else if (src == 12) {
       src = 5;
       dst = 6;
     } else if (src == 13) {

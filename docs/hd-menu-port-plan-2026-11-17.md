@@ -128,15 +128,28 @@ background and menu hit regions must not acquire inconsistent policies.
 - **Wrap width:** the scroll wraps at the HD image's own width: 1920 source pixels for the wide
   master, and 1280 original-game pixels (the full 5760-wide master at 4.5x) for the existing
   master.
-- **Scroll speed:** the ORIGINAL game's speed. **Source facts:** the native host steps the menu
-  scroll by 1 px per 30 fps step (`menu_widgets.h:27`, `frames_due` in `menu_widgets.cpp:29` with
-  the zfix per-second constant), which is 30 px/s. The figure "about 60 px/s" comes only from the
-  previous runtime's menu patch (`tools/remaster-launcher/apply_menu_hd.py` and
-  `tools/remaster-launcher/apply_menu_scroll_time.py`). The GPU background PR must confirm the
-  speed against the original Mech3.exe behaviour at its native rate before it chooses the
-  constant, and record the answer here.
+- **Scroll speed (owner decision, 2026-11-19):** a FIXED 60 px/s per axis, in source pixels of the
+  original 1280x960 image, from elapsed time and independent of the presented frame rate. This is what
+  the original looked like at 60 Hz and what the previous runtime patch did. **Source facts:** the
+  original 0x40A210 moves the view 1 px per presented frame with no time basis (about 143 px/s at
+  144 fps), the port previously stepped once per 1/30 s (30 px/s), and the "about 60 px/s" figure came
+  from `tools/remaster-launcher/apply_menu_scroll_time.py`. `ScrollImage::update` now steps 60 times a
+  second (`menu_widgets.cpp`, `main_menu_moves_per_second`). Its steps are texels of the bound
+  game texture, which remains 1280 pixels wide. Presentation converts both the horizontal scroll
+  origin and the view span by `master.source_width / game_texture.width`: 60 original-game px/s
+  becomes 90 master-source px/s on the 1920-wide master. One 1280-pixel game cycle therefore covers
+  the entire 1920-pixel master, including the extra 640 columns, and wraps at its own width.
+  Scaling the view span by the same ratio preserves on-screen speed; changing only the origin
+  would accelerate it. For the existing 1280-source-pixel master (5760 HD texels at 4.5x), the
+  ratio is one. Vertical coordinates use the corresponding game texture height. CPU and GPU
+  coordinates correspond within 8-bit quantization tolerance, rather than promising exact pixels.
 - **Art assets:** the owner's HD art candidates live in a local, untracked folder and are never
   committed.
+- **Menu layout (owner decision, 2026-11-19):** the menu keeps its 4:3 layout; the background fills
+  the full screen resolution; menu text scales with the 4:3 menu; the cursor scales with the menu.
+  These are recorded as named constants in `runtime/mw3-re/src/gamez/zrender/zrndr_blit.h`
+  (`kMenuKeepsFourByThreeLayout`, `kMenuBackgroundFillsScreen`, `kMenuTextScalesWithMenu`,
+  `kCursorUsesMenuLogicalTransform`).
 
 ## Order of work (priorities: no crashes first, then the HD menu at full speed on the GPU)
 
@@ -169,6 +182,21 @@ The stages are A, B, C, D, E as in the delivery sequence above:
 - A 5760x4320 RGB background is large, but that size is not verified from the
   tracked asset. Texture limits, upload cost, caching, and memory pressure must
   be checked against the actual locally supplied asset and target hardware.
+- The texture upload API exposes no mip levels. The GPU menu upload is area-filtered once on
+  the CPU to at most twice the initial window height (2160 when no window is supplied), because
+  the original 480-high view spans half the 960-high background canvas. This reduces scrolling
+  shimmer near the initial display size while retaining the full source for CPU composition.
+  Resizing does not regenerate this upload; smaller windows can still minify it and larger ones
+  can lose detail. Filtered GPU output and full-source CPU output correspond within 8-bit
+  quantization tolerance only where filtering footprints agree; filtering detail can differ.
+- Invalid or mismatched background inputs retain native-frame presentation, with one diagnostic.
+  Optional GPU image/map allocation failures select CPU composition. Vulkan texture and staging
+  allocations are preflighted before draw submission so their failure does not stop the render
+  worker. CPU fallback uses the same cleared surround as explicit CPU mode; it does not extrapolate
+  a repeating image from only the first recorded blit.
+- Classification still compares the full native frame and recorded blits. Scrolling changes both,
+  so the whole-frame cache misses on each scrolling frame even when unchanged correction maps
+  require no upload. This remains a known CPU cost; UV-only GPU updates do not remove classification.
 - Headless tests can check recorded draws, pixel math, asset parsing, geometry,
   and input transforms. Only a live game run can verify the actual animated
   menu, real draw order, transitions, cursor interactions, navigation, quit,

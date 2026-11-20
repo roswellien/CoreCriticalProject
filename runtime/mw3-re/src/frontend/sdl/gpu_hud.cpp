@@ -34,6 +34,32 @@ void fold(uint64_t& hash, uint32_t value) {
     hash *= 0x100000001b3ULL;
   }
 }
+const char* normalize_reason(const char* operation) {
+  return (operation && *operation) ? operation : "unknown write";
+}
+void bump_bounded_reason(std::map<std::string, uint64_t>& reasons, const char* key,
+                         uint64_t* count_out = nullptr) {
+  auto found = reasons.find(key);
+  if (found != reasons.end()) {
+    const uint64_t count = ++found->second;
+    if (count_out) *count_out = count;
+    return;
+  }
+  const auto other_it = reasons.find("other");
+  const size_t distinct_keys = reasons.size() - (other_it != reasons.end() ? 1 : 0);
+  const char* actual_key = distinct_keys < GpuHud::kMaxReasonKeys ? key : "other";
+  const uint64_t count = ++reasons[actual_key];
+  if (count_out) *count_out = count;
+}
+void log_first_use_reason(std::set<std::string>& logged, const char* key) {
+  if (logged.find(key) != logged.end()) return;
+  const auto other_it = logged.find("other");
+  const size_t distinct_keys = logged.size() - (other_it != logged.end() ? 1 : 0);
+  const char* actual_key = distinct_keys < GpuHud::kMaxReasonKeys ? key : "other";
+  if (logged.insert(actual_key).second) {
+    std::fprintf(stderr, "GPU HUD: using native shadow composition for %s\n", actual_key);
+  }
+}
 }  // namespace
 GpuHud::GpuHud(FrameRenderer& renderer, const HudOptions& options)
     : renderer_(renderer), options_(options) {
@@ -102,6 +128,8 @@ void GpuHud::begin_frame(const uint16_t* target, int width, int height, int pitc
   shadow_layer_ = false;
   observation_only_ = observation_only;
   observed_draws_ = 0;
+  frame_resolved_bytes_ = 0;
+  frame_resolved_regions_ = 0;
   frame_stats_ = {};
   density_ = std::max(1.f, float(output_height) / height);
   vertices_.clear();
@@ -129,6 +157,8 @@ void GpuHud::cancel() {
   vertices_.clear();
   commands_.clear();
   observation_only_ = false;
+  frame_resolved_bytes_ = 0;
+  frame_resolved_regions_ = 0;
   frame_stats_ = {};
 }
 bool GpuHud::finish() {
@@ -154,6 +184,24 @@ bool GpuHud::finish() {
     return observed;
   }
   if (commands_.empty()) return false;
+  try {
+    std::vector<int32_t> preflight_textures;
+    for (const auto& command : commands_) {
+      if (command.texture >= 0 &&
+          std::find(preflight_textures.begin(), preflight_textures.end(), command.texture) ==
+              preflight_textures.end()) {
+        preflight_textures.push_back(command.texture);
+      }
+    }
+    if (!preflight_textures.empty()) {
+      renderer_.prepare_canvas_textures(preflight_textures);
+    }
+  } catch (...) {
+    record_shadow_reason("texture preflight failed");
+    ++shadow_layers_;
+    frame_stats_.fallback = true;
+    return false;
+  }
   int x, y, width, height;
   renderer_.flush();
   renderer_.viewport(&x, &y, &width, &height);
@@ -166,6 +214,7 @@ bool GpuHud::finish() {
     state.depth_always = true;
     state.depth_write = false;
     state.sharp = command.sharp;
+    state.filter = command.filter;
     state.address_u = state.address_v = 3;
     renderer_.draw(command.primitive, vertices_.data() + command.first,
                    static_cast<int>(command.count), state);
@@ -177,24 +226,87 @@ bool GpuHud::finish() {
   commands_.clear();
   return true;
 }
-void GpuHud::framebuffer_write(const void* target, const char* operation) {
-  int x, y;
-  if (!position(static_cast<const uint16_t*>(target), x, y)) return;
+void GpuHud::record_shadow_reason(const char* operation) {
+  const char* reason = normalize_reason(operation);
   if (observation_only_) {
-    // Observation keeps counting every reason after the first, and stays out of the
-    // in-mission lifetime counters and their first-use log line.
+    // Observation keeps counting every reason after the first, logs once per distinct reason
+    // across frames, and stays out of the in-mission lifetime counters.
     shadow_layer_ = true;
-    ++frame_stats_.shadow_reasons[operation];
+    bump_bounded_reason(frame_stats_.shadow_reasons, reason);
+    log_first_use_reason(logged_shadow_reasons_, reason);
     return;
   }
   if (shadow_layer_) return;
   shadow_layer_ = true;
-  ++frame_stats_.shadow_reasons[operation];
-  const auto count = ++shadow_reasons_[operation];
-  if (count == 1)
-    std::fprintf(stderr, "GPU HUD: using native shadow composition for %s\n", operation);
+  bump_bounded_reason(frame_stats_.shadow_reasons, reason);
+  bump_bounded_reason(shadow_reasons_, reason);
+  log_first_use_reason(logged_shadow_reasons_, reason);
   vertices_.clear();
   commands_.clear();
+}
+void GpuHud::framebuffer_write(const void* target, const char* operation) {
+  int x, y;
+  if (!position(static_cast<const uint16_t*>(target), x, y)) return;
+  record_shadow_reason(operation);
+}
+void GpuHud::resolved_region(const uint16_t* destination, uint32_t width, uint32_t height,
+                             uint32_t pitch_bytes, const char* operation) {
+  if ((shadow_layer_ && !observation_only_) || !target_) return;
+  FloatScope scope;
+  int x = 0, y = 0;
+  if (!destination || !position(destination, x, y) ||
+      zrndr::target2d().base != reinterpret_cast<const uint8_t*>(target_)) {
+    record_shadow_reason(operation);
+    return;
+  }
+  if (zrndr::target2d().format != 6) {
+    record_shadow_reason("RGB555 target");
+    return;
+  }
+  if (zrndr::layer_cover().alpha != nullptr) {
+    record_shadow_reason(operation);
+    return;
+  }
+  // position() already refuses row padding, but the start must be checked here too: the
+  // unsigned subtractions below would wrap to a huge limit if x or y ever reached the edge.
+  const bool start_inside_surface = x >= 0 && y >= 0 && x < width_ && y < height_;
+  if (!start_inside_surface || width == 0 || height == 0 ||
+      pitch_bytes != static_cast<uint32_t>(pitch_) ||
+      width > static_cast<uint32_t>(width_ - x) || height > static_cast<uint32_t>(height_ - y)) {
+    record_shadow_reason(operation);
+    return;
+  }
+  const uint64_t bytes = uint64_t(width) * uint64_t(height) * sizeof(uint32_t);
+  if (frame_resolved_regions_ >= kMaxFrameResolvedRegions || bytes > kMaxFrameResolvedBytes ||
+      frame_resolved_bytes_ > kMaxFrameResolvedBytes - bytes) {
+    record_shadow_reason("resolved region budget exceeded");
+    return;
+  }
+  ++frame_resolved_regions_;
+  frame_resolved_bytes_ += bytes;
+  ++observed_draws_;
+  ++frame_stats_.resolved_regions;
+  if (observation_only_) return;
+  try {
+    auto resolved = std::make_shared<platform::HudImage>();
+    resolved->width = width;
+    resolved->height = height;
+    resolved->pixels.resize(size_t(width) * height);
+    const auto* base_bytes = reinterpret_cast<const uint8_t*>(destination);
+    for (uint32_t row = 0; row < height; ++row) {
+      const auto* src_row = reinterpret_cast<const uint16_t*>(base_bytes + size_t(row) * pitch_bytes);
+      uint32_t* dst_row = resolved->pixels.data() + size_t(row) * width;
+      for (uint32_t col = 0; col < width; ++col) {
+        dst_row[col] = rgba(src_row[col], 255);
+      }
+    }
+    const int handle = texture(resolved);
+    rectangle(float(x), float(y), float(x + int(width)), float(y + int(height)), 0xffffffffu,
+              handle, 0.f, 0.f, 1.f, 1.f, platform::TextureFilter::kNearest);
+    ++resolved_regions_;
+  } catch (...) {
+    record_shadow_reason("texture allocation failed");
+  }
 }
 int GpuHud::texture(const std::shared_ptr<const platform::HudImage>& image) {
   auto found = resources_.find(image.get());
@@ -206,19 +318,24 @@ int GpuHud::texture(const std::shared_ptr<const platform::HudImage>& image) {
       renderer_.create_texture(static_cast<int>(image->width), static_cast<int>(image->height),
                                reinterpret_cast<const uint8_t*>(image->pixels.data()), 1);
   if (handle < 0) throw std::runtime_error("GPU HUD texture allocation failed");
-  resources_.emplace(image.get(), Resource{image, handle, frame_});
+  try {
+    resources_.emplace(image.get(), Resource{image, handle, frame_});
+  } catch (...) {
+    renderer_.release_texture(handle);
+    throw;
+  }
   resource_bytes_ += image->pixels.size() * sizeof(uint32_t);
   return handle;
 }
 void GpuHud::append(platform::TLVertex vertex, int image, platform::Primitive primitive,
-                    bool sharp) {
-  commands_.push_back({image, static_cast<unsigned>(vertices_.size()), 0, primitive, sharp});
+                    bool sharp, platform::TextureFilter filter) {
+  commands_.push_back({image, static_cast<unsigned>(vertices_.size()), 0, primitive, sharp, filter});
   vertices_.push_back(vertex);
   ++commands_.back().count;
 }
 void GpuHud::rectangle(float x0, float y0, float x1, float y1, uint32_t colour, int image, float u0,
-                       float v0, float u1, float v1) {
-  append({x0, y0, 0, 1, colour, 0, u0, v0}, image, platform::Primitive::kFan, image >= 0);
+                       float v0, float u1, float v1, platform::TextureFilter filter) {
+  append({x0, y0, 0, 1, colour, 0, u0, v0}, image, platform::Primitive::kFan, image >= 0, filter);
   // One fan must retain its four vertices; subsequent rectangles are separate.
   vertices_.push_back({x1, y0, 0, 1, colour, 0, u1, v0});
   vertices_.push_back({x1, y1, 0, 1, colour, 0, u1, v1});

@@ -1046,6 +1046,33 @@ public:
     viewport_ = {x, y, width, height};
   }
 
+  void prepare_canvas_textures(const std::vector<int32_t> &handles) override {
+      std::vector<vk::TextureRef> references;
+      for (const auto handle : handles) {
+          const auto &entry = textures_.at(handle);
+          references.push_back({std::uint64_t(handle) * 2 + 2,
+                                entry.version,
+                                entry.width,
+                                entry.height,
+                                vk::TexFormat::rgba8888,
+                                {},
+                                {}});
+      }
+      const auto prepare = [this, &references] {
+          // Return the failure as data: letting it escape a worker job permanently
+          // stops that worker, including the CPU compositor's subsequent uploads.
+          try {
+              renderer_->prepare_canvas_textures(references);
+              return std::exception_ptr{};
+          } catch (...) {
+              return std::current_exception();
+          }
+      };
+      const auto failure = worker_ ? worker_->call(prepare) : prepare();
+      if (failure)
+          std::rethrow_exception(failure);
+  }
+
   int32_t create_texture(int width, int height, const uint8_t *rgba,
                          uint8_t) override {
     if (width <= 0 || height <= 0 || unsigned(width) > texture_limit_ ||
@@ -1660,11 +1687,14 @@ private:
         draw.normal_texture = int(bind_texture(normal_handle, false));
       }
     }
-    const bool sharp = state.sharp && state.texture >= 0 &&
+    const bool sharp = state.sharp && state.filter == ::platform::TextureFilter::kDefault &&
+                       state.texture >= 0 &&
                        !textures_.at(state.texture).held_copy;
     draw.sampler = (state.address_u == 3 ? 3U : 1U) << 4 |
                    (state.address_v == 3 ? 3U : 1U) << 8 |
-                   (state.sharp && !sharp ? 0U : 3U);
+                   (state.filter == ::platform::TextureFilter::kNearest ? 0U :
+                    state.filter == ::platform::TextureFilter::kLinear ? 3U :
+                    state.sharp && !sharp ? 0U : 3U);
     if (!hud)
       draw.sampler |= 0x10000U;
     const auto flare = state.flare_diagnostic;
@@ -1703,9 +1733,19 @@ private:
             viewport[2], viewport[3], scene_.width, scene_.height, int(hud));
       }
     }
+    // D3DBLEND factors; 14 is ours: ONE, ONE through a reverse subtract (vk_scene's pipeline).
+    uint8_t source_factor = 5, destination_factor = 6;
+    if (state.multiply)
+      source_factor = 1, destination_factor = 3;
+    else if (state.brighten)
+      source_factor = 9, destination_factor = 2;
+    else if (state.subtract)
+      source_factor = vk::kReverseSubtractBlend, destination_factor = 2;
+    else if (state.additive)
+      source_factor = 2, destination_factor = 2;
     draw.key = {uint8_t(state.blend || state.multiply),
-                uint8_t(state.multiply ? 1 : state.additive ? 2 : 5),
-                uint8_t(state.multiply ? 3 : state.additive ? 2 : 6),
+                source_factor,
+                destination_factor,
                 1,
                 uint8_t(state.depth_always ? 8 : 7),
                 uint8_t(state.depth_write),

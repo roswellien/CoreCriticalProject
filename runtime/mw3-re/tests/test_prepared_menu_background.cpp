@@ -70,6 +70,13 @@ float reference_channel_value(uint16_t pixel, int index, bool rgb565) {
   return float(pixel & 31) * (255.f / 31);
 }
 
+// The RGB565 code of one channel (0 red, 1 green, 2 blue).
+unsigned reference_channel_code(uint16_t pixel, int index) {
+  if (index == 0) return (pixel >> 11) & 31;
+  if (index == 1) return (pixel >> 5) & 63;
+  return pixel & 31;
+}
+
 uint16_t reference_rgb565(int red, int green, int blue) {
   const auto red_bits = unsigned(std::clamp(red, 0, 255) * 31 / 255);
   const auto green_bits = unsigned(std::clamp(green, 0, 255) * 63 / 255);
@@ -172,7 +179,9 @@ std::vector<uint32_t> brute_force_compose(
     for (int x = 0; x < width; ++x) {
       const size_t index = size_t(y) * width + x;
       if (type[index] != 1) continue;
-      std::array<float, 3> rendered_sum{}, background_sum{};
+      // The sums are exact: each channel value is an integer code times 255 over the largest
+      // code, so the codes are summed and scaled once.
+      std::array<unsigned, 3> rendered_sum{}, background_sum{};
       for (int dy = -2; dy <= 2; ++dy) {
         const int neighbor_y = y + dy;
         if (neighbor_y < 0 || neighbor_y >= height) continue;
@@ -181,15 +190,21 @@ std::vector<uint32_t> brute_force_compose(
           if (neighbor_x < 0 || neighbor_x >= width) continue;
           const size_t neighbor = size_t(neighbor_y) * width + neighbor_x;
           if (type[neighbor] != 1) continue;
+          const uint16_t rendered_pixel = frame[neighbor];
+          const uint16_t background_pixel = background_pixels[
+              size_t(source_y[neighbor]) * source.width_again + source_x[neighbor]];
           for (int channel = 0; channel < 3; ++channel) {
-            rendered_sum[channel] += rendered[neighbor][channel];
-            background_sum[channel] += background[neighbor][channel];
+            rendered_sum[channel] += reference_channel_code(rendered_pixel, channel);
+            background_sum[channel] += reference_channel_code(background_pixel, channel);
           }
         }
       }
-      for (int channel = 0; channel < 3; ++channel)
+      for (int channel = 0; channel < 3; ++channel) {
+        const float scale = channel == 1 ? 255.f / 63 : 255.f / 31;
         correction[index][channel] =
-            (rendered_sum[channel] + 4.f) / (background_sum[channel] + 4.f);
+            std::min(4.f, (float(rendered_sum[channel]) * scale + 4.f) /
+                              (float(background_sum[channel]) * scale + 4.f));
+      }
     }
   }
   require(std::find(type.begin(), type.end(), 2) != type.end(),
@@ -661,6 +676,467 @@ void menu_background_output_cap_preserves_fit_and_layer_rect() {
               smaller_window.width == 960 && smaller_window.height == 720,
           "Smaller-window output did not follow the full fit");
 }
+
+void gpu_cover_and_uv_geometry() {
+  struct CoverCase {
+    int width, height;
+    float x, y, covered_width, covered_height;
+  };
+  const CoverCase cases[] = {{3440, 1440, 0, -570, 3440, 2580},
+                             {1920, 1080, 0, -180, 1920, 1440},
+                             {640, 480, 0, 0, 640, 480},
+                             {5120, 1440, 0, -1200, 5120, 3840},
+                             {480, 640, -186.66667f, 0, 853.33333f, 640}};
+  for (const auto& entry : cases) {
+    const auto rect = platform::menu_background_cover_rect(640, 480, entry.width, entry.height);
+    require(std::abs(rect.x - entry.x) < .001f && std::abs(rect.y - entry.y) < .001f &&
+                std::abs(rect.width - entry.covered_width) < .001f &&
+                std::abs(rect.height - entry.covered_height) < .001f,
+            "Menu cover no longer uniformly fills the output and centers the crop");
+    const double scale = std::min(double(entry.width) / 640, double(entry.height) / 480);
+    const platform::MenuBackgroundLayerRect fitted{
+        float((entry.width - 640 * scale) * .5), float((entry.height - 480 * scale) * .5),
+        float(640 * scale), float(480 * scale)};
+    const platform::MenuBackgroundUvRect native_uv{.9f, .75f, 1.4f, 1.75f};
+    const auto extended = platform::menu_background_extend_uv(native_uv, fitted, rect);
+    // Re-evaluate the covering quad at the native frame corners: source
+    // correspondence must survive while the repeating image fills the margins.
+    const double left = extended.u0 + (double(fitted.x) - rect.x) / rect.width *
+                                         (double(extended.u1) - extended.u0);
+    const double top = extended.v0 + (double(fitted.y) - rect.y) / rect.height *
+                                        (double(extended.v1) - extended.v0);
+    const double right = extended.u0 + (double(fitted.x) + fitted.width - rect.x) / rect.width *
+                                          (double(extended.u1) - extended.u0);
+    const double bottom = extended.v0 + (double(fitted.y) + fitted.height - rect.y) / rect.height *
+                                           (double(extended.v1) - extended.v0);
+    require(std::abs(left - native_uv.u0) < .000001 && std::abs(top - native_uv.v0) < .000001 &&
+                std::abs(right - native_uv.u1) < .000001 && std::abs(bottom - native_uv.v1) < .000001,
+            "Menu cover extension moved the native scroll mapping or control corrections");
+  }
+  for (unsigned master_width : {1280u, 1920u}) {
+    const auto covered_master = platform::menu_background_cover_rect(int(master_width), 480, 3440, 1440);
+    const float expected_left = master_width == 1280 ? -200.f : -1160.f;
+    require(covered_master.x == expected_left && covered_master.y == 0 &&
+                covered_master.width == master_width * 3.f && covered_master.height == 1440,
+            "Wide menu masters no longer cover ultrawide output at a uniform scale");
+    platform::MenuBackgroundImage image;
+    image.source_width = master_width;
+    image.source_height = 480;
+    image.width = master_width * 3;
+    image.height = 1440;
+    for (int64_t offset : {int64_t(0), int64_t(master_width - 1),
+                           int64_t(master_width + 13), int64_t(master_width) * 5 + 13,
+                           int64_t(-1)}) {
+      const auto uv = platform::menu_background_uv_rect(image, offset, 479, 640, 480);
+      const int64_t wrapped = (offset % master_width + master_width) % master_width;
+      const double expected_u = double(wrapped) / master_width + .5 / image.width;
+      require(std::abs(uv.u0 - expected_u) < .000001 &&
+                  std::abs(uv.u1 - uv.u0 - 640.0 / master_width) < .000001 &&
+                  std::abs(uv.v0 - (479.0 / 480 + .5 / image.height)) < .000001 &&
+                  std::abs(uv.v1 - uv.v0 - 1.0) < .000001,
+              "Menu UV phase, half-texel convention or native-image wrap changed");
+    }
+  }
+  bool rejected = false;
+  try {
+    platform::menu_background_cover_rect(0, 480, 1920, 1080);
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  require(rejected, "Menu cover accepted an invalid required dimension");
+  rejected = false;
+  try {
+    platform::menu_background_uv_rect({}, 0, 0, 640, 480);
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  require(rejected, "Menu UV rectangle accepted an invalid image");
+}
+
+void wide_master_prepares_from_game_texture_across_wrap() {
+    constexpr int game_width = 1280, source_height = 960;
+    constexpr int frame_width = 16, frame_height = 4;
+    constexpr uint16_t original = uint16_t((12 << 11) | (25 << 5) | 12);
+    std::vector<uint16_t> source_pixels(size_t(game_width) * source_height, original);
+    std::vector<uint16_t> frame(frame_width * frame_height, original);
+    zimg::Texture source{};
+    source.width = source.width_again = game_width;
+    source.height = source_height;
+    source.pixels = source_pixels.data();
+    for (unsigned master_width : {1280u, 1920u}) {
+        // A 1920-wide source canvas is exercised through prepare(), not just the UV helper.
+        platform::MenuBackgroundImage image{
+            master_width, source_height, master_width, source_height, {}};
+        image.rgb.resize(size_t(image.width) * image.height * 3);
+        for (unsigned y = 0; y < image.height; ++y)
+            for (unsigned x = 0; x < image.width; ++x) {
+                const size_t at = (size_t(y) * image.width + x) * 3;
+                image.rgb[at] = uint8_t(x / 8);
+                image.rgb[at + 1] = uint8_t(y / 4);
+                image.rgb[at + 2] = 80;
+            }
+        platform::PreparedMenuBackgroundComposer gpu_composer, cpu_composer;
+        platform::MenuBackgroundGpuLayers layers;
+        std::vector<uint32_t> composed;
+        uint64_t revision = 0;
+        double previous_phase = 0;
+        int previous_offset = 0;
+        for (int offset : {0, 900, 1273, 1284, 1297, 2564}) {
+            const int wrapped = offset % game_width;
+            const int first_width = std::min(frame_width, game_width - wrapped);
+            std::vector<zrndr::MenuBackgroundBlit> blits{{0, 0, wrapped, 958, first_width, 2},
+                                                         {0, 2, wrapped, 0, first_width, 2}};
+            if (first_width < frame_width) {
+                blits.push_back({first_width, 0, 0, 958, frame_width - first_width, 2});
+                blits.push_back({first_width, 2, 0, 0, frame_width - first_width, 2});
+            }
+            bool cache_hit = true;
+            require(gpu_composer.prepare_gpu(image, &source, blits, frame.data(), frame_width,
+                                             frame_height, frame_width * 2, true, &layers,
+                                             &cache_hit) &&
+                        layers.status == platform::MenuBackgroundGpuStatus::kReady && !cache_hit,
+                    "Wide master rejected a real game-width prepare or a multi-pixel wrap step");
+            require(!revision || layers.revision == revision,
+                    "Scrolling unchanged classifications uploaded new GPU maps");
+            revision = layers.revision;
+            const double phase = (double(layers.uv.u0) - .5 / image.width) * master_width;
+            const double expected_phase = double(wrapped) * master_width / game_width;
+            require(std::abs(phase - expected_phase) < .001 &&
+                        std::abs((layers.uv.u1 - layers.uv.u0) * master_width -
+                                 double(frame_width) * master_width / game_width) < .001,
+                    "Wide master did not scale both scroll origin and view span from game pixels");
+            if (offset == 1284)
+                require(std::abs(phase + master_width - previous_phase -
+                                 double(offset - previous_offset) * master_width / game_width) <
+                            .001,
+                        "Multi-pixel scroll jumped at the master's wrap boundary");
+            previous_offset = offset;
+            previous_phase = phase;
+            require(cpu_composer.compose(image, &source, blits, frame.data(), frame_width,
+                                         frame_height, frame_width * 2, true, frame_width,
+                                         frame_height, &composed),
+                    "Wide master CPU preparation failed instead of retaining fallback");
+            for (int x = 0; x < frame_width; ++x) {
+                const double source_x = (wrapped + x + .5) * master_width / game_width;
+                const double wrapped_x =
+                    source_x - std::floor(source_x / master_width) * master_width;
+                const unsigned left = unsigned(wrapped_x);
+                const unsigned right = (left + 1) % master_width;
+                const double fraction = wrapped_x - left;
+                const int expected_red =
+                    int((left / 8) * (1 - fraction) + (right / 8) * fraction + .5);
+                require(
+                    std::abs(int(composed[size_t(x)] & 255) - expected_red) <= 1,
+                    "CPU and GPU master coordinates differ beyond 8-bit quantization tolerance");
+            }
+            if (offset == 900 && master_width == 1920)
+                require(phase > 1280 && (composed[0] & 255) > 160,
+                        "Wide master never exposed the extra 640 source columns");
+        }
+    }
+}
+
+void upload_downsampling_averages_source_footprints() {
+    platform::MenuBackgroundImage image{18, 12, 6, 4, std::vector<uint8_t>(18 * 12 * 3)};
+    for (unsigned y = 0; y < image.height; ++y)
+        for (unsigned x = 0; x < image.width; ++x)
+            for (unsigned channel_index = 0; channel_index < 3; ++channel_index)
+                image.rgb[(size_t(y) * image.width + x) * 3 + channel_index] =
+                    (x + y) % 2 ? 255 : 0;
+    const auto saved = image.rgb;
+    const auto filtered = platform::menu_background_upload_image(image, 6);
+    require(filtered.width == 9 && filtered.height == 6 && filtered.source_width == 6 &&
+                filtered.source_height == 4 && image.rgb == saved,
+            "Upload downsampling changed the full CPU source or canvas dimensions");
+    require(std::all_of(filtered.rgb.begin(), filtered.rgb.end(),
+                        [](uint8_t value) { return value == 128; }),
+            "Menu upload point-sampled a checkerboard instead of filtering its footprint");
+    const auto fractional = platform::menu_background_upload_image(image, 5);
+    require(fractional.width == 7 && fractional.height == 5 &&
+                std::all_of(fractional.rgb.begin(), fractional.rgb.end(),
+                            [](uint8_t value) { return value >= 120 && value <= 135; }),
+            "Menu upload lost fractional edge coverage while downsampling");
+    require(platform::menu_background_upload_image(image, 12).rgb == saved,
+            "Menu upload changed an image that needed no downsampling");
+    // A zero or unknown window height (minimised or not yet sized) must not cap the texture at a
+    // couple of pixels for the whole session: use the display height, else keep the full image.
+    require(platform::menu_background_upload_height(480, 1080, 960) == 960,
+            "A sized window did not give twice its height");
+    require(platform::menu_background_upload_height(0, 1080, 960) == 2160,
+            "A zero-height window did not fall back to the display height");
+    require(platform::menu_background_upload_height(-1, 0, 960) == 960,
+            "An unknown window and display did not keep the full image");
+    require(platform::menu_background_upload_image(
+                    image, platform::menu_background_upload_height(0, 0, image.height))
+                    .rgb == saved,
+            "A zero-height window filtered the image down instead of uploading it whole");
+    // The half texel belongs to the texture the GPU samples (the filtered copy), not the image.
+    const auto full_uv = platform::menu_background_uv_rect(image, 0, 0, 6, 4);
+    const auto bound_uv = platform::menu_background_uv_rect(image, 0, 0, 6, 4, 6, 4, 9, 6);
+    require(std::fabs(full_uv.u0 - .5f / 18.f) < 1e-6f && std::fabs(bound_uv.u0 - .5f / 9.f) < 1e-6f &&
+                std::fabs(bound_uv.v0 - .5f / 6.f) < 1e-6f,
+            "The UV half texel did not follow the bound texture's size");
+}
+
+void gpu_maps_share_classification_gain_cache_and_fallback() {
+  platform::MenuBackgroundImage image{16, 16, 8, 8, std::vector<uint8_t>(16 * 16 * 3, 80)};
+  constexpr uint16_t original = uint16_t((12 << 11) | (25 << 5) | 12);
+  constexpr uint16_t dimmed = uint16_t((8 << 11) | (16 << 5) | 8);
+  constexpr uint16_t glow = uint16_t((12 << 11) | (45 << 5) | 12);
+  std::vector<uint16_t> source_pixels(64, original), frame(64, dimmed);
+  zimg::Texture source{};
+  source.width = source.height = source.width_again = 8;
+  source.pixels = source_pixels.data();
+  frame[0] = original;
+  frame[9] = glow;
+  frame[63] = 0xf81f;
+  std::vector<zrndr::MenuBackgroundBlit> blits{
+      {0, 0, 7, 6, 1, 2}, {1, 0, 0, 6, 7, 2},
+      {0, 2, 7, 0, 1, 6}, {1, 2, 0, 0, 7, 6}};
+  platform::PreparedMenuBackgroundComposer composer;
+  platform::MenuBackgroundGpuLayers layers;
+  bool hit = false;
+  const auto prepare = [&] {
+    return composer.prepare_gpu(image, &source, blits, frame.data(), 8, 8, 16, true, &layers, &hit);
+  };
+  const auto& overlay = layers.maps[platform::kMenuGpuOverlay];
+  const auto& attenuate = layers.maps[platform::kMenuGpuAttenuate];
+  const auto& add = layers.maps[platform::kMenuGpuAdd];
+  require(prepare() && !hit && layers.status == platform::MenuBackgroundGpuStatus::kReady,
+          "Wrapped GPU maps rejected attenuation and nonnegative added light");
+  for (const auto& map : layers.maps)
+    require(map.size() == 64, "GPU maps did not stay at frame resolution");
+  require(overlay[63] == 0xffff00ff && overlay[0] == 0 && add[9] == 0x00005100 &&
+              attenuate[9] == 0xffffffff && attenuate[0] != 0xffffffff,
+          "GPU maps lost native artwork, added-light classification or the 5x5 gain");
+  require(layers.used[platform::kMenuGpuAttenuate] && layers.used[platform::kMenuGpuAdd] &&
+              layers.used[platform::kMenuGpuOverlay] && !layers.used[platform::kMenuGpuBoost] &&
+              !layers.used[platform::kMenuGpuBoostHigh] &&
+              !layers.used[platform::kMenuGpuSubtract],
+          "A dimmed menu with positive added light asked for boost or subtract passes");
+  const auto expected_uv = platform::menu_background_uv_rect(image, 7, 6, 8, 8);
+  require(layers.uv.u0 == expected_uv.u0 && layers.uv.v0 == expected_uv.v0,
+          "GPU maps lost the game's wrapped scroll origin");
+  // Telling the composer the bound texture is a smaller filtered copy moves the half texel and
+  // drops the cached layers computed for the old size.
+  composer.set_bound_texture_size(8, 8);
+  require(prepare() && !hit, "A bound texture size change did not invalidate the cached layers");
+  const auto bound_uv = platform::menu_background_uv_rect(image, 7, 6, 8, 8, 8, 8, 8, 8);
+  require(layers.uv.u0 == bound_uv.u0 && layers.uv.v0 == bound_uv.v0 && layers.uv.u0 != expected_uv.u0,
+          "The GPU UV half texel ignored the bound texture size");
+  composer.set_bound_texture_size(0, 0);
+  require(prepare() && layers.uv.u0 == expected_uv.u0,
+          "Clearing the bound texture size did not restore the image's half texel");
+  const auto* map_storage = layers.maps[platform::kMenuGpuAttenuate].data();
+  require(prepare() && hit && layers.maps[platform::kMenuGpuAttenuate].data() == map_storage,
+          "Unchanged GPU maps missed the cache or replaced retained storage");
+  frame[0] = dimmed;
+  require(prepare() && !hit, "GPU map cache ignored a changed frame");
+  blits[0].source_x = 6;
+  require(prepare() && !hit && layers.status == platform::MenuBackgroundGpuStatus::kMapping,
+          "GPU maps accepted pieces that are not one wrapped source rectangle");
+  require(prepare() && hit, "An unsupported map was unnecessarily reclassified on a cache hit");
+  blits = {{0, 0, 0, 0, 8, 8}};
+  // The real menu art amplifies (gain above 1) and lowers red or blue under added light. Both
+  // stay on the GPU now, as exact pass values: gain = attenuate * (1 + boost) * (1 + high).
+  std::fill(frame.begin(), frame.end(), uint16_t((14 << 11) | (29 << 5) | 14));
+  require(prepare() && layers.status == platform::MenuBackgroundGpuStatus::kReady &&
+              layers.used[platform::kMenuGpuBoost] && !layers.used[platform::kMenuGpuBoostHigh] &&
+              !layers.used[platform::kMenuGpuAttenuate],
+          "GPU maps rejected or clamped a gain between 1 and 2");
+  {
+    const float red_gain = (14 * 25 * (255.f / 31) + 4.f) / (12 * 25 * (255.f / 31) + 4.f);
+    const uint32_t boost = layers.maps[platform::kMenuGpuBoost][27];
+    require(boost >> 24 == 0 && std::abs(int(boost & 255) - int((red_gain - 1.f) * 255.f + .5f)) <= 0,
+            "The boost map did not hold gain - 1 for a gain between 1 and 2");
+  }
+  std::fill(frame.begin(), frame.end(), uint16_t((26 << 11) | (53 << 5) | 26));
+  std::fill(source_pixels.begin(), source_pixels.end(), uint16_t((11 << 11) | (23 << 5) | 11));
+  require(prepare() && layers.status == platform::MenuBackgroundGpuStatus::kReady &&
+              layers.used[platform::kMenuGpuBoost] && layers.used[platform::kMenuGpuBoostHigh],
+          "GPU maps rejected a gain above 2");
+  {
+    const float red_gain = (26 * 25 * (255.f / 31) + 4.f) / (11 * 25 * (255.f / 31) + 4.f);
+    const uint32_t boost = layers.maps[platform::kMenuGpuBoost][27];
+    const uint32_t high = layers.maps[platform::kMenuGpuBoostHigh][27];
+    require((boost & 255) == 255 &&
+                std::abs(int(high & 255) - int((red_gain * .5f - 1.f) * 255.f + .5f)) <= 0,
+            "The high boost map did not hold gain / 2 - 1 for a gain above 2");
+  }
+  std::fill(source_pixels.begin(), source_pixels.end(), original);
+  std::fill(frame.begin(), frame.end(), original);
+  frame[9] = uint16_t((11 << 11) | (45 << 5) | 12);
+  require(prepare() && layers.status == platform::MenuBackgroundGpuStatus::kReady &&
+              layers.used[platform::kMenuGpuSubtract] &&
+              layers.maps[platform::kMenuGpuSubtract][9] == 0x00000008u &&
+              (layers.maps[platform::kMenuGpuAdd][9] & 0xff00u) == 0x5100u,
+          "GPU maps did not split a negative red delta into the subtract map");
+  // Near-black art: an original code 0 rendered as code 1 passes the background test, and its
+  // 5x5 ratio (25 x 8.2 + 4) / 4 is about 52. Both paths limit the gain to 4, so the GPU stays
+  // exact and the CPU no longer turns black speckles into full white.
+  std::fill(source_pixels.begin(), source_pixels.end(), uint16_t(0));
+  std::fill(frame.begin(), frame.end(), uint16_t((1 << 11) | (1 << 5) | 1));
+  require(prepare() && layers.status == platform::MenuBackgroundGpuStatus::kReady &&
+              (layers.maps[platform::kMenuGpuBoost][27] & 0xffffffu) == 0xffffffu &&
+              (layers.maps[platform::kMenuGpuBoostHigh][27] & 0xffffffu) == 0xffffffu,
+          "A near-black frame's gain was not limited to 4 on the GPU maps");
+  std::fill(source_pixels.begin(), source_pixels.end(), original);
+  std::fill(frame.begin(), frame.end(), original);
+  require(prepare() && layers.status == platform::MenuBackgroundGpuStatus::kReady,
+          "GPU map preparation failed to recover after an unsupported frame");
+  source.alpha = reinterpret_cast<uint8_t*>(frame.data());
+  require(!prepare() && !hit, "A GPU cache hit bypassed validation of an invalid source");
+  source.alpha = nullptr;
+  require(prepare() && !hit, "Invalid source rejection did not invalidate the GPU map cache");
+  const uint64_t previous_revision = layers.revision;
+  blits = {{0, 0, 7, 6, 1, 2}, {1, 0, 0, 6, 7, 2},
+           {0, 2, 7, 0, 1, 6}, {1, 2, 0, 0, 7, 6}};
+  require(prepare() && !hit && layers.status == platform::MenuBackgroundGpuStatus::kReady &&
+              layers.revision == previous_revision && layers.uv.u0 == expected_uv.u0,
+          "A UV-only scroll change requested an unnecessary GPU map upload");
+}
+
+// The menus redraw the scrolling background every frame without clearing the buffer, so
+// begin_menu_background_frame (the clear) never ran while a menu was open and every frame's
+// pieces were appended: 4 more per frame, the CPU fallback's cost rising by about 0.8 ms per
+// frame in the owner's log (47 ms to 210 ms over 40 s) and its cache never hitting.
+void scrolling_frames_keep_one_frame_of_pieces_and_hit_the_cache_when_still() {
+  constexpr int size = 8;
+  std::vector<uint16_t> original(size * size), target(size * size);
+  for (int at = 0; at < size * size; ++at)
+    original[size_t(at)] = uint16_t(((10 + at % 3) << 11) | ((20 + at % 5) << 5) | (10 + at % 2));
+  zimg::Texture source{};
+  source.width = source.height = source.width_again = size;
+  source.pixels = original.data();
+  platform::MenuBackgroundImage image{16, 16, size, size, std::vector<uint8_t>(16 * 16 * 3, 90)};
+  zrndr::set_menu_background_source(&source);
+  zrndr::begin_menu_background_frame();
+  zrndr::target2d() = {reinterpret_cast<uint8_t*>(target.data()), size, size, size * 2, 6};
+  // ScrollImage::draw's four pieces of a view scrolled by (offset, offset).
+  const auto draw_scrolled = [&](int offset) {
+    const zrndr::BlitRect pieces[4] = {{offset, offset, size, size},
+                                       {0, offset, offset, size},
+                                       {offset, 0, size, offset},
+                                       {0, 0, offset, offset}};
+    const int positions[4][2] = {{0, 0}, {size - offset, 0}, {0, size - offset},
+                                 {size - offset, size - offset}};
+    for (int piece = 0; piece < 4; ++piece)
+      if (pieces[piece].right > pieces[piece].left && pieces[piece].bottom > pieces[piece].top)
+        zrndr::blit16(&source, positions[piece][0], positions[piece][1], 0, &pieces[piece]);
+  };
+  platform::PreparedMenuBackgroundComposer composer;
+  std::vector<uint32_t> output;
+  unsigned hits = 0, misses = 0;
+  for (int frame = 0; frame < 200; ++frame) {
+    // The scroll steps every fourth frame, as at 60 px/s on a 240 Hz display.
+    draw_scrolled(1 + (frame / 4) % (size - 1));
+    const auto& blits = zrndr::menu_background_blits();
+    require(blits.size() == 4, "Menu frames without a clear accumulated background pieces");
+    bool hit = false;
+    require(composer.compose(image, &source, blits, target.data(), size, size, size * 2, true,
+                             16, 16, &output, &hit),
+            "Scrolling CPU composition failed");
+    (hit ? hits : misses) += 1;
+    zrndr::end_menu_background_frame();
+  }
+  require(hits == 150 && misses == 50,
+          "The CPU compositor missed its cache on frames where the scroll did not step");
+  // A frame that draws no background (a message box over the menu) keeps the last pieces,
+  // since the buffer still shows them.
+  require(zrndr::menu_background_blits().size() == 4,
+          "A frame without a background draw dropped the pieces still in the buffer");
+  zrndr::set_menu_background_source(nullptr);
+}
+
+// The owner's 3440x1440 and 1920x1080 menus use a 1147x480 canvas. A scrolling frame must
+// prepare its GPU maps (classification, 5x5 gain, six maps) well inside a 60 Hz frame and at
+// a cost that does not grow; the CPU fallback's cost must not grow either.
+void real_size_scrolling_cost_stays_flat() {
+  constexpr int width = 1147, height = 480, image_width = 1280, image_height = 960;
+  std::vector<uint16_t> original(size_t(image_width / 2) * (image_height / 2));
+  for (size_t at = 0; at < original.size(); ++at)
+    original[at] = uint16_t(((4 + at * 7 % 23) << 11) | ((8 + at * 5 % 47) << 5) | (4 + at % 23));
+  zimg::Texture source{};
+  source.width = source.width_again = image_width / 2;
+  source.height = image_height / 2;
+  source.pixels = original.data();
+  platform::MenuBackgroundImage image{image_width, image_height, unsigned(source.width),
+                                      unsigned(source.height),
+                                      std::vector<uint8_t>(size_t(image_width) * image_height * 3)};
+  for (size_t at = 0; at < image.rgb.size(); ++at) image.rgb[at] = uint8_t(at * 13 % 251);
+  std::vector<uint16_t> frame(size_t(width) * height);
+  platform::PreparedMenuBackgroundComposer gpu_composer, cpu_composer;
+  platform::MenuBackgroundGpuLayers layers;
+  std::vector<uint32_t> output;
+  const auto build_frame = [&](int offset, std::vector<zrndr::MenuBackgroundBlit>* blits) {
+    // One wrapped view: the canvas is wider than the source, so it repeats horizontally.
+    blits->clear();
+    for (int x = 0; x < width; x += source.width)
+      for (int y = 0; y < height; y += source.height)
+        blits->push_back({x, y, 0, 0, std::min<int>(source.width, width - x),
+                          std::min<int>(source.height, height - y)});
+    for (auto& blit : *blits) {
+      blit.source_x = offset % source.width;
+      blit.width = std::min<int>(blit.width, source.width - blit.source_x);
+      blit.source_y = offset % source.height;
+      blit.height = std::min<int>(blit.height, source.height - blit.source_y);
+    }
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const int source_x = (x + offset) % source.width, source_y = (y + offset) % source.height;
+        const uint16_t background = original[size_t(source_y) * source.width + source_x];
+        // A darker band, a brighter band, plain background and a native panel.
+        uint16_t value = background;
+        if (y < 120) {
+          value = uint16_t(((((background >> 11) & 31) * 2 / 3) << 11) |
+                           ((((background >> 5) & 63) * 2 / 3) << 5) | ((background & 31) * 2 / 3));
+        } else if (y < 240) {
+          value = uint16_t(((std::min(31, ((background >> 11) & 31) * 3 / 2)) << 11) |
+                           ((std::min(63, ((background >> 5) & 63) * 3 / 2)) << 5) |
+                           std::min(31, (background & 31) * 3 / 2));
+        } else if (x > 400 && x < 700 && y > 300 && y < 420) {
+          value = 0x39e7;
+        }
+        frame[size_t(y) * width + x] = value;
+      }
+    }
+  };
+  std::vector<double> gpu_ms, cpu_ms;
+  std::vector<zrndr::MenuBackgroundBlit> blits;
+  for (int step = 0; step < 40; ++step) {
+    build_frame(step * 3, &blits);
+    auto started = std::chrono::steady_clock::now();
+    require(gpu_composer.prepare_gpu(image, &source, blits, frame.data(), width, height,
+                                     width * 2, true, &layers),
+            "Real-size GPU map preparation failed");
+    gpu_ms.push_back(std::chrono::duration<double, std::milli>(
+                         std::chrono::steady_clock::now() - started).count());
+    started = std::chrono::steady_clock::now();
+    require(cpu_composer.compose(image, &source, blits, frame.data(), width, height, width * 2,
+                                 true, 1920, 803, &output),
+            "Real-size CPU composition failed");
+    cpu_ms.push_back(std::chrono::duration<double, std::milli>(
+                         std::chrono::steady_clock::now() - started).count());
+  }
+  require(layers.status == platform::MenuBackgroundGpuStatus::kReady &&
+              layers.used[platform::kMenuGpuBoost] && layers.used[platform::kMenuGpuAttenuate],
+          "Real-size frames with dim and bright bands left the GPU path");
+  const auto average = [](const std::vector<double>& values, size_t first, size_t count) {
+    double sum = 0;
+    for (size_t index = first; index < first + count; ++index) sum += values[index];
+    return sum / double(count);
+  };
+  const double gpu_first = average(gpu_ms, 2, 10), gpu_last = average(gpu_ms, 30, 10);
+  const double cpu_first = average(cpu_ms, 2, 10), cpu_last = average(cpu_ms, 30, 10);
+  std::printf("menu background 1147x480 scroll frame: GPU maps %.2f -> %.2f ms, "
+              "CPU 1920x803 %.2f -> %.2f ms (frames 2-11 -> 30-39)\n",
+              gpu_first, gpu_last, cpu_first, cpu_last);
+  // Generous bounds: a shared CI runner can be slow, but growth or a return to the old
+  // per-frame cost (tens of milliseconds for the maps) must fail.
+  require(gpu_last < gpu_first * 2 + 2 && cpu_last < cpu_first * 2 + 2,
+          "Menu background cost grew across scrolling frames");
+  require(gpu_last < 40, "GPU map preparation for a 1147x480 menu frame exceeded 40 ms");
+}
 }  // namespace
 
 int main() {
@@ -682,4 +1158,10 @@ int main() {
     worker_pool_handles_single_worker_empty_and_inline_ranges();
   });
   menu_background_output_cap_preserves_fit_and_layer_rect();
+  gpu_cover_and_uv_geometry();
+  wide_master_prepares_from_game_texture_across_wrap();
+  upload_downsampling_averages_source_footprints();
+  gpu_maps_share_classification_gain_cache_and_fallback();
+  scrolling_frames_keep_one_frame_of_pieces_and_hit_the_cache_when_still();
+  real_size_scrolling_cost_stays_flat();
 }

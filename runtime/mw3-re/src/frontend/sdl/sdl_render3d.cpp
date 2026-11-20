@@ -67,16 +67,18 @@ fragment float4 fs_flat(Out in [[stage_in]], constant F& f [[buffer(0)]]) {
 
 uint32_t key_of(const platform::DrawState& s, bool textured) {
   return textured | s.blend << 1 | s.multiply << 2 | s.depth_write << 3 |
-         s.depth_always << 4 | s.wireframe << 5 | s.additive << 6;
+         s.depth_always << 4 | s.wireframe << 5 | s.additive << 6 | s.brighten << 7 |
+         s.subtract << 8;
 }
 
 bool same(const platform::DrawState& a, const platform::DrawState& b) {
   return a.texture == b.texture && a.address_u == b.address_u &&
          a.address_v == b.address_v && a.blend == b.blend &&
-         a.multiply == b.multiply && a.additive == b.additive && a.depth_write == b.depth_write &&
+         a.multiply == b.multiply && a.additive == b.additive && a.brighten == b.brighten &&
+         a.subtract == b.subtract && a.depth_write == b.depth_write &&
          a.depth_always == b.depth_always &&
          a.alpha_modulate == b.alpha_modulate && a.fog == b.fog &&
-         a.wireframe == b.wireframe && a.sharp == b.sharp;
+         a.wireframe == b.wireframe && a.sharp == b.sharp && a.filter == b.filter;
 }
 
 #if defined(MW3_HAVE_DXIL)
@@ -179,6 +181,13 @@ SDL_GPUGraphicsPipeline* SdlRender3D::pipeline(const platform::DrawState& s, boo
     if (s.multiply) {  // SRCBLEND ZERO, DESTBLEND SRCCOLOR
       ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
       ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_COLOR;
+    } else if (s.brighten) {  // DESTCOLOR, ONE: destination * (1 + source)
+      ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_DST_COLOR;
+      ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    } else if (s.subtract) {  // ONE, ONE, reverse subtract: destination - source
+      ct.blend_state.color_blend_op = SDL_GPU_BLENDOP_REVERSE_SUBTRACT;
+      ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+      ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
     } else if (s.additive) {  // ONE, ONE
       ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
       ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
@@ -211,13 +220,13 @@ SDL_GPUGraphicsPipeline* SdlRender3D::pipeline(const platform::DrawState& s, boo
   return p;
 }
 
-SDL_GPUSampler* SdlRender3D::sampler(uint8_t u, uint8_t v) {
-  const uint32_t key = u << 8 | v;
+SDL_GPUSampler* SdlRender3D::sampler(uint8_t u, uint8_t v, bool nearest) {
+  const uint32_t key = u << 8 | v | (nearest ? 1u << 16 : 0u);
   auto it = samplers_.find(key);
   if (it != samplers_.end()) return it->second;
   auto mode = [](uint8_t m) { return m == 3 ? SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE : SDL_GPU_SAMPLERADDRESSMODE_REPEAT; };
   SDL_GPUSamplerCreateInfo si{};
-  si.min_filter = si.mag_filter = SDL_GPU_FILTER_LINEAR;  // TEXTUREMAG/MIN LINEAR
+  si.min_filter = si.mag_filter = nearest ? SDL_GPU_FILTER_NEAREST : SDL_GPU_FILTER_LINEAR;
   si.address_mode_u = mode(u), si.address_mode_v = mode(v), si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
   SDL_GPUSampler* s = SDL_CreateGPUSampler(dev_, &si);
   samplers_[key] = s;
@@ -231,15 +240,27 @@ int32_t SdlRender3D::create_texture(int width, int height, const uint8_t* rgba, 
   ti.width = width, ti.height = height, ti.layer_count_or_depth = 1, ti.num_levels = 1;
   SDL_GPUTexture* t = SDL_CreateGPUTexture(dev_, &ti);
   if (!t) return -1;
-  upload(t, width, height, rgba);
+  // A texture whose pixels never reached the GPU must not get a handle: the caller would show
+  // uninitialised memory instead of choosing its CPU fallback.
+  if (!upload(t, width, height, rgba)) {
+    SDL_ReleaseGPUTexture(dev_, t);
+    return -1;
+  }
   textures_.push_back(t);
   return static_cast<int32_t>(textures_.size() - 1);
 }
 
 void SdlRender3D::update_texture(int32_t h, int width, int height, const uint8_t* rgba) {
   if (h < 0 || h >= static_cast<int32_t>(textures_.size()) || !textures_[h]) return;
-  upload(textures_[h], width, height, rgba);
+  // There is no return value to carry the failure: throw, so the caller keeps its fallback.
+  if (!upload(textures_[h], width, height, rgba))
+    throw std::runtime_error("SDL GPU texture upload failed");
 }
+
+namespace {
+bool g_fail_staging_for_test = false;
+}  // namespace
+void SdlRender3D::fail_staging_for_test(bool fail) { g_fail_staging_for_test = fail; }
 
 // A staging buffer of at least `bytes`, mapped. Kept between calls (made per
 // call, they were a quarter of a frame; performance.md); mapping with cycle
@@ -251,13 +272,14 @@ void* SdlRender3D::map_staging(Staging& s, uint32_t bytes) {
     SDL_GPUTransferBufferCreateInfo tbi{SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, s.size, 0};
     s.buf = SDL_CreateGPUTransferBuffer(dev_, &tbi);
   }
+  if (g_fail_staging_for_test) return nullptr;
   return s.buf ? SDL_MapGPUTransferBuffer(dev_, s.buf, true) : nullptr;
 }
 
-void SdlRender3D::upload(SDL_GPUTexture* t, int width, int height, const uint8_t* rgba) {
+bool SdlRender3D::upload(SDL_GPUTexture* t, int width, int height, const uint8_t* rgba) {
   const auto size = static_cast<uint32_t>(width * height * 4);
   void* to = map_staging(tex_staging_, size);
-  if (!to) return;
+  if (!to) return false;
   std::memcpy(to, rgba, size);
   SDL_GPUTransferBuffer* tb = tex_staging_.buf;
   SDL_UnmapGPUTransferBuffer(dev_, tb);
@@ -269,6 +291,7 @@ void SdlRender3D::upload(SDL_GPUTexture* t, int width, int height, const uint8_t
   SDL_UploadToGPUTexture(copy, &src, &dst, false);
   SDL_EndGPUCopyPass(copy);
   SDL_SubmitGPUCommandBuffer(cmd);
+  return true;
 }
 
 void SdlRender3D::release_texture(int32_t h) {
@@ -431,15 +454,18 @@ void SdlRender3D::end_scene() {
     SDL_BindGPUGraphicsPipeline(pass, p);
     SDL_PushGPUVertexUniformData(cmd, 0, vu, sizeof vu);
     // A sharp draw's texel is a game pixel: the frame's pixels per game pixel.
-    const float sx = r.state.sharp && vw_ > 0 ? static_cast<float>(w) / static_cast<float>(vw_) : 0.0f;
-    const float sy = r.state.sharp && vh_ > 0 ? static_cast<float>(h) / static_cast<float>(vh_) : 0.0f;
+    const bool sharp = r.state.sharp && r.state.filter == platform::TextureFilter::kDefault;
+    const float sx = sharp && vw_ > 0 ? static_cast<float>(w) / static_cast<float>(vw_) : 0.0f;
+    const float sy = sharp && vh_ > 0 ? static_cast<float>(h) / static_cast<float>(vh_) : 0.0f;
     const float fu[8] = {r.fog[0], r.fog[1], r.fog[2], 1, r.state.fog ? 1.0f : 0.0f,
                          r.state.alpha_modulate ? 1.0f : 0.0f, std::max(sx, 1.0f) * (sx > 0), std::max(sy, 1.0f) * (sy > 0)};
     SDL_PushGPUFragmentUniformData(cmd, 0, fu, sizeof fu);
     SDL_GPUBufferBinding vb{vbuf_, 0};
     SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
     if (textured) {
-      SDL_GPUTextureSamplerBinding tsb{textures_[r.state.texture], sampler(r.state.address_u, r.state.address_v)};
+      SDL_GPUTextureSamplerBinding tsb{textures_[r.state.texture],
+          sampler(r.state.address_u, r.state.address_v,
+                  r.state.filter == platform::TextureFilter::kNearest)};
       SDL_BindGPUFragmentSamplers(pass, 0, &tsb, 1);
     }
     SDL_DrawGPUPrimitives(pass, r.count, 1, r.first, 0);

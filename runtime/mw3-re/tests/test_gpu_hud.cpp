@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cfenv>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -16,12 +17,16 @@
 
 #include "frontend/sdl/gpu_hud.h"
 #include "frontend/sdl/sdl_render3d.h"
+#include "frontend/sdl/sdl_platform.h"
 #include "frontend/sdl/sdl_twod_host.h"
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zrender/zrndr_blur.h"
+#include "gamez/zrender/zrndr_ripple.h"
 #include "gamez/zrender/zrndr_span.h"
 #include "gamez/zrender/zrndr_tint.h"
+#include "gamez/ztwod/twod.h"
 #include "gamez/zutil/zutl_path.h"
+#include "gamez/zvideo/zvid_ddd3d.h"
 #include "gamez/zvideo/zvid_format.h"
 #include "platform/prepared_hud.h"
 
@@ -101,16 +106,26 @@ class Recorder : public sdlfe::FrameRenderer {
     std::vector<platform::TLVertex> vertices;
     platform::DrawState state;
   };
+  struct ImageRecord {
+    int width;
+    int height;
+    std::vector<uint32_t> pixels;
+  };
   std::vector<Draw> draws;
   std::vector<std::vector<uint32_t>> images;
+  std::vector<ImageRecord> image_records;
   std::vector<int> released;
   bool flushed = false;
   bool allocation_fails = false;
+  bool preflight_throws = false;
   int x = 3, y = 4, w = 5, h = 6;
   bool ok() const override { return true; }
   void capture_next(const char*) override {}
   void set_shape(const sdlfe::FrameShape*) override {}
   void flush() override { flushed = true; }
+  void prepare_canvas_textures(const std::vector<int32_t>&) override {
+    if (preflight_throws) throw std::runtime_error("Synthetic HUD preflight failure");
+  }
   void viewport(int* a, int* b, int* c, int* d) const override {
     *a = x;
     *b = y;
@@ -128,6 +143,7 @@ class Recorder : public sdlfe::FrameRenderer {
     if (allocation_fails) return -1;
     std::vector<uint32_t> copy(size_t(width) * height);
     std::memcpy(copy.data(), pixels, copy.size() * 4);
+    image_records.push_back({width, height, copy});
     images.push_back(std::move(copy));
     return int(images.size() - 1);
   }
@@ -347,6 +363,297 @@ void drawing_checks() {
   }
   zrndr::target2d() = {};
 }
+
+void menu_background_checks(const std::filesystem::path& directory) {
+  class MenuRecorder : public Recorder {
+   public:
+    unsigned updates = 0;
+    unsigned creation_attempts = 0;
+    unsigned preflight_attempts = 0;
+    bool fail_next_texture = false;
+    bool throw_next_texture = false;
+    bool throw_next_preflight = false;
+    int dimension_limit = 16384;
+    const sdlfe::FrameShape* shape = nullptr;
+    void set_shape(const sdlfe::FrameShape* value) override { shape = value; }
+    int32_t create_texture(int width, int height, const uint8_t* pixels, uint8_t type) override {
+      ++creation_attempts;
+      if (width > dimension_limit || height > dimension_limit)
+          throw std::runtime_error("Synthetic device texture size limit");
+      if (throw_next_texture) {
+          throw_next_texture = false;
+          throw std::runtime_error("Synthetic texture allocation failure");
+      }
+      if (fail_next_texture) {
+        fail_next_texture = false;
+        return -1;
+      }
+      return Recorder::create_texture(width, height, pixels, type);
+    }
+    void prepare_canvas_textures(const std::vector<int32_t> &textures) override {
+        ++preflight_attempts;
+        // GPU: the HD image and the maps whose passes are needed (2 to 6); CPU: the composition.
+        require((textures.size() >= 3 && textures.size() <= 7) || textures.size() == 1,
+                "Menu did not preflight its image and maps (GPU) or its composed texture (CPU)");
+        if (throw_next_preflight) {
+            throw_next_preflight = false;
+            throw std::runtime_error("Synthetic deferred Vulkan texture allocation failure");
+        }
+    }
+    void update_texture(int32_t handle, int width, int height, const uint8_t* pixels) override {
+      auto& image = images.at(size_t(handle));
+      require(image.size() == size_t(width) * height, "Menu updated a texture at the wrong size");
+      std::memcpy(image.data(), pixels, image.size() * 4);
+      ++updates;
+    }
+  };
+  const auto path = directory / "menu-background.rgb";
+  {
+    std::ofstream file(path, std::ios::binary);
+    const uint8_t header[24] = {'M', 'W', 'H', 'D', 'B', 'G', '1', 0,
+                                16, 0, 0, 0, 16, 0, 0, 0, 8, 0, 0, 0, 8, 0, 0, 0};
+    const std::array<uint8_t, 16 * 16 * 3> image{};
+    file.write(reinterpret_cast<const char*>(header), sizeof header);
+    file.write(reinterpret_cast<const char*>(image.data()), image.size());
+    require(bool(file), "Cannot write synthetic menu image");
+  }
+  std::array<uint16_t, 64> original{}, frame{};
+  original.fill(uint16_t((12 << 11) | (25 << 5) | 12));
+  zimg::Texture source{};
+  source.width = source.height = source.width_again = 8;
+  source.pixels = original.data();
+  zrndr::set_menu_background_source(&source);
+  zrndr::begin_menu_background_frame();
+  zrndr::target2d() = {reinterpret_cast<uint8_t*>(frame.data()), 8, 8, 16, 6};
+  zrndr::blit16(&source, 0, 0, 0, nullptr);
+  // The GPU path covers every gain and added light; only pieces that are not one wrapped
+  // rectangle (here the right half repeats the left half's source) still need the CPU.
+  const auto record_whole_background = [&] {
+    zrndr::end_menu_background_frame();
+    zrndr::blit16(&source, 0, 0, 0, nullptr);
+  };
+  const auto record_nonuniform_pieces = [&] {
+    const zrndr::BlitRect left_half{0, 0, 4, 8};
+    zrndr::end_menu_background_frame();
+    zrndr::blit16(&source, 0, 0, 0, &left_half);
+    zrndr::blit16(&source, 4, 0, 0, &left_half);
+  };
+  frame.fill(uint16_t((8 << 11) | (16 << 5) | 8));
+  sdlfe::HudOptions options;
+  options.menu_background = path.string();
+  sdlfe::FrameShape shape;
+  shape.fit = true;
+  shape.frame_w = shape.frame_h = 8;
+  MenuRecorder recorder;
+  const auto present_preserving_float_state = [&](sdlfe::SdlScreen2D &screen) {
+      std::fenv_t saved;
+      std::fegetenv(&saved);
+      std::fesetround(FE_DOWNWARD);
+      std::feclearexcept(FE_ALL_EXCEPT);
+      std::feraiseexcept(FE_INVALID | FE_DIVBYZERO);
+      const int flags = std::fetestexcept(FE_ALL_EXCEPT);
+      screen.present_16(frame.data(), 8, 8, 16, true);
+      require(std::fegetround() == FE_DOWNWARD && std::fetestexcept(FE_ALL_EXCEPT) == flags,
+              "Menu presentation changed guest rounding or exception flags");
+      std::fesetenv(&saved);
+  };
+  {
+    sdlfe::SdlScreen2D screen(&recorder, options, nullptr, &shape);
+    require(recorder.images.size() == 1 && recorder.images[0].size() == 256,
+            "HD menu image was not uploaded once during screen construction");
+    present_preserving_float_state(screen);
+    // A uniformly dimmed menu needs only the attenuation and overlay maps.
+    require(recorder.images.size() == 3 && recorder.updates == 0 && recorder.draws.size() == 3,
+            "GPU menu did not upload two frame-sized maps and draw three passes");
+    require(recorder.shape == &shape && recorder.x == 3 && recorder.y == 4 &&
+                recorder.w == 5 && recorder.h == 6,
+            "Menu presentation did not restore the world shape and viewport");
+    for (size_t index = 1; index < recorder.images.size(); ++index)
+      require(recorder.images[index].size() == 64, "GPU menu allocated an output-sized map");
+    require(recorder.draws[0].state.filter == platform::TextureFilter::kLinear &&
+                recorder.draws[0].state.address_u == 1 &&
+                recorder.draws[1].state.filter == platform::TextureFilter::kNearest &&
+                recorder.draws[1].state.multiply && !recorder.draws[2].state.additive &&
+                recorder.draws[2].state.blend,
+            "GPU menu lost repeat sampling, exact map sampling or blend order");
+    screen.present_16(frame.data(), 8, 8, 16, true);
+    require(recorder.images.size() == 3 && recorder.updates == 0,
+            "Unchanged GPU menu uploaded textures on a cache hit");
+    const auto draws_before_invalid_stride = recorder.draws.size();
+    screen.present_16(frame.data(), 8, 8, 15, true);
+    require(recorder.draws.size() == draws_before_invalid_stride,
+            "Menu read an invalid native stride instead of rejecting it without throwing");
+    frame[0] = 0xf81f;
+    present_preserving_float_state(screen);
+    require(recorder.images.size() == 3 && recorder.updates == 2,
+            "Changed GPU menu failed to update its maps or uploaded the immutable HD image");
+    // Brightening (gain above 1) stays on the GPU: a boost map replaces the attenuation pass.
+    auto before = recorder.draws.size();
+    frame.fill(uint16_t((14 << 11) | (29 << 5) | 14));
+    screen.present_16(frame.data(), 8, 8, 16, true);
+    require(recorder.draws.size() == before + 3 && recorder.images.size() == 4 &&
+                recorder.draws[before + 1].state.brighten && recorder.draws[before + 1].state.blend,
+            "A brightened menu left the GPU path or lost its boost pass");
+    // Lowered red under added light stays on the GPU too, through the subtract pass.
+    before = recorder.draws.size();
+    frame.fill(uint16_t((12 << 11) | (25 << 5) | 12));
+    frame[9] = uint16_t((11 << 11) | (45 << 5) | 12);
+    screen.present_16(frame.data(), 8, 8, 16, true);
+    require(recorder.draws.size() == before + 4 && recorder.draws[before + 1].state.additive &&
+                recorder.draws[before + 2].state.subtract,
+            "Negative added light left the GPU path or lost its subtract pass");
+    {
+      // A resize (8x8 to 8x6 maps) recreates the needed maps at the new size and releases the
+      // unneeded ones, whose old-size textures must not be reused when a later frame needs them.
+      const auto images_before_resize = recorder.images.size();
+      const auto released_before_resize = recorder.released.size();
+      frame.fill(uint16_t((8 << 11) | (16 << 5) | 8));
+      screen.present_16(frame.data(), 8, 6, 16, true);
+      // Attenuate and overlay are made again at 8x6; boost, add and subtract (8x8) are dropped.
+      require(recorder.images.size() == images_before_resize + 2 &&
+                  recorder.released.size() == released_before_resize + 5 &&
+                  recorder.images.back().size() == 48,
+              "A menu resize kept old-size map textures or did not remake the needed ones");
+      frame.fill(uint16_t((12 << 11) | (25 << 5) | 12));
+      frame[9] = uint16_t((11 << 11) | (45 << 5) | 12);
+      const auto draws_before = recorder.draws.size();
+      screen.present_16(frame.data(), 8, 6, 16, true);
+      require(recorder.images.size() == images_before_resize + 4 &&
+                  recorder.images[recorder.images.size() - 1].size() == 48 &&
+                  recorder.images[recorder.images.size() - 2].size() == 48 &&
+                  recorder.draws.size() == draws_before + 4 &&
+                  recorder.draws[draws_before + 2].state.subtract,
+              "Maps needed again after a resize were not remade and uploaded at the new size");
+      screen.present_16(frame.data(), 8, 8, 16, true);  // back to 8x8 for the checks below
+    }
+    before = recorder.draws.size();
+    const auto images_before_fallback = recorder.images.size();
+    record_nonuniform_pieces();
+    frame.fill(uint16_t((8 << 11) | (16 << 5) | 8));
+    screen.present_16(frame.data(), 8, 8, 16, true);
+    require(recorder.draws.size() == before + 1 &&
+                recorder.images.size() == images_before_fallback + 1,
+            "A nonuniform source mapping did not select CPU composition");
+    record_whole_background();
+  }
+  require(recorder.released.size() == recorder.images.size(), "Menu screen leaked GPU resources");
+  MenuRecorder cpu;
+  options.menu_background_renderer = "cpu";
+  {
+    sdlfe::SdlScreen2D screen(&cpu, options);
+    require(cpu.images.empty(), "Explicit CPU mode uploaded an unused HD texture");
+    screen.present_16(frame.data(), 8, 8, 16, true);
+    require(cpu.images.size() == 1 && cpu.draws.size() == 1,
+            "Explicit CPU mode did not retain the composed-texture path");
+  }
+  {
+    // The Vulkan renderer allocates a stored texture only at flush; the CPU compositor now forces
+    // that allocation inside its fallback scope. A deferred failure there must select the native
+    // frame, not escape present_16, and must not leave a half-made texture behind.
+    MenuRecorder deferred;
+    {
+      sdlfe::SdlScreen2D screen(&deferred, options);
+      deferred.throw_next_preflight = true;
+      present_preserving_float_state(screen);
+      require(deferred.preflight_attempts == 1,
+              "CPU compositor did not preflight its composed texture");
+      require(deferred.draws.size() == 1,
+              "A deferred CPU-compositor allocation failure did not present the native frame");
+    }
+    require(deferred.released.size() == deferred.images.size(),
+            "A deferred CPU-compositor failure leaked its texture");
+  }
+  options.menu_background_renderer = "gpu";
+  frame.fill(uint16_t((8 << 11) | (16 << 5) | 8));
+  for (bool fail_hd_image : {true, false}) {
+    MenuRecorder unavailable;
+    unavailable.fail_next_texture = fail_hd_image;
+    {
+      sdlfe::SdlScreen2D screen(&unavailable, options);
+      unavailable.fail_next_texture = !fail_hd_image;
+      screen.present_16(frame.data(), 8, 8, 16, true);
+      require(unavailable.draws.size() == 1,
+              "Unavailable GPU menu resources did not select CPU composition");
+      const auto attempts = unavailable.creation_attempts;
+      screen.present_16(frame.data(), 8, 8, 16, true);
+      require(unavailable.creation_attempts == attempts && unavailable.updates == 0,
+              "Unavailable GPU menu retried allocation or reuploaded an unchanged CPU fallback");
+    }
+    require(unavailable.released.size() == unavailable.images.size(),
+            "Unavailable GPU menu leaked partial texture resources");
+  }
+  for (int failure_kind : {0, 1, 2, 3}) {
+      MenuRecorder throwing;
+      throwing.throw_next_texture = failure_kind == 0;
+      if (failure_kind == 3)
+          throwing.dimension_limit = 12;
+      {
+          sdlfe::SdlScreen2D screen(&throwing, options);
+          throwing.throw_next_texture = failure_kind == 1;
+          throwing.throw_next_preflight = failure_kind == 2;
+          present_preserving_float_state(screen);
+          require(throwing.draws.size() == 1 && throwing.images.back().size() == 64,
+                  "Throwing or over-limit menu allocation did not select the CPU compositor");
+          const auto attempts = throwing.creation_attempts;
+          const auto preflights = throwing.preflight_attempts;
+          present_preserving_float_state(screen);
+          require(throwing.creation_attempts == attempts &&
+                      throwing.preflight_attempts == preflights,
+                  "Menu retried a failed allocation instead of retaining the CPU fallback");
+      }
+      require(throwing.released.size() == throwing.images.size(),
+              "Throwing GPU menu allocation leaked partial resources");
+  }
+  for (const char *mode : {"cpu", "gpu"}) {
+      options.menu_background_renderer = mode;
+      MenuRecorder invalid;
+      {
+          sdlfe::SdlScreen2D screen(&invalid, options);
+          source.height = 7;
+          present_preserving_float_state(screen);
+          require(invalid.draws.size() == 1 &&
+                      invalid.images.back()[0] == sdlfe::SdlScreen2D::rgba(frame[0], true),
+                  "Mismatched menu inputs threw or failed to present the native frame");
+          source.height = 8;
+          source.alpha = reinterpret_cast<uint8_t *>(frame.data());
+          present_preserving_float_state(screen);
+          require(invalid.draws.size() == 2 &&
+                      invalid.images.back()[0] == sdlfe::SdlScreen2D::rgba(frame[0], true),
+                  "Invalid menu input layout failed to retain native presentation");
+          source.alpha = nullptr;
+      }
+  }
+  // A narrow fitted menu exposes a surround even without a real SDL window.
+  // A nonuniform mapping forces fallback while the GPU image is still available.
+  shape.frame_w = 4;
+  record_nonuniform_pieces();
+  frame.fill(uint16_t((14 << 11) | (29 << 5) | 14));
+  std::vector<uint32_t> cpu_pixels;
+  std::vector<platform::TLVertex> cpu_vertices;
+  for (const char *mode : {"cpu", "gpu"}) {
+      options.menu_background_renderer = mode;
+      MenuRecorder fallback;
+      sdlfe::SdlScreen2D screen(&fallback, options, nullptr, &shape);
+      present_preserving_float_state(screen);
+      require(fallback.draws.size() == 1,
+              "GPU fallback painted a first-blit surround absent from requested CPU mode");
+      if (cpu_pixels.empty()) {
+          cpu_pixels = fallback.images.back();
+          cpu_vertices = fallback.draws.front().vertices;
+      } else {
+          require(cpu_pixels == fallback.images.back(),
+                  "GPU fallback changed CPU composition pixels");
+          const auto &vertices = fallback.draws.front().vertices;
+          for (size_t index = 0; index < vertices.size(); ++index)
+              require(vertices[index].sx == cpu_vertices[index].sx &&
+                          vertices[index].sy == cpu_vertices[index].sy,
+                      "GPU fallback fitted its frame differently from requested CPU mode");
+      }
+  }
+  zrndr::set_menu_background_source(nullptr);
+  zrndr::target2d() = {};
+}
+
 void observation_checks() {
   Recorder recorder;
   sdlfe::HudOptions options;
@@ -431,7 +738,840 @@ void observation_checks() {
   zrndr::blit16(&indexed, 1, 2, 0, nullptr);
   require(!hud.finish() && hud.frame_stats().shadow_reasons.count("invalid image palette") == 1,
           "Bad palette index inside the crop did not fall back");
+  // With an alpha plane the same bad index still falls back, but the CPU blit must still draw:
+  // the native shadow is the fallback's output, so skipping it would drop the image entirely.
+  uint8_t opaque_alpha[] = {255, 255, 255, 255};
+  zimg::Texture indexed_alpha = indexed;
+  indexed_alpha.alpha = opaque_alpha;
+  shadow[2 * 8 + 1] = 0;
+  shadow[3 * 8 + 2] = 0;
+  require(hud.begin_observation(shadow.data(), 8, 6, 16, 18), "Observation did not start");
+  zrndr::blit16(&indexed_alpha, 1, 2, 0, nullptr);
+  require(!hud.finish() && hud.frame_stats().shadow_reasons.count("invalid image palette") == 1,
+          "Bad palette index under an alpha plane did not fall back");
+  require(shadow[2 * 8 + 1] == 0xf800 && shadow[3 * 8 + 2] == 0x07e0,
+          "Bad palette index under an alpha plane skipped the CPU blit");
   zrndr::target2d() = {};
+}
+
+uint32_t expand_565(uint16_t colour) {
+  return ((colour >> 11) * 255 / 31) | (((colour >> 5) & 63) * 255 / 63) << 8 |
+         ((colour & 31) * 255 / 31) << 16 | 0xff000000u;
+}
+
+void replay_recorder_draws(const Recorder& recorder, int width, int height,
+                           std::vector<uint32_t>& canvas) {
+  require(int(canvas.size()) == width * height, "Replay canvas size mismatch");
+  for (const auto& draw : recorder.draws) {
+    if (draw.primitive == platform::Primitive::kFan) {
+      require(draw.vertices.size() == 4, "Expected 4-vertex fan quad in replay");
+      const int x0 = int(std::lround(draw.vertices[0].sx));
+      const int y0 = int(std::lround(draw.vertices[0].sy));
+      const int x1 = int(std::lround(draw.vertices[2].sx));
+      const int y1 = int(std::lround(draw.vertices[2].sy));
+      const float u0 = draw.vertices[0].tu;
+      const float v0 = draw.vertices[0].tv;
+      const float u1 = draw.vertices[2].tu;
+      const float v1 = draw.vertices[2].tv;
+      for (int y = std::max(0, y0); y < std::min(height, y1); ++y) {
+        for (int x = std::max(0, x0); x < std::min(width, x1); ++x) {
+          uint32_t src_rgba = 0;
+          if (draw.state.texture >= 0) {
+            const auto& img = recorder.image_records.at(size_t(draw.state.texture));
+            const float u = u0 + (float(x - x0) + 0.5f) / float(x1 - x0) * (u1 - u0);
+            const float v = v0 + (float(y - y0) + 0.5f) / float(y1 - y0) * (v1 - v0);
+            const int tx = std::clamp(int(u * img.width), 0, img.width - 1);
+            const int ty = std::clamp(int(v * img.height), 0, img.height - 1);
+            src_rgba = img.pixels[size_t(ty) * img.width + tx];
+          } else {
+            const uint32_t argb = draw.vertices[0].diffuse;
+            src_rgba = (argb & 0xff00ff00u) | ((argb >> 16) & 0xffu) | ((argb & 0xffu) << 16);
+          }
+          const unsigned alpha = src_rgba >> 24;
+          if (alpha == 0) continue;
+          if (alpha == 255) {
+            canvas[size_t(y) * width + x] = src_rgba;
+          } else {
+            const uint32_t dst_rgba = canvas[size_t(y) * width + x];
+            uint32_t out = 0xff000000u;
+            for (int shift = 0; shift < 24; shift += 8) {
+              const unsigned s_ch = (src_rgba >> shift) & 0xffu;
+              const unsigned d_ch = (dst_rgba >> shift) & 0xffu;
+              const unsigned blended =
+                  std::min(255u, s_ch + (d_ch * (255u - alpha) + 127u) / 255u);
+              out |= blended << shift;
+            }
+            canvas[size_t(y) * width + x] = out;
+          }
+        }
+      }
+    } else if (draw.primitive == platform::Primitive::kStrip) {
+      for (size_t i = 0; i + 3 < draw.vertices.size();) {
+        if (draw.vertices[i].sx == draw.vertices[i + 1].sx &&
+            draw.vertices[i].sy == draw.vertices[i + 1].sy) {
+          ++i;
+          continue;
+        }
+        const int x0 = int(std::lround(draw.vertices[i].sx));
+        const int y0 = int(std::lround(draw.vertices[i].sy));
+        const uint32_t argb = draw.vertices[i].diffuse;
+        const uint32_t rgba =
+            (argb & 0xff00ff00u) | ((argb >> 16) & 0xffu) | ((argb & 0xffu) << 16);
+        if (x0 >= 0 && x0 < width && y0 >= 0 && y0 < height)
+          canvas[size_t(y0) * width + x0] = rgba;
+        i += 4;
+      }
+    }
+  }
+}
+
+class CursorTestHost : public ztwod::Host {
+ public:
+  zimg::Texture* screen_grab_rect(int32_t, ztwod::Rect* r, zimg::Texture* into) override {
+    const zrndr::Target2D& t = zrndr::target2d();
+    if (!t.base || !r || !into || !into->pixels) return nullptr;
+    ztwod::Rect c = *r;
+    if (c.left < 0) c.left = 0;
+    if (c.top < 0) c.top = 0;
+    if (c.right > int32_t(t.width)) c.right = int32_t(t.width);
+    if (c.bottom > int32_t(t.height)) c.bottom = int32_t(t.height);
+    if (c.right <= c.left || c.bottom <= c.top) return nullptr;
+    const int w = c.right - c.left, h = c.bottom - c.top;
+    if (into->width < w || into->height < h) return nullptr;
+    for (int y = 0; y < h; ++y) {
+      std::memcpy(static_cast<uint16_t*>(into->pixels) + size_t(y) * into->width,
+                  t.base + size_t(c.top + y) * t.pitch + size_t(c.left) * 2, size_t(w) * 2);
+    }
+    *r = c;
+    return into;
+  }
+};
+
+struct LegacyObserver final : zrndr::DrawObserver {
+  unsigned fallbacks = 0;
+  std::string last_reason;
+  void image(const zimg::Texture*, int32_t, int32_t, uint16_t, const zrndr::BlitRect*) override {}
+  void pixel(const uint16_t*, uint16_t) override {}
+  void span(const uint16_t*, uint32_t, uint16_t) override {}
+  void framebuffer_write(const void*, const char* operation) override {
+    ++fallbacks;
+    last_reason = operation ? operation : "";
+  }
+};
+
+struct ScopedStageBGlobals {
+  zrndr::Target2D saved_target = zrndr::target2d();
+  zrndr::FinishTarget saved_finish_target = zrndr::finish_target();
+  zrndr::TintState saved_tint = zrndr::tint_state();
+  zrndr::FinishMachine saved_machine = zrndr::finish_machine();
+  zrndr::LayerCover saved_cover = zrndr::layer_cover();
+  ztwod::Host* saved_host = &ztwod::host();
+  std::fenv_t saved_fenv{};
+  ScopedStageBGlobals() { std::fegetenv(&saved_fenv); }
+  ~ScopedStageBGlobals() {
+    zrndr::set_draw_observer(nullptr);
+    zrndr::target2d() = saved_target;
+    zrndr::finish_target() = saved_finish_target;
+    zrndr::tint_state() = saved_tint;
+    zrndr::finish_machine() = saved_machine;
+    zrndr::layer_cover() = saved_cover;
+    ztwod::set_host(saved_host);
+    zvid::set_pixel_format(5, 6, 5);
+    std::fesetenv(&saved_fenv);
+  }
+};
+
+void stage_b_primitive_checks(const std::filesystem::path& directory) {
+  ScopedStageBGlobals globals_guard;
+  require(zrndr::kCursorUsesMenuLogicalTransform,
+          "Cursor logical menu transform policy constant changed");
+
+  // 0. DrawObserver default resolved_region delegates to framebuffer_write for legacy observers.
+  {
+    LegacyObserver legacy;
+    uint16_t dummy = 0;
+    legacy.resolved_region(&dummy, 1, 1, 2, "legacy delegate check");
+    require(legacy.fallbacks == 1 && legacy.last_reason == "legacy delegate check",
+            "DrawObserver::resolved_region did not delegate to framebuffer_write by default");
+  }
+
+  // 0b. ScopedMuteDrawObserver: nested mutes restore the original observer, and an observer
+  //     installed inside a muted scope survives the scope's exit instead of being replaced by
+  //     the stale saved pointer.
+  {
+    LegacyObserver original, installed_inside;
+    zrndr::set_draw_observer(&original);
+    {
+      zrndr::ScopedMuteDrawObserver outer;
+      {
+        zrndr::ScopedMuteDrawObserver inner;
+        require(zrndr::draw_observer() == nullptr, "Nested mute did not clear the observer");
+      }
+      require(zrndr::draw_observer() == nullptr, "Inner mute exit unmuted the outer scope");
+    }
+    require(zrndr::draw_observer() == &original, "Nested mutes did not restore the observer");
+    {
+      zrndr::ScopedMuteDrawObserver mute;
+      zrndr::set_draw_observer(&installed_inside);
+    }
+    require(zrndr::draw_observer() == &installed_inside,
+            "Observer installed inside a muted scope was overwritten on scope exit");
+    zrndr::set_draw_observer(nullptr);
+  }
+
+  sdlfe::HudOptions options;
+  options.mode = "core-critical";
+  options.text = false;
+
+  // 1. Alpha edge values (0,3,4,7,8,251,252,255), green signed down-rounding, source/dest extremes,
+  //    palette index vs color key, alpha-over-key precedence, and representative green alpha glow
+  //    artwork on a padded-pitch canvas.
+  {
+    constexpr int width = 10, height = 7, pitch_px = 12, pitch_bytes = 24;
+    std::vector<uint16_t> initial(size_t(pitch_px) * height);
+    for (int y = 0; y < height; ++y)
+      for (int x = 0; x < pitch_px; ++x)
+        initial[size_t(y) * pitch_px + x] =
+            (x & 1) ? uint16_t(0xffffu) : uint16_t((15u << 11) | (40u << 5) | 20u);
+    initial[3] = uint16_t(63u << 5);  // max green dest for signed down-rounding check
+
+    uint16_t alpha_pixels[16] = {
+        0xf800, 0x07e0, 0x001f, 0x0000, 0xffff, 0xf81f, 0x07ff, 0xffe0,
+        0x1234, 0x5678, 0x9abc, 0xdef0, 0x0000, 0xffff, 0xf800, 0x07e0};
+    uint8_t alpha_plane[16] = {0, 3, 4, 7, 8, 128, 251, 252, 255, 0, 4, 251, 252, 3, 8, 255};
+    zimg::Texture alpha_img{};
+    alpha_img.width = 8;
+    alpha_img.height = 2;
+    alpha_img.width_again = 8;
+    alpha_img.pixels = alpha_pixels;
+    alpha_img.alpha = alpha_plane;
+    alpha_img.flags = zimg::kAlpha | zimg::kTwoBytes;  // kAlpha must be ignored when alpha != null
+
+    // Keyed palette image: non-magenta palette[0] so unkeyed index 0 is valid; index 2 is keyed.
+    uint16_t palette[4] = {0x1234, 0x07e0, 0xf800, 0x001f};
+    uint8_t pal_indices[4] = {0, 1, 2, 3};
+    zimg::Texture pal_keyed{};
+    pal_keyed.width = 4;
+    pal_keyed.height = 1;
+    pal_keyed.width_again = 4;
+    pal_keyed.pixels = pal_indices;
+    pal_keyed.palette = palette;
+    pal_keyed.palette_count = 4;
+    pal_keyed.flags = zimg::kAlpha;  // key is palette index 2 (not color 0xf800)
+
+    // Alpha-over-key palette image: includes opaque magenta (0xf81f) resolved via post-alpha path.
+    uint16_t pal_with_magenta[4] = {0xf81f, 0x07e0, 0xf800, 0x001f};
+    uint8_t pal_alpha[4] = {3, 4, 251, 255};
+    zimg::Texture pal_alpha_img = pal_keyed;
+    pal_alpha_img.palette = pal_with_magenta;
+    pal_alpha_img.alpha = pal_alpha;  // alpha plane takes precedence over index key
+
+    // Representative menu/lab green glow artwork: drawn as an ordinary alpha-blended Image.
+    uint16_t glow_pixels[6] = {0x07e0, 0x07e0, 0x03e0, 0x07e0, 0x05e0, 0x07e0};
+    uint8_t glow_alpha[6] = {0, 64, 140, 220, 252, 3};
+    zimg::Texture glow_img{};
+    glow_img.width = 3;
+    glow_img.height = 2;
+    glow_img.width_again = 3;
+    glow_img.pixels = glow_pixels;
+    glow_img.alpha = glow_alpha;
+    glow_img.flags = zimg::kTwoBytes;
+
+    zrndr::BlitRect neg_crop{-1, -1, 7, 2};
+    auto draw_scene = [&] {
+      zrndr::blit16(&alpha_img, 0, 0, 0xf800, nullptr);
+      zrndr::blit16(&alpha_img, -2, 1, 0xffff, &neg_crop);
+      zrndr::blit16(&pal_keyed, 1, 3, 2, nullptr);
+      zrndr::blit16(&pal_alpha_img, 2, 4, 1, nullptr);
+      zrndr::blit16(&glow_img, 5, 4, 0, nullptr);
+    };
+
+    auto baseline = initial;
+    zrndr::target2d() = {reinterpret_cast<uint8_t*>(baseline.data()), width, height, pitch_bytes, 6};
+    draw_scene();
+
+    auto shadow = initial;
+    Recorder recorder;
+    sdlfe::GpuHud hud(recorder, options);
+    zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), width, height, pitch_bytes, 6};
+
+    std::fesetround(FE_DOWNWARD);
+    std::feclearexcept(FE_ALL_EXCEPT);
+    std::feraiseexcept(FE_OVERFLOW);
+    const int expected_except = std::fetestexcept(FE_ALL_EXCEPT);
+
+    hud.begin(shadow.data(), width, height, pitch_bytes, height * 2);
+    draw_scene();
+    // Mutate BOTH source and shadow buffer after callbacks but before finish() to prove owned snapshots.
+    const auto shadow_after_draws = shadow;
+    alpha_pixels[2] = 0x1111;
+    glow_pixels[1] = 0xf800;
+    std::fill(shadow.begin(), shadow.end(), uint16_t(0x0000));
+    require(hud.finish(), "Alpha/palette/glow scene fell back instead of emitting GPU quads");
+    require(std::fegetround() == FE_DOWNWARD &&
+                std::fetestexcept(FE_ALL_EXCEPT) == expected_except,
+            "Stage B alpha/palette/glow draws polluted guest FP state");
+    alpha_pixels[2] = 0x001f;
+    glow_pixels[1] = 0x07e0;
+
+    require(shadow_after_draws == baseline,
+            "Observer changed CPU shadow pixels for alpha/palette/glow blits");
+    require(hud.frame_stats().resolved_regions > 0 && !hud.frame_stats().fallback,
+            "Alpha blits did not record resolved regions");
+    unsigned nearest_draws = 0;
+    for (const auto& draw : recorder.draws) {
+      if (draw.state.texture >= 0 && draw.state.filter == platform::TextureFilter::kNearest) {
+        require(draw.state.sharp && draw.vertices.size() == 4 &&
+                    draw.vertices[0].sx >= 0.f && draw.vertices[2].sx <= float(width) &&
+                    draw.vertices[0].sy >= 0.f && draw.vertices[2].sy <= float(height),
+                "Resolved region quad lacked nearest filter, sharp flag, or logical bounds");
+        ++nearest_draws;
+      }
+    }
+    require(nearest_draws == hud.frame_stats().resolved_regions,
+            "Emitted nearest-filtered resolved quads did not match resolved_regions count");
+
+    std::vector<uint32_t> replayed(size_t(width) * height);
+    for (int y = 0; y < height; ++y)
+      for (int x = 0; x < width; ++x)
+        replayed[size_t(y) * width + x] = expand_565(initial[size_t(y) * pitch_px + x]);
+    replay_recorder_draws(recorder, width, height, replayed);
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        require(replayed[size_t(y) * width + x] == expand_565(baseline[size_t(y) * pitch_px + x]),
+                "Replayed GPU quads differed from expanded CPU RGB565 alpha/palette/glow output");
+      }
+    }
+
+    // Separately verify that an unkeyed opaque magenta palette entry still triggers "unkeyed layer erase".
+    {
+      Recorder mag_recorder;
+      sdlfe::GpuHud mag_hud(mag_recorder, options);
+      auto mag_shadow = initial;
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(mag_shadow.data()), width, height,
+                           pitch_bytes, 6};
+      zimg::Texture mag_pal = pal_keyed;
+      mag_pal.palette = pal_with_magenta;  // index 0 is 0xf81f, key is 2 -> unkeyed magenta
+      mag_hud.begin(mag_shadow.data(), width, height, pitch_bytes, height * 2);
+      zrndr::blit16(&mag_pal, 1, 3, 2, nullptr);
+      require(!mag_hud.finish() &&
+                  mag_hud.frame_stats().shadow_reasons.count("unkeyed layer erase") == 1 &&
+                  mag_recorder.draws.empty(),
+              "Unkeyed magenta palette entry did not trigger unkeyed layer erase fallback");
+    }
+
+    // Observation-only mode validates/counts resolved regions without allocating or uploading.
+    Recorder obs_recorder;
+    sdlfe::GpuHud obs_hud(obs_recorder, options);
+    auto obs_shadow = initial;
+    zrndr::target2d() = {reinterpret_cast<uint8_t*>(obs_shadow.data()), width, height, pitch_bytes,
+                         6};
+    require(obs_hud.begin_observation(obs_shadow.data(), width, height, pitch_bytes, height * 2),
+            "Observation did not start for alpha scene");
+    draw_scene();
+    require(obs_hud.finish() && !obs_hud.frame_stats().fallback &&
+                obs_hud.frame_stats().resolved_regions == hud.frame_stats().resolved_regions &&
+                obs_recorder.images.empty() && obs_recorder.draws.empty() &&
+                obs_shadow == baseline,
+            "Observation-only alpha scene allocated resources or differed from baseline");
+  }
+
+  // 1b. RGB555 alpha threshold (<= 7 skipped, >= 252 opaque) CPU result + GPU fallback check.
+  {
+    constexpr int width = 8, height = 2, pitch_bytes = 16;
+    std::array<uint16_t, 16> initial{};
+    initial.fill(0x7fff);
+    uint16_t src555[8] = {0x7c00, 0x03e0, 0x001f, 0x7c1f, 0x03ff, 0x7fe0, 0x0000, 0x4210};
+    uint8_t alpha555[8] = {0, 3, 4, 7, 8, 128, 251, 252};
+    zimg::Texture tex555{};
+    tex555.width = tex555.width_again = 8;
+    tex555.height = 1;
+    tex555.pixels = src555;
+    tex555.alpha = alpha555;
+    tex555.flags = zimg::kTwoBytes;
+
+    auto baseline = initial;
+    zrndr::target2d() = {reinterpret_cast<uint8_t*>(baseline.data()), width, height, pitch_bytes, 5};
+    zrndr::blit16(&tex555, 0, 0, 0, nullptr);
+    // In RGB555 (format == 5), alphas 0, 3, 4, 7 are all <= 7 and must be skipped; 8..251 blend; 252 is opaque.
+    require(baseline[0] == 0x7fff && baseline[1] == 0x7fff && baseline[2] == 0x7fff &&
+                baseline[3] == 0x7fff && baseline[4] != 0x7fff && baseline[7] == 0x4210,
+            "RGB555 CPU alpha thresholds (<=7 skipped, >=252 opaque) changed");
+
+    auto shadow = initial;
+    Recorder recorder;
+    sdlfe::GpuHud hud(recorder, options);
+    zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), width, height, pitch_bytes, 5};
+    hud.begin(shadow.data(), width, height, pitch_bytes, height);
+    zrndr::blit16(&tex555, 0, 0, 0, nullptr);
+    require(!hud.finish() && hud.frame_stats().fallback &&
+                hud.frame_stats().shadow_reasons.count("RGB555 target") == 1 &&
+                recorder.draws.empty() && shadow == baseline,
+            "RGB555 alpha blit did not preserve exact CPU shadow and fall back cleanly");
+  }
+
+  // 2. Opaque full 16-bit copies across actual clipped dimensions (odd vs even clipped rows*width,
+  //    width 1 odd/even heights, crops, y-clipping, non-full x-offset, and offscreen no-op).
+  {
+    struct FullCopyCase {
+      int target_w;
+      int target_h;
+      int img_h;
+      int dst_x;
+      int dst_y;
+      bool use_crop;
+      zrndr::BlitRect crop;
+    };
+    const FullCopyCase cases[] = {
+        {3, 3, 3, 0, 0, false, {}},               // 3x3 full = 9 px (odd -> copies 8, leaves 9th)
+        {3, 3, 1, 0, 1, false, {}},               // 3x1 full at y=1 = 3 px (odd -> copies 2)
+        {3, 3, 2, 0, 1, false, {}},               // 3x2 full at y=1 = 6 px (even -> copies all 6)
+        {3, 4, 4, 0, 0, true, {0, 1, 3, 4}},      // 3x4 cropped to 3x3 = 9 px (odd -> copies 8)
+        {3, 4, 4, 0, -2, false, {}},              // 3x4 clipped at y=-2 -> 3x2 = 6 px (even -> copies 6)
+        {3, 4, 4, 0, -1, false, {}},              // 3x4 clipped at y=-1 -> 3x3 = 9 px (odd -> copies 8)
+        {1, 3, 3, 0, 0, false, {}},               // 1x3 full = 3 px (odd, width 1 -> copies 2 rows)
+        {1, 2, 2, 0, 0, false, {}},               // 1x2 full = 2 px (even, width 1 -> copies 2 rows)
+        {1, 1, 1, 0, 0, false, {}},               // 1x1 full = 1 px (odd -> 0 dwords copied, no-op)
+        {3, 3, 3, 1, 0, false, {}},               // x=1 clipped to 2x3 (not full -> copies all 6)
+        {3, 3, 3, 0, 5, false, {}},               // completely offscreen (no-op)
+    };
+    for (const auto& tc : cases) {
+      const int pitch_bytes = tc.target_w * 2;
+      std::vector<uint16_t> initial(size_t(tc.target_w) * tc.target_h, 0x001f);
+      std::vector<uint16_t> src_px(size_t(tc.target_w) * tc.img_h);
+      for (size_t i = 0; i < src_px.size(); ++i) src_px[i] = uint16_t(0xf800u + i);
+      zimg::Texture tex{};
+      tex.width = tex.width_again = tc.target_w;
+      tex.height = tc.img_h;
+      tex.pixels = src_px.data();
+      tex.flags = zimg::kTwoBytes;
+
+      auto baseline = initial;
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(baseline.data()), uint32_t(tc.target_w),
+                           uint32_t(tc.target_h), uint32_t(pitch_bytes), 6};
+      zrndr::blit16(&tex, tc.dst_x, tc.dst_y, 0, tc.use_crop ? &tc.crop : nullptr);
+
+      auto shadow = initial;
+      Recorder recorder;
+      sdlfe::GpuHud hud(recorder, options);
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), uint32_t(tc.target_w),
+                           uint32_t(tc.target_h), uint32_t(pitch_bytes), 6};
+      hud.begin(shadow.data(), tc.target_w, tc.target_h, pitch_bytes, tc.target_h);
+      zrndr::blit16(&tex, tc.dst_x, tc.dst_y, 0, tc.use_crop ? &tc.crop : nullptr);
+      const bool finished = hud.finish();
+      const bool any_changed = baseline != initial;
+      require(! hud.frame_stats().fallback && finished == any_changed,
+              "Full/partial unkeyed blit unexpected fallback or empty-draw status");
+      require(shadow == baseline, "Full/partial unkeyed blit shadow differed from baseline");
+
+      std::vector<uint32_t> replayed(initial.size(), expand_565(0x001f));
+      replay_recorder_draws(recorder, tc.target_w, tc.target_h, replayed);
+      for (size_t i = 0; i < baseline.size(); ++i) {
+        require(replayed[i] == expand_565(baseline[i]),
+                "Replayed full/partial unkeyed blit mismatched CPU output");
+      }
+    }
+  }
+
+  // The opaque fast path copies contiguous words, including padding, rather
+  // than rows. Keep it on the CPU until replay models that original quirk.
+  {
+    constexpr int width = 3, height = 3, pitch_pixels = 5;
+    std::array<uint16_t, pitch_pixels * height> source_pixels{};
+    for (size_t i = 0; i < source_pixels.size(); ++i)
+      source_pixels[i] = uint16_t(0x2000 + i);
+    zimg::Texture source{};
+    source.width = width;
+    source.width_again = pitch_pixels;
+    source.height = height;
+    source.pixels = source_pixels.data();
+    source.flags = zimg::kTwoBytes;
+    std::array<uint16_t, pitch_pixels * height> baseline{}, shadow{};
+    zrndr::target2d() = {reinterpret_cast<uint8_t*>(baseline.data()), width, height,
+                         pitch_pixels * 2, 6};
+    zrndr::blit16(&source, 0, 0, 0, nullptr);
+    Recorder recorder;
+    sdlfe::GpuHud hud(recorder, options);
+    zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), width, height,
+                         pitch_pixels * 2, 6};
+    hud.begin(shadow.data(), width, height, pitch_pixels * 2, height);
+    zrndr::blit16(&source, 0, 0, 0, nullptr);
+    require(!hud.finish() && shadow == baseline && recorder.draws.empty() &&
+                hud.frame_stats().shadow_reasons.count("padded full blit") == 1,
+            "Padded opaque fast copy did not preserve CPU output and request fallback");
+  }
+
+  // 3. Ripple (interior, clipped + persistent scratch) and tint (MMX tail + scalar pair spill).
+  {
+    zvid::set_pixel_format(5, 6, 5);
+    constexpr int width = 12, height = 10, pitch_bytes = 24;
+    std::vector<uint16_t> initial(size_t(width) * height);
+    for (size_t i = 0; i < initial.size(); ++i)
+      initial[i] = uint16_t(((i * 7 & 31) << 11) | ((i * 11 & 63) << 5) | (i * 3 & 31));
+
+    const int32_t clip_rect[4] = {1, 1, 10, 9};
+    const int32_t tint_mmx_rect[4] = {1, 1, 8, 4};     // count = 7 -> MMX tints 4, leaves 3 tail
+    const int32_t tint_scalar_rect[4] = {2, 5, 7, 7};  // count = 5 -> scalar tints (5>>1)+1 = 3 pairs = 6 px
+
+    auto run_effects = [&](std::vector<uint16_t>& buf) {
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(buf.data()), width, height, pitch_bytes, 6};
+      zrndr::set_finish_target(buf.data(), width, height, pitch_bytes);
+      zrndr::ripple_state().scratch.assign(size_t(width) * height, 0x7befu);
+      // Interior ripple
+      zrndr::ripple(6, 5, 1, 3, 1, 2.0f, 0.5f, nullptr, zrndr::X87::k24);
+      // Clipped ripple (reads outside clip preserve persistent scratch values)
+      zrndr::ripple(2, 2, 1, 3, 2, 2.0f, 1.0f, clip_rect, zrndr::X87::k24);
+      // No-op ripple (inner == outer)
+      zrndr::ripple(5, 5, 2, 2, 1, 2.0f, 0.0f, nullptr, zrndr::X87::k24);
+      // MMX tint
+      zrndr::finish_machine().mmx = true;
+      zrndr::finish_machine().format = 6;
+      zrndr::tint(0xf800, tint_mmx_rect, 0.5, false);
+      zrndr::finish();
+      // Scalar tint (spills past count)
+      zrndr::finish_machine().mmx = false;
+      zrndr::tint(0x07e0, tint_scalar_rect, 0.25, false);
+      zrndr::finish();
+      zrndr::tint_clear();
+      zrndr::finish_machine().mmx = true;
+    };
+
+    auto baseline = initial;
+    run_effects(baseline);
+
+    auto shadow = initial;
+    Recorder recorder;
+    sdlfe::GpuHud hud(recorder, options);
+    zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), width, height, pitch_bytes, 6};
+    hud.begin(shadow.data(), width, height, pitch_bytes, height);
+    run_effects(shadow);
+    require(hud.finish(), "Ripple and tint sequence fell back instead of emitting GPU quads");
+    require(shadow == baseline, "Observer changed ripple/tint CPU shadow");
+
+    std::vector<uint32_t> replayed(size_t(width) * height);
+    for (size_t i = 0; i < initial.size(); ++i) replayed[i] = expand_565(initial[i]);
+    replay_recorder_draws(recorder, width, height, replayed);
+    for (size_t i = 0; i < baseline.size(); ++i) {
+      require(replayed[i] == expand_565(baseline[i]),
+              "Replayed ripple/tint GPU quads differed from expanded CPU RGB565 output");
+    }
+  }
+
+  // 4. Cursor draw, hotspot/center, screen-edge clipping, save-under grab, move and restore
+  //    (including over unkeyed magenta 0xf81f background pixels, at 1x and scaled output height).
+  {
+    CursorTestHost test_host;
+    ztwod::set_host(&test_host);
+    constexpr int width = 8, height = 8, pitch_bytes = 16;
+    std::vector<uint16_t> initial(size_t(width) * height);
+    for (size_t i = 0; i < initial.size(); ++i) initial[i] = uint16_t(0x1000 + i * 17);
+    initial[0] = 0xf81f;  // unkeyed magenta in background must not trigger layer erase on restore
+    initial[size_t(4) * width + 4] = 0xf81f;
+
+    uint16_t cursor_px[9] = {0,      0xffff, 0,      0xffff, 0xf800,
+                             0xffff, 0,      0xffff, 0};
+    zimg::Texture cursor_tex{};
+    cursor_tex.width = cursor_tex.height = cursor_tex.width_again = 3;
+    cursor_tex.pixels = cursor_px;
+    cursor_tex.flags = zimg::kAlpha | zimg::kTwoBytes;
+
+    auto run_cursor_sequence = [&](std::vector<uint16_t>& buf, sdlfe::GpuHud* hud,
+                                   int output_height) {
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(buf.data()), width, height, pitch_bytes, 6};
+      if (hud) hud->begin(buf.data(), width, height, pitch_bytes, output_height);
+      ztwod::Cursor cursor(nullptr, 1);
+      cursor.center = 1;  // hotspot at center (3/2 = 1, 1)
+      cursor.set_cursor_image(&cursor_tex);
+      // Frame 1: move to top-left edge (0, 0) -> top-left at (-1, -1), clipped to 2x2
+      cursor.set_pos(0, 0);
+      cursor.draw();
+      // Frame 2: erase at (0, 0), move to interior (4, 4) -> top-left at (3, 3), draw
+      cursor.erase();
+      cursor.set_pos(4, 4);
+      cursor.draw();
+      // Frame 3: erase at (4, 4), move completely offscreen (-5, -5), draw & erase (no-op)
+      cursor.erase();
+      cursor.set_pos(-5, -5);
+      cursor.erase();
+      if (hud) require(hud->finish(), "Cursor sequence fell back instead of using GPU quads");
+    };
+
+    auto baseline = initial;
+    run_cursor_sequence(baseline, nullptr, height);
+    require(baseline == initial, "Cursor erase did not restore exact initial CPU canvas");
+
+    for (int out_h : {height, height * 3}) {
+      auto shadow = initial;
+      Recorder recorder;
+      sdlfe::GpuHud hud(recorder, options);
+      run_cursor_sequence(shadow, &hud, out_h);
+      require(shadow == baseline, "Observed cursor sequence changed CPU shadow");
+      // Verify emitted cursor draw and restore quad logical coordinates match at 1x and 3x density:
+      // Draw 0: clipped cursor draw at (0,0)..(2,2)
+      // Draw 1: clipped cursor restore at (0,0)..(2,2) (nearest filter)
+      // Draw 2: interior cursor draw at (3,3)..(6,6)
+      // Draw 3: interior cursor restore at (3,3)..(6,6) (nearest filter)
+      require(recorder.draws.size() == 4, "Cursor sequence emitted unexpected draw count");
+      require(recorder.draws[0].vertices[0].sx == 0.f && recorder.draws[0].vertices[0].sy == 0.f &&
+                  recorder.draws[0].vertices[2].sx == 2.f && recorder.draws[0].vertices[2].sy == 2.f &&
+                  recorder.draws[1].state.filter == platform::TextureFilter::kNearest &&
+                  recorder.draws[1].vertices[0].sx == 0.f && recorder.draws[1].vertices[2].sx == 2.f &&
+                  recorder.draws[2].vertices[0].sx == 3.f && recorder.draws[2].vertices[0].sy == 3.f &&
+                  recorder.draws[2].vertices[2].sx == 6.f && recorder.draws[2].vertices[2].sy == 6.f &&
+                  recorder.draws[3].state.filter == platform::TextureFilter::kNearest &&
+                  recorder.draws[3].vertices[0].sx == 3.f && recorder.draws[3].vertices[2].sx == 6.f,
+              "Cursor draw/restore logical quad coordinates or filter changed across output scales");
+
+      std::vector<uint32_t> replayed(size_t(width) * height);
+      for (size_t i = 0; i < initial.size(); ++i) replayed[i] = expand_565(initial[i]);
+      replay_recorder_draws(recorder, width, height, replayed);
+      for (size_t i = 0; i < baseline.size(); ++i) {
+        require(replayed[i] == expand_565(baseline[i]),
+                "Replayed cursor draw/restore sequence differed from CPU output");
+      }
+    }
+
+    // A host that reports a crop wider than the save-under buffer (as if the buffer were sized
+    // to a clipped area) must not make grab_at move rows past the end of that buffer: the
+    // capture is left exactly as the host packed it.
+    {
+      struct OversizedCropHost : CursorTestHost {
+        zimg::Texture* screen_grab_rect(int32_t, ztwod::Rect* r, zimg::Texture* into) override {
+          if (!r || !into || !into->pixels) return nullptr;
+          auto* pixels = static_cast<uint16_t*>(into->pixels);
+          for (int32_t i = 0; i < into->pixel_count; ++i) pixels[i] = uint16_t(0x4000 + i);
+          r->left += 1;
+          r->top += 1;
+          r->right += 2;  // two columns past the cursor, so past the buffer's row width
+          return into;
+        }
+      } oversized_host;
+      ztwod::set_host(&oversized_host);
+      auto screen = initial;
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(screen.data()), width, height, pitch_bytes,
+                           6};
+      ztwod::Cursor cursor(nullptr, 1);
+      cursor.set_cursor_image(&cursor_tex);
+      cursor.set_pos(4, 4);
+      bool capture_left_as_packed = cursor.under != nullptr;
+      if (capture_left_as_packed) {
+        const auto* pixels = static_cast<const uint16_t*>(cursor.under->pixels);
+        for (int32_t i = 0; i < cursor.under->pixel_count; ++i)
+          capture_left_as_packed = capture_left_as_packed && pixels[i] == uint16_t(0x4000 + i);
+      }
+      require(capture_left_as_packed,
+              "Cursor grab_at relocated rows for a crop larger than the save-under buffer");
+      ztwod::set_host(&test_host);
+    }
+  }
+
+  // 5. Fallbacks: LayerCover active, RGB555 target, malformed regions, region allocation failure,
+  //    region count & byte budget overflow, preflight failure, and bounded reason keys/diagnostics
+  //    (<= 32 + "other", including first-use logging in observation mode without polluting lifetime stats).
+  {
+    constexpr int width = 8, height = 6, pitch_bytes = 16;
+    std::array<uint16_t, 48> shadow{};
+    shadow.fill(0x2222);
+
+    // LayerCover active with resolved_region -> rejected and falls back.
+    {
+      Recorder recorder;
+      sdlfe::GpuHud hud(recorder, options);
+      std::array<uint8_t, 48> cover_a{};
+      std::array<uint16_t, 48> cover_c{};
+      zrndr::layer_cover() = {cover_a.data(), cover_c.data(), 0xf81f};
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), width, height, pitch_bytes, 6};
+      hud.begin(shadow.data(), width, height, pitch_bytes, height);
+      zrndr::observe_resolved_region(shadow.data(), 2, 2, pitch_bytes, "overlay resolved region");
+      require(!hud.finish() &&
+                  hud.frame_stats().shadow_reasons.count("overlay resolved region") == 1 &&
+                  recorder.draws.empty(),
+              "Resolved region allowed while LayerCover was active");
+      zrndr::layer_cover() = {};
+    }
+
+    // Malformed regions (zero dimensions, bad pitch, out-of-bounds) and null/empty operation name.
+    {
+      Recorder recorder;
+      sdlfe::GpuHud hud(recorder, options);
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), width, height, pitch_bytes, 6};
+      hud.begin_observation(shadow.data(), width, height, pitch_bytes, height);
+      zrndr::observe_resolved_region(shadow.data(), 0, 2, pitch_bytes, "zero width");
+      zrndr::observe_resolved_region(shadow.data(), 2, 0, pitch_bytes, nullptr);
+      zrndr::observe_resolved_region(shadow.data(), 2, 2, pitch_bytes + 2, "bad pitch");
+      zrndr::observe_resolved_region(shadow.data() + 7, 2, 1, pitch_bytes, "out of bounds");
+      zrndr::observe_resolved_region(shadow.data(), 1, 1, pitch_bytes, nullptr);
+      require(!hud.finish() && hud.frame_stats().shadow_reasons.count("zero width") == 1 &&
+                  hud.frame_stats().shadow_reasons.count("unknown write") == 1 &&
+                  hud.frame_stats().shadow_reasons.count("bad pitch") == 1 &&
+                  hud.frame_stats().shadow_reasons.count("out of bounds") == 1 &&
+                  hud.frame_stats().resolved_regions == 1,
+              "Malformed resolved regions did not record fallback reasons");
+    }
+
+    // A region starting in row padding (pitch wider than the visible width) must be refused
+    // before the unsigned width/height limits are computed, so it can never wrap into a huge
+    // accepted size.
+    {
+      constexpr int padded_pitch_bytes = 20;  // 8 visible pixels + 2 padding pixels per row
+      std::array<uint16_t, 60> padded{};
+      Recorder recorder;
+      sdlfe::GpuHud hud(recorder, options);
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(padded.data()), width, height,
+                           padded_pitch_bytes, 6};
+      // Observation mode keeps counting every refusal, so both padding starts are checked.
+      const bool observing =
+          hud.begin_observation(padded.data(), width, height, padded_pitch_bytes, height);
+      zrndr::observe_resolved_region(padded.data() + 8, 1, 1, padded_pitch_bytes, "row padding");
+      zrndr::observe_resolved_region(padded.data() + 19, 1, 1, padded_pitch_bytes, "row padding");
+      const bool observed_drawing = hud.finish();
+      const auto& reasons = hud.frame_stats().shadow_reasons;
+      const auto padding_reason = reasons.find("row padding");
+      const bool both_refused = padding_reason != reasons.end() && padding_reason->second == 2;
+      require(observing && !observed_drawing && both_refused &&
+                  hud.frame_stats().resolved_regions == 0 && recorder.draws.empty(),
+              "Resolved region starting in row padding was not refused");
+    }
+
+    // Resolved region texture allocation failure (Recorder::allocation_fails) falls back cleanly
+    // without throwing out of blit16 and without leaving partial draws.
+    {
+      Recorder failing_recorder;
+      failing_recorder.allocation_fails = true;
+      sdlfe::GpuHud hud(failing_recorder, options);
+      auto alpha_shadow = shadow;
+      uint16_t src_px[4] = {0xf800, 0x07e0, 0x001f, 0xffff};
+      uint8_t src_al[4] = {128, 128, 128, 128};
+      zimg::Texture alpha_tex{};
+      alpha_tex.width = alpha_tex.width_again = 2;
+      alpha_tex.height = 2;
+      alpha_tex.pixels = src_px;
+      alpha_tex.alpha = src_al;
+      alpha_tex.flags = zimg::kTwoBytes;
+
+      auto expected_shadow = shadow;
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(expected_shadow.data()), width, height,
+                           pitch_bytes, 6};
+      zrndr::blit16(&alpha_tex, 0, 0, 0, nullptr);
+
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(alpha_shadow.data()), width, height,
+                           pitch_bytes, 6};
+      hud.begin(alpha_shadow.data(), width, height, pitch_bytes, height);
+      zrndr::blit16(&alpha_tex, 0, 0, 0, nullptr);
+      require(!hud.finish() && hud.frame_stats().fallback &&
+                  hud.frame_stats().shadow_reasons.count("texture allocation failed") == 1 &&
+                  failing_recorder.draws.empty() && alpha_shadow == expected_shadow,
+              "Resolved region texture allocation failure threw mid-blit or left partial draws");
+    }
+
+    // Per-frame resolved region count budget (kMaxFrameResolvedRegions = 4096) and byte budget
+    // (kMaxFrameResolvedBytes = 32 MiB) tested via observation without GPU allocations.
+    {
+      Recorder recorder;
+      sdlfe::GpuHud hud(recorder, options);
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), width, height, pitch_bytes, 6};
+      require(hud.begin_observation(shadow.data(), width, height, pitch_bytes, height),
+              "Observation did not start for region count budget test");
+      for (uint64_t i = 0; i < sdlfe::GpuHud::kMaxFrameResolvedRegions; ++i) {
+        zrndr::observe_resolved_region(shadow.data(), 1, 1, pitch_bytes, "alpha blit");
+      }
+      require(!hud.frame_stats().fallback &&
+                  hud.frame_stats().resolved_regions == sdlfe::GpuHud::kMaxFrameResolvedRegions,
+              "Resolved region count budget failed before reaching kMaxFrameResolvedRegions");
+      zrndr::observe_resolved_region(shadow.data(), 1, 1, pitch_bytes, "alpha blit");
+      require(!hud.finish() && hud.frame_stats().fallback &&
+                  hud.frame_stats().shadow_reasons.count("resolved region budget exceeded") == 1 &&
+                  recorder.images.empty() && recorder.draws.empty(),
+              "Exceeding kMaxFrameResolvedRegions did not trigger resolved region budget exceeded");
+
+      // Byte budget: 1024x1024 target (4 MiB per full resolved region); 8 regions = 32 MiB ok, 9th fails.
+      constexpr int big_w = 1024, big_h = 1024, big_pitch = 2048;
+      uint16_t dummy_base = 0;
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(&dummy_base), big_w, big_h, big_pitch, 6};
+      require(hud.begin_observation(&dummy_base, big_w, big_h, big_pitch, big_h),
+              "Observation did not start for byte budget test");
+      for (int i = 0; i < 8; ++i) {
+        zrndr::observe_resolved_region(&dummy_base, big_w, big_h, big_pitch, "alpha blit");
+      }
+      require(!hud.frame_stats().fallback && hud.frame_stats().resolved_regions == 8,
+              "32 MiB resolved region byte budget rejected within-budget regions");
+      zrndr::observe_resolved_region(&dummy_base, 1, 1, big_pitch, "alpha blit");
+      require(!hud.finish() && hud.frame_stats().fallback &&
+                  hud.frame_stats().shadow_reasons.count("resolved region budget exceeded") == 1,
+              "Exceeding 32 MiB resolved region byte budget did not fall back");
+    }
+
+    // Preflight failure in finish() catches exception and selects fallback before submitting draws.
+    {
+      Recorder recorder;
+      recorder.preflight_throws = true;
+      sdlfe::GpuHud hud(recorder, options);
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), width, height, pitch_bytes, 6};
+      hud.begin(shadow.data(), width, height, pitch_bytes, height);
+      zrndr::observe_resolved_region(shadow.data(), 2, 2, pitch_bytes, "alpha blit");
+      require(!hud.finish() && hud.frame_stats().fallback &&
+                  hud.frame_stats().shadow_reasons.count("texture preflight failed") == 1 &&
+                  recorder.draws.empty(),
+              "Preflight exception in GpuHud::finish escaped or submitted partial draws");
+    }
+
+    // Bounded reason keys (<= 32 distinct reasons + "other") and once-per-reason stderr diagnostic
+    // across both observation_only and normal HUD frames, without observation polluting lifetime stats.
+    {
+      Recorder recorder;
+      StderrCapture capture(directory / "bounded-reasons.log");
+      {
+        sdlfe::GpuHud hud(recorder, options);
+        zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), width, height, pitch_bytes,
+                             6};
+        // First, observe an unknown reason twice across two observed frames: must log once,
+        // and must NOT enter lifetime compatibility counters printed at destructor.
+        for (int pass = 0; pass < 2; ++pass) {
+          require(hud.begin_observation(shadow.data(), width, height, pitch_bytes, height),
+                  "Observation did not start");
+          zrndr::observe_framebuffer_write(shadow.data(), "observed_only_reason");
+          require(!hud.finish(), "Observed unknown write did not fall back");
+        }
+        // Now trigger 40 distinct reasons in normal mode: 31 new reasons + "other" (since 1 slot
+        // in logged_shadow_reasons_ was used by "observed_only_reason").
+        for (int i = 0; i < 40; ++i) {
+          hud.begin(shadow.data(), width, height, pitch_bytes, height);
+          const std::string reason = "synthetic_reason_" + std::to_string(i);
+          zrndr::observe_framebuffer_write(shadow.data(), reason.c_str());
+          require(!hud.finish(), "Synthetic reason did not fall back");
+        }
+        // Repeat reason 0 and an overflow reason to ensure neither prints a second time.
+        hud.begin(shadow.data(), width, height, pitch_bytes, height);
+        zrndr::observe_framebuffer_write(shadow.data(), "synthetic_reason_0");
+        require(!hud.finish(), "Repeated reason 0 did not fall back");
+
+        hud.begin_observation(shadow.data(), width, height, pitch_bytes, height);
+        for (int i = 0; i < 40; ++i) {
+          const std::string reason = "obs_reason_" + std::to_string(i);
+          zrndr::observe_framebuffer_write(shadow.data(), reason.c_str());
+        }
+        require(!hud.finish() && hud.frame_stats().shadow_reasons.size() == 33 &&
+                    hud.frame_stats().shadow_reasons.at("other") == 8,
+                "Per-frame shadow_reasons map exceeded 32 keys + other");
+      }
+      const std::string log_text = capture.text();
+      size_t first_use_lines = 0;
+      for (size_t pos = 0;
+           (pos = log_text.find("GPU HUD: using native shadow composition for ", pos)) !=
+           std::string::npos;
+           pos += 45) {
+        ++first_use_lines;
+      }
+      require(first_use_lines == 33,
+              "First-use fallback diagnostic log was not bounded to 32 reasons + other");
+      require(
+          log_text.find("GPU HUD: using native shadow composition for observed_only_reason\n") !=
+              std::string::npos,
+          "Observation mode did not log first-use diagnostic for unknown write");
+      require(log_text.find("GPU HUD compatibility: observed_only_reason") == std::string::npos,
+              "Observation mode polluted in-mission lifetime compatibility counters");
+    }
+  }
 }
 void text_checks(const char* fonts) {
   const auto saved = zutl::mounts();
@@ -521,7 +1661,9 @@ int main(int argc, char** argv) {
   try {
     artwork_checks(directory);
     drawing_checks();
+    menu_background_checks(directory);
     observation_checks();
+    stage_b_primitive_checks(directory);
     if (argc == 3 && std::string(argv[1]) == "--fonts")
       text_checks(argv[2]);
     else

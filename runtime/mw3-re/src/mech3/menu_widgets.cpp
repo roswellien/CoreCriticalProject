@@ -5,6 +5,7 @@
 #include "mech3/mech_salvage.h"
 #include "mech3/pilot.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <map>
 #include <cstring>
@@ -12,6 +13,7 @@
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zreader/zreader.h"
 #include "gamez/zutil/zfix.h"
+#include "gamez/zutil/ztimer.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -23,16 +25,8 @@ namespace {
 int32_t width_of(const zimg::Texture* t) { return t ? t->width : 0; }
 int32_t height_of(const zimg::Texture* t) { return t ? t->height : 0; }
 
-// FIX (B): the menus move by a step each frame, so they ran faster the faster
-// the machine drew. With zfix's per_second the step is taken once for every
-// 30 fps frame that has passed (owed: what is left over); off, once a frame.
-int32_t frames_due(float dt, float* owed) {
-  if (!zfix::options().per_second) return 1;
-  *owed += zfix::frame_steps(dt);
-  const int32_t n = static_cast<int32_t>(*owed);
-  *owed -= static_cast<float>(n);
-  return n;
-}
+// Owner decision (2026-11-19): see ScrollImage::update.
+constexpr float kMenuBackgroundStepsPerSecond = 60.0f;
 }  // namespace
 
 // ---- the background ----
@@ -64,7 +58,18 @@ void ScrollImage::draw() {
 // fill the screen past them from the image's left and top, piece 3 the corner.
 void ScrollImage::update(float dt) {
   if (moving) {
-    const int32_t n = frames_due(dt, &steps_);
+    // Owner decision (2026-11-19): the menu background scrolls a fixed 60 source pixels a second per axis,
+    // from elapsed time, so every machine and presented frame rate looks the same (the original stepped
+    // one pixel per presented frame, so its speed followed the frame rate). Off, once a frame.
+    int32_t n = 1;
+    if (zfix::options().per_second) {
+      // The game clock clamps its step (default 0.125 s), which would slow the scroll below
+      // 8 fps and drop stalled time. The unclamped step keeps 60 px/s on every machine.
+      const float elapsed = std::max(dt, ztimer::state().raw_dt);
+      steps_ += elapsed * kMenuBackgroundStepsPerSecond;
+      n = static_cast<int32_t>(steps_);
+      steps_ -= static_cast<float>(n);
+    }
     view.left += step_x * n;
     view.right += step_x * n;
     view.bottom += step_y * n;

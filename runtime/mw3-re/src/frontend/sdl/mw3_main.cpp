@@ -336,7 +336,8 @@ void usage() {
       "    [--cc-effect-lights CATALOG] [--cc-fixture-lights 0|1]\n"
       "    [--cc-mech-headlights STOCK-CATALOG BINDINGS]\n"
       "    [--cc-hud original|core-critical] [--cc-hud-artwork PACK-ROOT]... [--cc-hud-text 0|1]\n"
-      "    [--cc-menu-background FILE] [--cc-menu-observe]\n"
+      "    [--cc-menu-background FILE] [--cc-menu-background-renderer cpu|gpu (default gpu)]\n"
+      "    [--cc-menu-observe]\n"
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
       "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires Core Critical Vulkan and --cc-lighting normal)]\n"
       "    [--cc-draw-distance 800|1200|1600|2400|3200 (default 800)]\n"
@@ -500,6 +501,11 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-hud" && next(1)) a.hud.mode = argv[++i], a.hud_mode_given = true;
     else if (s == "--cc-hud-artwork" && next(1)) a.hud.artwork.emplace_back(argv[++i]), a.hud_artwork_given = true;
     else if (s == "--cc-menu-background" && next(1)) a.hud.menu_background = argv[++i];
+    else if (s == "--cc-menu-background-renderer" && next(1)) {
+      a.hud.menu_background_renderer = argv[++i];
+      if (a.hud.menu_background_renderer != "cpu" && a.hud.menu_background_renderer != "gpu")
+        return false;
+    }
     else if (s == "--cc-menu-observe") a.hud.observe_menu = true;
     else if (s == "--cc-hud-text" && next(1)) {
       const std::string value = argv[++i];
@@ -1345,8 +1351,13 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   window.set_fullscreen(!a.windowed && !a.window_given && !a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty());
   // FIX (B): a first start's mission at the desktop's size; checks and shots keep 640x480.
   // MW3_FIRST_START=1 keeps it on in a check (sdl_first_start_takes_the_desktop).
-  window.set_first_start_desktop((!a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty()) ||
-                                 std::getenv("MW3_FIRST_START") != nullptr);
+  const bool play_run_size = (!a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty()) ||
+                             std::getenv("MW3_FIRST_START") != nullptr;
+  window.set_first_start_desktop(play_run_size);
+  // FIX (B): the launcher passes its resolution as --window WxH; a play run's frame (the menus'
+  // canvas and the mission) follows it rather than a saved or desktop size (resolution.md).
+  if (play_run_size && a.window_given && a.win_w > 0 && a.win_h > 0)
+    window.set_launch_size(a.win_w, a.win_h);
   sdlfe::SdlZinHost zin_host(&input);
   sdlfe::FrontendInputLifetime input_lifetime(zin_host);
   sdlfe::SdlClock clock;

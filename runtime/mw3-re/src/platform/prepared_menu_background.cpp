@@ -1,6 +1,7 @@
 #include "platform/prepared_menu_background.h"
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cmath>
 #include <cstdint>
@@ -177,11 +178,20 @@ uint32_t word(const uint8_t* bytes) {
          uint32_t(bytes[3]) << 24;
 }
 
+// The 5- or 6-bit code of one RGB555/RGB565 channel (0 red, 1 green, 2 blue).
+unsigned channel_code(uint16_t pixel, int index, bool rgb565) {
+  if (index == 0) return (pixel >> (rgb565 ? 11 : 10)) & 31;
+  if (index == 1) return (pixel >> 5) & (rgb565 ? 63 : 31);
+  return pixel & 31;
+}
+
+// 255 over the channel's largest code: a code times this is its 8-bit value.
+float channel_scale(int index, bool rgb565) {
+  return index == 1 && rgb565 ? 255.f / 63 : 255.f / 31;
+}
+
 float channel(uint16_t pixel, int index, bool rgb565) {
-  if (index == 0) return float((pixel >> (rgb565 ? 11 : 10)) & 31) * (255.f / 31);
-  if (index == 1)
-    return float((pixel >> 5) & (rgb565 ? 63 : 31)) * (255.f / (rgb565 ? 63 : 31));
-  return float(pixel & 31) * (255.f / 31);
+  return float(channel_code(pixel, index, rgb565)) * channel_scale(index, rgb565);
 }
 
 uint32_t pack(uint8_t red, uint8_t green, uint8_t blue) {
@@ -210,11 +220,24 @@ struct SourcePixel { int x{-1}, y{-1}; };
 
 struct ComposeScratch {
   std::vector<SourcePixel> source_at;
+  // 0 native artwork, 1 background (possibly tinted), 2 background with added light.
   std::vector<uint8_t> kind;
-  std::vector<float> actual, expected, added, gain;
+  std::vector<float> added, gain;
+  // Per background pixel, the channel codes of the rendered and the original pixel (zero
+  // elsewhere), and their sums over five columns. The 5x5 gain then needs five additions per
+  // pixel instead of 25, in exact integers, so it no longer dominates every menu frame.
+  std::vector<uint8_t> codes;
+  std::vector<uint16_t> row_sums;
   std::unique_ptr<detail::MenuBackgroundWorkers> workers;
+  // A one-off composition (no retained scratch) runs on the caller's thread rather than
+  // starting a worker pool for a single frame.
+  bool inline_only = false;
 
   void run(unsigned rows, const std::function<void(unsigned, unsigned)>& render_rows) {
+    if (inline_only) {
+      render_rows(0, rows);
+      return;
+    }
     if (!workers) workers = std::make_unique<detail::MenuBackgroundWorkers>();
     workers->run(rows, render_rows);
   }
@@ -248,6 +271,28 @@ bool same_frame(const uint16_t* pixels, int width, int height, int pitch,
   }
   return true;
 }
+
+bool valid_menu_inputs(const MenuBackgroundImage& image, const zimg::Texture* source,
+                       const std::vector<zrndr::MenuBackgroundBlit>& blits,
+                       const uint16_t* pixels, int width, int height, int pitch,
+                       unsigned output_width, unsigned output_height) {
+    // Empty blits are checked before the source is read: after a menu closes, the registered
+    // source pointer can be stale (#375), and an empty blit list is the signal that no menu
+    // background is live, so nothing may dereference the source in that case.
+    return !blits.empty() && pixels && source && !source->palette && !source->alpha &&
+           source->pixels &&
+           image.width && image.height && image.source_width && image.source_height &&
+           std::max({image.width, image.height, image.source_width, image.source_height}) <=
+               16384 &&
+           uint64_t(image.width) * image.source_height ==
+               uint64_t(image.height) * image.source_width &&
+           uint64_t(image.width) * image.height * 3 == image.rgb.size() && source->width > 0 &&
+           source->width <= 16384 && source->height == int(image.source_height) &&
+           source->width_again >= source->width && width > 0 && height > 0 &&
+           pitch >= int64_t(width) * 2 && pitch % 2 == 0 &&
+           uint64_t(width) * height <= 16ull * 1024 * 1024 && output_width && output_height &&
+           uint64_t(output_width) * output_height <= 16ull * 1024 * 1024;
+}
 }  // namespace
 
 MenuBackgroundOutputSize menu_background_output_size(int frame_width, int frame_height,
@@ -267,6 +312,139 @@ MenuBackgroundOutputSize menu_background_output_size(int frame_width, int frame_
 
 MenuBackgroundLayerRect menu_background_layer_rect(int frame_width, int frame_height) {
   return {0.f, 0.f, float(frame_width), float(frame_height)};
+}
+
+MenuBackgroundLayerRect menu_background_cover_rect(int frame_width, int frame_height,
+                                                    int output_width, int output_height) {
+  if (frame_width <= 0 || frame_height <= 0 || output_width <= 0 || output_height <= 0)
+    throw std::invalid_argument("Menu cover requires positive frame and output dimensions");
+  const double scale = std::max(double(output_width) / frame_width,
+                                double(output_height) / frame_height);
+  const double covered_width = frame_width * scale;
+  const double covered_height = frame_height * scale;
+  return {float((output_width - covered_width) * .5),
+          float((output_height - covered_height) * .5),
+          float(covered_width), float(covered_height)};
+}
+
+MenuBackgroundUvRect menu_background_uv_rect(const MenuBackgroundImage &image, int64_t source_x,
+                                             int64_t source_y, int frame_width, int frame_height,
+                                             unsigned game_width, unsigned game_height,
+                                             unsigned texture_width, unsigned texture_height) {
+    if (!image.width || !image.height || !image.source_width || !image.source_height ||
+        frame_width <= 0 || frame_height <= 0)
+        throw std::invalid_argument(
+            "Menu UV rectangle requires positive image and frame dimensions");
+    const auto wrap = [](int64_t value, unsigned extent) {
+        const int64_t remainder = value % int64_t(extent);
+        return remainder < 0 ? remainder + extent : remainder;
+    };
+    if (!game_width)
+        game_width = image.source_width;
+    if (!game_height)
+        game_height = image.source_height;
+    // ScrollImage advances at 60 original-game pixels/s on the 1280-wide basis.
+    // Scale BOTH origin and span by master_width/game_width: 60 becomes 90 on a
+    // 1920-wide master, with the same on-screen speed and a 1920-pixel wrap period.
+    if (!texture_width)
+        texture_width = image.width;
+    if (!texture_height)
+        texture_height = image.height;
+    const double u0 = double(wrap(source_x, game_width)) / game_width + .5 / texture_width;
+    const double v0 = double(wrap(source_y, game_height)) / game_height + .5 / texture_height;
+    return {float(u0), float(v0), float(u0 + double(frame_width) / game_width),
+            float(v0 + double(frame_height) / game_height)};
+}
+
+unsigned menu_background_upload_height(int window_height, int display_height,
+                                       unsigned image_height) {
+    // Twice the displayed height: a 480-high menu views half a 960-high source canvas. A zero or
+    // unknown window (minimised, or not yet sized at startup) must not shrink the texture for the
+    // whole session, so use the display's height, and failing that keep the full image.
+    if (window_height > 0)
+        return unsigned(window_height) * 2;
+    if (display_height > 0)
+        return unsigned(display_height) * 2;
+    return image_height;
+}
+
+MenuBackgroundImage menu_background_upload_image(const MenuBackgroundImage &image,
+                                                 unsigned maximum_height) {
+    if (!maximum_height || !image.width || !image.height ||
+        uint64_t(image.width) * image.height * 3 != image.rgb.size())
+        throw std::invalid_argument("Menu upload requires a valid image and height limit");
+    if (image.height <= maximum_height)
+        return image;
+    MenuBackgroundImage filtered;
+    filtered.height = maximum_height;
+    filtered.width = std::max(1u, unsigned(uint64_t(image.width) * maximum_height / image.height));
+    filtered.source_width = image.source_width;
+    filtered.source_height = image.source_height;
+    filtered.rgb.resize(size_t(filtered.width) * filtered.height * 3);
+    // Integer overlap weights average each complete source footprint, including
+    // fractional edge texels; point sampling here would retain the shimmer.
+    const uint64_t total_weight = uint64_t(image.width) * image.height;
+    for (unsigned y = 0; y < filtered.height; ++y) {
+        const uint64_t top = uint64_t(y) * image.height;
+        const uint64_t bottom = top + image.height;
+        for (unsigned x = 0; x < filtered.width; ++x) {
+            const uint64_t left = uint64_t(x) * image.width;
+            const uint64_t right = left + image.width;
+            uint64_t sums[3]{};
+            for (unsigned source_y = unsigned(top / filtered.height);
+                 uint64_t(source_y) * filtered.height < bottom; ++source_y) {
+                const uint64_t row_weight =
+                    std::min(bottom, uint64_t(source_y + 1) * filtered.height) -
+                    std::max(top, uint64_t(source_y) * filtered.height);
+                for (unsigned source_x = unsigned(left / filtered.width);
+                     uint64_t(source_x) * filtered.width < right; ++source_x) {
+                    const uint64_t weight =
+                        row_weight * (std::min(right, uint64_t(source_x + 1) * filtered.width) -
+                                      std::max(left, uint64_t(source_x) * filtered.width));
+                    for (unsigned channel_index = 0; channel_index < 3; ++channel_index)
+                        sums[channel_index] +=
+                            image.rgb[(size_t(source_y) * image.width + source_x) * 3 +
+                                      channel_index] *
+                            weight;
+                }
+            }
+            for (unsigned channel_index = 0; channel_index < 3; ++channel_index)
+                filtered.rgb[(size_t(y) * filtered.width + x) * 3 + channel_index] =
+                    uint8_t((sums[channel_index] + total_weight / 2) / total_weight);
+        }
+    }
+    return filtered;
+}
+
+const char* menu_background_gpu_status_name(MenuBackgroundGpuStatus status) {
+  switch (status) {
+    case MenuBackgroundGpuStatus::kReady: return "ready";
+    case MenuBackgroundGpuStatus::kMapping: return "nonuniform-source-mapping";
+    case MenuBackgroundGpuStatus::kGain: return "gain-not-finite-or-above-4";
+    case MenuBackgroundGpuStatus::kAdded: return "added-light-not-finite-or-beyond-255";
+  }
+  throw std::invalid_argument("Unknown menu GPU status");
+}
+
+MenuBackgroundUvRect menu_background_extend_uv(const MenuBackgroundUvRect& uv,
+                                               const MenuBackgroundLayerRect& frame_rectangle,
+                                               const MenuBackgroundLayerRect& cover_rectangle) {
+  const auto valid_rectangle = [](const MenuBackgroundLayerRect& rectangle) {
+    return std::isfinite(rectangle.x) && std::isfinite(rectangle.y) &&
+           std::isfinite(rectangle.width) && std::isfinite(rectangle.height) &&
+           rectangle.width > 0 && rectangle.height > 0;
+  };
+  if (!valid_rectangle(frame_rectangle) || !valid_rectangle(cover_rectangle) ||
+      !std::isfinite(uv.u0) || !std::isfinite(uv.v0) ||
+      !std::isfinite(uv.u1) || !std::isfinite(uv.v1))
+    throw std::invalid_argument("Menu background extension requires finite UVs and positive rectangles");
+  const double du = double(uv.u1) - uv.u0, dv = double(uv.v1) - uv.v0;
+  const double left = double(cover_rectangle.x) - frame_rectangle.x;
+  const double top = double(cover_rectangle.y) - frame_rectangle.y;
+  return {float(uv.u0 + du * left / frame_rectangle.width),
+          float(uv.v0 + dv * top / frame_rectangle.height),
+          float(uv.u0 + du * (left + cover_rectangle.width) / frame_rectangle.width),
+          float(uv.v0 + dv * (top + cover_rectangle.height) / frame_rectangle.height)};
 }
 
 MenuBackgroundImage load_menu_background(const std::filesystem::path& path) {
@@ -298,110 +476,299 @@ MenuBackgroundImage load_menu_background(const std::filesystem::path& path) {
   return image;
 }
 
+namespace {
+// Records, for each frame pixel, the background texel a recorded blit put there. Later blits
+// overwrite earlier ones, as the native draw order does.
+void map_source_pixels(const std::vector<zrndr::MenuBackgroundBlit>& blits,
+                       const zimg::Texture& source, int width, int height,
+                       std::vector<SourcePixel>* source_at) {
+  source_at->assign(size_t(width) * height, {});
+  for (const auto& blit : blits) {
+    const int64_t first_row = std::max({int64_t(0), -int64_t(blit.destination_y),
+                                        -int64_t(blit.source_y)});
+    const int64_t last_row = std::min({int64_t(blit.height),
+                                       int64_t(height) - blit.destination_y,
+                                       int64_t(source.height) - blit.source_y});
+    const int64_t first_column = std::max({int64_t(0), -int64_t(blit.destination_x),
+                                           -int64_t(blit.source_x)});
+    const int64_t last_column = std::min({int64_t(blit.width),
+                                          int64_t(width) - blit.destination_x,
+                                          int64_t(source.width) - blit.source_x});
+    for (int64_t row = first_row; row < last_row; ++row) {
+      const int y = int(blit.destination_y + row);
+      SourcePixel* destination_row = source_at->data() + size_t(y) * width;
+      for (int64_t column = first_column; column < last_column; ++column) {
+        const int x = int(blit.destination_x + column);
+        destination_row[x] = {int(blit.source_x + column), int(blit.source_y + row)};
+      }
+    }
+  }
+}
+
+// One 8-bit UNORM map value; callers have already checked the value lies in [0, 1].
+uint8_t unorm(float value) { return uint8_t(value * 255.f + .5f); }
+
+// The GPU pass values of one gain (see MenuBackgroundGpuMap): attenuate * (1 + boost) *
+// (1 + boost_high) == gain for every gain in [0, kMenuBackgroundMaximumGain].
+struct GainFactors {
+  float attenuate, boost, boost_high;
+};
+GainFactors split_gain(float gain) {
+  GainFactors factors{std::min(gain, 1.f), 0.f, 0.f};
+  if (gain > 1.f) factors.boost = std::min(gain, 2.f) - 1.f;
+  if (gain > 2.f) factors.boost_high = gain * .5f - 1.f;
+  return factors;
+}
+}  // namespace
+
 static bool compose_menu_background_impl(const MenuBackgroundImage& image, const zimg::Texture* source,
                              const std::vector<zrndr::MenuBackgroundBlit>& blits,
                              const uint16_t* pixels, int width, int height, int pitch,
                              bool rgb565, unsigned output_width, unsigned output_height,
-                             std::vector<uint32_t>* output, ComposeScratch* scratch) {
-  if (!output || !pixels || blits.empty() || !source || source->palette || source->alpha ||
-      !source->pixels ||
-      source->width != int(image.source_width) || source->height != int(image.source_height) ||
-      source->width_again < source->width ||
-      width <= 0 || height <= 0 || pitch < int64_t(width) * 2 ||
-      output_width == 0 || output_height == 0 ||
-      uint64_t(output_width) * output_height > 16ull * 1024 * 1024)
+                             std::vector<uint32_t>* output, ComposeScratch* scratch,
+                             MenuBackgroundGpuLayers* layers = nullptr,
+                             unsigned bound_texture_width = 0, unsigned bound_texture_height = 0) {
+  if ((!output && !layers) || !valid_menu_inputs(image, source, blits, pixels, width, height,
+                                               pitch, output_width, output_height))
     return false;
 
   ComposeScratch local_scratch;
+  local_scratch.inline_only = true;
   ComposeScratch& work = scratch ? *scratch : local_scratch;
   auto& source_at = work.source_at;
   auto& kind = work.kind;
-  auto& actual = work.actual;
-  auto& expected = work.expected;
   auto& added = work.added;
   auto& gain = work.gain;
-  source_at.assign(size_t(width) * height, {});
-  for (const auto& blit : blits) {
-    for (int row = 0; row < blit.height; ++row) {
-      const int y = blit.destination_y + row;
-      if (y < 0 || y >= height || blit.source_y + row < 0 || blit.source_y + row >= source->height)
-        continue;
-      for (int column = 0; column < blit.width; ++column) {
-        const int x = blit.destination_x + column;
-        const int sx = blit.source_x + column;
-        if (x >= 0 && x < width && sx >= 0 && sx < source->width)
-          source_at[size_t(y) * width + x] = {sx, blit.source_y + row};
-      }
-    }
-  }
+  auto& codes = work.codes;
+  auto& row_sums = work.row_sums;
+  map_source_pixels(blits, *source, width, height, &source_at);
   const auto* frame = reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(pixels));
   const auto* original = static_cast<const uint16_t*>(source->pixels);
   const int pitch_pixels = pitch / 2;
   const size_t frame_pixels = size_t(width) * height;
-  kind.assign(frame_pixels, 0);
-  actual.resize(frame_pixels * 3);
-  expected.resize(frame_pixels * 3);
-  added.assign(frame_pixels * 3, 0.f);
-  gain.assign(frame_pixels * 3, 1.f);
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      const size_t at = size_t(y) * width + x;
-      const auto position = source_at[at];
-      if (position.x < 0 || position.y < 0) continue;
-      const uint16_t rendered = frame[y * pitch_pixels + x];
-      const uint16_t background = original[size_t(position.y) * source->width_again + position.x];
-      float ratio[3]{};
-      bool background_pixel = rendered == background;
-      for (int channel_index = 0; channel_index < 3; ++channel_index) {
-        actual[at * 3 + channel_index] = channel(rendered, channel_index, rgb565);
-        expected[at * 3 + channel_index] = channel(background, channel_index, rgb565);
-        ratio[channel_index] = (actual[at * 3 + channel_index] + 8.f) /
-                               (expected[at * 3 + channel_index] + 8.f);
-      }
-      if (!background_pixel) {
-        const float minimum = std::min({ratio[0], ratio[1], ratio[2]});
-        const float maximum = std::max({ratio[0], ratio[1], ratio[2]});
-        background_pixel = minimum > .12f && maximum < 2.5f && maximum <= minimum * 1.45f;
-      }
-      if (background_pixel) {
-        kind[at] = 1;
-        continue;
-      }
-      const float red_delta = actual[at * 3] - expected[at * 3];
-      const float green_delta = actual[at * 3 + 1] - expected[at * 3 + 1];
-      const float blue_delta = actual[at * 3 + 2] - expected[at * 3 + 2];
-      if (green_delta > 6.f && red_delta > -10.f && blue_delta > -10.f &&
-          red_delta < green_delta * .6f && blue_delta < green_delta * .6f) {
-        kind[at] = 2;
-        added[at * 3] = red_delta;
-        added[at * 3 + 1] = green_delta;
-        added[at * 3 + 2] = blue_delta;
+  kind.resize(frame_pixels);
+  added.resize(frame_pixels * 3);
+  gain.resize(frame_pixels * 3);
+  codes.resize(frame_pixels * 6);
+  row_sums.resize(frame_pixels * 6);
+
+  // Classification: every pixel depends only on its own rendered and original values, so rows
+  // run in parallel. The thresholds are unchanged from the serial version.
+  work.run(unsigned(height), [&](unsigned first_row, unsigned last_row) {
+    for (unsigned y = first_row; y < last_row; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const size_t at = size_t(y) * width + x;
+        kind[at] = 0;
+        for (int channel_index = 0; channel_index < 3; ++channel_index) {
+          added[at * 3 + channel_index] = 0.f;
+          gain[at * 3 + channel_index] = 1.f;
+        }
+        std::fill_n(codes.begin() + at * 6, 6, uint8_t(0));
+        const auto position = source_at[at];
+        if (position.x < 0 || position.y < 0) continue;
+        const uint16_t rendered = frame[size_t(y) * pitch_pixels + x];
+        const uint16_t background =
+            original[size_t(position.y) * source->width_again + position.x];
+        float actual[3]{}, expected[3]{}, ratio[3]{};
+        bool background_pixel = rendered == background;
+        for (int channel_index = 0; channel_index < 3; ++channel_index) {
+          actual[channel_index] = channel(rendered, channel_index, rgb565);
+          expected[channel_index] = channel(background, channel_index, rgb565);
+          ratio[channel_index] = (actual[channel_index] + 8.f) / (expected[channel_index] + 8.f);
+        }
+        if (!background_pixel) {
+          const float minimum = std::min({ratio[0], ratio[1], ratio[2]});
+          const float maximum = std::max({ratio[0], ratio[1], ratio[2]});
+          background_pixel = minimum > .12f && maximum < 2.5f && maximum <= minimum * 1.45f;
+        }
+        if (background_pixel) {
+          kind[at] = 1;
+          for (int channel_index = 0; channel_index < 3; ++channel_index) {
+            codes[at * 6 + channel_index] = uint8_t(channel_code(rendered, channel_index, rgb565));
+            codes[at * 6 + 3 + channel_index] =
+                uint8_t(channel_code(background, channel_index, rgb565));
+          }
+          continue;
+        }
+        const float red_delta = actual[0] - expected[0];
+        const float green_delta = actual[1] - expected[1];
+        const float blue_delta = actual[2] - expected[2];
+        if (green_delta > 6.f && red_delta > -10.f && blue_delta > -10.f &&
+            red_delta < green_delta * .6f && blue_delta < green_delta * .6f) {
+          kind[at] = 2;
+          added[at * 3] = red_delta;
+          added[at * 3 + 1] = green_delta;
+          added[at * 3 + 2] = blue_delta;
+        }
       }
     }
-  }
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      const size_t at = size_t(y) * width + x;
-      if (kind[at] != 1) continue;
-      float sum_actual[3]{}, sum_expected[3]{};
-      for (int dy = -2; dy <= 2; ++dy) {
-        const int yy = y + dy;
-        if (yy < 0 || yy >= height) continue;
-        for (int dx = -2; dx <= 2; ++dx) {
-          const int xx = x + dx;
-          if (xx < 0 || xx >= width) continue;
-          const size_t neighbor = size_t(yy) * width + xx;
-          if (kind[neighbor] != 1) continue;
-          for (int channel_index = 0; channel_index < 3; ++channel_index) {
-            sum_actual[channel_index] += actual[neighbor * 3 + channel_index];
-            sum_expected[channel_index] += expected[neighbor * 3 + channel_index];
+  });
+  // The gain of a background pixel is the ratio of the rendered to the original light over the
+  // background pixels of its 5x5 neighbourhood. Codes are summed as integers, five columns then
+  // five rows; non-background pixels hold zero codes and so add nothing.
+  work.run(unsigned(height), [&](unsigned first_row, unsigned last_row) {
+    for (unsigned y = first_row; y < last_row; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const size_t at = size_t(y) * width + x;
+        const int first_column = std::max(0, x - 2), last_column = std::min(width - 1, x + 2);
+        for (int value = 0; value < 6; ++value) {
+          unsigned sum = 0;
+          for (int column = first_column; column <= last_column; ++column)
+            sum += codes[(size_t(y) * width + column) * 6 + value];
+          row_sums[at * 6 + value] = uint16_t(sum);
+        }
+      }
+    }
+  });
+  work.run(unsigned(height), [&](unsigned first_row, unsigned last_row) {
+    for (unsigned y = first_row; y < last_row; ++y) {
+      const int first_neighbour_row = std::max(0, int(y) - 2);
+      const int last_neighbour_row = std::min(height - 1, int(y) + 2);
+      for (int x = 0; x < width; ++x) {
+        const size_t at = size_t(y) * width + x;
+        if (kind[at] != 1) continue;
+        unsigned sums[6]{};
+        for (int row = first_neighbour_row; row <= last_neighbour_row; ++row)
+          for (int value = 0; value < 6; ++value)
+            sums[value] += row_sums[(size_t(row) * width + x) * 6 + value];
+        for (int channel_index = 0; channel_index < 3; ++channel_index) {
+          const float scale = channel_scale(channel_index, rgb565);
+          const float sum_actual = float(sums[channel_index]) * scale;
+          const float sum_expected = float(sums[3 + channel_index]) * scale;
+          // Near-black background makes this ratio of tiny sums meaningless (an original code 0
+          // shown as code 1 gives about 52), so both paths limit it to what the GPU passes hold.
+          gain[at * 3 + channel_index] =
+              std::min((sum_actual + 4.f) / (sum_expected + 4.f), kMenuBackgroundMaximumGain);
+        }
+      }
+    }
+  });
+
+  if (layers) {
+    bool maps_changed = layers->status != MenuBackgroundGpuStatus::kReady;
+    for (const auto& map : layers->maps) maps_changed = maps_changed || map.size() != frame_pixels;
+    layers->status = MenuBackgroundGpuStatus::kMapping;
+    // All recorded pieces must be one affine rectangle modulo the image, including overlap
+    // order. Otherwise a single repeating quad cannot reproduce the CPU source_at map.
+    const SourcePixel* first_mapped = std::find_if(
+        source_at.data(), source_at.data() + frame_pixels,
+        [](const SourcePixel& position) { return position.x >= 0; });
+    if (first_mapped == source_at.data() + frame_pixels) return true;
+    const size_t first_index = size_t(first_mapped - source_at.data());
+    const int origin_x = first_mapped->x - int(first_index % width);
+    const int origin_y = first_mapped->y - int(first_index / width);
+    std::atomic<bool> nonuniform{false};
+    work.run(unsigned(height), [&](unsigned first_row, unsigned last_row) {
+      for (unsigned y = first_row; y < last_row && !nonuniform.load(std::memory_order_relaxed);
+           ++y) {
+        for (int x = 0; x < width; ++x) {
+          const auto position = source_at[size_t(y) * width + x];
+          if (position.x < 0) continue;
+          if ((int64_t(position.x) - x - origin_x) % source->width != 0 ||
+              (int64_t(position.y) - int64_t(y) - origin_y) % source->height != 0) {
+            nonuniform.store(true, std::memory_order_relaxed);
+            break;
           }
         }
       }
-      for (int channel_index = 0; channel_index < 3; ++channel_index)
-        gain[at * 3 + channel_index] = (sum_actual[channel_index] + 4.f) /
-                                       (sum_expected[channel_index] + 4.f);
+    });
+    if (nonuniform.load()) return true;
+    layers->uv = menu_background_uv_rect(image, origin_x, origin_y, width, height,
+                                         unsigned(source->width), unsigned(source->height),
+                                         bound_texture_width, bound_texture_height);
+    for (auto& map : layers->maps) map.resize(frame_pixels);
+    // Bit i of a mask stands for map i. Rows report which maps changed and which are needed
+    // once per row block, not per pixel.
+    std::atomic<unsigned> changed_maps{0}, used_maps{1u << kMenuGpuOverlay};
+    std::atomic<bool> gain_unrepresentable{false}, added_unrepresentable{false};
+    work.run(unsigned(height), [&](unsigned first_row, unsigned last_row) {
+      unsigned block_changed = 0, block_used = 0;
+      bool block_gain_error = false, block_added_error = false;
+      for (unsigned y = first_row; y < last_row; ++y) {
+        for (int x = 0; x < width; ++x) {
+          const size_t at = size_t(y) * width + x;
+          const uint16_t pixel = frame[size_t(y) * pitch_pixels + x];
+          uint8_t attenuate[3]{255, 255, 255}, boost[3]{}, boost_high[3]{};
+          uint8_t add[3]{}, subtract[3]{};
+          for (int c = 0; c < 3; ++c) {
+            if (kind[at] == 1) {
+              const float factor = gain[at * 3 + c];
+              if (!std::isfinite(factor) || factor < 0.f || factor > kMenuBackgroundMaximumGain) {
+                block_gain_error = true;
+                continue;
+              }
+              const GainFactors split = split_gain(factor);
+              attenuate[c] = unorm(split.attenuate);
+              boost[c] = unorm(split.boost);
+              boost_high[c] = unorm(split.boost_high);
+            }
+            if (kind[at] == 2) {
+              const float delta = added[at * 3 + c];
+              if (!std::isfinite(delta) || std::fabs(delta) > 255.f) {
+                block_added_error = true;
+                continue;
+              }
+              if (delta >= 0.f)
+                add[c] = uint8_t(delta + .5f);
+              else
+                subtract[c] = uint8_t(-delta + .5f);
+            }
+          }
+          // The overlay alone carries alpha (opaque native artwork). The other maps keep alpha
+          // so their passes leave the opaque destination's alpha unchanged: one for the
+          // multiply, zero for the additive passes.
+          uint32_t values[kMenuGpuMapCount]{};
+          values[kMenuGpuAttenuate] = pack(attenuate[0], attenuate[1], attenuate[2]);
+          values[kMenuGpuBoost] = pack(boost[0], boost[1], boost[2]) & 0x00ffffffu;
+          values[kMenuGpuBoostHigh] = pack(boost_high[0], boost_high[1], boost_high[2]) &
+                                      0x00ffffffu;
+          values[kMenuGpuAdd] = pack(add[0], add[1], add[2]) & 0x00ffffffu;
+          values[kMenuGpuSubtract] = pack(subtract[0], subtract[1], subtract[2]) & 0x00ffffffu;
+          values[kMenuGpuOverlay] =
+              kind[at] == 0 ? pack(uint8_t(channel(pixel, 0, rgb565) + .5f),
+                                   uint8_t(channel(pixel, 1, rgb565) + .5f),
+                                   uint8_t(channel(pixel, 2, rgb565) + .5f))
+                            : 0;
+          for (unsigned map = 0; map < kMenuGpuMapCount; ++map) {
+            uint32_t& stored = layers->maps[map][at];
+            if (stored != values[map]) block_changed |= 1u << map;
+            stored = values[map];
+          }
+          if (values[kMenuGpuAttenuate] != 0xffffffffu) block_used |= 1u << kMenuGpuAttenuate;
+          for (unsigned map : {kMenuGpuBoost, kMenuGpuBoostHigh, kMenuGpuAdd, kMenuGpuSubtract})
+            if (values[map] != 0) block_used |= 1u << map;
+        }
+      }
+      changed_maps.fetch_or(block_changed, std::memory_order_relaxed);
+      used_maps.fetch_or(block_used, std::memory_order_relaxed);
+      if (block_gain_error) gain_unrepresentable.store(true, std::memory_order_relaxed);
+      if (block_added_error) added_unrepresentable.store(true, std::memory_order_relaxed);
+    });
+    if (gain_unrepresentable.load()) {
+      layers->status = MenuBackgroundGpuStatus::kGain;
+      return true;
     }
+    if (added_unrepresentable.load()) {
+      layers->status = MenuBackgroundGpuStatus::kAdded;
+      return true;
+    }
+    const unsigned changed = changed_maps.load();
+    const unsigned used = used_maps.load();
+    for (unsigned map = 0; map < kMenuGpuMapCount; ++map) {
+      layers->used[map] = (used >> map) & 1u;
+      if (maps_changed || ((changed >> map) & 1u)) {
+        if (layers->map_revisions[map] == std::numeric_limits<uint64_t>::max())
+          throw std::overflow_error("Menu GPU map revision exhausted");
+        ++layers->map_revisions[map];
+      }
+    }
+    if (maps_changed || changed != 0) {
+      if (layers->revision == std::numeric_limits<uint64_t>::max())
+        throw std::overflow_error("Menu GPU map revision exhausted");
+      ++layers->revision;
+    }
+    layers->status = MenuBackgroundGpuStatus::kReady;
+    return true;
   }
 
   output->resize(size_t(output_width) * output_height);
@@ -414,20 +781,20 @@ static bool compose_menu_background_impl(const MenuBackgroundImage& image, const
         const double fx = (double(ox) + .5) * width / output_width;
         const int x = std::min(width - 1, int(fx));
         const size_t at = size_t(y) * width + x;
-        const uint16_t pixel = frame[y * pitch_pixels + x];
+        const uint16_t pixel = frame[size_t(y) * pitch_pixels + x];
         const auto position = source_at[at];
         if (position.x >= 0 && kind[at] != 0) {
-          const double hy = (position.y + sub_y) * double(image.height) / image.source_height;
-          const double sub_x = fx - x;
-          const double sx = (position.x + sub_x) * double(image.width) / image.source_width;
-          const uint32_t color = sample(image, sx, hy);
-          uint8_t channels[3] = {uint8_t(color), uint8_t(color >> 8), uint8_t(color >> 16)};
-          for (int channel_index = 0; channel_index < 3; ++channel_index) {
-            const float correction = kind[at] == 1 ? gain[at * 3 + channel_index] : 1.f;
-            channels[channel_index] = uint8_t(std::clamp(
-                channels[channel_index] * correction + added[at * 3 + channel_index] + .5f, 0.f,
-                255.f));
-          }
+            const double hy = (position.y + sub_y) * double(image.height) / source->height;
+            const double sub_x = fx - x;
+            const double sx = (position.x + sub_x) * double(image.width) / source->width;
+            const uint32_t color = sample(image, sx, hy);
+            uint8_t channels[3] = {uint8_t(color), uint8_t(color >> 8), uint8_t(color >> 16)};
+            for (int channel_index = 0; channel_index < 3; ++channel_index) {
+                const float correction = kind[at] == 1 ? gain[at * 3 + channel_index] : 1.f;
+                channels[channel_index] = uint8_t(std::clamp(
+                    channels[channel_index] * correction + added[at * 3 + channel_index] + .5f, 0.f,
+                    255.f));
+            }
           (*output)[size_t(oy) * output_width + ox] = pack(channels[0], channels[1], channels[2]);
         } else {
           (*output)[size_t(oy) * output_width + ox] = pack(
@@ -482,6 +849,7 @@ struct PreparedMenuBackgroundComposer::Impl {
   std::vector<zrndr::MenuBackgroundBlit> previous_blits;
   const MenuBackgroundImage* previous_image = nullptr;
   std::vector<uint32_t>* previous_output = nullptr;
+  MenuBackgroundGpuLayers* previous_layers = nullptr;
   const uint8_t* previous_image_data = nullptr;
   const zimg::Texture* previous_source = nullptr;
   const void* previous_source_pixels = nullptr;
@@ -504,13 +872,32 @@ bool PreparedMenuBackgroundComposer::compose(
     const std::vector<zrndr::MenuBackgroundBlit>& blits, const uint16_t* pixels, int width,
     int height, int pitch, bool rgb565, unsigned output_width, unsigned output_height,
     std::vector<uint32_t>* output, bool* cache_hit) {
+  return prepare(image, source, blits, pixels, width, height, pitch, rgb565,
+                 output_width, output_height, output, nullptr, cache_hit);
+}
+
+bool PreparedMenuBackgroundComposer::prepare_gpu(
+    const MenuBackgroundImage& image, const zimg::Texture* source,
+    const std::vector<zrndr::MenuBackgroundBlit>& blits, const uint16_t* pixels, int width,
+    int height, int pitch, bool rgb565, MenuBackgroundGpuLayers* layers, bool* cache_hit) {
+  return prepare(image, source, blits, pixels, width, height, pitch, rgb565,
+                 unsigned(std::max(0, width)), unsigned(std::max(0, height)),
+                 nullptr, layers, cache_hit);
+}
+
+bool PreparedMenuBackgroundComposer::prepare(
+    const MenuBackgroundImage& image, const zimg::Texture* source,
+    const std::vector<zrndr::MenuBackgroundBlit>& blits, const uint16_t* pixels, int width,
+    int height, int pitch, bool rgb565, unsigned output_width, unsigned output_height,
+    std::vector<uint32_t>* output, MenuBackgroundGpuLayers* layers, bool* cache_hit) {
   if (cache_hit) *cache_hit = false;
-  if (!source || blits.empty()) {
+  if ((!output && !layers) || !valid_menu_inputs(image, source, blits, pixels, width, height,
+                                               pitch, output_width, output_height)) {
     invalidate_cache();
     return false;
   }
-  if (!output || !pixels || width <= 0 || height <= 0 || pitch < int64_t(width) * 2)
-    return false;
+  // Scrolling changes blits and native pixels, so classification currently
+  // misses this whole-frame cache on each scrolling frame, even with UV-only uploads.
   const auto& state = *impl_;
   const bool hit = state.valid && state.previous_image == &image &&
                    state.previous_image_data == image.rgb.data() &&
@@ -524,6 +911,7 @@ bool PreparedMenuBackgroundComposer::compose(
                    state.previous_source_height == unsigned(source->height) &&
                    state.previous_source_stride == source->width_again &&
                    state.previous_output == output &&
+                   state.previous_layers == layers &&
                    state.previous_width == width && state.previous_height == height &&
                    state.previous_pitch == pitch && state.previous_rgb565 == rgb565 &&
                    state.previous_output_width == output_width &&
@@ -536,7 +924,8 @@ bool PreparedMenuBackgroundComposer::compose(
   }
 
   if (!compose_menu_background_impl(image, source, blits, pixels, width, height, pitch, rgb565,
-                                    output_width, output_height, output, &impl_->scratch)) {
+                                    output_width, output_height, output, &impl_->scratch, layers,
+                                    bound_texture_width_, bound_texture_height_)) {
     invalidate_cache();
     return false;
   }
@@ -551,6 +940,7 @@ bool PreparedMenuBackgroundComposer::compose(
   updated.previous_blits = blits;
   updated.previous_image = &image;
   updated.previous_output = output;
+  updated.previous_layers = layers;
   updated.previous_image_data = image.rgb.data();
   updated.previous_image_width = image.width;
   updated.previous_image_height = image.height;
@@ -573,6 +963,12 @@ bool PreparedMenuBackgroundComposer::compose(
 }
 
 void PreparedMenuBackgroundComposer::invalidate_cache() { impl_->valid = false; }
+void PreparedMenuBackgroundComposer::set_bound_texture_size(unsigned width, unsigned height) {
+  if (width == bound_texture_width_ && height == bound_texture_height_) return;
+  bound_texture_width_ = width;
+  bound_texture_height_ = height;
+  impl_->valid = false;  // the cached layers carry UVs computed for the old texture size
+}
 unsigned PreparedMenuBackgroundComposer::thread_count() const {
   return impl_->scratch.thread_count();
 }

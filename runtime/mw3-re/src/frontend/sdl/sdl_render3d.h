@@ -91,6 +91,9 @@ class FrameRenderer : public platform::Render3D {
   virtual void begin_canvas_scene() { begin_scene(); }
   virtual void capture_next(const char* bmp_path) = 0;
   virtual void flush() = 0;
+  // Optional canvases must discover deferred texture allocation failures before
+  // submitting draws, so their CPU fallback can still use the render worker.
+  virtual void prepare_canvas_textures(const std::vector<int32_t> &) {}
   virtual void viewport(int* x, int* y, int* w, int* h) const = 0;
   virtual void set_shape(const FrameShape* shape) = 0;
 };
@@ -107,6 +110,8 @@ class SdlRender3D : public FrameRenderer {
   int32_t create_texture(int width, int height, const uint8_t* rgba, uint8_t type) override;
   void release_texture(int32_t handle) override;
   void update_texture(int32_t handle, int width, int height, const uint8_t* rgba) override;
+  // Tests only: make every texture staging map fail, as an exhausted device would.
+  static void fail_staging_for_test(bool fail);
   void set_viewport(int x, int y, int width, int height) override;
   void clear(bool color, uint8_t r, uint8_t g, uint8_t b) override;
   void begin_scene() override;
@@ -135,7 +140,8 @@ class SdlRender3D : public FrameRenderer {
   std::function<void(SDL_GPUCommandBuffer*, SDL_GPUTexture*, Uint32, Uint32)> overlay;
 
  private:
-  void upload(SDL_GPUTexture* t, int width, int height, const uint8_t* rgba);
+  // False when the staging buffer could not be created or mapped; nothing was uploaded then.
+  bool upload(SDL_GPUTexture* t, int width, int height, const uint8_t* rgba);
   struct Run {
     platform::DrawState state;
     uint32_t first, count;
@@ -144,7 +150,7 @@ class SdlRender3D : public FrameRenderer {
     float fog[3];
   };
   SDL_GPUGraphicsPipeline* pipeline(const platform::DrawState& s, bool textured);
-  SDL_GPUSampler* sampler(uint8_t u, uint8_t v);
+  SDL_GPUSampler* sampler(uint8_t u, uint8_t v, bool nearest);
   void ensure_depth(uint32_t w, uint32_t h);
   void ensure_buffer(uint32_t bytes);
   bool ensure_frame();
