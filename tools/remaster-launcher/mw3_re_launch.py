@@ -1,7 +1,8 @@
 """MW3-RE argv planning; lexical validation is not package/execution admission.
 
 Schemas 2 and 3 are pure. Schema 4 (the labelled Native preview) also reads the pack manifests
-and bounded lighting-catalog headers it is given, read-only, to turn installed packs into arguments.
+and bounded lighting-catalog headers it is given to turn installed packs into arguments. Named
+skin selections write the existing BWSKIN1 catalog below the isolated native write directory.
 """
 
 from pathlib import Path, PureWindowsPath
@@ -26,7 +27,7 @@ _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _MAX_PREVIEW_PACKS = 64
 _MAX_REGISTRY_MODELS = 256
 _PREVIEW_FIELDS = frozenset({"draw_distance", "hud", "hud_text", "geometry", "model_packs",
-                             "environment_packs", "ui_packs", "dynamic_lighting", "shadows",
+                             "environment_packs", "ui_packs", "skin_packs", "dynamic_lighting", "shadows",
                              "headlights", "water_detail", "cloud_detail",
                              "headlight_bindings", "stock_effect_catalog",
                              "stock_headlight_catalog"})
@@ -491,7 +492,7 @@ def _model_pack_arguments(root, taken=None):
     names MW34_<ID>_MESH, MW34_<ID>_TEXTURES and MW34_<ID>_NORMALS, with LOD1_ after <ID> for
     the distance model. A level of detail is emitted only when both its mesh and textures exist.
     Optional BWSFM1 sidecars use MW34_<ID>[_LOD1]_SURFACE_MATERIALS keys.
-    Alternative liveries (*_SKIN_*) are not part of this preview.
+    Alternative liveries preserve the retail B-H indices at both levels of detail.
     """
     _, payload = _pack_payload(root, "prepared-native-v1")
     if payload.get("path_base") != "pack-root":
@@ -535,6 +536,18 @@ def _model_pack_arguments(root, taken=None):
                 continue
             arguments += ["--cc-model", chassis, str(level), _pack_member(root, mesh),
                           _pack_member(root, textures)]
+            for index, letter in enumerate("BCDEFGH", 1):
+                skin_member = files.get(prefix + f"SKIN_{letter}_TEXTURES")
+                if skin_member is None:
+                    continue
+                try:
+                    skin_path = _pack_member(root, skin_member)
+                    arguments += ["--cc-model-skin", chassis, str(level), str(index), skin_path]
+                except (OSError, ValueError) as error:
+                    skipped_materials.append({
+                        "chassis": chassis, "lod": str(level), "skin": index,
+                        "reason": f"skin texture is missing or invalid; primary fallback: {error}",
+                    })
             normals = files.get(prefix + "NORMALS")
             if normals is not None:
                 arguments += ["--cc-model-normals", chassis, str(level), _pack_member(root, normals)]
@@ -564,6 +577,83 @@ def _model_pack_arguments(root, taken=None):
         if supplied:
             taken[chassis] = root
     return arguments, overridden, skipped_materials
+
+
+def _skin_pack_arguments(roots, argv, write_directory, skipped):
+    """Reuse the installed skin contract against the winning native mesh identities."""
+    if not roots:
+        return []
+    from prepared_skin_packs import select, write_catalog, CATALOG_KEY
+    models = {}
+    for position, argument in enumerate(argv):
+        if argument != "--cc-model":
+            continue
+        chassis, lod, mesh = argv[position + 1:position + 4]
+        model = models.setdefault(chassis, {"id": chassis, "visuals": {}})
+        model["visuals"]["close" if lod == "0" else "distance"] = {"mesh": mesh}
+    skins = []
+    ids = set()
+    # This planner targets the native BWSKIN1 consumer introduced with this route;
+    # the content pack cannot grant itself a host capability.
+    host = {"content_capabilities": {"additional-mech-skins": [1]}}
+    for directory in roots:
+        try:
+            root = Path(_windows_path(directory, directory=True))
+            manifest = _read_pack_json(root / "pack.json")
+            candidates = [{**model, "additional_skins": []} for model in models.values()]
+            selected = select([(root, manifest)], host, candidates)
+            if ids.intersection(skin["id"] for skin in selected):
+                raise ValueError("Duplicate enabled additional skin identity")
+            if len(skins) + len(selected) > 128:
+                raise ValueError("Too many enabled additional skins")
+            ids.update(skin["id"] for skin in selected)
+            skins.extend(selected)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            skipped.append({"root": directory, "feature": "additional_skins", "reason": str(error)})
+    if not skins:
+        return []
+    try:
+        catalog = write_catalog([{"additional_skins": skins}], Path(write_directory) / "prepared-skins")
+    except OSError as error:
+        skipped.append({"root": str(write_directory), "feature": "additional_skins", "reason": str(error)})
+        return []
+    return ["--cc-skin-catalog", catalog[CATALOG_KEY]]
+
+
+def _compact_skin_arguments(argv, write_directory, skipped):
+    """Move stock path metadata off the Windows command line without reading pixels."""
+    compact = []
+    records = []
+    position = 0
+    while position < len(argv):
+        if argv[position] != "--cc-model-skin":
+            compact.append(argv[position])
+            position += 1
+            continue
+        chassis, lod, index, path = argv[position + 1:position + 5]
+        records.append((chassis, int(lod), int(index), path))
+        position += 5
+    if not records:
+        return compact
+    if len(records) > 512:
+        raise ValueError("Too many native stock skin bindings")
+    blob = bytearray(b"BWSKIDX1" + struct.pack("<I", len(records)))
+    for chassis, lod, index, path in records:
+        chassis_bytes, path_bytes = chassis.encode("utf-8"), path.encode("utf-8")
+        if not 1 <= len(chassis_bytes) <= 32 or not 1 <= len(path_bytes) <= 4096:
+            raise ValueError("Invalid native stock skin binding string size")
+        blob += struct.pack("<I", len(chassis_bytes)) + chassis_bytes
+        blob += struct.pack("<III", lod, index, len(path_bytes)) + path_bytes
+    from native_assets import write_atomic
+    output = Path(write_directory) / "prepared-skins" / "stock-skins.bin"
+    try:
+        write_atomic(output, blob)
+    except OSError as error:
+        skipped.append({"root": str(write_directory), "feature": "skin_textures", "reason": str(error)})
+        return compact
+    # write_directory is already a validated absolute path; resolving it would expand
+    # 8.3 short names and make the argument differ from the request's own spelling.
+    return compact + ["--cc-skin-bindings", str(output)]
 
 
 def _environment_pack_skip_reason(root):
@@ -676,6 +766,7 @@ def _preview_choices(preview):
         "model_packs": [],
         "environment_packs": [],
         "ui_packs": [],
+        "skin_packs": [],
         "dynamic_lighting": False,
         "shadows": False,
         "headlights": False,
@@ -698,7 +789,7 @@ def _preview_choices(preview):
             raise ValueError("Native preview HUD text needs the core-critical HUD")
     if choices["geometry"] is not None and choices["geometry"] not in _PREVIEW_GEOMETRY:
         raise ValueError("Unknown native preview geometry mode")
-    for field in ("model_packs", "environment_packs", "ui_packs"):
+    for field in ("model_packs", "environment_packs", "ui_packs", "skin_packs"):
         packs = choices[field]
         if type(packs) is not list or len(packs) > _MAX_PREVIEW_PACKS:
             raise ValueError(f"Invalid native preview {field}")
@@ -963,8 +1054,10 @@ def plan_launch(request):
                 pack, supplied_chassis)
             argv.extend(arguments)
             overridden_models.extend({"root": pack, **item} for item in overridden)
-            skipped.extend({"root": pack, "feature": "surface_materials", **item}
+            skipped.extend({"root": pack, "feature": "skin_textures" if "skin" in item else "surface_materials", **item}
                            for item in skipped_materials)
+        argv = _compact_skin_arguments(argv, write, skipped)
+        argv.extend(_skin_pack_arguments(preview["skin_packs"], argv, write, skipped))
         effect_catalog = None
         effect_catalog_problem = None
         detail_catalogs = {"water": None, "surf": None, "cloud": None}

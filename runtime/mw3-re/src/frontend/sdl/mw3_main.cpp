@@ -56,6 +56,7 @@
 #include "crt/msvc_rand.h"
 #include "light_invariance.h"
 #include "platform/prepared_visuals.h"
+#include "platform/prepared_skins.h"
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -328,6 +329,8 @@ void usage() {
       "    [--mission NAME [--valve-map DIR] | --fly NAME [--variant BLOCK]] [--pos X Y Z] [--look YAW PITCH] [--vehicle-ahead M [--vehicle-hold]] [--field-base-ahead M] [--turret-ahead M] [--mech-ahead M] [--dialog FILE NAME]\n"
       "    [--shot FILE.bmp [--shot-frame N] [--shot-any] [--shot-series K]] [--fire N [--fire-group 1..5]] [--objectives N] [--hurt F@N] [--win N] [--lose N] [--lab-mech N]\n"
       "    [--cc-model CHASSIS LOD MESH BWTEX1]... [--cc-textures BWTEX1]\n"
+      "    [--cc-model-skin CHASSIS LOD INDEX BWTEX1]... [--cc-skin-catalog BWSKIN1]\n"
+      "    [--cc-skin-bindings BWSKIDX1]\n"
       "    [--cc-environment-pack DIR]... [--cc-environment-packs-explicit]\n"
       "    [--cc-model-materials CHASSIS LOD BWSFM1]...\n"
       "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting off|flat|normal] [--cc-sun AZIMUTH ELEVATION]\n"
@@ -617,6 +620,38 @@ bool parse(int argc, char** argv, Args& a) {
       a.cc_assets.environment_packs.push_back(argv[++i]);
     } else if (s == "--cc-environment-packs-explicit") {
       a.cc_assets.environment_packs_explicit = true;
+    } else if (s == "--cc-skin-bindings" && next(1)) {
+      try {
+        std::ifstream input(std::filesystem::u8path(argv[++i]), std::ios::binary);
+        if (!input) throw std::runtime_error("Cannot open prepared skin binding index");
+        const auto bindings = platform::prepared::read_skin_bindings(input);
+        for (const auto& binding : bindings)
+          a.cc_assets.skins.push_back({binding.chassis, std::to_string(binding.lod), binding.path,
+                                      static_cast<int32_t>(binding.index)});
+      } catch (const std::exception& error) {
+        std::fprintf(stderr, "Prepared skin bindings fallback: %s; using primary textures\n", error.what());
+      }
+    } else if (s == "--cc-skin-catalog" && next(1)) {
+      a.cc_assets.skin_catalog = argv[++i];
+    } else if (s == "--cc-model-skin" && next(4)) {
+      sdlfe::PreparedSkinBinding binding;
+      binding.chassis = argv[++i], binding.lod = argv[++i];
+      const std::string index = argv[++i];
+      const bool index_is_digits =
+          !index.empty() && index.size() <= 3 && index.find_first_not_of("0123456789") == std::string::npos;
+      if (!index_is_digits) {
+        std::fprintf(stderr, "Invalid --cc-model-skin index\n");
+        return false;
+      }
+      binding.index = std::atoi(index.c_str());
+      // 1-7 are retail B-H; catalog skins follow. Index 0 is the primary set already
+      // given by --cc-model, so it is never a separate binding.
+      if (binding.index < 1 || binding.index > 135 || (binding.lod != "0" && binding.lod != "1")) {
+        std::fprintf(stderr, "Invalid --cc-model-skin index/LOD\n");
+        return false;
+      }
+      binding.path = argv[++i];
+      a.cc_assets.skins.push_back(std::move(binding));
     } else if (s == "--cc-model-materials" && next(3)) {
       sdlfe::PreparedMaterialBinding binding;
       binding.chassis = argv[++i], binding.lod = argv[++i],
@@ -912,6 +947,10 @@ int program(int argc, char** argv) {
 #endif
   Args a;
   if (!parse(argc, argv, a)) return 2;
+  if (a.cc_assets.skin_catalog.empty())
+    if (const char* catalog = std::getenv("MW34_ADDITIONAL_SKINS"))
+      a.cc_assets.skin_catalog = catalog;
+  platform::prepared::configure_skin_catalog(a.cc_assets.skin_catalog);
   // docs/modding-reference.md, from the readers' registries: nothing else
   // run (no SDL, no write dir, no log), so the player's folder is untouched.
   if (!a.reference.empty()) {
