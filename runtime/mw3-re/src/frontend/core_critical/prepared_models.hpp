@@ -30,6 +30,12 @@ struct PreparedModelDraw {
     bool replace{};
     std::vector<PreparedBatchDraw> batches;
 };
+struct PreparedTextureResources {
+    std::vector<const ::platform::prepared::Batch *> rigid_batches;
+    std::size_t matched_source_assets{};
+    std::vector<const ::platform::prepared::Image *> textures;
+    std::vector<const ::platform::prepared::NormalImage *> normals;
+};
 
 using PreparedMaterialBinding = sdlfe::PreparedMaterialBinding;
 
@@ -48,6 +54,8 @@ class PreparedModels {
     }
     bool has_binding(const ::platform::ModelDrawContext &context) const;
     const ::platform::prepared::Image *named_texture(const char *name) const;
+    PreparedTextureResources
+    resources_for_assets(const std::vector<std::string> &source_assets) const;
     PreparedModelDraw draw(const ::platform::ModelDrawContext &context,
                            bool rigid_only = false) const;
     std::optional<::platform::prepared::Matrix>

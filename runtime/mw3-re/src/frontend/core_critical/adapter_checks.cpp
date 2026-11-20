@@ -1,4 +1,5 @@
 #include "frame_renderer.hpp"
+#include "prepared_models.hpp"
 
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/sdl_platform.h"
@@ -674,6 +675,20 @@ void check_terrain_surface_normals(SDL_Window *window,
   const auto tex =
       renderer->create_named_texture("ggter1", 128, 128, green_data.data(), 1);
   mw34::materials::clear_active_surface_key();
+  require(renderer->asset_statistics().world_normal_decoded_bytes == 4 &&
+              renderer->asset_statistics().world_normal_peak_decoded_bytes == 4 &&
+              renderer->asset_statistics().world_normal_loaded_pages == 1,
+          "Authenticated texture admission did not preload its matching world normal page");
+
+  // Preload matching GPU normal textures at the post-load mission callback
+  // boundary (empty MissionIdentity covers Instant Action as well) before the
+  // first draw without altering decoded bytes, normal binding, or output pixels.
+  renderer->mission_changed(platform::MissionIdentity{});
+  require(renderer->asset_statistics().world_normal_decoded_bytes == 4 &&
+              renderer->asset_statistics().world_normal_peak_decoded_bytes == 4 &&
+              renderer->asset_statistics().world_normal_loaded_pages == 1,
+          "Mission normal GPU preload altered world normal cache accounting");
+  renderer->clear(true, 0, 0, 0);
 
   platform::DrawState state{};
   state.texture = tex;
@@ -754,8 +769,11 @@ void check_terrain_surface_normals(SDL_Window *window,
   state.texture =
       renderer->create_named_texture("ggter1", 128, 128, green_data.data(), 1);
   mw34::materials::clear_active_surface_key();
+  renderer->mission_changed(platform::MissionIdentity{});
+  renderer->clear(true, 0, 0, 0);
   quad(*renderer, 0, 64, .5f, 0xffffffff, state);
   require(renderer->read_back(&pixels, &width, &height) &&
+              pixels == normal_pixels &&
               renderer->asset_statistics().normal_draws > stats.normal_draws &&
               renderer->asset_statistics().world_normal_decoded_bytes == 4,
           "New-epoch texture did not reload its world normal page");
@@ -1593,6 +1611,10 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       std::filesystem::remove(folder / "textures.bin", error);
       std::filesystem::remove(folder / "normals.bin", error);
       std::filesystem::remove(folder / "materials.bin", error);
+      std::filesystem::remove(folder / "other_textures.bin", error);
+      std::filesystem::remove(folder / "other_normals.bin", error);
+      std::filesystem::remove(folder / "absent_normals.bin", error);
+      std::filesystem::remove(folder / "mixed_mesh.bin", error);
       std::filesystem::remove(folder, error);
     }
   } files{folder};
@@ -1601,13 +1623,15 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       << prepared_fixture::mesh(2, 0xffff0000);
   std::ofstream(folder / "textures.bin", std::ios::binary)
       << prepared_fixture::textures();
+  // Resource-selection checks use normals even when the draw control leaves
+  // normal lighting disabled.
+  std::ofstream(folder / "normals.bin", std::ios::binary)
+      << prepared_fixture::normals(0xffd980d9);
   sdlfe::CoreCriticalAssets options;
   options.textures = (folder / "textures.bin").u8string();
   options.models.push_back(
       {"authored", "0", (folder / "mesh.bin").u8string(), options.textures});
   if (materials) {
-    std::ofstream(folder / "normals.bin", std::ios::binary)
-        << prepared_fixture::normals(0xffd980d9);
     options.normals.push_back(
         {"authored", "0", (folder / "normals.bin").u8string()});
     options.lighting = "normal";
@@ -1634,6 +1658,98 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     std::ofstream(path, std::ios::binary)
         .write(metadata.data(), metadata.size());
   }
+  {
+    std::ofstream(folder / "other_textures.bin", std::ios::binary)
+        << prepared_fixture::textures();
+    std::ofstream(folder / "other_normals.bin", std::ios::binary)
+        << prepared_fixture::normals(0xffd980d9);
+    std::ofstream(folder / "absent_normals.bin", std::ios::binary)
+        << prepared_fixture::normals(0, true);
+    std::ofstream(folder / "mixed_mesh.bin", std::ios::binary)
+        << prepared_fixture::build_valid_v4_mesh(
+               "ltoe01", "control", "panel", .5, .2, -.1, "", true);
+    sdlfe::CoreCriticalAssets selection_options;
+    selection_options.lighting = "normal";
+    selection_options.models.push_back(
+        {"authored", "0", (folder / "mesh.bin").u8string(),
+         (folder / "textures.bin").u8string()});
+    selection_options.models.push_back(
+        {"other", "1", (folder / "mesh.bin").u8string(),
+         (folder / "other_textures.bin").u8string()});
+    selection_options.models.push_back(
+        {"nonormal", "0", (folder / "mesh.bin").u8string(),
+         (folder / "textures.bin").u8string()});
+    selection_options.normals.push_back(
+        {"authored", "0", (folder / "normals.bin").u8string()});
+    selection_options.normals.push_back(
+        {"other", "1", (folder / "other_normals.bin").u8string()});
+    selection_options.normals.push_back(
+        {"nonormal", "0", (folder / "absent_normals.bin").u8string()});
+
+    selection_options.models.push_back(
+        {"mixed", "0", (folder / "mixed_mesh.bin").u8string(),
+         (folder / "textures.bin").u8string()});
+    selection_options.normals.push_back(
+        {"mixed", "0", (folder / "normals.bin").u8string()});
+
+    const cc_mw3_re::PreparedModels selection_models(selection_options);
+    const auto unmatched = selection_models.resources_for_assets(
+        {"", "mech_unmatched.flt", "building_tower.flt"});
+    require(unmatched.matched_source_assets == 0 &&
+                unmatched.textures.empty() && unmatched.normals.empty() &&
+                unmatched.rigid_batches.empty(),
+            "Unmatched source assets selected prepared texture resources");
+
+    const auto authored_exact =
+        selection_models.resources_for_assets({"mech_authored.flt"});
+    require(authored_exact.matched_source_assets == 1 &&
+                authored_exact.textures.size() == 1 &&
+                authored_exact.normals.size() == 1 &&
+                authored_exact.textures[0] != nullptr &&
+                authored_exact.normals[0] != nullptr &&
+                authored_exact.rigid_batches.size() == 1,
+            "Exact prepared source asset did not select expected texture and "
+            "normal pointers");
+
+    // Repeated source asset names and cross-LOD fallback to the same selected
+    // model must deduplicate both model identity and image pointers.
+    const auto authored_deduped = selection_models.resources_for_assets(
+        {"mech_authored.flt", "mech_authored.flt", "mech_authored_1.flt",
+         "mech_unmatched.flt"});
+    require(authored_deduped.matched_source_assets == 2 &&
+                authored_deduped.textures == authored_exact.textures &&
+                authored_deduped.normals == authored_exact.normals &&
+                authored_deduped.rigid_batches == authored_exact.rigid_batches,
+            "Repeated or cross-LOD fallback source assets duplicated prepared "
+            "resource pointers");
+
+    // Mixed-bone geometry stays dynamic while authored images remain selectable.
+    const auto mixed_resources =
+        selection_models.resources_for_assets({"mech_mixed.flt"});
+    require(mixed_resources.matched_source_assets == 1 &&
+                mixed_resources.rigid_batches.empty() &&
+                mixed_resources.textures.size() == 1 &&
+                mixed_resources.normals.size() == 1,
+            "Mixed-bone geometry warmup changed authored image selection");
+
+    const auto other_fallback =
+        selection_models.resources_for_assets({"mech_other.flt"});
+    require(other_fallback.matched_source_assets == 1 &&
+                other_fallback.textures.size() == 1 &&
+                other_fallback.normals.size() == 1 &&
+                other_fallback.textures[0] != authored_exact.textures[0] &&
+                other_fallback.normals[0] != authored_exact.normals[0],
+            "Distance-to-close LOD fallback did not select the other model's "
+            "distinct resource pointers");
+
+    // Explicit no_normal bindings must not select a normal image pointer.
+    const auto absent_normal =
+        selection_models.resources_for_assets({"mech_nonormal.flt"});
+    require(absent_normal.matched_source_assets == 1 &&
+                absent_normal.textures.size() == 1 &&
+                absent_normal.normals.empty(),
+            "Explicit no_normal binding selected a prepared normal resource");
+  }
   require(SDL_SetWindowSize(window, 64, 64) && SDL_SyncWindow(window),
           SDL_GetError());
   std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> root(
@@ -1652,16 +1768,84 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   identity->nodes = {{"actor", 1}, {"control", 1}, {"panel", 1}};
   root->source_asset = control->source_asset = panel->source_asset = identity;
   root->source_asset_root = true;
+  // A valid native source makes accidental warming of the replaced mesh visible.
+  float source_positions[]{-1, -1, 2, 1, -1, 2, 0, 1, 2};
+  std::uint32_t source_indices[]{2, 1, 0};
+  zmod::Material source_material{};
+  source_material.alpha = 255;
+  zmod::Polygon source_polygon{};
+  source_polygon.flags = 3;
+  source_polygon.vertex_indices = source_indices;
+  source_polygon.material = &source_material;
   zmod::Model source_model{};
-  const uint32_t source_count = 3;
+  source_model.vertices = source_positions;
+  source_model.polygons = &source_polygon;
+  const uint32_t source_count = 3, source_polygon_count = 1;
   std::memcpy(source_model.header + 0x14, &source_count, sizeof source_count);
+  std::memcpy(source_model.header + 0x10, &source_polygon_count,
+              sizeof source_polygon_count);
   panel->model = &source_model;
   panel->source_model_vertices = source_count;
   struct ModelPointer {
     zcls::Node *node;
     ~ModelPointer() { node->model = nullptr; }
   } model_pointer{panel};
+  {
+    auto warmup_quality = quality;
+    warmup_quality.anisotropy = "16";
+    auto warmup_renderer =
+        make_check_renderer(window, backend, warmup_quality, options);
+    const auto mips_before = warmup_renderer->quality_statistics().mip_levels;
+    warmup_renderer->mission_changed(platform::MissionIdentity{});
+    require(warmup_renderer->quality_statistics().mip_levels > mips_before,
+            "Prepared albedo was not preloaded or mip-generated at mission boundary");
+
+    // Verify late native source admission after mission boundary: create a 2x2
+    // RGBA native texture while a nonzero unmatched SurfaceKey is active.
+    // Must remain CPU-cold until begin_scene triggers scene-boundary warmup.
+    const mw34::materials::SurfaceKey late_native_surface_key{2, 2, 1,
+                                                              0x11223344ULL};
+    mw34::materials::set_active_surface_key(late_native_surface_key);
+    const uint8_t late_native_rgba[16] = {
+        255, 0, 0, 255,   0, 255, 0, 255,
+        0, 0, 255, 255,   255, 255, 0, 255};
+    const auto late_native_handle =
+        warmup_renderer->create_texture(2, 2, late_native_rgba, 1);
+    mw34::materials::clear_active_surface_key();
+
+    const auto mip_levels_after_creation =
+        warmup_renderer->quality_statistics().mip_levels;
+    warmup_renderer->begin_scene();
+    require(warmup_renderer->quality_statistics().mip_levels >
+                mip_levels_after_creation,
+            "Late native albedo was not preloaded at scene boundary");
+    warmup_renderer->end_scene();
+    const auto mip_levels_after_warmup =
+        warmup_renderer->quality_statistics().mip_levels;
+    mw34::materials::set_active_surface_key(late_native_surface_key);
+    warmup_renderer->update_texture(late_native_handle, 2, 2, late_native_rgba);
+    mw34::materials::clear_active_surface_key();
+    warmup_renderer->begin_scene();
+    require(warmup_renderer->quality_statistics().mip_levels ==
+                mip_levels_after_warmup,
+            "Runtime texture update repeated bulk mission preload");
+    platform::DrawState late_native_state{};
+    late_native_state.texture = late_native_handle;
+    quad(*warmup_renderer, 0, 64, .5f, 0xffffffff, late_native_state);
+    std::vector<uint32_t> late_native_pixels;
+    int late_native_width = 0, late_native_height = 0;
+    require(warmup_renderer->read_back(&late_native_pixels, &late_native_width,
+                                     &late_native_height) &&
+                warmup_renderer->quality_statistics().mip_levels >
+                    mip_levels_after_warmup,
+            "Runtime texture update did not upload through its normal draw");
+    warmup_renderer->end_scene();
+    warmup_renderer->release_texture(late_native_handle);
+  }
   auto renderer = make_check_renderer(window, backend, quality, options);
+  // Preload live-node prepared resources at the mission boundary before the
+  // first draw (covering both normal-disabled and normal-enabled runs).
+  renderer->mission_changed(platform::MissionIdentity{});
   struct RenderBinding {
     platform::Render3D *previous = zvid::render3d();
     ~RenderBinding() { zvid::set_render3d(previous); }
@@ -1721,6 +1905,29 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
             "Prepared model did not render at the output extent");
     return pixels;
   };
+  {
+    // Load-time upload must be reused by the first real prepared draw.
+    auto warmed_options = options;
+    warmed_options.geometry = "gpu";
+    auto warmed_renderer =
+        make_check_renderer(window, backend, quality, warmed_options);
+    warmed_renderer->set_viewport(0, 0, 64, 64);
+    warmed_renderer->mission_changed({});
+    require(!source_model.render_geometry,
+            "Prepared-owned native geometry was warmed unnecessarily");
+    require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+            "First warmup should upload geometry");
+    warmed_renderer->begin_scene();
+    warmed_renderer->end_scene();
+    require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+            "Late warmup should not upload geometry again");
+    const auto warmed_pixels = frame(warmed_renderer.get(), true, true);
+    require(!warmed_pixels.empty(), "Warmed frame should produce pixels");
+    require(warmed_renderer->asset_statistics().gpu_model_draws > 0,
+            "Warmed frame should have GPU model draws");
+    require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+            "First real draw should reuse warm upload");
+  }
   const auto first = frame();
   require((first[20 * 64 + 23] & 0xff00) != 0 &&
               (first[20 * 64 + 23] & 255) == 0,

@@ -3,6 +3,7 @@
 
 struct SurfaceNormalState {
   bool loaded{false};
+  bool preload_pending{false};
   std::uint64_t peak_decoded_bytes{};
   mw34::materials::WorldNormalCache cache{};
   std::string native_material_bytes;
@@ -408,6 +409,25 @@ native_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
   return {};
 }
 
+void preload_surface_normal(const mw34::materials::SurfaceKey &key) {
+  if (!surface_normals_enabled() || !key.hash) {
+    return;
+  }
+  surface_normals_load();
+  // Decode the matching world page at texture admission so the first visible
+  // turn does not stall on disk IO and decompression. Do not create a renderer
+  // texture handle here because create_texture reads the thread-local active
+  // surface key. Mark preload_pending so the post-load mission callback knows
+  // authentic source textures were admitted and can upload their GPU normal
+  // textures once source admission finishes.
+  surface_normals_.preload_pending = true;
+  mw34::timing::ScopedDuration decode_timer(
+      producer_resource_timing_.page_decode_target());
+  surface_normals_.cache.preload_surface(key, true);
+  surface_normals_.peak_decoded_bytes = std::max(
+      surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
+}
+
 int surface_normal_index(const mw34::materials::SurfaceKey &input_key,
                          bool enabled = true, int texture_handle = -1) {
   if (!enabled || !surface_normals_enabled()) {
@@ -427,6 +447,8 @@ int surface_normal_index(const mw34::materials::SurfaceKey &input_key,
     native_surface_binding_matches(key, texture_handle);
   if (candidate && !native_surface_binding_matches(key, texture_handle))
     return -1;
+  mw34::timing::ScopedDuration decode_timer(
+      producer_resource_timing_.page_decode_target());
   const int index = surface_normals_.cache.surface_normal_index(key, enabled);
   surface_normals_.peak_decoded_bytes = std::max(
       surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
@@ -435,7 +457,11 @@ int surface_normal_index(const mw34::materials::SurfaceKey &input_key,
 
 const mw34::materials::WorldNormalCache::TextureRecord &
 surface_normal_image(int index) {
+  mw34::timing::ScopedDuration decode_timer(
+      producer_resource_timing_.page_decode_target());
   surface_normals_.cache.require_image(index);
+  surface_normals_.peak_decoded_bytes = std::max(
+      surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
   return surface_normals_.cache.textures.at(static_cast<std::size_t>(index));
 }
 
@@ -591,8 +617,17 @@ void apply_native_geometry_admission(vk::Draw &draw,
                                      const NativeGroundRangeAdmission &admission) {
   draw.height_binding = admission.height_binding;
   draw.surface_parameters = admission.surface_parameters;
-  if (admission.normal_index >= 0)
-    draw.normal_texture = int(bind_texture(surface_normal_texture(admission.normal_index), false));
+  if (admission.normal_index >= 0) {
+    const bool first_normal_handle =
+        surface_normal_textures_.find(admission.normal_index) ==
+        surface_normal_textures_.end();
+    const int32_t normal_handle =
+        surface_normal_texture(admission.normal_index);
+    mw34::timing::ScopedDuration upload_timer(
+        first_normal_handle ? producer_resource_timing_.page_upload_target()
+                            : nullptr);
+    draw.normal_texture = int(bind_texture(normal_handle, false));
+  }
 }
 
 private:

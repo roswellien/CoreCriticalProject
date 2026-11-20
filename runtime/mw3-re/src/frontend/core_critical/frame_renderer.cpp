@@ -4,6 +4,7 @@
 #include "gamez/zclass/cls_zbd.h"
 #include "gamez/zclass/class.h"
 #include "gamez/zclass/cls_node.h"
+#include "gamez/zclass/list.h"
 #include "gamez/zclass/visual_distance.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zinput/zinput.h"
@@ -27,7 +28,9 @@
 #include "renderer/headlight_spotlight.hpp"
 #include "renderer/material_normals.hpp"
 #include "renderer/mech_headlights.hpp"
+#include "renderer/resource_timing.hpp"
 #include "gamez/zmodel/gmod_geometry.h"
+#include "gamez/zmodel/gmod_const.h"
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/native_fixture_sources.hpp"
 #include "renderer/fixture_observation_emission.hpp"
@@ -655,7 +658,9 @@ public:
                               [](const auto &page) { return page.loaded; })),
             binding_rejected_mismatch_,
             native_fingerprint_evaluations_,
-            deferred_material_admissions_};
+            deferred_material_admissions_,
+            std::uint64_t(native_geometry_.size()),
+            native_geometry_prune_passes_};
   }
   // Capacity the current producer Scene retains from earlier packets (adopted from the pool).
   std::size_t retained_scene_capacity_bytes() const {
@@ -691,6 +696,8 @@ public:
       return found->second;
     }
     const auto &norm_img = surface_normal_image(normal_index);
+    mw34::timing::ScopedDuration upload_timer(
+        producer_resource_timing_.page_upload_target());
     const auto handle = create_texture(
         int(norm_img.width), int(norm_img.height),
         reinterpret_cast<const uint8_t *>(norm_img.pixels32.data()), 1);
@@ -859,11 +866,19 @@ public:
     } else {
       current_mission_lighting_ = resolved;
     }
+    preload_mission_normal_textures();
+    first_world_preload_pending_ = true;
   }
   void reset_scene_resources() override {
+    // Clear pending preload before the empty mission callback so scene teardown
+    // does not warm old mission textures right before resetting them.
+    surface_normals_.preload_pending = false;
+    prepared_preload_pending_ = false;
     // Reset the owned mission identity/result via the callback with the empty
     // identity before the scene resources are reset.
     mission_changed(::platform::MissionIdentity{});
+    first_world_preload_pending_ = false;
+    prepared_preload_pending_ = true;
     reset_pending_ = true;
     ++group_load_epoch_;
     for (const auto &[index, handle] : surface_normal_textures_)
@@ -1100,6 +1115,15 @@ public:
     entry.group_load_epoch = group_load_epoch_;
     entry.version = ++texture_version_;
     entry.fixture_visual_key.reset();
+    // Preload any matching world normal page once the texture's source identity
+    // is published. No reference to entry is used after this point in case
+    // later texture allocations reallocate textures_.
+    if (source_key.hash != 0)
+      prepared_preload_pending_ = true;
+    if (lighting_.normals && source_key.hash != 0) {
+      VisualFloatScope float_scope;
+      preload_surface_normal(source_key);
+    }
   }
 
   int32_t create_named_texture(const char *name, int width, int height,
@@ -1176,6 +1200,17 @@ public:
   }
   void begin_scene() override {
     begin_scene_housekeeping();
+    // HUD source textures update during play. Bulk warmup belongs to loading
+    // and this first world scene, after late player and IA assets arrive.
+    if (first_world_preload_pending_) {
+      if (worker_)
+        worker_->drain();
+      prepared_preload_pending_ = true;
+      if (lighting_.normals)
+        surface_normals_.preload_pending = true;
+      preload_mission_normal_textures();
+      first_world_preload_pending_ = false;
+    }
     local_lights_begin();
   }
   void begin_canvas_scene() override {
@@ -1246,6 +1281,8 @@ private:
       flush();
     complete_local_light_packets();
     ensure_extent();
+    // Cleanup once per scene instead of scanning the preloaded cache per draw.
+    prune_native_geometry();
     const bool hdr_enabled = window_hdr_enabled();
     if (hdr_enabled != display_hdr_) {
       drain();
@@ -1545,7 +1582,14 @@ private:
                            ? deferred_surface_normal_index(key, state.texture)
                            : -1;
         if (norm_idx >= 0) {
+          const bool first_normal_handle =
+              surface_normal_textures_.find(norm_idx) ==
+              surface_normal_textures_.end();
           int norm_handle = surface_normal_texture(norm_idx);
+          mw34::timing::ScopedDuration upload_timer(
+              first_normal_handle
+                  ? producer_resource_timing_.page_upload_target()
+                  : nullptr);
           draw.normal_texture = int(bind_texture(norm_handle, false));
         } else {
           draw.normal_texture = -1;
@@ -1604,8 +1648,16 @@ private:
         if (binding->normal_index < 0)
           throw std::runtime_error(
               "Validated surface detail role lost its normal image");
-        draw.normal_texture = int(bind_texture(
-            surface_normal_texture(binding->normal_index), false));
+        const bool first_normal_handle =
+            surface_normal_textures_.find(binding->normal_index) ==
+            surface_normal_textures_.end();
+        const int32_t normal_handle =
+            surface_normal_texture(binding->normal_index);
+        mw34::timing::ScopedDuration upload_timer(
+            first_normal_handle
+                ? producer_resource_timing_.page_upload_target()
+                : nullptr);
+        draw.normal_texture = int(bind_texture(normal_handle, false));
       }
     }
     const bool sharp = state.sharp && state.texture >= 0 &&
@@ -2020,6 +2072,296 @@ private:
     scene_.clears.push_back(std::move(clear));
   }
 
+  void prune_native_geometry() {
+    ++native_geometry_prune_passes_;
+    for (auto iterator = native_geometry_.begin();
+         iterator != native_geometry_.end();) {
+      if (iterator->second.source.expired())
+        iterator = native_geometry_.erase(iterator);
+      else
+        ++iterator;
+    }
+  }
+
+  std::shared_ptr<const vk::ModelGeometry> native_model_geometry(const std::shared_ptr<const cc::geometry::Resource> &source) {
+    const auto found = native_geometry_.find(source->identity);
+    if (found != native_geometry_.end() &&
+        !found->second.source.expired() && found->second.geometry)
+      return found->second.geometry;
+    // Cache misses still reclaim dead snapshots before allocating replacements.
+    prune_native_geometry();
+    auto &cached = native_geometry_[source->identity];
+    if (!cached.geometry) {
+      cached.source = source;
+      auto geometry = std::make_shared<vk::ModelGeometry>();
+      geometry->key = 0x4700000000000000ULL | source->identity;
+      geometry->vertices = source->vertices;
+      geometry->indices = source->indices;
+      geometry->source = source;
+      geometry->hash = 0xcbf29ce484222325ULL;
+      const auto hash = [&](const void *data, std::size_t bytes) {
+        const auto *input = static_cast<const unsigned char *>(data);
+        for (std::size_t i = 0; i < bytes; ++i) {
+          geometry->hash ^= input[i];
+          geometry->hash *= 0x100000001b3ULL;
+        }
+      };
+      hash(geometry->vertices.data(),
+           geometry->vertices.size() * sizeof(vk::ModelVertex));
+      hash(geometry->indices.data(),
+           geometry->indices.size() * sizeof(std::uint32_t));
+      cached.geometry = std::move(geometry);
+    }
+    return cached.geometry;
+  }
+
+  void preload_native_model_geometry() {
+    VisualFloatScope guard;
+    if (!renderer_ || (geometry_mode_ != cc::geometry::Mode::gpu &&
+                       geometry_mode_ != cc::geometry::Mode::partial))
+      return;
+    std::unordered_set<const zcls::ListItem *> visited_items;
+    std::unordered_set<zmod::Model *> seen_models;
+    for (const zcls::ListItem *item = zcls::list_head(zcls::kAllNodes);
+         item; item = item->next) {
+      if (!visited_items.insert(item).second)
+        throw std::runtime_error("Cycle detected in node list");
+      if (item->removable != 0 || !item->node || !item->node->model)
+        continue;
+      // Prepared-owned nodes never enter the native GPU draw path.
+      ::platform::ModelDrawContext binding_context;
+      binding_context.node = item->node;
+      if (prepared_.has_binding(binding_context))
+        continue;
+      auto &model = *item->node->model;
+      if (!seen_models.insert(&model).second)
+        continue;
+      if (!zmod::rigid_source_supported(model, zmod::RigidGeometryEligibility{}))
+        continue;
+      if (model.render_geometry) {
+        bool materials_match = model.render_materials.size() == model.count(0x10);
+        if (materials_match) {
+          for (size_t index = 0; index < model.render_materials.size(); ++index) {
+            if (model.render_materials[index] != model.polygons[index].material) {
+              materials_match = false;
+              break;
+            }
+          }
+        }
+        if (!materials_match) {
+          model.invalidate_render_geometry();
+        }
+      }
+      if (!model.render_geometry) {
+        auto registered = zmod::register_rigid_source(model);
+        model.render_geometry = std::move(registered.resource);
+        model.render_materials = std::move(registered.original_materials);
+      }
+      const auto geometry = native_model_geometry(model.render_geometry);
+      renderer_->preload_model_geometry(*geometry);
+    }
+  }
+
+  static std::vector<std::string> live_node_source_assets() {
+    // Canonical list membership is required because node_alloc adds nodes
+    // to kAllNodes but does not set the world-file kNodeLive bit (which is only
+    // set for world-file slots by cls_zbd.cpp). Iterating kAllNodes directly
+    // captures all live nodes, including MechLib nodes created with object3d_create.
+    std::vector<std::string> source_assets;
+    std::set<std::string> seen_source_assets;
+    std::unordered_set<const zcls::ListItem *> visited_items;
+
+    for (const zcls::ListItem *item = zcls::list_head(zcls::kAllNodes);
+         item != nullptr; item = item->next) {
+      if (!visited_items.insert(item).second) {
+        throw std::runtime_error("Malformed cycle detected in kAllNodes list");
+      }
+      if (item->removable != 0 || item->node == nullptr) {
+        continue;
+      }
+      const auto &source_asset = item->node->source_asset;
+      if (!source_asset || source_asset->name.empty()) {
+        continue;
+      }
+      if (seen_source_assets.insert(source_asset->name).second) {
+        source_assets.push_back(source_asset->name);
+      }
+    }
+    return source_assets;
+  }
+
+  std::uint64_t preload_texture_handle(int32_t handle) {
+    const std::uint64_t texture_key = std::uint64_t(handle) * 2 + 1;
+    const auto &entry = textures_.at(std::size_t(handle));
+    const unsigned texture_width = entry.width;
+    const unsigned texture_height = entry.height;
+    const std::uint64_t texture_version = entry.version;
+    const std::array<std::uint64_t, 3> receipt_stamp{
+        texture_version, texture_width, texture_height};
+    const auto existing_receipt = submitted_textures_.find(texture_key);
+    if (existing_receipt != submitted_textures_.end() &&
+        existing_receipt->second == receipt_stamp)
+      return 0;
+
+    // Upload one transient texture payload at a time without mutating scene
+    // bindings or building an all-textures Scene packet.
+    const std::uint64_t staged_bytes =
+        std::uint64_t(entry.pixels.size()) * sizeof(std::uint32_t);
+    vk::TextureRef texture_ref{texture_key,
+                               texture_version,
+                               texture_width,
+                               texture_height,
+                               vk::TexFormat::rgba8888,
+                               {},
+                               entry.pixels};
+    renderer_->preload_texture(texture_ref);
+    submitted_textures_[texture_key] = receipt_stamp;
+    return staged_bytes;
+  }
+
+  // Upload matching world normal maps, live-mission prepared model textures,
+  // and current-epoch native CPU albedo textures to the GPU after mission loading
+  // has finished or at the first scene boundary when late actor assets arrive,
+  // so camera turns do not stall on lazy Vulkan image and mip creation.
+  void preload_mission_normal_textures() {
+    VisualFloatScope guard;
+    const bool preload_world_normals = surface_normals_.preload_pending &&
+                                       lighting_.enabled && lighting_.normals;
+    const bool preload_prepared_assets =
+        prepared_preload_pending_ && !prepared_.empty();
+    if (!surface_normals_.preload_pending && !prepared_preload_pending_) {
+      return;
+    }
+    if (!renderer_ || producer_failed_) {
+      surface_normals_.preload_pending = false;
+      prepared_preload_pending_ = false;
+      return;
+    }
+    if (reset_pending_)
+      ensure_extent();
+    preload_native_model_geometry();
+
+    // Snapshot original native CPU albedo texture slots before allocating any
+    // new normal or prepared texture handles, preventing recursion or dangling
+    // references across textures_ reallocations.
+    const std::size_t source_texture_count = textures_.size();
+    std::vector<int32_t> native_handles;
+    std::vector<mw34::materials::SurfaceKey> mission_source_keys;
+    native_handles.reserve(source_texture_count);
+    if (preload_world_normals)
+      mission_source_keys.reserve(source_texture_count);
+    for (std::size_t slot_index = 0; slot_index < source_texture_count;
+         ++slot_index) {
+      const auto &slot = textures_[slot_index];
+      if (!slot.pixels.empty() && slot.group_load_epoch == group_load_epoch_ &&
+          slot.surface_key.hash != 0) {
+        native_handles.push_back(static_cast<int32_t>(slot_index));
+        if (preload_world_normals)
+          mission_source_keys.push_back(slot.surface_key);
+      }
+    }
+
+    std::vector<int> unique_normal_indices;
+    if (preload_world_normals) {
+      surface_normals_load();
+
+      std::set<int> seen_normal_indices;
+      for (const auto &source_key : mission_source_keys) {
+        const auto authored = surface_normals_.cache.bindings.find(source_key);
+        if (authored != surface_normals_.cache.bindings.end() &&
+            authored->second < 0)
+          continue;
+        mw34::timing::ScopedDuration decode_timer(
+            producer_resource_timing_.page_decode_target());
+        const int normal_index =
+            surface_normals_.cache.surface_normal_index(source_key, true);
+        surface_normals_.peak_decoded_bytes =
+            std::max(surface_normals_.peak_decoded_bytes,
+                     surface_normals_.cache.world_bytes);
+        if (normal_index >= 0 && seen_normal_indices.insert(normal_index).second)
+          unique_normal_indices.push_back(normal_index);
+      }
+    }
+
+    PreparedTextureResources prepared_resources;
+    if (preload_prepared_assets) {
+      prepared_resources =
+          prepared_.resources_for_assets(live_node_source_assets());
+    }
+
+    // Create normal and prepared texture handles outside any active
+    // source-upload scope.
+    struct ActiveKeyGuard {
+      mw34::materials::SurfaceKey saved_key{};
+      bool had_active_key{false};
+      ActiveKeyGuard() {
+        had_active_key = mw34::materials::get_active_surface_key(&saved_key);
+        if (had_active_key)
+          mw34::materials::clear_active_surface_key();
+      }
+      ~ActiveKeyGuard() {
+        if (had_active_key)
+          mw34::materials::set_active_surface_key(saved_key);
+        else
+          mw34::materials::clear_active_surface_key();
+      }
+    } active_key_guard;
+
+    // Warm current-epoch native CPU albedo handles before normal or prepared handles.
+    std::uint64_t native_staged_bytes = 0;
+    for (const int32_t handle : native_handles) {
+      native_staged_bytes += preload_texture_handle(handle);
+    }
+
+    for (const int normal_index : unique_normal_indices) {
+      const int32_t normal_handle = surface_normal_texture(normal_index);
+      preload_texture_handle(normal_handle);
+    }
+
+    std::size_t selected_normal_count = 0;
+    std::uint64_t prepared_staged_bytes = 0;
+    if (preload_prepared_assets) {
+      // Geometry allocation can exceed a frame even when texture receipts are warm.
+      if (geometry_mode_ == cc::geometry::Mode::gpu ||
+          geometry_mode_ == cc::geometry::Mode::partial) {
+        for (const auto *batch : prepared_resources.rigid_batches) {
+          const auto geometry = prepared_geometry(*batch);
+          renderer_->preload_model_geometry(*geometry);
+        }
+      }
+      for (const auto *image : prepared_resources.textures) {
+        const int32_t texture_handle = prepared_texture(*image);
+        prepared_staged_bytes += preload_texture_handle(texture_handle);
+      }
+      selected_normal_count =
+          (lighting_.enabled && lighting_.normals)
+              ? prepared_resources.normals.size()
+              : 0;
+      if (lighting_.enabled && lighting_.normals) {
+        for (const auto *normal : prepared_resources.normals) {
+          const int32_t normal_handle = prepared_normal(*normal);
+          prepared_staged_bytes += preload_texture_handle(normal_handle);
+        }
+      }
+    }
+
+    if (producer_resource_timing_.enabled) {
+      std::fprintf(
+          stderr,
+          "[RESOURCE_TIMING] owner=producer stage=prepared_preload "
+          "source_assets=%zu albedos=%zu normals=%zu staged_bytes=%llu "
+          "native_textures=%zu native_staged_bytes=%llu\n",
+          prepared_resources.matched_source_assets,
+          prepared_resources.textures.size(), selected_normal_count,
+          static_cast<unsigned long long>(prepared_staged_bytes),
+          native_handles.size(),
+          static_cast<unsigned long long>(native_staged_bytes));
+    }
+
+    surface_normals_.preload_pending = false;
+    prepared_preload_pending_ = false;
+  }
+
   unsigned bind_texture(int handle, bool sharp) {
     auto &entry = textures_.at(handle);
     if (entry.pixels.empty()) {
@@ -2122,6 +2464,7 @@ private:
     std::shared_ptr<const vk::ModelGeometry> geometry;
   };
   std::map<std::uint64_t, NativeGeometry> native_geometry_;
+  std::uint64_t native_geometry_prune_passes_{};
   std::unique_ptr<vk::Renderer> renderer_;
   // Declared after renderer_: join before destroying the backend, including
   // unwinding. Only the producer accesses textures and builds the next scene.
@@ -2155,6 +2498,8 @@ private:
       prepared_geometry_;
   std::uint64_t group_load_epoch_{1};
   std::map<int, int32_t> surface_normal_textures_;
+  bool prepared_preload_pending_{true};
+  bool first_world_preload_pending_{false};
   bool logged_first_normal_trace_{false};
   // Names survive handle reuse/reloads; unknown names use the upload handle.
   // Stop after four distinct flare textures, with no growing set or log spam.
@@ -2171,6 +2516,7 @@ private:
   int32_t present_window_width_{}, present_window_height_{};
   bool window_bound_{}, presented_{}, reported_resident_{}, reset_pending_{};
   const bool cpu_profile_ = cpu_profile_requested();
+  mw34::timing::ProducerResourceTiming producer_resource_timing_{};
   std::uint64_t render_ticks_{}, transport_ticks_{};
   std::uint64_t detail_frame_{};
   std::uint64_t worker_render_ticks_{}, worker_present_ticks_{};
