@@ -96,16 +96,16 @@ public static class Mw3ReLaunchRequest
             Mw3ReFlareStyle.Original => "original",
             _ => throw new InvalidDataException("Unknown native flare style.")
         };
-        // The preview ships its planner with the launcher, so it has no pinned planner roles to check;
-        // the planner still refuses POM without normal lighting.
-        if (options.Preview != null)
-            return CreatePreview(contract, options, gameDirectory, dataRoot, id, renderer, antialiasing,
-                windowMode, lighting, flareStyle, indeoCodec);
         if (options.PomQuality is not null and not ("off" or "low" or "high"))
             throw new InvalidDataException("Unknown native POM quality.");
         if (options.Pom && options.PomQuality == "off")
             throw new InvalidDataException("Conflicting native POM options.");
         var pomEnabled = options.Pom || options.PomQuality is "low" or "high";
+        // The preview ships its planner with the launcher, so it has no pinned planner roles to check;
+        // the planner still refuses POM without normal lighting.
+        if (options.Preview != null)
+            return CreatePreview(contract, options, gameDirectory, dataRoot, id, renderer, antialiasing,
+                windowMode, lighting, flareStyle, indeoCodec);
         // This pinned combined runtime/planner claim is observational, not trusted execution admission.
         if (pomEnabled && (options.Lighting != Mw3ReLighting.Normal ||
             !contract.Capabilities.TryGetValue("pom", out var versions) || !versions.Contains(1) ||

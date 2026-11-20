@@ -44,7 +44,7 @@ def _make_sine_normal_map(width: int = 32, height: int = 32) -> bytes:
             nx, ny, nz = nx * inv, ny * inv, nz * inv
             out[idx] = max(0, min(255, int(round(nx * 127.0 + 128.0))))
             out[idx + 1] = max(0, min(255, int(round(ny * 127.0 + 128.0))))
-            out[idx + 2] = max(0, min(255, int(round(nz * 255.0))))
+            out[idx + 2] = max(0, min(255, int(round(nz * 127.0 + 128.0))))
             out[idx + 3] = 255
             idx += 4
     return bytes(out)
@@ -68,6 +68,11 @@ class GenerateSurfaceHeightsTests(unittest.TestCase):
         gt = gen.np.sin(xx) * gen.np.cos(yy)
         corr = float(gen.np.corrcoef(red.ravel(), gt.ravel())[0, 1])
         self.assertGreater(corr, 0.95)
+        # Narrow normal maps (e.g. 512x2) must downsample without reshaping errors.
+        narrow = _make_sine_normal_map(512, 2)
+        nw, nh, nbytes = gen._downsample_rgba(narrow, 512, 2, 128)
+        self.assertEqual((nw, nh), (128, 2))
+        self.assertEqual(len(nbytes), 128 * 2 * 4)
 
     def test_excludes_water_and_classifies_families(self):
         self.assertTrue(gen.should_skip_material("c2_water01"))

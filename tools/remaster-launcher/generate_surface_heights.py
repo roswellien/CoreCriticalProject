@@ -217,10 +217,10 @@ def frankot_chellappa_height(normal_rgba: bytes, width: int, height: int) -> tup
         raise ValueError("Height map dimensions must be at least 2x2")
 
     arr = np.frombuffer(normal_rgba, dtype=np.uint8).reshape(height, width, 4).astype(np.float32)
-    # BWNRM2/3 encodes neutral normal as (128, 128, 255).
+    # Match sun_scene.frag BWNRM2/3 decoding: max((channel - 128) / 127, -1).
     nx = np.maximum((arr[:, :, 0] - 128.0) / 127.0, -1.0)
     ny = np.maximum((arr[:, :, 1] - 128.0) / 127.0, -1.0)
-    nz = np.maximum(arr[:, :, 2] / 255.0, 0.05)
+    nz = np.maximum((arr[:, :, 2] - 128.0) / 127.0, 0.05)
 
     p = -nx / nz
     q = -ny / nz
@@ -257,22 +257,23 @@ def frankot_chellappa_height(normal_rgba: bytes, width: int, height: int) -> tup
 def _downsample_rgba(pixels: bytes, width: int, height: int, max_dim: int) -> tuple[int, int, bytes]:
     if max_dim <= 0 or (width <= max_dim and height <= max_dim):
         return width, height, pixels
-    stride = max(math.ceil(width / max_dim), math.ceil(height / max_dim))
-    if stride <= 1:
+    stride_x = max(1, math.ceil(width / max_dim))
+    stride_y = max(1, math.ceil(height / max_dim))
+    if stride_x == 1 and stride_y == 1:
         return width, height, pixels
-    new_w = max(2, width // stride)
-    new_h = max(2, height // stride)
+    new_w = max(1, width // stride_x)
+    new_h = max(1, height // stride_y)
     arr = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 4).astype(np.float32)
-    cropped = arr[: new_h * stride, : new_w * stride, :]
-    blocks = cropped.reshape(new_h, stride, new_w, stride, 4)
+    cropped = arr[: new_h * stride_y, : new_w * stride_x, :]
+    blocks = cropped.reshape(new_h, stride_y, new_w, stride_x, 4)
     nx = np.maximum((blocks[:, :, :, :, 0] - 128.0) / 127.0, -1.0).mean(axis=(1, 3))
     ny = np.maximum((blocks[:, :, :, :, 1] - 128.0) / 127.0, -1.0).mean(axis=(1, 3))
-    nz = (blocks[:, :, :, :, 2] / 255.0).mean(axis=(1, 3))
+    nz = np.maximum((blocks[:, :, :, :, 2] - 128.0) / 127.0, -1.0).mean(axis=(1, 3))
     length = np.maximum(np.sqrt(nx * nx + ny * ny + nz * nz), 1e-6)
     out = np.empty((new_h, new_w, 4), dtype=np.uint8)
     out[:, :, 0] = np.clip(np.round((nx / length) * 127.0 + 128.0), 0, 255).astype(np.uint8)
     out[:, :, 1] = np.clip(np.round((ny / length) * 127.0 + 128.0), 0, 255).astype(np.uint8)
-    out[:, :, 2] = np.clip(np.round((nz / length) * 255.0), 0, 255).astype(np.uint8)
+    out[:, :, 2] = np.clip(np.round((nz / length) * 127.0 + 128.0), 0, 255).astype(np.uint8)
     out[:, :, 3] = 255
     return new_w, new_h, out.tobytes()
 
@@ -332,12 +333,16 @@ def build_environment_surface_materials(
             norm_hash = uncached_pixel_hash(pixels)
             key_name = f"n_{norm_hash:016x}"
             if key_name not in unique_normals:
-                unique_normals[key_name] = (mat_name, width, height, pixels)
+                # Downsample immediately to keep memory bounded across large packs.
+                dw, dh, reduced = _downsample_rgba(pixels, width, height, max_dimension)
+                if dw < 2 or dh < 2:
+                    continue
+                unique_normals[key_name] = (mat_name, dw, dh, reduced)
             else:
                 # Prefer a non-generic authored name for family classification.
-                existing_name = unique_normals[key_name][0]
+                existing_name, ew, eh, epx = unique_normals[key_name]
                 if existing_name.startswith("surface") and not mat_name.startswith("surface"):
-                    unique_normals[key_name] = (mat_name, width, height, pixels)
+                    unique_normals[key_name] = (mat_name, ew, eh, epx)
 
     candidates: list[tuple[float, str, str, int, int, bytes]] = []
     skipped_flat = 0

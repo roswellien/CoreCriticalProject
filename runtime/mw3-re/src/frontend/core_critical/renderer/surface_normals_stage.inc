@@ -462,39 +462,39 @@ native_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
     if (selected != environment_->material_targets.end()) {
       const auto *target = select_native_ground_target(
           selected->second, native_context_.node, native_context_.model);
-      if (!target)
-        return {};
-      NativeGroundHeightInput input;
-      input.enabled = true;
-      input.eligible = true;
-      input.node = native_context_.node;
-      input.model = native_context_.model;
-      input.material = native_context_.material;
-      if (!native_context_.material_active)
-        input.material = {};
-      input.key = key;
-      input.texture = texture;
-      input.source_epoch = zcls::world_source_epoch();
-      input.producer_epoch = native_context_.epoch;
-      input.current_group_epoch = group_load_epoch_;
-      if (texture >= 0 && std::size_t(texture) < textures_.size()) {
-        const auto &slot = textures_[texture];
-        input.slot_key = slot.surface_key;
-        input.slot_epoch = slot.group_load_epoch;
-        input.texture_version = input.current_texture_version = slot.version;
-        input.normal_index = surface_normal_index(key, true, texture);
-        if (input.normal_index >= 0) {
-          const auto &normal = surface_normal_image(input.normal_index);
-          input.normal_width = normal.width;
-          input.normal_height = normal.height;
-          input.normal_hash = normal.hash;
+      if (target) {
+        NativeGroundHeightInput input;
+        input.enabled = true;
+        input.eligible = true;
+        input.node = native_context_.node;
+        input.model = native_context_.model;
+        input.material = native_context_.material;
+        if (!native_context_.material_active)
+          input.material = {};
+        input.key = key;
+        input.texture = texture;
+        input.source_epoch = zcls::world_source_epoch();
+        input.producer_epoch = native_context_.epoch;
+        input.current_group_epoch = group_load_epoch_;
+        if (texture >= 0 && std::size_t(texture) < textures_.size()) {
+          const auto &slot = textures_[texture];
+          input.slot_key = slot.surface_key;
+          input.slot_epoch = slot.group_load_epoch;
+          input.texture_version = input.current_texture_version = slot.version;
+          input.normal_index = surface_normal_index(key, true, texture);
+          if (input.normal_index >= 0) {
+            const auto &normal = surface_normal_image(input.normal_index);
+            input.normal_width = normal.width;
+            input.normal_height = normal.height;
+            input.normal_hash = normal.hash;
+          }
         }
-      }
-      try {
-        return admit_native_ground_height(*target, input, prepared_.surface_budget());
-      } catch (const std::runtime_error &error) {
-        reject_surface_binding(error.what());
-        throw;
+        try {
+          return admit_native_ground_height(*target, input, prepared_.surface_budget());
+        } catch (const std::runtime_error &error) {
+          reject_surface_binding(error.what());
+          throw;
+        }
       }
     }
     // Fall back to the region's admitted BWSFM1 surface-material catalog, bound
@@ -504,7 +504,8 @@ native_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
     if (catalog && texture >= 0 && std::size_t(texture) < textures_.size() &&
         key.width > 0 && key.height > 0 && key.format == 1U && key.hash != 0) {
       const auto &slot = textures_[std::size_t(texture)];
-      if (slot.group_load_epoch == group_load_epoch_ && slot.surface_key == key) {
+      if (!slot.replacement && slot.width == key.width && slot.height == key.height &&
+          slot.group_load_epoch == group_load_epoch_ && slot.surface_key == key) {
         const int normal_idx = surface_normal_index(key, true, texture);
         if (normal_idx >= 0) {
           const auto source_epoch = zcls::world_source_epoch();

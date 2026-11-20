@@ -96,7 +96,7 @@ vec2 pomTrace(vec2 baseUV, vec3 normal, vec3 dp1, vec3 dp2,
         // residual would miss an exact zero/one-height endpoint intersection.
         lower = stepIndex == steps ? low : mix(high, low, float(stepIndex) / float(steps));
         float lowerF = lower - effectiveAmplitude * (pomHeight(chart + q * lower, dx, dy) - reference);
-        if (lowerF <= 0.0) found = true;
+        if (lowerF <= 0.0 || (stepIndex == steps && lowerF <= 1e-5 * abs(effectiveAmplitude))) found = true;
         else { upper = lower; upperF = lowerF; }
     }
     if (!found) return baseUV;

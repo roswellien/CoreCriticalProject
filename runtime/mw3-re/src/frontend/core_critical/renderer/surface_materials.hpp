@@ -317,8 +317,9 @@ inline std::shared_ptr<const HeightBinding> resolve_catalog_height_binding(
     binding->image = std::shared_ptr<const SurfaceMaterialImage>(pack, &image);
     binding->source_sha256 = sidecar_sha256;
     binding->sidecar_sha256 = sidecar_sha256;
-    // Region catalogs bind via authenticated albedo SurfaceKey + normal image identity.
-    binding->mesh_uv_hash = albedo.hash;
+    // Use the height image's own content hash so multiple albedos sharing the
+    // same normal/height map share one GPU HeightImage allocation.
+    binding->mesh_uv_hash = image.hash ? image.hash : albedo.hash;
     binding->image_version = pack->version;
     binding->albedo = albedo;
     binding->normal_width = normal_width;
@@ -578,13 +579,9 @@ read_surface_materials_impl(std::istream &input, const std::string &expected_ass
 
     for (const auto &rec_ptr : pack.records) {
         const auto &record = *rec_ptr;
-        if (record.height_image != no_surface_image) {
-            const auto &img = pack.images[record.height_image];
-            if (img.role != surface_role_height ||
-                !(record.atlas_rect[2] - record.atlas_rect[0] > 1.0f / float(img.width)) ||
-                !(record.atlas_rect[3] - record.atlas_rect[1] > 1.0f / float(img.height)))
-                fail();
-        }
+        if (record.height_image != no_surface_image &&
+            pack.images[record.height_image].role != surface_role_height)
+            fail();
         if (record.thickness_image != no_surface_image &&
             pack.images[record.thickness_image].role != surface_role_thickness)
             fail();
