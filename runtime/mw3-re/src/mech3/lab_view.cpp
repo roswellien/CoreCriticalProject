@@ -72,6 +72,9 @@ bool GameEngine::lab_world_load(Handle) {
   video_clear(0);                         // 0x00576dd0
   lab_view_ = std::make_unique<LabView>();
   LabView& v = *lab_view_;
+  // Ours: from a briefing the mission is already loaded, and its campaign lighting
+  // profile must not paint the turntable chassis (render3d.h).
+  if (auto* render = platform_parts().render) render->set_lab_preview_lighting(true);
   v.world = zcls::world_create();
   zcls::node_set_name(v.world, "labworld");
   v.window = zcls::window_create();
@@ -147,6 +150,7 @@ void GameEngine::lab_world_unload(Handle) {
   }
   ls.models_.clear();
   lab_view_.reset();
+  if (auto* render = platform_parts().render) render->set_lab_preview_lighting(false);
   ls.model_ = 0;
   video_show_cursor(ls.cursor_);
   twod_set_cursor(ls.cursor_);

@@ -87,6 +87,9 @@ struct StagingTestState {
   std::size_t oversized_packets{}, oversized_log_lines{};
 };
 StagingTestState staging_state(VulkanFrameRenderer &renderer);
+// True when the lighting the renderer submits equals its configured stock lighting
+// (no mission campaign profile applied).
+bool display_lighting_is_stock(VulkanFrameRenderer &renderer);
 
 // The geometry, lit-normal and raw-fog terms and the checked total of one packet's byte count.
 struct PacketByteBreakdown {

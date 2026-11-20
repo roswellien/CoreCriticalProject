@@ -862,6 +862,28 @@ public:
       current_mission_lighting_ = resolved;
     }
   }
+  void set_lab_preview_lighting(bool on) override {
+    VisualFloatScope fp_guard;
+    if (lab_preview_lighting_ == on)
+      return;
+    lab_preview_lighting_ = on;
+    if (!renderer_)
+      return;
+    // Queued draws were recorded under the previous lighting; submit them first,
+    // as the HDR change in begin_scene_housekeeping does.
+    if (!scene_.draws.empty())
+      flush();
+    drain();
+    renderer_->update_lighting_settings(display_lighting());
+  }
+  bool display_lighting_is_stock_for_test() const {
+    const auto shown = display_lighting();
+    const auto stock = mw34::sun::display_ambient(base_lighting_, campaign_enabled_, display_hdr_);
+    return shown.color == stock.color && shown.ambient_color == stock.ambient_color &&
+           shown.sky_tint == stock.sky_tint && shown.haze_color == stock.haze_color &&
+           shown.sky_active == stock.sky_active && shown.haze_active == stock.haze_active &&
+           shown.strength == stock.strength && shown.ambient == stock.ambient;
+  }
   void reset_scene_resources() override {
     // Reset the owned mission identity/result via the callback with the empty
     // identity before the scene resources are reset.
@@ -1990,7 +2012,10 @@ private:
   }
 
   mw34::sun::Settings display_lighting() const {
-    return mw34::sun::display_ambient(lighting_, campaign_enabled_, display_hdr_);
+    // The Lab preview keeps stock lighting; the mission profile stays resolved in
+    // lighting_ and returns as soon as the Lab closes.
+    const auto &active = lab_preview_lighting_ ? base_lighting_ : lighting_;
+    return mw34::sun::display_ambient(active, campaign_enabled_, display_hdr_);
   }
 
   void require_editor_producer() const {
@@ -2167,6 +2192,7 @@ private:
   bool display_hdr_ = false;
   const mw34::sun::Settings base_lighting_;
   const bool campaign_enabled_, sun_explicit_;
+  bool lab_preview_lighting_{};
   std::shared_ptr<const ::platform::prepared::EnvironmentSelection>
       environment_;
   std::shared_ptr<const zcls::ZbdObservationSession> observation_session_;
@@ -2447,6 +2473,13 @@ testing::StagingTestState testing::staging_state(VulkanFrameRenderer &renderer) 
     if (!typed)
         throw std::runtime_error("Renderer is not a FrameRenderer");
     return typed->staging_state_for_test();
+}
+
+bool testing::display_lighting_is_stock(VulkanFrameRenderer &renderer) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->display_lighting_is_stock_for_test();
 }
 
 testing::NamedTextureTestState testing::named_texture_state(
