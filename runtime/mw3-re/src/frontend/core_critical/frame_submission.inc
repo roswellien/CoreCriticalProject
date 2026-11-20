@@ -53,10 +53,11 @@ void flush() override {
                      terms.height_metadata + terms.height_packet, terms.emissions, terms.clears,
                      local_staging_budget_);
       }
-      // A single packet that could never fit even an EMPTY staging area is a real invariant
-      // failure: reject it before submitting any earlier packet.
-      if (!staging::fits(local_bytes, 0, local_staging_budget_))
-        throw std::runtime_error("Local light packet staging exceeds budget");
+      // A packet whose own bytes exceed the allowance must not end the game: its memory is
+      // already allocated by the time it is flushed, so refusing it saves nothing. A mission's
+      // first world frame can upload every texture it draws in one packet (the owner's c1m1
+      // first packet carried 698 MB of texture pixels), and a bigger mission can pass 1 GiB.
+      const bool fits_empty_area = staging::fits(local_bytes, 0, local_staging_budget_);
       if (!staging::fits(local_bytes, pending_local_bytes_, local_staging_budget_) &&
           !pending_local_packets_.empty()) {
         // The CPU staging area is full of earlier packets of this scene. Submit them now
@@ -84,9 +85,30 @@ void flush() override {
                        terms.clears, terms.height_packet);
         }
       }
-      // After any early completion the packet must fit the (now empty or smaller) area.
-      if (!staging::fits(local_bytes, pending_local_bytes_, local_staging_budget_))
-        throw std::runtime_error("Local light packet staging exceeds budget");
+      if (!fits_empty_area) {
+        // The staging area is empty now (any earlier packet was completed above), so this
+        // packet is staged ALONE and its local lights are still attached at the normal point:
+        // the output is the same as for a packet that fits. The next packet of the scene does
+        // not fit beside it and completes it early through the branch above, so at most one
+        // oversized packet is ever held and staging stays bounded by
+        // max(budget, largest single packet).
+        ++staging_oversized_packets_;
+        if (!staging_oversized_logged_) {
+          staging_oversized_logged_ = true;
+          ++staging_oversized_log_lines_;
+          std::fprintf(stderr,
+                       "Local light staging: warning: one packet of %zu bytes exceeds the "
+                       "budget of %zu; staged alone instead of failing (logged once per "
+                       "mission); terms: scene=%zu vertices=%zu color_depth=%zu draws=%zu "
+                       "order=%zu textures=%zu texture_pixels=%zu emissions=%zu geometry=%zu "
+                       "lit_normals=%zu raw_fog=%zu height_metadata=%zu clears=%zu "
+                       "height_packet=%zu (capacity based)\n",
+                       local_bytes, local_staging_budget_, terms.scene, terms.vertices,
+                       terms.color_depth, terms.draws, terms.order, terms.textures,
+                       terms.texture_pixels, terms.emissions, terms.geometry, terms.lit_normals,
+                       terms.raw_fog, terms.height_metadata, terms.clears, terms.height_packet);
+        }
+      }
       if (worker_)
         for (const auto &draw : scene_.draws)
           if (draw.shadow_valid)
@@ -178,6 +200,10 @@ private:
   std::size_t staging_early_completions_{};
   std::size_t staging_early_log_lines_{};
   bool staging_early_logged_{};
+  // Packets larger than the whole allowance, staged alone (see flush) instead of failing.
+  std::size_t staging_oversized_packets_{};
+  std::size_t staging_oversized_log_lines_{};
+  bool staging_oversized_logged_{};
   void complete_local_light_packets() {
     if (producer_failed_) return;
     // Detach the batch before posting: an exception must not cause a later

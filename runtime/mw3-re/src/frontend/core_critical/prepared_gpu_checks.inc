@@ -1079,8 +1079,9 @@ void check_local_light_staging(SDL_Window *window, sdlfe::RendererBackend backen
               "Early completion delivered packets out of producer order");
   }
 
-  // A single packet that can never fit an empty allowance still throws, and does so before any
-  // earlier packet is submitted.
+  // A single packet larger than the whole allowance (the owner's c3m3 crash) must not end the
+  // game. The pending earlier packet is completed first, in producer order, and the oversized
+  // packet is then staged alone and delivered once.
   {
     sdlfe::CoreCriticalAssets assets{};
     assets.lighting = "flat";
@@ -1104,15 +1105,84 @@ void check_local_light_staging(SDL_Window *window, sdlfe::RendererBackend backen
     platform::DrawState oversized{};
     oversized.texture = renderer->create_texture(256, 256, big.data(), 1);
     quad(*renderer, 4, 28, .5f, 0xffffffff, oversized);
-    bool threw = false;
-    try {
-      renderer->end_scene();
-    } catch (const std::runtime_error &error) {
-      threw = std::string(error.what()).find("staging exceeds budget") != std::string::npos;
+    renderer->end_scene();
+    renderer->drain();
+    const auto staging = cc_mw3_re::testing::staging_state(*renderer);
+    require(staging.oversized_packets == 1, "An oversized single packet was not staged alone");
+    require(staging.early_completions == 1,
+            "The packet pending before an oversized packet was not completed first");
+    const auto delivered = observer.rows(producer_view_checks::Stage::packet, true);
+    require(delivered.size() == 2, "An oversized packet or its predecessor was dropped");
+    require(delivered[1].packet > delivered[0].packet,
+            "An oversized packet was delivered before its predecessor");
+    std::vector<std::uint32_t> frame;
+    int width{}, height{};
+    require(renderer->read_back(&frame, &width, &height) && !frame.empty(),
+            "A scene with an oversized packet did not render");
+  }
+
+  // Several oversized packets in a row: each one completes the one before it, so at most one is
+  // ever held. Every 256-square RGBA payload is 256 KiB, so holding two at once would need at
+  // least 512 KiB. Every packet is delivered once and in order, the warning is written once per
+  // mission, and later frames keep rendering.
+  {
+    sdlfe::CoreCriticalAssets assets{};
+    assets.lighting = "flat";
+    auto renderer = make_check_renderer(window, backend, {}, assets, 128u * 1024u);
+    producer_view_checks::Observer observer;
+    require(cc_mw3_re::testing::observe_producer_views(*renderer, &observer),
+            "Staging fixture could not observe worker packets");
+    ObserverCleanup observer_cleanup{*renderer};
+    renderer->mission_changed({5, 1});
+    renderer->set_viewport(0, 0, 32, 32);
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    constexpr int oversized_packet_count = 3;
+    std::vector<platform::DrawState> states;
+    for (int packet = 0; packet < oversized_packet_count; ++packet) {
+      const std::vector<uint8_t> big(std::size_t(256) * 256 * 4, uint8_t(60 + packet * 40));
+      platform::DrawState state{};
+      state.texture = renderer->create_texture(256, 256, big.data(), 1);
+      states.push_back(state);
+      quad(*renderer, 4, 28, .5f, 0xffffffff, state);
+      renderer->flush();
     }
-    require(threw, "An oversized single packet did not throw");
-    require(cc_mw3_re::testing::staging_state(*renderer).early_completions == 0,
-            "An oversized single packet submitted earlier packets before throwing");
+    renderer->end_scene();
+    renderer->drain();
+    const auto staging = cc_mw3_re::testing::staging_state(*renderer);
+    const std::string accumulation_message =
+        "Oversized packets were not completed one at a time: oversized=" +
+        std::to_string(staging.oversized_packets) +
+        " early=" + std::to_string(staging.early_completions) +
+        " peak=" + std::to_string(staging.peak_bytes) +
+        " log_lines=" + std::to_string(staging.oversized_log_lines);
+    require(staging.oversized_packets == oversized_packet_count, accumulation_message.c_str());
+    require(staging.early_completions == oversized_packet_count - 1,
+            accumulation_message.c_str());
+    const std::size_t two_payload_bytes = std::size_t(2) * 256 * 256 * 4;
+    require(staging.peak_bytes > 128u * 1024u && staging.peak_bytes < two_payload_bytes,
+            accumulation_message.c_str());
+    require(staging.oversized_log_lines == 1, accumulation_message.c_str());
+    const auto delivered = observer.rows(producer_view_checks::Stage::packet, true);
+    require(delivered.size() == std::size_t(oversized_packet_count),
+            "Oversized packets were dropped or duplicated");
+    for (std::size_t index = 1; index < delivered.size(); ++index)
+      require(delivered[index].packet > delivered[index - 1].packet,
+              "Oversized packets were delivered out of producer order");
+    // The textures are resident now, so the next frame's packet carries no payload and fits.
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    for (const auto &state : states)
+      quad(*renderer, 4, 28, .5f, 0xffffffff, state);
+    renderer->end_scene();
+    renderer->drain();
+    std::vector<std::uint32_t> frame;
+    int width{}, height{};
+    require(renderer->read_back(&frame, &width, &height) && !frame.empty(),
+            "The frame after oversized packets did not render");
+    require(cc_mw3_re::testing::staging_state(*renderer).oversized_packets ==
+                oversized_packet_count,
+            "A frame with resident textures was still oversized");
   }
 
   // Nothing may be carried from one mission into the next. Mission A completes some packets

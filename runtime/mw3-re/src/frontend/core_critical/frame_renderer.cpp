@@ -670,7 +670,8 @@ public:
   testing::StagingTestState staging_state_for_test() {
     return {staging_peak_bytes_,        staging_early_completions_, staging_early_log_lines_,
             staging_first_flush_bytes_, staging_first_flush_packets_,
-            recycled_scene_count_for_test(), retained_scene_capacity_bytes()};
+            recycled_scene_count_for_test(), retained_scene_capacity_bytes(),
+            staging_oversized_packets_, staging_oversized_log_lines_};
   }
   testing::NamedTextureTestState named_texture_state_for_test(
       int32_t handle) const {
@@ -825,6 +826,7 @@ public:
     release_recycled_scenes();
     local_lights_clear();
     staging_early_logged_ = false;
+    staging_oversized_logged_ = false;
     staging_first_flush_pending_ = true;
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
@@ -907,8 +909,10 @@ public:
           statistics.submitted, statistics.completed, statistics.peak_jobs,
           statistics.peak_bytes, statistics.waits);
       std::fprintf(stderr,
-                   "Local light staging: peak %zu bytes of %zu, %zu early completions\n",
-                   staging_peak_bytes_, local_staging_budget_, staging_early_completions_);
+                   "Local light staging: peak %zu bytes of %zu, %zu early completions, "
+                   "%zu oversized packets\n",
+                   staging_peak_bytes_, local_staging_budget_, staging_early_completions_,
+                   staging_oversized_packets_);
       worker_.reset(); // All later summary reads and destruction belong to this
                        // thread.
     }
