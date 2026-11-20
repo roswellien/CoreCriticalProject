@@ -785,6 +785,43 @@ void gradient_text_checks(const char* fonts) {
   // Any other edit keeps the native image rather than stale text.
   pixels[0] = 0x1234;
   require(!host.hud_text_image(image, 3, 0), "Edited text pixels were replaced by stale text");
+
+  // A persistent image that gets more text drawn into it, without being
+  // cleared, over the previous draw's tinted pixels. DrawTextA must take the
+  // pre-draw contents (old text included) as the new base, so the new draw's
+  // row tint is still recovered and the image re-rasterised at output scale.
+  auto tint = [&](uint16_t top, uint16_t bottom) {
+    for (int row = 0; row < 24; ++row)
+      for (int column = 0; column < 48; ++column)
+        if (pixels[row * 48 + column] == white) pixels[row * 48 + column] = row < 12 ? top : bottom;
+  };
+  std::fill_n(pixels, 48 * 24, uint16_t(0));
+  ztwod::Rect left_box{1, 2, 24, 22};
+  host.DrawTextA(dc, "M", -1, &left_box, 0);
+  tint(0xf800, 0x001f);
+  require(host.hud_text_image(image, 3, 0) != nullptr, "First tinted draw lost its raster");
+  ztwod::Rect right_box{24, 2, 47, 22};
+  host.DrawTextA(dc, "W", -1, &right_box, 0);
+  tint(0x07e0, 0x07e0);
+  const auto redrawn = host.hud_text_image(image, 3, 0);
+  require(redrawn != nullptr, "Text drawn into an uncleared image fell back to native text");
+  unsigned green_right = 0;
+  for (unsigned y = 0; y < redrawn->height; ++y)
+    for (unsigned x = redrawn->width / 2 + 3; x < redrawn->width; ++x)
+      green_right += redrawn->pixels[size_t(y) * redrawn->width + x] == 0xff00ff00u;
+  require(green_right > 0, "The second draw's tint was not applied at output scale");
+  // The first draw's tinted text is part of the new base and must still show.
+  unsigned red_left = 0;
+  for (unsigned y = 0; y < redrawn->height / 2; ++y)
+    for (unsigned x = 0; x < redrawn->width / 2; ++x)
+      red_left += redrawn->pixels[size_t(y) * redrawn->width + x] == 0xff0000ffu;
+  require(red_left > 0, "Text already in the image vanished from the output-scale raster");
+  // The same image cleared and drawn again (FontText's own pattern) also re-rasterises.
+  std::fill_n(pixels, 48 * 24, uint16_t(0));
+  host.DrawTextA(dc, "MW", -1, &box, 0);
+  tint(0xf800, 0x001f);
+  require(host.hud_text_image(image, 3, 0) != nullptr,
+          "Text redrawn into a cleared image fell back to native text");
   host.DeleteDC(dc);
   host.DeleteObject(font);
   host.texture_free(image);
