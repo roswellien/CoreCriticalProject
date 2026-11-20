@@ -16,6 +16,7 @@
 #endif
 
 #include "frontend/sdl/gpu_hud.h"
+#include "frontend/sdl/sdl_input.h"
 #include "frontend/sdl/sdl_render3d.h"
 #include "frontend/sdl/sdl_platform.h"
 #include "frontend/sdl/sdl_twod_host.h"
@@ -28,6 +29,7 @@
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "gamez/zvideo/zvid_format.h"
+#include "mech3/app_engine.h"
 #include "platform/prepared_hud.h"
 
 namespace {
@@ -778,8 +780,10 @@ void replay_recorder_draws(const Recorder& recorder, int width, int height,
           uint32_t src_rgba = 0;
           if (draw.state.texture >= 0) {
             const auto& img = recorder.image_records.at(size_t(draw.state.texture));
-            const float u = u0 + (float(x - x0) + 0.5f) / float(x1 - x0) * (u1 - u0);
-            const float v = v0 + (float(y - y0) + 0.5f) / float(y1 - y0) * (v1 - v0);
+            float u = u0 + (float(x - x0) + 0.5f) / float(x1 - x0) * (u1 - u0);
+            float v = v0 + (float(y - y0) + 0.5f) / float(y1 - y0) * (v1 - v0);
+            if (draw.state.address_u == 1) u = u - std::floor(u);
+            if (draw.state.address_v == 1) v = v - std::floor(v);
             const int tx = std::clamp(int(u * img.width), 0, img.width - 1);
             const int ty = std::clamp(int(v * img.height), 0, img.height - 1);
             src_rgba = img.pixels[size_t(ty) * img.width + tx];
@@ -806,20 +810,43 @@ void replay_recorder_draws(const Recorder& recorder, int width, int height,
         }
       }
     } else if (draw.primitive == platform::Primitive::kStrip) {
-      for (size_t i = 0; i + 3 < draw.vertices.size();) {
-        if (draw.vertices[i].sx == draw.vertices[i + 1].sx &&
-            draw.vertices[i].sy == draw.vertices[i + 1].sy) {
-          ++i;
-          continue;
-        }
-        const int x0 = int(std::lround(draw.vertices[i].sx));
-        const int y0 = int(std::lround(draw.vertices[i].sy));
-        const uint32_t argb = draw.vertices[i].diffuse;
+      require(draw.state.texture < 0, "Strip replay requires untextured pixel geometry");
+      // Pixel batches join quads with degenerate triangles. Rasterize the strip itself so
+      // connectors cannot be mistaken for pixels, including when one pixel covers 3x3 samples.
+      for (size_t index = 2; index < draw.vertices.size(); ++index) {
+        const auto& first = draw.vertices[index - 2];
+        const auto& second = draw.vertices[index - 1];
+        const auto& third = draw.vertices[index];
+        const auto edge = [](const platform::TLVertex& start, const platform::TLVertex& end,
+                             float x, float y) {
+          return (end.sx - start.sx) * (y - start.sy) -
+                 (end.sy - start.sy) * (x - start.sx);
+        };
+        const float area = edge(first, second, third.sx, third.sy);
+        if (area == 0.f) continue;
+        const int left =
+            std::max(0, int(std::floor(std::min({first.sx, second.sx, third.sx}))));
+        const int top =
+            std::max(0, int(std::floor(std::min({first.sy, second.sy, third.sy}))));
+        const int right =
+            std::min(width, int(std::ceil(std::max({first.sx, second.sx, third.sx}))));
+        const int bottom =
+            std::min(height, int(std::ceil(std::max({first.sy, second.sy, third.sy}))));
+        const uint32_t argb = first.diffuse;
         const uint32_t rgba =
             (argb & 0xff00ff00u) | ((argb >> 16) & 0xffu) | ((argb & 0xffu) << 16);
-        if (x0 >= 0 && x0 < width && y0 >= 0 && y0 < height)
-          canvas[size_t(y0) * width + x0] = rgba;
-        i += 4;
+        require((rgba >> 24) == 255, "Strip replay requires opaque pixel geometry");
+        for (int y = top; y < bottom; ++y) {
+          for (int x = left; x < right; ++x) {
+            const float first_edge = edge(first, second, x + .5f, y + .5f);
+            const float second_edge = edge(second, third, x + .5f, y + .5f);
+            const float third_edge = edge(third, first, x + .5f, y + .5f);
+            const bool inside = area > 0.f
+                                    ? first_edge >= 0.f && second_edge >= 0.f && third_edge >= 0.f
+                                    : first_edge <= 0.f && second_edge <= 0.f && third_edge <= 0.f;
+            if (inside) canvas[size_t(y) * width + x] = rgba;
+          }
+        }
       }
     }
   }
@@ -1653,6 +1680,1069 @@ void text_checks(const char* fonts) {
   host.texture_free(image);
   zutl::mounts() = saved;
 }
+
+void part1_live_menu_checks(const std::filesystem::path& directory) {
+  ScopedStageBGlobals globals_guard;
+  CursorTestHost test_host;
+  ztwod::set_host(&test_host);
+  zvid::set_pixel_format(5, 6, 5);
+
+  class LiveMenuRecorder : public Recorder {
+   public:
+    unsigned updates = 0;
+    unsigned creates = 0;
+    unsigned preflights = 0;
+    unsigned clears = 0;
+    unsigned presents = 0;
+    bool fail_next_create = false;
+    bool throw_next_preflight = false;
+    const sdlfe::FrameShape* current_shape = nullptr;
+    void set_shape(const sdlfe::FrameShape* s) override { current_shape = s; }
+    int32_t create_texture(int width, int height, const uint8_t* pixels, uint8_t type) override {
+      ++creates;
+      if (fail_next_create) {
+        fail_next_create = false;
+        return -1;
+      }
+      return Recorder::create_texture(width, height, pixels, type);
+    }
+    void update_texture(int32_t handle, int width, int height, const uint8_t* pixels) override {
+      auto& image = images.at(size_t(handle));
+      require(image.size() == size_t(width) * height,
+              "Live menu updated a texture at the wrong size");
+      std::memcpy(image.data(), pixels, image.size() * 4);
+      image_records.at(size_t(handle)).pixels = image;
+      ++updates;
+    }
+    void prepare_canvas_textures(const std::vector<int32_t>& textures) override {
+      ++preflights;
+      require(!textures.empty(), "Live menu preflighted an empty texture list");
+      if (throw_next_preflight) {
+        throw_next_preflight = false;
+        throw std::runtime_error("Synthetic live menu preflight failure");
+      }
+    }
+    void clear(bool, uint8_t, uint8_t, uint8_t) override {
+      ++clears;
+      draws.clear();
+    }
+    void present() override { ++presents; }
+  };
+
+  struct EnvGuard {
+    std::string name;
+    std::string old_value;
+    bool had_old = false;
+    explicit EnvGuard(const char* key) : name(key) {
+      if (const char* v = SDL_getenv(key)) {
+        had_old = true;
+        old_value = v;
+      }
+    }
+    void set(const char* val) {
+      if (val)
+        SDL_setenv_unsafe(name.c_str(), val, 1);
+      else
+        SDL_unsetenv_unsafe(name.c_str());
+    }
+    ~EnvGuard() {
+      if (had_old)
+        SDL_setenv_unsafe(name.c_str(), old_value.c_str(), 1);
+      else
+        SDL_unsetenv_unsafe(name.c_str());
+    }
+  } env_guard("MW3_MENU_GPU");
+  env_guard.set(nullptr);
+
+  // 1. Primitive-by-primitive and combined menu CPU-vs-replay equality at 1x and 3x output scales,
+  //    including opaque magenta (0xf81f) validity in menu mode and scaled pixel strips.
+  {
+    constexpr int width = 16, height = 12, pitch_bytes = 32;
+    std::vector<uint16_t> bg_pixels(size_t(width) * height);
+    for (int y = 0; y < height; ++y)
+      for (int x = 0; x < width; ++x)
+        bg_pixels[size_t(y) * width + x] =
+            uint16_t(((x + 2) << 11) | (((y * 2 + 5) & 63) << 5) | ((x + y) & 31));
+    zimg::Texture bg_tex{};
+    bg_tex.width = bg_tex.width_again = width;
+    bg_tex.height = height;
+    bg_tex.pixels = bg_pixels.data();
+    bg_tex.flags = zimg::kTwoBytes;
+
+    // Unkeyed image containing opaque magenta 0xf81f (valid in menus, not a layer erase).
+    uint16_t unkeyed_px[4] = {0xf81f, 0x07e0, 0x001f, 0xffff};
+    zimg::Texture unkeyed_tex{};
+    unkeyed_tex.width = unkeyed_tex.width_again = 2;
+    unkeyed_tex.height = 2;
+    unkeyed_tex.pixels = unkeyed_px;
+    unkeyed_tex.flags = zimg::kTwoBytes;
+
+    // Keyed 16-bit image.
+    uint16_t keyed_px[4] = {0x0000, 0xf800, 0xffe0, 0x0000};
+    zimg::Texture keyed_tex{};
+    keyed_tex.width = keyed_tex.width_again = 2;
+    keyed_tex.height = 2;
+    keyed_tex.pixels = keyed_px;
+    keyed_tex.flags = zimg::kAlpha | zimg::kTwoBytes;
+
+    // Palette-keyed image (key is index 1, includes opaque magenta at index 2).
+    uint16_t pal_colors[4] = {0x07ff, 0x1234, 0xf81f, 0xf800};
+    uint8_t pal_idx[4] = {0, 1, 2, 3};
+    zimg::Texture pal_tex{};
+    pal_tex.width = pal_tex.width_again = 2;
+    pal_tex.height = 2;
+    pal_tex.pixels = pal_idx;
+    pal_tex.palette = pal_colors;
+    pal_tex.palette_count = 4;
+    pal_tex.flags = zimg::kAlpha;
+
+    // Alpha-plane image (triggers per-row resolved_region snapshots for 4..251).
+    uint16_t alpha_px[6] = {0xf800, 0x07e0, 0x001f, 0xffff, 0xf81f, 0x07ff};
+    uint8_t alpha_al[6] = {0, 3, 64, 180, 252, 255};
+    zimg::Texture alpha_tex{};
+    alpha_tex.width = alpha_tex.width_again = 3;
+    alpha_tex.height = 2;
+    alpha_tex.pixels = alpha_px;
+    alpha_tex.alpha = alpha_al;
+    alpha_tex.flags = zimg::kTwoBytes;
+
+    // Cursor image.
+    uint16_t cursor_px[9] = {0, 0xffff, 0, 0xffff, 0xf800, 0xffff, 0, 0xffff, 0};
+    zimg::Texture cursor_tex{};
+    cursor_tex.width = cursor_tex.height = cursor_tex.width_again = 3;
+    cursor_tex.pixels = cursor_px;
+    cursor_tex.flags = zimg::kAlpha | zimg::kTwoBytes;
+
+    const int32_t tint_rect[4] = {1, 8, 9, 11};
+
+    auto run_primitive_case = [&](int kind, std::vector<uint16_t>& buf) {
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(buf.data()), width, height, pitch_bytes, 6};
+      zrndr::set_finish_target(buf.data(), width, height, pitch_bytes);
+      // Quadrant background blits covering the 16x12 canvas.
+      zrndr::BlitRect q0{0, 0, 8, 6}, q1{8, 0, 16, 6}, q2{0, 6, 8, 12}, q3{8, 6, 16, 12};
+      zrndr::blit16(&bg_tex, 0, 0, 0, &q0);
+      zrndr::blit16(&bg_tex, 8, 0, 0, &q1);
+      zrndr::blit16(&bg_tex, 0, 6, 0, &q2);
+      zrndr::blit16(&bg_tex, 8, 6, 0, &q3);
+
+      if (kind == 0 || kind == 6) {
+        zrndr::blit16(&unkeyed_tex, 1, 1, 0, nullptr);
+        zrndr::blit16(&keyed_tex, 4, 1, 0x0000, nullptr);
+        zrndr::blit16(&pal_tex, 7, 1, 1, nullptr);
+      }
+      if (kind == 1 || kind == 6) {
+        zrndr::blit16(&alpha_tex, 10, 1, 0, nullptr);
+      }
+      if (kind == 2 || kind == 6) {
+        zrndr::line16(1, 4, 6, 4, 0xf81f);  // opaque magenta line in menu
+        zrndr::line16(2, 5, 5, 7, 0xffff);
+      }
+      if (kind == 3 || kind == 6) {
+        zrndr::span_state().dest = zrndr::target2d().base + 6 * pitch_bytes + 8 * 2;
+        zrndr::span_fill16(0xf81f, 4);  // opaque magenta span in menu
+        zrndr::span_state().dest = zrndr::target2d().base + 7 * pitch_bytes + 8 * 2;
+        zrndr::span_fill16(0x07e0, 5);
+      }
+      if (kind == 4 || kind == 6) {
+        zrndr::ripple_state().scratch.assign(size_t(width) * height, 0x0000u);
+        zrndr::ripple(5, 6, 1, 3, 1, 2.0f, 0.5f, nullptr, zrndr::X87::k24);
+        zrndr::finish_machine().mmx = true;
+        zrndr::finish_machine().format = 6;
+        zrndr::tint(0x001f, tint_rect, 0.5, false);
+        zrndr::finish();
+        zrndr::tint_clear();
+      }
+      if (kind == 5 || kind == 6) {
+        ztwod::Cursor cursor(nullptr, 1);
+        cursor.center = 1;
+        cursor.set_cursor_image(&cursor_tex);
+        cursor.set_pos(3, 3);
+        cursor.draw();
+        cursor.erase();
+        cursor.set_pos(12, 9);
+        cursor.draw();
+      }
+    };
+
+    sdlfe::HudOptions hud_opts;
+    hud_opts.mode = "core-critical";
+    hud_opts.text = false;
+
+    for (int kind = 0; kind <= 6; ++kind) {
+      std::vector<uint16_t> baseline(size_t(width) * height, 0);
+      run_primitive_case(kind, baseline);
+
+      for (int scale : {1, 3}) {
+        std::vector<uint16_t> shadow(size_t(width) * height, 0);
+        LiveMenuRecorder recorder;
+        sdlfe::GpuHud hud(recorder, hud_opts);
+        require(hud.begin_menu(shadow.data(), width, height, pitch_bytes, height * scale, false),
+                "GpuHud::begin_menu failed to start for menu primitive check");
+        run_primitive_case(kind, shadow);
+        require(shadow == baseline,
+                "Live menu recording altered CPU shadow buffer pixels");
+        require(hud.seal_menu() && hud.menu_sealed() && !hud.frame_stats().fallback,
+                "GpuHud::seal_menu failed or fell back on valid menu primitive fixture");
+        require(recorder.draws.empty(),
+                "GpuHud::seal_menu submitted draws before present_16 clear");
+
+        const int out_w = width * scale, out_h = height * scale;
+        const platform::MenuBackgroundLayerRect dest{0.f, 0.f, float(out_w), float(out_h)};
+        require(hud.submit_menu(&dest, true), "GpuHud::submit_menu failed on sealed menu");
+        require(!hud.menu_sealed() && !recorder.draws.empty(),
+                "GpuHud::submit_menu left menu sealed or emitted no draws");
+
+        std::vector<uint32_t> replayed(size_t(out_w) * out_h, expand_565(0));
+        replay_recorder_draws(recorder, out_w, out_h, replayed);
+        for (int y = 0; y < out_h; ++y) {
+          for (int x = 0; x < out_w; ++x) {
+            const uint16_t expected_565 =
+                baseline[size_t(y / scale) * width + size_t(x / scale)];
+            if (replayed[size_t(y) * out_w + x] != expand_565(expected_565))
+              std::fprintf(stderr,
+                           "Menu replay: kind=%d scale=%d at %d,%d expected=%08x actual=%08x\n",
+                           kind, scale, x, y, expand_565(expected_565),
+                           replayed[size_t(y) * out_w + x]);
+            require(replayed[size_t(y) * out_w + x] == expand_565(expected_565),
+                    "Replayed live menu GPU draws mismatched CPU output at 1x or 3x scale");
+          }
+        }
+      }
+    }
+
+    // 2. Idle frame cache stability: two identical menu frames must perform zero creates and
+    //    zero updates on the second frame, and budget eviction must never evict current-frame
+    //    references.
+    {
+      LiveMenuRecorder idle_recorder;
+      sdlfe::GpuHud hud(idle_recorder, hud_opts);
+      std::vector<uint16_t> shadow(size_t(width) * height, 0);
+
+      require(hud.begin_menu(shadow.data(), width, height, pitch_bytes, height, false),
+              "Idle check frame 1 failed to begin");
+      run_primitive_case(6, shadow);
+      require(hud.seal_menu() && hud.submit_menu(nullptr, true),
+              "Idle check frame 1 failed to seal or submit");
+      const unsigned creates_after_frame_1 = idle_recorder.creates;
+      const unsigned updates_after_frame_1 = idle_recorder.updates;
+      require(creates_after_frame_1 > 0 && updates_after_frame_1 == 0,
+              "Idle check frame 1 did not create initial textures");
+
+      std::fill(shadow.begin(), shadow.end(), uint16_t(0));
+      require(hud.begin_menu(shadow.data(), width, height, pitch_bytes, height, false),
+              "Idle check frame 2 failed to begin");
+      run_primitive_case(6, shadow);
+      require(hud.seal_menu() && hud.submit_menu(nullptr, true),
+              "Idle check frame 2 failed to seal or submit");
+      require(idle_recorder.creates == creates_after_frame_1 &&
+                  idle_recorder.updates == updates_after_frame_1 &&
+                  idle_recorder.released.empty(),
+              "Equal idle menu frame created, updated, or evicted GPU textures");
+
+      // Budget protection: limit cache to 4 resources, then emit 6 distinct resolved regions in
+      // one frame. None of the 6 current-frame references may be evicted during that frame.
+      LiveMenuRecorder budget_recorder;
+      sdlfe::GpuHud budget_hud(budget_recorder, hud_opts);
+      budget_hud.set_resource_cache_limits(4, 1024 * 1024);
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(shadow.data()), width, height, pitch_bytes,
+                           6};
+      require(budget_hud.begin_menu(shadow.data(), width, height, pitch_bytes, height, false),
+              "Budget check frame 1 failed to begin");
+      for (int i = 0; i < 6; ++i) {
+        shadow[size_t(i)] = uint16_t(0x1000 + i * 111);
+        zrndr::observe_resolved_region(shadow.data() + i, 1, 1, pitch_bytes, "budget region");
+      }
+      require(budget_hud.cached_resource_count() == 6 && budget_recorder.released.empty(),
+              "Resource cache budget evicted a texture referenced in the current frame");
+      require(budget_hud.seal_menu() && budget_hud.submit_menu(nullptr, true),
+              "Budget check frame 1 failed to submit");
+
+      // Next frame: emit 1 new distinct region; older unreferenced entries must now be evicted
+      // down to the limit of 4.
+      require(budget_hud.begin_menu(shadow.data(), width, height, pitch_bytes, height, false),
+              "Budget check frame 2 failed to begin");
+      require(budget_hud.cached_resource_count() == 4 && budget_recorder.released.size() == 2,
+              "Resource cache did not evict prior-frame excess down to budget at frame boundary");
+      shadow[0] = uint16_t(0x7777);
+      zrndr::observe_resolved_region(shadow.data(), 1, 1, pitch_bytes, "budget region");
+      require(budget_hud.cached_resource_count() == 4 && budget_recorder.released.size() == 3,
+              "Resource cache did not evict oldest prior-frame entry on new insertion");
+      require(budget_hud.seal_menu() && budget_hud.submit_menu(nullptr, true),
+              "Budget check frame 2 failed to submit");
+    }
+
+    // 3. Full SdlScreen2D live GPU menu lifecycle with HD background quad, skipping original
+    //    background blits, bypassing the 3-map Stage C classifier, and verifying fallbacks.
+    {
+      const auto hd_path = directory / "live-menu-background.rgb";
+      std::ofstream file(hd_path, std::ios::binary);
+      const uint8_t header[24] = {'M', 'W', 'H', 'D', 'B', 'G', '1', 0, 32, 0, 0, 0,
+                                  24,  0,   0,   0,   16,  0,   0,   0, 12, 0, 0, 0};
+      std::vector<uint8_t> hd_rgb(32 * 24 * 3);
+      for (size_t i = 0; i < 32 * 24; ++i) {
+        hd_rgb[i * 3 + 0] = uint8_t((i * 5) & 0xff);
+        hd_rgb[i * 3 + 1] = uint8_t((i * 9 + 40) & 0xff);
+        hd_rgb[i * 3 + 2] = uint8_t((i * 13 + 80) & 0xff);
+      }
+      file.write(reinterpret_cast<const char*>(header), sizeof header);
+      file.write(reinterpret_cast<const char*>(hd_rgb.data()), hd_rgb.size());
+      file.close();
+
+      zrndr::set_menu_background_source(&bg_tex);
+      sdlfe::HudOptions screen_opts;
+      screen_opts.mode = "core-critical";
+      screen_opts.text = false;
+      screen_opts.menu_background = hd_path.string();
+      sdlfe::FrameShape shape;
+      shape.fit = true;
+      shape.frame_w = width;
+      shape.frame_h = height;
+
+      LiveMenuRecorder screen_recorder;
+      sdlfe::SdlScreen2D screen(&screen_recorder, screen_opts, nullptr, &shape);
+      require(screen_recorder.creates == 1,
+              "SdlScreen2D did not upload HD background texture once at construction");
+
+      std::vector<uint16_t> frame_buf(size_t(width) * height, 0);
+      auto draw_full_menu_frame = [&]() {
+        screen_recorder.draws.clear();
+        zrndr::begin_menu_background_frame();
+        std::fill(frame_buf.begin(), frame_buf.end(), uint16_t(0));
+        screen.begin_menu_observation(frame_buf.data(), width, height, pitch_bytes);
+        run_primitive_case(6, frame_buf);
+        screen.finish_menu_observation();
+      };
+      auto require_current_shadow = [&]() {
+        require(screen_recorder.draws.size() == 1,
+                "Rejected menu frame did not use one complete shadow texture");
+        const int handle = screen_recorder.draws.front().state.texture;
+        require(handle >= 0, "Rejected menu frame has no shadow texture");
+        const auto& uploaded = screen_recorder.image_records.at(size_t(handle));
+        require(uploaded.width == width && uploaded.height == height,
+                "Rejected menu frame uploaded the wrong shadow dimensions");
+        for (size_t index = 0; index < frame_buf.size(); ++index) {
+          const uint32_t pixel = uploaded.pixels[index];
+          // The compatibility upload expands channels by bit replication. Recovering 565
+          // checks exact shadow contents independently of the GPU path's 8-bit expansion.
+          const uint16_t native = uint16_t(((pixel & 255) >> 3) << 11 |
+                                            (((pixel >> 8) & 255) >> 2) << 5 |
+                                            (((pixel >> 16) & 255) >> 3));
+          require((pixel >> 24) == 255 && native == frame_buf[index],
+                  "Rejected menu frame uploaded a blank, stale or inferred shadow pixel");
+        }
+      };
+
+      // The escape hatch MW3_MENU_GPU=0 keeps the legacy Stage C path.
+      env_guard.set("0");
+      draw_full_menu_frame();
+      require(!zrndr::draw_observer() && !shape.menu_layout_active,
+              "MW3_MENU_GPU=0 enabled live menu recording or active menu layout");
+      screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
+      // Stage C draws the repeating HD image, then one pass per map the frame needs (#391: two
+      // to six). Every map pass samples a frame-sized map clamped and unfiltered, which the live
+      // path's foreground quads need not do.
+      bool stage_c_map_passes = screen_recorder.draws.size() >= 2 &&
+                                screen_recorder.draws.size() <= 7 &&
+                                screen_recorder.draws[0].state.address_u == 1;
+      for (size_t draw = 1; draw < screen_recorder.draws.size(); ++draw) {
+        const auto& state = screen_recorder.draws[draw].state;
+        if (state.address_u != 3 || state.filter != platform::TextureFilter::kNearest)
+          stage_c_map_passes = false;
+      }
+      require(stage_c_map_passes && !shape.menu_layout_active,
+              "MW3_MENU_GPU=0 did not keep the legacy Stage C menu background composition");
+
+      for (const char* off_value : {"off", "false", "no", "OFF", "False"}) {
+        env_guard.set(off_value);
+        draw_full_menu_frame();
+        require(!zrndr::draw_observer() && !shape.menu_layout_active,
+                "An explicit MW3_MENU_GPU off value enabled live menu recording or menu layout");
+        screen.cancel_menu_observation();
+      }
+
+      // An unrecognised value does not count as "off": only an explicit off value disables it.
+      env_guard.set("invalid");
+      draw_full_menu_frame();
+      require(shape.menu_layout_active,
+              "An unrecognised MW3_MENU_GPU value turned the default live GPU menu off");
+      screen.cancel_menu_observation();
+
+      // Live GPU menu replay and the shared menu layout are the default (MW3_MENU_GPU unset).
+      env_guard.set(nullptr);
+      draw_full_menu_frame();
+      require(shape.menu_layout_active,
+              "Unset MW3_MENU_GPU did not mark shared FrameShape::menu_layout_active by default");
+      // finish_menu_observation sealed the command list without drawing before present_16 clear.
+      require(screen_recorder.draws.empty(),
+              "finish_menu_observation drew before present_16 cleared the frame");
+      screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
+      // Draw 0 must be the HD background quad (texture 0, linear filter, repeat address mode),
+      // followed by the ordered foreground primitives (> 1 draw total, and NOT the 4-pass
+      // multiply/additive classifier maps).
+      require(screen_recorder.draws.size() > 4 && screen_recorder.draws[0].state.texture == 0 &&
+                  screen_recorder.draws[0].state.filter == platform::TextureFilter::kLinear &&
+                  screen_recorder.draws[0].state.address_u == 1 &&
+                  !screen_recorder.draws[1].state.multiply &&
+                  !screen_recorder.draws[2].state.additive && shape.menu_layout_active,
+              "Live GPU menu did not draw HD background quad followed by ordered foreground quads");
+      // GameEngine::video_flip also calls this after present through its cleanup scope.
+      screen.cancel_menu_observation();
+      require(shape.menu_layout_active,
+              "Engine flip cleanup changed the input transform of the visible menu");
+
+      const unsigned creates_after_live_1 = screen_recorder.creates;
+      const unsigned updates_after_live_1 = screen_recorder.updates;
+      draw_full_menu_frame();
+      screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
+      require(screen_recorder.creates == creates_after_live_1 &&
+                  screen_recorder.updates == updates_after_live_1,
+              "Second identical live GPU menu frame created or updated textures");
+
+      // 3a. Escape hatch MW3_MENU_GPU=0 forces legacy path and clears menu_layout_active;
+      //     MW3_MENU_GPU=1 re-enables live path.
+      env_guard.set("0");
+      draw_full_menu_frame();
+      require(!zrndr::draw_observer() && !shape.menu_layout_active,
+              "MW3_MENU_GPU=0 still attached a live menu draw observer or kept menu_layout_active");
+      screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
+      require(!shape.menu_layout_active,
+              "MW3_MENU_GPU=0 present_16 enabled menu_layout_active");
+      env_guard.set("1");
+      draw_full_menu_frame();
+      screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
+      require(screen_recorder.draws.size() > 4 && !screen_recorder.draws[1].state.multiply &&
+                  shape.menu_layout_active,
+              "MW3_MENU_GPU=1 did not use the live GPU menu replay path");
+
+      // 3a'. The live begin path opts each recorded menu frame into HD menu stage D, so text and
+      //      sprites are drawn from output-scale sources. GpuHud reports that state through
+      //      wants_source_alpha_images(), which is true only while stage D is active.
+      screen.begin_menu_observation(frame_buf.data(), width, height, pitch_bytes);
+      require(zrndr::draw_observer() && zrndr::draw_observer()->wants_source_alpha_images(),
+              "Live GPU menu begin did not opt the frame into HD menu stage D");
+      screen.cancel_menu_observation();
+
+      // 3a''. The game's menus redraw without clearing the canvas, so most live menu frames are
+      //       never recorded. Such a frame must keep the Stage C HD background rather than
+      //       falling back to the bare native canvas.
+      screen_recorder.draws.clear();
+      zrndr::begin_menu_background_frame();
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(frame_buf.data()), width, height, pitch_bytes,
+                           6};
+      zrndr::blit16(&bg_tex, 0, 0, 0, nullptr);
+      screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
+      require(screen_recorder.draws.size() >= 2 &&
+                  screen_recorder.draws[0].state.address_u == 1 &&
+                  screen_recorder.draws[1].state.address_u == 3,
+              "Unrecorded live menu frame lost the Stage C HD background");
+
+      // 3b. Late background blit after a foreground draw is rejected rather than reordered,
+      //     falling back to the complete CPU frame (1 draw) while keeping menu_layout_active.
+      zrndr::begin_menu_background_frame();
+      std::fill(frame_buf.begin(), frame_buf.end(), uint16_t(0));
+      screen.begin_menu_observation(frame_buf.data(), width, height, pitch_bytes);
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(frame_buf.data()), width, height, pitch_bytes,
+                           6};
+      zrndr::blit16(&unkeyed_tex, 1, 1, 0, nullptr);
+      zrndr::blit16(&bg_tex, 0, 0, 0, nullptr);  // late background blit after foreground!
+      screen.finish_menu_observation();
+      screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
+      require(screen_recorder.draws.size() == 1 && shape.menu_layout_active,
+              "Late menu background blit after foreground was reordered instead of falling back");
+      require_current_shadow();
+
+      // 3c. Partial background blit (does not cover full frame) is rejected and falls back cleanly.
+      zrndr::begin_menu_background_frame();
+      std::fill(frame_buf.begin(), frame_buf.end(), uint16_t(0));
+      screen.begin_menu_observation(frame_buf.data(), width, height, pitch_bytes);
+      zrndr::target2d() = {reinterpret_cast<uint8_t*>(frame_buf.data()), width, height, pitch_bytes,
+                           6};
+      zrndr::BlitRect half_rect{0, 0, width / 2, height};
+      zrndr::blit16(&bg_tex, 0, 0, 0, &half_rect);
+      zrndr::blit16(&unkeyed_tex, 1, 1, 0, nullptr);
+      screen.finish_menu_observation();
+      screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
+      require(screen_recorder.draws.size() == 1 && shape.menu_layout_active,
+              "Partial menu background blit did not select safe CPU fallback");
+      require_current_shadow();
+
+      // 3d. Unknown write mid-frame selects complete current CPU frame fallback before drawing.
+      zrndr::begin_menu_background_frame();
+      std::fill(frame_buf.begin(), frame_buf.end(), uint16_t(0));
+      screen.begin_menu_observation(frame_buf.data(), width, height, pitch_bytes);
+      run_primitive_case(0, frame_buf);
+      zrndr::observe_framebuffer_write(frame_buf.data(), "unsupported menu effect");
+      frame_buf[5 * width + 3] = 0x1234;
+      screen.finish_menu_observation();
+      screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
+      require(screen_recorder.draws.size() == 1 && shape.menu_layout_active,
+              "Unknown menu framebuffer write did not fall back to a single CPU frame draw");
+      require_current_shadow();
+      const unsigned fallback_creates = screen_recorder.creates;
+      const unsigned fallback_updates = screen_recorder.updates;
+      zrndr::begin_menu_background_frame();
+      std::fill(frame_buf.begin(), frame_buf.end(), uint16_t(0));
+      screen.begin_menu_observation(frame_buf.data(), width, height, pitch_bytes);
+      run_primitive_case(0, frame_buf);
+      zrndr::observe_framebuffer_write(frame_buf.data(), "unsupported menu effect");
+      frame_buf[5 * width + 3] = 0x1234;
+      screen.finish_menu_observation();
+      screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
+      require_current_shadow();
+      require(screen_recorder.creates == fallback_creates &&
+                  screen_recorder.updates == fallback_updates,
+              "Equal idle CPU fallback frame uploaded another texture");
+
+      // 3e. Lifecycle cancellation: begin_overlay_16 preempts an active menu recording without
+      //     observer competition and resets menu_layout_active, and --cc-menu-background-renderer
+      //     cpu forces CPU composition with menu_layout_active false.
+      zrndr::begin_menu_background_frame();
+      screen.begin_menu_observation(frame_buf.data(), width, height, pitch_bytes);
+      require(zrndr::draw_observer() != nullptr && shape.menu_layout_active,
+              "Live menu recording did not attach observer or set menu_layout_active");
+      screen.begin_overlay_16(frame_buf.data(), width, height, pitch_bytes);
+      require(!shape.menu_layout_active,
+              "begin_overlay_16 did not clear menu_layout_active on mission overlay preemption");
+      screen.cancel_overlay_16();
+      require(zrndr::draw_observer() == nullptr && !shape.menu_layout_active,
+              "Overlay preemption left a dangling draw observer or stale menu_layout_active");
+
+      sdlfe::HudOptions cpu_opts = screen_opts;
+      cpu_opts.menu_background_renderer = "cpu";
+      env_guard.set("1");
+      LiveMenuRecorder cpu_recorder;
+      sdlfe::SdlScreen2D cpu_screen(&cpu_recorder, cpu_opts, nullptr, &shape);
+      zrndr::begin_menu_background_frame();
+      cpu_screen.begin_menu_observation(frame_buf.data(), width, height, pitch_bytes);
+      require(zrndr::draw_observer() == nullptr && !shape.menu_layout_active,
+              "--cc-menu-background-renderer cpu did not disable live GPU menu recording");
+      run_primitive_case(0, frame_buf);
+      cpu_screen.finish_menu_observation();
+      cpu_screen.present_16(frame_buf.data(), width, height, pitch_bytes, true);
+      require(cpu_recorder.draws.size() == 1 && !shape.menu_layout_active,
+              "--cc-menu-background-renderer cpu did not use single-pass CPU composition");
+
+      // 3f. GameEngine + SdlScreen2D frame-boundary integration (no video_clear, repeated
+      //     full redraw+flip, partial foreground/background redraw over persistent canvas,
+      //     empty idle flip, unknown write, recovery on subsequent full redraw, and clean
+      //     engine destructor detach).
+      {
+        env_guard.set("1");
+        zrndr::set_menu_background_source(&bg_tex);
+        LiveMenuRecorder engine_recorder;
+        sdlfe::FrameShape engine_shape;
+        engine_shape.fit = true;
+        engine_shape.frame_w = width;
+        engine_shape.frame_h = height;
+        sdlfe::SdlScreen2D engine_screen(&engine_recorder, screen_opts, nullptr, &engine_shape);
+
+        auto draw_engine_primitives = [&](int kind, mech3::GameEngine& engine) {
+          uint16_t* const target_pixels = engine.buffer16();
+          require(target_pixels != nullptr &&
+                      zrndr::target2d().base == reinterpret_cast<uint8_t*>(target_pixels) &&
+                      int(zrndr::target2d().width) == width &&
+                      int(zrndr::target2d().height) == height &&
+                      int(zrndr::target2d().pitch) == pitch_bytes,
+                  "GameEngine::video_lock did not bind zrndr::target2d to engine.buffer16()");
+          zrndr::BlitRect q0{0, 0, 8, 6}, q1{8, 0, 16, 6}, q2{0, 6, 8, 12}, q3{8, 6, 16, 12};
+          zrndr::blit16(&bg_tex, 0, 0, 0, &q0);
+          zrndr::blit16(&bg_tex, 8, 0, 0, &q1);
+          zrndr::blit16(&bg_tex, 0, 6, 0, &q2);
+          zrndr::blit16(&bg_tex, 8, 6, 0, &q3);
+          if (kind == 0 || kind == 6) {
+            zrndr::blit16(&unkeyed_tex, 1, 1, 0, nullptr);
+            zrndr::blit16(&keyed_tex, 4, 1, 0x0000, nullptr);
+            zrndr::blit16(&pal_tex, 7, 1, 1, nullptr);
+          }
+          if (kind == 1 || kind == 6) {
+            zrndr::blit16(&alpha_tex, 10, 1, 0, nullptr);
+          }
+          if (kind == 2 || kind == 6) {
+            zrndr::line16(1, 4, 6, 4, 0xf81f);
+            zrndr::line16(2, 5, 5, 7, 0xffff);
+          }
+          if (kind == 3 || kind == 6) {
+            zrndr::span_state().dest = zrndr::target2d().base + 6 * pitch_bytes + 8 * 2;
+            zrndr::span_fill16(0xf81f, 4);
+            zrndr::span_state().dest = zrndr::target2d().base + 7 * pitch_bytes + 8 * 2;
+            zrndr::span_fill16(0x07e0, 5);
+          }
+          if (kind == 4 || kind == 6) {
+            zrndr::ripple_state().scratch.assign(size_t(width) * height, 0x0000u);
+            zrndr::ripple(5, 6, 1, 3, 1, 2.0f, 0.5f, nullptr, zrndr::X87::k24);
+            zrndr::finish_machine().mmx = true;
+            zrndr::finish_machine().format = 6;
+            zrndr::tint(0x001f, tint_rect, 0.5, false);
+            zrndr::finish();
+            zrndr::tint_clear();
+          }
+          if (kind == 5 || kind == 6) {
+            ztwod::Cursor cursor(nullptr, 1);
+            cursor.center = 1;
+            cursor.set_cursor_image(&cursor_tex);
+            cursor.set_pos(3, 3);
+            cursor.draw();
+            cursor.erase();
+            cursor.set_pos(12, 9);
+            cursor.draw();
+          }
+        };
+
+        auto require_engine_shadow = [&](mech3::GameEngine& engine, const char* context) {
+          require(engine_recorder.draws.size() == 1, context);
+          const int handle = engine_recorder.draws.front().state.texture;
+          require(handle >= 0, context);
+          const auto& uploaded = engine_recorder.image_records.at(size_t(handle));
+          require(uploaded.width == width && uploaded.height == height, context);
+          const uint16_t* const expected_buf = engine.buffer16();
+          for (size_t index = 0; index < size_t(width) * height; ++index) {
+            const uint32_t pixel = uploaded.pixels[index];
+            const uint16_t native = uint16_t(((pixel & 255) >> 3) << 11 |
+                                             (((pixel >> 8) & 255) >> 2) << 5 |
+                                             (((pixel >> 16) & 255) >> 3));
+            require((pixel >> 24) == 255 && native == expected_buf[index], context);
+          }
+        };
+
+        struct ScreenRectGuard {
+          mech3::Rect saved_display = mech3::display();
+          mech3::Rect saved_render = mech3::render();
+          ScreenRectGuard(int32_t w, int32_t h) {
+            mech3::rect_set_origin(mech3::display(), 0, 0);
+            mech3::rect_set_size(mech3::display(), w, h);
+            mech3::rect_set_origin(mech3::render(), 0, 0);
+            mech3::rect_set_size(mech3::render(), w, h);
+          }
+          ~ScreenRectGuard() {
+            mech3::display() = saved_display;
+            mech3::render() = saved_render;
+          }
+        } screen_rect_guard(width, height);
+
+        {
+          mech3::Platform engine_platform;
+          engine_platform.screen = &engine_screen;
+          engine_platform.render = &engine_recorder;
+          mech3::GameEngine engine(engine_platform, "mech3.exe -nofmv");
+          engine.quiet = true;
+          // Allocate the 16x12 menu canvas via public video_open (never calling video_clear).
+          engine_recorder.flush();
+          engine.video_open(0, 1, 0, 0);
+          require(zrndr::draw_observer() != nullptr &&
+                      zrndr::draw_observer()->wants_source_alpha_images() &&
+                      engine_shape.menu_layout_active,
+                  "GameEngine::video_open did not arm live menu observation and Stage D");
+
+          // Frame 1: full menu redraw + flip WITHOUT video_clear.
+          ztwod::Cursor persistent_cursor(nullptr, 1);
+          persistent_cursor.center = 1;
+          persistent_cursor.set_cursor_image(&cursor_tex);
+
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          draw_engine_primitives(6, engine);
+          persistent_cursor.set_pos(10, 8);
+          persistent_cursor.draw();
+          engine.video_unlock();
+          engine.video_flip(0, 0, 0, 0);
+          require(engine_recorder.draws.size() > 4 &&
+                      engine_recorder.draws[0].state.texture == 0 &&
+                      engine_recorder.draws[0].state.filter == platform::TextureFilter::kLinear &&
+                      engine_recorder.draws[0].state.address_u == 1 &&
+                      !engine_recorder.draws[1].state.multiply &&
+                      !engine_recorder.draws[2].state.additive &&
+                      engine_shape.menu_layout_active,
+                  "Frame 1 without video_clear did not replay live GPU menu draw list");
+          require(zrndr::draw_observer() != nullptr &&
+                      zrndr::draw_observer()->wants_source_alpha_images(),
+                  "GameEngine::video_flip did not re-arm live menu observation and Stage D for frame 2");
+
+          // Frame 2: repeated identical full redraw + flip without video_clear must engage live
+          // GPU replay with zero texture creates or updates.
+          const unsigned creates_after_f1 = engine_recorder.creates;
+          const unsigned updates_after_f1 = engine_recorder.updates;
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          persistent_cursor.erase();
+          require(zrndr::draw_observer() != nullptr &&
+                      zrndr::draw_observer()->wants_source_alpha_images(),
+                  "Prefix cursor erase disarmed live menu observation");
+          draw_engine_primitives(6, engine);
+          persistent_cursor.draw();
+          engine.video_unlock();
+          engine.video_flip(0, 0, 0, 0);
+          require(engine_recorder.draws.size() > 4 &&
+                      engine_recorder.draws[0].state.texture == 0 &&
+                      !engine_recorder.draws[1].state.multiply &&
+                      engine_shape.menu_layout_active,
+                  "Frame 2 without video_clear did not replay live GPU menu draw list");
+          require(engine_recorder.creates == creates_after_f1 &&
+                      engine_recorder.updates == updates_after_f1,
+                  "Repeated unchanged full menu redraw caused per-frame texture churn");
+
+          // Frame 3: partial foreground-only redraw over the persistent canvas (no background redraw,
+          // no video_clear). Must NOT replay only the partial sprite over a blank/background-only
+          // frame; must present the exact complete current CPU shadow (retaining prior pixels plus
+          // the new sprite).
+          const uint16_t retained_corner = engine.buffer16()[size_t(height - 1) * width + (width - 1)];
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          persistent_cursor.erase();
+          zrndr::blit16(&unkeyed_tex, 2, 2, 0, nullptr);
+          engine.video_unlock();
+          require(engine.buffer16()[2 * width + 2] == unkeyed_px[0] &&
+                      engine.buffer16()[size_t(height - 1) * width + (width - 1)] == retained_corner,
+                  "Persistent engine canvas lost retained pixels during partial foreground redraw");
+          engine.video_flip(0, 0, 0, 0);
+          require_engine_shadow(
+              engine,
+              "Partial foreground menu redraw did not present the complete current CPU shadow");
+
+          // Frame 4: partial background redraw (only left half of background + foreground sprite)
+          // over the persistent canvas must also fall back to the exact complete current CPU shadow.
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          zrndr::BlitRect left_half{0, 0, width / 2, height};
+          zrndr::blit16(&bg_tex, 0, 0, 0, &left_half);
+          zrndr::blit16(&keyed_tex, 3, 2, 0x0000, nullptr);
+          engine.video_unlock();
+          engine.video_flip(0, 0, 0, 0);
+          require_engine_shadow(
+              engine,
+              "Partial background menu redraw did not present the complete current CPU shadow");
+
+          // Frame 5: empty idle flip (no draws at all between flips) must present the complete
+          // current CPU shadow with zero texture creates or updates.
+          const unsigned creates_after_f4 = engine_recorder.creates;
+          const unsigned updates_after_f4 = engine_recorder.updates;
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          engine.video_unlock();
+          engine.video_flip(0, 0, 0, 0);
+          require_engine_shadow(
+              engine,
+              "Empty idle menu flip did not present the complete current CPU shadow");
+          require(engine_recorder.creates == creates_after_f4 &&
+                      engine_recorder.updates == updates_after_f4,
+                  "Empty idle menu flip caused texture churn on unchanged CPU shadow");
+
+          // Frame 6: unknown framebuffer write mid-frame falls back to complete current CPU shadow.
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          draw_engine_primitives(0, engine);
+          zrndr::observe_framebuffer_write(engine.buffer16(), "unsupported menu effect");
+          engine.buffer16()[5 * width + 3] = 0x1234;
+          engine.video_unlock();
+          engine.video_flip(0, 0, 0, 0);
+          require_engine_shadow(
+              engine,
+              "Unknown framebuffer write in GameEngine menu frame did not present complete CPU shadow");
+
+          // Frame 7: subsequent full redraw without video_clear recovers live GPU replay and Stage D
+          // immediately without creating or updating cached foreground textures.
+          const unsigned creates_before_recovery = engine_recorder.creates;
+          const unsigned updates_before_recovery = engine_recorder.updates;
+          engine_recorder.draws.clear();
+          engine.video_lock();
+          require(zrndr::draw_observer() != nullptr &&
+                      zrndr::draw_observer()->wants_source_alpha_images(),
+                  "Recovery frame was not armed with live menu observer and Stage D");
+          draw_engine_primitives(6, engine);
+          engine.video_unlock();
+          engine.video_flip(0, 0, 0, 0);
+          require(engine_recorder.draws.size() > 4 &&
+                      engine_recorder.draws[0].state.texture == 0 &&
+                      engine_recorder.draws[0].state.filter == platform::TextureFilter::kLinear &&
+                      engine_recorder.draws[0].state.address_u == 1 &&
+                      !engine_recorder.draws[1].state.multiply &&
+                      !engine_recorder.draws[2].state.additive &&
+                      engine_shape.menu_layout_active,
+                  "Full menu redraw after partial/fallback frames did not recover live GPU replay");
+          require(engine_recorder.creates == creates_before_recovery &&
+                      engine_recorder.updates == updates_before_recovery,
+                  "Recovered full menu redraw churned already-cached GPU textures");
+          require(zrndr::draw_observer() != nullptr,
+                  "Post-flip boundary before engine destruction did not have active observer");
+        }
+        require(zrndr::draw_observer() == nullptr,
+                "GameEngine destructor left a dangling global zrndr draw observer");
+      }
+
+      env_guard.set(nullptr);
+      zrndr::set_menu_background_source(nullptr);
+    }
+  }
+
+  // 4. Uniform centered 4:3 menu layout (square native pixels anchored at centered 640x480
+  //    dialog_origin) and shared SdlInput / SdlZinHost / SdlScreen2D policy across 640x480 and
+  //    wide 1147x480 native menu canvases, resizes, fit=false, mission transitions, env=0/unset/cpu,
+  //    and unknown-write native fallback.
+  {
+    struct LayoutCase {
+      int frame_w, frame_h;
+      int canvas_w, canvas_h;
+      int win_w, win_h;
+      bool fit;
+      float expected_dialog_x, expected_dialog_y, expected_dialog_w, expected_dialog_h;
+    };
+    const LayoutCase cases[] = {
+        {640, 480, 0, 0, 1280, 960, true, 0.f, 0.f, 1280.f, 960.f},
+        {640, 480, 0, 0, 1920, 1080, true, 240.f, 0.f, 1440.f, 1080.f},
+        {640, 480, 0, 0, 3440, 1440, true, 760.f, 0.f, 1920.f, 1440.f},
+        {3440, 1440, 1147, 480, 3440, 1440, true, 760.f, 0.f, 1920.f, 1440.f},
+        {3440, 1440, 1147, 480, 1920, 1080, true, 240.f, 0.f, 1440.f, 1080.f},
+        {1147, 480, 0, 0, 3440, 1440, true, 760.f, 0.f, 1920.f, 1440.f},
+        {3440, 1440, 1147, 480, 3440, 1440, false, 760.f, 0.f, 1920.f, 1440.f},
+    };
+    for (const auto& lc : cases) {
+      sdlfe::FrameShape shape;
+      shape.frame_w = lc.frame_w;
+      shape.frame_h = lc.frame_h;
+      shape.canvas_w = lc.canvas_w;
+      shape.canvas_h = lc.canvas_h;
+      shape.fit = lc.fit;
+      shape.menu_layout_active = true;
+
+      const int client_width = shape.client_w();
+      const int client_height = shape.client_h();
+      const int dialog_width =
+          client_width < sdlfe::kMenuLogicalWidth ? client_width : sdlfe::kMenuLogicalWidth;
+      const int dialog_height =
+          client_height < sdlfe::kMenuLogicalHeight ? client_height : sdlfe::kMenuLogicalHeight;
+      const int dialog_origin_x = (client_width - dialog_width) / 2;
+      const int dialog_origin_y = (client_height - dialog_height) / 2;
+      const float expected_scale = lc.expected_dialog_w / float(dialog_width);
+
+      const auto menu_fit = sdlfe::menu_fit_rect(float(lc.win_w), float(lc.win_h), shape);
+      require(std::fabs(menu_fit.x - (lc.expected_dialog_x - float(dialog_origin_x) * expected_scale)) <
+                      1e-4f &&
+                  std::fabs(menu_fit.y - (lc.expected_dialog_y - float(dialog_origin_y) * expected_scale)) <
+                      1e-4f &&
+                  std::fabs(menu_fit.w - float(client_width) * expected_scale) < 1e-4f &&
+                  std::fabs(menu_fit.h - float(client_height) * expected_scale) < 1e-4f,
+              "menu_fit_rect did not expand full canvas uniformly around centered 4:3 dialog_origin");
+
+      // One native pixel horizontally and vertically must have the exact same output scale.
+      const float scale_x = menu_fit.w / float(client_width);
+      const float scale_y = menu_fit.h / float(client_height);
+      require(std::fabs(scale_x - scale_y) < 1e-5f &&
+                  std::fabs(scale_x - expected_scale) < 1e-5f,
+              "menu_fit_rect horizontal and vertical native pixel scales were not uniform");
+
+      // Central 640x480 dialog origin and opposite corner map to the expected centered 4:3 window rect.
+      float dialog_wx0 = 0.f, dialog_wy0 = 0.f, dialog_wx1 = 0.f, dialog_wy1 = 0.f;
+      sdlfe::menu_frame_to_window(float(dialog_origin_x), float(dialog_origin_y), float(lc.win_w),
+                                  float(lc.win_h), shape, &dialog_wx0, &dialog_wy0);
+      sdlfe::menu_frame_to_window(float(dialog_origin_x + dialog_width),
+                                  float(dialog_origin_y + dialog_height), float(lc.win_w),
+                                  float(lc.win_h), shape, &dialog_wx1, &dialog_wy1);
+      require(std::fabs(dialog_wx0 - lc.expected_dialog_x) < 1e-4f &&
+                  std::fabs(dialog_wy0 - lc.expected_dialog_y) < 1e-4f &&
+                  std::fabs(dialog_wx1 - (lc.expected_dialog_x + lc.expected_dialog_w)) < 1e-4f &&
+                  std::fabs(dialog_wy1 - (lc.expected_dialog_y + lc.expected_dialog_h)) < 1e-4f,
+              "Centered 640x480 dialog bounds did not map to centered 4:3 window rectangle");
+
+      int cur_win_w = lc.win_w, cur_win_h = lc.win_h;
+      bool in_mission_state = false;
+      sdlfe::SdlInput input;
+      input.shape = &shape;
+      input.window_size = [&](int* w, int* h) {
+        *w = cur_win_w;
+        *h = cur_win_h;
+      };
+      input.in_mission = [&]() { return in_mission_state; };
+      sdlfe::SdlZinHost zin_host(&input, client_width, client_height);
+
+      int32_t cw = 0, ch = 0;
+      zin_host.client_size(&cw, &ch);
+      require(cw == client_width && ch == client_height,
+              "Menu SdlZinHost changed original game client_size coordinates");
+
+      // Central dialog_origin in canvas maps to top-left of centered 4:3 rect in window.
+      int32_t sx = dialog_origin_x, sy = dialog_origin_y;
+      zin_host.client_to_screen(&sx, &sy);
+      require(sx == int32_t(std::lround(lc.expected_dialog_x)) &&
+                  sy == int32_t(std::lround(lc.expected_dialog_y)),
+              "Menu client_to_screen did not map dialog_origin to centered 4:3 origin");
+
+      // Points across the entire native canvas (including wide 1147x480 corners that extend past
+      // the 4:3 dialog and central dialog points) roundtrip through client_to_screen -> screen_to_client.
+      for (int32_t cx :
+           {0, dialog_origin_x, client_width / 2, dialog_origin_x + dialog_width - 1, client_width - 1}) {
+        for (int32_t cy :
+             {0, dialog_origin_y, client_height / 2, dialog_origin_y + dialog_height - 1, client_height - 1}) {
+          int32_t wx = cx, wy = cy;
+          zin_host.client_to_screen(&wx, &wy);
+          if (cx >= dialog_origin_x && cx < dialog_origin_x + dialog_width &&
+              cy >= dialog_origin_y && cy < dialog_origin_y + dialog_height) {
+            require(wx >= int32_t(lc.expected_dialog_x) &&
+                        wx <= int32_t(lc.expected_dialog_x + lc.expected_dialog_w) &&
+                        wy >= int32_t(lc.expected_dialog_y) &&
+                        wy <= int32_t(lc.expected_dialog_y + lc.expected_dialog_h),
+                    "Central 640x480 dialog coordinate mapped outside centered 4:3 window area");
+          }
+          int32_t rx = wx, ry = wy;
+          zin_host.screen_to_client(&rx, &ry);
+          require(std::abs(rx - cx) <= 1 && std::abs(ry - cy) <= 1,
+                  "Menu client_to_screen / screen_to_client roundtrip drifted by > 1 canvas pixel");
+        }
+      }
+
+      // Relative mouse motion scale in menu matches uniform 1 / expected_scale (640 / expected_dialog_w).
+      const float expected_mickey = float(dialog_width) / lc.expected_dialog_w;
+      require(std::fabs(input.motion_scale() - expected_mickey) < 1e-5f,
+              "Menu SdlInput::motion_scale did not use uniform 4:3 pixel scale");
+
+      // Dynamic window resize updates menu input mapping immediately.
+      cur_win_w = 1920;
+      cur_win_h = 1080;
+      int32_t resized_x = dialog_origin_x, resized_y = dialog_origin_y;
+      zin_host.client_to_screen(&resized_x, &resized_y);
+      require(resized_x == 240 && resized_y == 0,
+              "Menu input transform did not track window resize to 1920x1080");
+
+      // When menu_layout_active is false (env=0/unset/cpu/diagnostic), SdlInput and SdlZinHost
+      // use the raw world shape without applying menu_frame_shape.
+      cur_win_w = lc.win_w;
+      cur_win_h = lc.win_h;
+      shape.menu_layout_active = false;
+      if (lc.frame_w == 3440 && lc.frame_h == 1440 && lc.win_w == 3440 && lc.win_h == 1440) {
+        int32_t raw_x = dialog_origin_x, raw_y = dialog_origin_y;
+        zin_host.client_to_screen(&raw_x, &raw_y);
+        const int32_t expected_raw_x =
+            lc.fit ? int32_t(std::lround(float(dialog_origin_x) * 3440.f / float(client_width)))
+                   : dialog_origin_x * 3440 / client_width;
+        require(raw_x == expected_raw_x &&
+                    std::fabs(input.motion_scale() - float(client_width) / 3440.f) < 1e-5f,
+                "Disabled menu_layout_active still applied 4:3 menu input transform");
+      }
+
+      // Switching to in-mission restores the full ultrawide frame even when menu_layout_active is true.
+      shape.menu_layout_active = true;
+      in_mission_state = true;
+      if (lc.frame_w == 3440 && lc.frame_h == 1440 && lc.win_w == 3440 && lc.win_h == 1440 && lc.fit) {
+        int32_t mx = 0, my = 0;
+        zin_host.client_to_screen(&mx, &my);
+        require(mx == 0 && my == 0 &&
+                    std::fabs(input.motion_scale() - float(client_width) / 3440.f) < 1e-5f,
+                "Menu 4:3 transform leaked into in-mission ultrawide input mapping");
+      }
+    }
+
+    // 4b. Paired presentation & input agreement on unknown-write native CPU fallback (no HD background
+    //     required) when MW3_MENU_GPU=1 vs MW3_MENU_GPU=0, plus destructor cleanup.
+    {
+      constexpr int canvas_w = 1147, canvas_h = 480, pitch_bytes = canvas_w * 2;
+      std::vector<uint16_t> wide_frame(size_t(canvas_w) * canvas_h, uint16_t(0x07e0));
+      sdlfe::FrameShape shared_shape;
+      shared_shape.frame_w = 3440;
+      shared_shape.frame_h = 1440;
+      shared_shape.canvas_w = canvas_w;
+      shared_shape.canvas_h = canvas_h;
+      shared_shape.fit = true;
+
+      sdlfe::SdlInput input;
+      input.shape = &shared_shape;
+      input.window_size = [](int* w, int* h) {
+        *w = 3440;
+        *h = 1440;
+      };
+      input.in_mission = []() { return false; };
+      sdlfe::SdlZinHost zin_host(&input, canvas_w, canvas_h);
+
+      sdlfe::HudOptions native_opts;
+      native_opts.mode = "core-critical";
+      native_opts.text = false;
+      LiveMenuRecorder fallback_recorder;
+      {
+        sdlfe::SdlScreen2D screen(&fallback_recorder, native_opts, nullptr, &shared_shape);
+
+        // With MW3_MENU_GPU=1, force an unknown-write native fallback on a 1147x480 menu canvas.
+        // Screen presentation and SdlInput must both stay on the uniform menu transform.
+        env_guard.set("1");
+        screen.begin_menu_observation(wide_frame.data(), canvas_w, canvas_h, pitch_bytes);
+        require(shared_shape.menu_layout_active,
+                "begin_menu_observation did not activate shared menu_layout_active");
+        zrndr::target2d() = {reinterpret_cast<uint8_t*>(wide_frame.data()), canvas_w, canvas_h,
+                             pitch_bytes, 6};
+        zrndr::observe_framebuffer_write(wide_frame.data(), "wide menu native fallback");
+        screen.finish_menu_observation();
+        screen.present_16(wide_frame.data(), canvas_w, canvas_h, pitch_bytes, true);
+        require(fallback_recorder.draws.size() == 1 && shared_shape.menu_layout_active,
+                "Unknown-write native fallback under MW3_MENU_GPU=1 lost shared menu_layout_active");
+        const auto& fallback_quad = fallback_recorder.draws[0].vertices;
+        const auto expected_fit =
+            sdlfe::menu_fit_rect(float(canvas_w), float(canvas_h), shared_shape, canvas_w, canvas_h);
+        require(std::fabs(fallback_quad[0].sx - expected_fit.x) < 1e-3f &&
+                    std::fabs(fallback_quad[0].sy - expected_fit.y) < 1e-3f &&
+                    std::fabs(fallback_quad[2].sx - (expected_fit.x + expected_fit.w)) < 1e-3f &&
+                    std::fabs(fallback_quad[2].sy - (expected_fit.y + expected_fit.h)) < 1e-3f,
+                "Native CPU fallback under MW3_MENU_GPU=1 did not draw into the uniform menu canvas rect");
+        int32_t dialog_x = (canvas_w - 640) / 2, dialog_y = 0;
+        zin_host.client_to_screen(&dialog_x, &dialog_y);
+        require(dialog_x == 760 && dialog_y == 0,
+                "Input mapping disagreed with uniform menu presentation after native CPU fallback");
+
+        // With MW3_MENU_GPU=0, both presentation and input revert to the legacy world shape.
+        env_guard.set("0");
+        screen.begin_menu_observation(wide_frame.data(), canvas_w, canvas_h, pitch_bytes);
+        require(!shared_shape.menu_layout_active,
+                "MW3_MENU_GPU=0 did not clear shared menu_layout_active");
+        screen.finish_menu_observation();
+        screen.present_16(wide_frame.data(), canvas_w, canvas_h, pitch_bytes, true);
+        require(fallback_recorder.draws.size() == 1 && !shared_shape.menu_layout_active,
+                "MW3_MENU_GPU=0 native presentation kept menu_layout_active");
+        const auto& legacy_quad = fallback_recorder.draws[0].vertices;
+        require(legacy_quad[0].sx == 0.f && legacy_quad[0].sy == 0.f &&
+                    legacy_quad[2].sx == float(canvas_w) && legacy_quad[2].sy == float(canvas_h),
+                "MW3_MENU_GPU=0 native presentation changed legacy full-viewport quad");
+        int32_t legacy_x = (canvas_w - 640) / 2, legacy_y = 0;
+        zin_host.client_to_screen(&legacy_x, &legacy_y);
+        require(legacy_x == int32_t(std::lround(float((canvas_w - 640) / 2) * 3440.f / float(canvas_w))),
+                "MW3_MENU_GPU=0 input did not match legacy world-shape mapping");
+
+        // During a mission the live GPU menu is on by default but must not apply: the engine
+        // still arms menu recording at every flip, and a 2D-only frame presented then must use
+        // the mission's frame shape, as SdlInput does.
+        bool mission_running = false;
+        input.in_mission = [&mission_running] { return mission_running; };
+        screen.in_mission = [&mission_running] { return mission_running; };
+        env_guard.set(nullptr);
+        screen.begin_menu_observation(wide_frame.data(), canvas_w, canvas_h, pitch_bytes);
+        screen.finish_menu_observation();
+        screen.present_16(wide_frame.data(), canvas_w, canvas_h, pitch_bytes, true);
+        require(shared_shape.menu_layout_active,
+                "Menu before the mission did not use the default live menu layout");
+        mission_running = true;
+        screen.begin_menu_observation(wide_frame.data(), canvas_w, canvas_h, pitch_bytes);
+        require(!zrndr::draw_observer() && !shared_shape.menu_layout_active,
+                "Menu recording or the menu layout stayed armed during a mission");
+        screen.finish_menu_observation();
+        screen.present_16(wide_frame.data(), canvas_w, canvas_h, pitch_bytes, true);
+        const auto& mission_quad = fallback_recorder.draws[0].vertices;
+        require(fallback_recorder.draws.size() == 1 && !shared_shape.menu_layout_active &&
+                    mission_quad[0].sx == 0.f && mission_quad[0].sy == 0.f &&
+                    mission_quad[2].sx == float(canvas_w) && mission_quad[2].sy == float(canvas_h),
+                "A 2D frame presented during a mission did not use the mission frame shape");
+        int32_t mission_x = (canvas_w - 640) / 2, mission_y = 0;
+        zin_host.client_to_screen(&mission_x, &mission_y);
+        require(mission_x == legacy_x,
+                "Input during a mission disagreed with the mission-shape presentation");
+        mission_running = false;
+        input.in_mission = []() { return false; };
+        screen.in_mission = nullptr;
+
+        // Re-activate before destruction to verify ~SdlScreen2D clears stale menu_layout_active.
+        env_guard.set("1");
+        screen.begin_menu_observation(wide_frame.data(), canvas_w, canvas_h, pitch_bytes);
+        require(shared_shape.menu_layout_active, "Menu layout did not re-activate before destruction");
+      }
+      require(!shared_shape.menu_layout_active,
+              "SdlScreen2D destructor left stale menu_layout_active on shared FrameShape");
+      env_guard.set(nullptr);
+    }
+  }
+}
 }  // namespace
 int main(int argc, char** argv) {
   const auto directory =
@@ -1664,6 +2754,7 @@ int main(int argc, char** argv) {
     menu_background_checks(directory);
     observation_checks();
     stage_b_primitive_checks(directory);
+    part1_live_menu_checks(directory);
     if (argc == 3 && std::string(argv[1]) == "--fonts")
       text_checks(argv[2]);
     else

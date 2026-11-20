@@ -518,12 +518,19 @@ void SdlInput::heal(const char* by, bool key) {
 // size, as DDrawCompat's default (MouseSensitivity=desktop) moves the
 // original's on Windows 11. Before, a held mouse's raw count was a whole
 // 640-wide pixel: six screen pixels at 3840 across.
+FrameShape SdlInput::effective_shape() const {
+  if (!shape) return {};
+  if (shape->menu_layout_active && !(in_mission && in_mission())) return menu_frame_shape(*shape);
+  return *shape;
+}
+
 float SdlInput::motion_scale() const {
   int w = 0, h = 0;
   if (window_size) window_size(&w, &h);
   else if (window) SDL_GetWindowSize(window, &w, &h);
   if (w <= 0 || h <= 0) return mickey_scale;
-  return shape ? sdlfe::mickey_scale(static_cast<float>(w), static_cast<float>(h), *shape) : 640.0f / static_cast<float>(w);
+  return shape ? sdlfe::mickey_scale(static_cast<float>(w), static_cast<float>(h), effective_shape())
+               : 640.0f / static_cast<float>(w);
 }
 
 // An exclusive mouse (DISCL_EXCLUSIVE) held while the window has the focus;
@@ -939,22 +946,26 @@ SDL_Scancode scancode_of(uint32_t dik) {
 
 void SdlZinHost::window_size(int* w, int* h) const {
   *w = fw_, *h = fh_;
-  if (input_ && input_->window) SDL_GetWindowSize(input_->window, w, h);
+  if (input_ && input_->window_size) input_->window_size(w, h);
+  else if (input_ && input_->window) SDL_GetWindowSize(input_->window, w, h);
 }
 // With any_resolution the client area is the frame (the display rect) and the
 // mapping goes through its rect in the window (sdl_fit.h); else the 640x480
 // frame stretched over the window.
 void SdlZinHost::client_size(int32_t* w, int32_t* h) {
   *w = fw_, *h = fh_;
-  if (input_ && input_->fitted()) *w = input_->shape->client_w(), *h = input_->shape->client_h();
+  if (input_ && input_->fitted()) {
+    const FrameShape eff = input_->effective_shape();
+    *w = eff.client_w(), *h = eff.client_h();
+  }
 }
 void SdlZinHost::client_to_screen(int32_t* x, int32_t* y) {
   int w, h;
   window_size(&w, &h);
   if (input_ && input_->fitted()) {
     float wx, wy;
-    frame_to_window(static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(w), static_cast<float>(h),
-                    *input_->shape, &wx, &wy);
+    frame_to_window(static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(w),
+                    static_cast<float>(h), input_->effective_shape(), &wx, &wy);
     *x = static_cast<int32_t>(std::lround(wx)), *y = static_cast<int32_t>(std::lround(wy));
     return;
   }
@@ -965,8 +976,8 @@ void SdlZinHost::screen_to_client(int32_t* x, int32_t* y) {
   window_size(&w, &h);
   if (input_ && input_->fitted() && w > 0 && h > 0) {
     float fx, fy;
-    window_to_frame(static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(w), static_cast<float>(h),
-                    *input_->shape, &fx, &fy);
+    window_to_frame(static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(w),
+                    static_cast<float>(h), input_->effective_shape(), &fx, &fy);
     *x = static_cast<int32_t>(std::floor(fx)), *y = static_cast<int32_t>(std::floor(fy));
     return;
   }
