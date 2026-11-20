@@ -38,6 +38,16 @@ bool node_float(const zrdr::Node* n, float* out) {
 
 Options& options() { return g_options; }
 void set_options_hooks(OptionsHooks* hooks) { g_hooks = hooks ? hooks : &g_default_hooks; }
+
+namespace {
+// The launcher's size for this run and the saved values it replaced (load_options).
+struct LaunchScreen {
+  bool active = false;
+  int32_t vmode = 0, width = 0, height = 0;
+  int32_t saved_vmode = 0, saved_width = 0, saved_height = 0;
+};
+LaunchScreen g_launch_screen;
+}  // namespace
 OptionsHooks& options_hooks() { return *g_hooks; }
 
 // Mech3.exe 1.2 @ 0x0040d4c0
@@ -763,6 +773,16 @@ int32_t load_options(const char* path) {
   g_hooks->controls_set_defaults();
   o.default_cmd_map = zreg::find("DefaultCmdMap");
   zreg::read_all();
+  // FIX (B): the launcher's resolution is the mission's and the menus' frame for this run. Without
+  // this a saved size (the first start's desktop, 3440x1440) won over a 1920x1080 launch, and the
+  // 1920x1080 window showed a 21:9 frame letterboxed inside it.
+  g_launch_screen = {};
+  int32_t launch_width = 0, launch_height = 0;
+  if (zfix::options().any_resolution && g_hooks->launch_screen(&launch_width, &launch_height)) {
+    g_launch_screen = {true, kCustomVMode, launch_width, launch_height,
+                       o.in_game_vmode, o.screen_w, o.screen_h};
+    o.in_game_vmode = kCustomVMode, o.screen_w = launch_width, o.screen_h = launch_height;
+  }
   // FIX (bug): a saved name without its 0 ran past the buffer (fixes.md).
   const std::string ctl(o.active_ctl_cfg, strnlen(o.active_ctl_cfg, sizeof o.active_ctl_cfg));
   g_hooks->controls_load(ctl.c_str());
@@ -773,6 +793,25 @@ int32_t load_options(const char* path) {
   o.window.target = 0;
   if (root) g_hooks->reader_free(root);
   return 1;
+}
+
+void launch_screen_for_save(bool saved) {
+  Options& o = g_options;
+  LaunchScreen& launch = g_launch_screen;
+  if (!launch.active) return;
+  if (saved) {
+    // A different mode or size now is the player's own choice: it is saved, and the launcher's
+    // size no longer applies.
+    if (o.in_game_vmode != launch.vmode || o.screen_w != launch.width ||
+        o.screen_h != launch.height) {
+      launch.active = false;
+      return;
+    }
+    o.in_game_vmode = launch.saved_vmode, o.screen_w = launch.saved_width;
+    o.screen_h = launch.saved_height;
+  } else {
+    o.in_game_vmode = launch.vmode, o.screen_w = launch.width, o.screen_h = launch.height;
+  }
 }
 
 // Mech3.exe 1.2 @ 0x0040cb20, from the app's destructor 0x0047fab0.

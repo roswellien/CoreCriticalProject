@@ -136,6 +136,14 @@ void check_menu_background_gpu(SDL_Window *window, sdlfe::RendererBackend backen
     const auto hd_texture = renderer->create_texture(16, 16,
         reinterpret_cast<const uint8_t*>(hd_rgba.data()), 1);
     require(hd_texture >= 0, "Could not upload synthetic HD menu background");
+    // The real menu art both dims and brightens the background, and its added light can lower
+    // red and blue. Each tint selects different map passes: 2/3 attenuation only, 3/2 one boost,
+    // 7/3 both boosts (gain above 2), each with the same scroll wraps and overlay.
+    struct Tint {
+      int numerator, denominator;
+      bool negative_added_light;
+    };
+    for (const Tint tint : {Tint{2, 3, false}, Tint{3, 2, true}, Tint{7, 3, true}}) {
     for (bool rgb565 : {true, false}) {
       for (int offset : {0, 7}) {
         constexpr int stride = 10;
@@ -144,23 +152,32 @@ void check_menu_background_gpu(SDL_Window *window, sdlfe::RendererBackend backen
         const auto packed = [rgb565](int red, int green, int blue) {
           return uint16_t((red << (rgb565 ? 11 : 10)) | (green << 5) | blue);
         };
+        // Brightened tints start darker so the tinted codes stay inside 5 (or 6) bits.
+        const bool brighten = tint.numerator > tint.denominator;
+        const int base_red = brighten ? 6 : 12, base_blue = brighten ? 6 : 12;
+        const int base_green = brighten ? (rgb565 ? 12 : 6) : 20;
         for (int y = 0; y < 8; ++y)
           for (int x = 0; x < 8; ++x)
-            source_pixels[size_t(y) * stride + x] = packed(12 + x % 2, 20 + y % 3, 12 + y % 2);
+            source_pixels[size_t(y) * stride + x] =
+                packed(base_red + x % 2, base_green + y % 3, base_blue + y % 2);
         const int offset_y = offset ? 6 : 0;
         for (int y = 0; y < 8; ++y) {
           for (int x = 0; x < 8; ++x) {
             const int sx = (x + offset) % 8, sy = (y + offset_y) % 8;
-            frame[size_t(y) * stride + x] = packed((12 + sx % 2) * 2 / 3,
-                (20 + sy % 3) * 2 / 3, (12 + sy % 2) * 2 / 3);
+            frame[size_t(y) * stride + x] =
+                packed((base_red + sx % 2) * tint.numerator / tint.denominator,
+                       (base_green + sy % 3) * tint.numerator / tint.denominator,
+                       (base_blue + sy % 2) * tint.numerator / tint.denominator);
           }
         }
         frame[0] = source_pixels[size_t(offset_y) * stride + offset];
-        // Red/blue are unchanged; a large green delta must be kind 2 rather
-        // than a uniformly tinted kind 1 pixel. This also exercises saturation.
+        // A large green delta must be kind 2 rather than a uniformly tinted kind 1 pixel. This
+        // also exercises saturation. With negative added light red and blue drop one code
+        // (8.2 of 255, inside the classifier's -10 limit), which needs the subtract pass.
         const int glow_x = (1 + offset) % 8, glow_y = (1 + offset_y) % 8;
-        frame[stride + 1] = packed(12 + glow_x % 2,
-            20 + glow_y % 3 + (rgb565 ? 24 : 10), 12 + glow_y % 2);
+        const int glow_drop = tint.negative_added_light ? 1 : 0;
+        frame[stride + 1] = packed(base_red + glow_x % 2 - glow_drop,
+            base_green + glow_y % 3 + (rgb565 ? 24 : 10), base_blue + glow_y % 2 - glow_drop);
         frame[7 * stride + 7] = packed(31, 0, 31);
         zimg::Texture source{};
         source.width = source.height = 8;
@@ -179,11 +196,15 @@ void check_menu_background_gpu(SDL_Window *window, sdlfe::RendererBackend backen
                                      rgb565, &layers) &&
                     layers.status == platform::MenuBackgroundGpuStatus::kReady,
                 "Synthetic GPU menu gain/glow/wrap fixture selected the fallback");
-        std::array<int32_t, 3> maps{};
-        const std::vector<uint32_t>* pixels[] = {&layers.gain, &layers.added, &layers.overlay};
-        for (size_t index = 0; index < maps.size(); ++index) {
+        require(layers.used[platform::kMenuGpuBoost] == brighten &&
+                    layers.used[platform::kMenuGpuBoostHigh] == (tint.numerator > 2 * tint.denominator) &&
+                    layers.used[platform::kMenuGpuSubtract] == tint.negative_added_light,
+                "Synthetic GPU menu tint did not select the expected gain and added-light passes");
+        sdlfe::MenuBackgroundGpuTextures maps{-1, -1, -1, -1, -1, -1};
+        for (unsigned index = 0; index < platform::kMenuGpuMapCount; ++index) {
+          if (!layers.used[index]) continue;
           maps[index] = renderer->create_texture(8, 8,
-              reinterpret_cast<const uint8_t*>(pixels[index]->data()), 1);
+              reinterpret_cast<const uint8_t*>(layers.maps[index].data()), 1);
           require(maps[index] >= 0, "Could not upload synthetic menu maps");
         }
         renderer->clear(true, 0, 0, 0);
@@ -206,7 +227,7 @@ void check_menu_background_gpu(SDL_Window *window, sdlfe::RendererBackend backen
             require(std::abs(int((gpu[at] >> shift) & 255u) - int((expected >> shift) & 255u)) <= 4,
                     "GPU/CPU menu pixel mismatch (gain, glow, native overlay or scroll wrap)");
         }
-        if (size[0] == 31 && rgb565 && offset == 7) {
+        if (size[0] == 31 && rgb565 && offset == 7 && !brighten) {
           auto flat_image = image;
           const std::vector<uint32_t> flat_rgba(256, 0xff208040u);
           for (size_t at = 0; at < 256; ++at) {
@@ -245,8 +266,10 @@ void check_menu_background_gpu(SDL_Window *window, sdlfe::RendererBackend backen
           }
           renderer->release_texture(flat_texture);
         }
-        for (int32_t map : maps) renderer->release_texture(map);
+        for (int32_t map : maps)
+          if (map >= 0) renderer->release_texture(map);
       }
+    }
     }
     renderer->release_texture(hd_texture);
   }

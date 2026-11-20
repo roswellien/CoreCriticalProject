@@ -11822,6 +11822,85 @@ TEST(settings_first_start_plays_at_the_desktop_size) {
   mech3::options() = mech3::Options{};
 }
 
+// FIX (B), resolution.md (the launcher's size): the launcher passes its resolution as --window
+// WxH. That size is this run's frame even over a saved desktop size (the owner's 3440x1440,
+// saved by an earlier first start, showed a 21:9 menu inside a 1920x1080 window), and it is
+// not written back, so the saved choice is still there for a launch without a size. A size
+// the player picks in the game during the run is saved as usual.
+TEST(settings_launcher_size_wins_for_the_run_and_is_not_saved) {
+  struct Launch : mech3::OptionsHooks {
+    int32_t w = 0, h = 0;
+    bool launch_screen(int32_t* ow, int32_t* oh) override {
+      if (w <= 0) return false;
+      *ow = w, *oh = h;
+      return true;
+    }
+  } launch;
+  const bool keep_fix = zfix::options().any_resolution;
+  zfix::options().any_resolution = true;
+  const std::string path = temp_dir("launch_size") + "/settings.reg";
+  auto start = [&](const char* saved, int32_t w, int32_t h) {
+    if (saved) {
+      std::FILE* f = std::fopen(path.c_str(), "wb");
+      std::fprintf(f, "Windows Registry Editor Version 5.00\r\n\r\n"
+                      "[HKEY_CURRENT_USER\\Software\\MicroProse\\MechWarrior 3\\1.0]\r\n%s", saved);
+      std::fclose(f);
+    }
+    auto reg = std::make_unique<platform::RegFile>(path);
+    zreg::Machine m;
+    zreg::init("MicroProse", "MechWarrior 3", "1.0", m, 0x101);
+    zreg::set_settings(reg.get());
+    launch.w = w, launch.h = h;
+    mech3::set_options_hooks(&launch);
+    mech3::options() = mech3::Options{};
+    EXPECT(mech3::load_options(nullptr) == 1);
+    return reg;
+  };
+  auto finish = [&]() {
+    mech3::set_options_hooks(nullptr);
+    zreg::set_settings(nullptr);
+    zreg::shutdown();
+  };
+  const char* saved_desktop =
+      "\"InGameVMode\"=dword:00000010\r\n\"ScreenWidth\"=dword:00000d70\r\n"
+      "\"ScreenHeight\"=dword:000005a0\r\n";
+  {
+    auto reg = start(saved_desktop, 1920, 1080);
+    const mech3::Options o = mech3::options();
+    EXPECT(o.in_game_vmode == mech3::kCustomVMode && o.screen_w == 1920 && o.screen_h == 1080);
+    int32_t w = 0, h = 0, cw = 0, ch = 0;
+    EXPECT(mech3::vmode_size(16, &w, &h) && w == 1920 && h == 1080);
+    EXPECT(mech3::vmode_canvas(16, &cw, &ch) && cw == 853 && ch == 480);  // 16:9, not 21:9
+    mech3::launch_screen_for_save(true);
+    EXPECT(zreg::write_all() == 1);
+    mech3::launch_screen_for_save(false);
+    EXPECT(mech3::options().screen_w == 1920);  // the run keeps the launcher's size
+    finish();
+  }
+  {
+    auto reg = start(nullptr, 0, 0);  // the next start without a size: the saved desktop size
+    const mech3::Options o = mech3::options();
+    EXPECT(o.in_game_vmode == 16 && o.screen_w == 3440 && o.screen_h == 1440);
+    finish();
+  }
+  {
+    auto reg = start(nullptr, 1920, 1080);  // the player picks 2560x1440 during the run
+    mech3::options().screen_w = 2560, mech3::options().screen_h = 1440;
+    mech3::launch_screen_for_save(true);
+    EXPECT(zreg::write_all() == 1);
+    mech3::launch_screen_for_save(false);
+    EXPECT(mech3::options().screen_w == 2560);
+    finish();
+  }
+  {
+    auto reg = start(nullptr, 0, 0);
+    EXPECT(mech3::options().screen_w == 2560 && mech3::options().screen_h == 1440);
+    finish();
+  }
+  zfix::options().any_resolution = keep_fix;
+  mech3::options() = mech3::Options{};
+}
+
 // c1 mission 1 driven from the keyboard (docs/movement.md): the spawn's step
 // and Core's power-up (0x0041cc30 from resume(7)) leave the Mad Cat powered
 // up; the throttle-up key, held through zInput, walks it forward along the

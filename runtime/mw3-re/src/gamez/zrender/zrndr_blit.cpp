@@ -87,6 +87,7 @@ void begin_menu_background_frame() {
   g_menu_background_draw_seen = false;
   if (g_menu_background_age < 3) ++g_menu_background_age;
 }
+void end_menu_background_frame() { g_menu_background_draw_seen = false; }
 const zimg::Texture* menu_background_source() { return g_menu_background; }
 const std::vector<MenuBackgroundBlit>& menu_background_blits() {
   static const std::vector<MenuBackgroundBlit> empty;

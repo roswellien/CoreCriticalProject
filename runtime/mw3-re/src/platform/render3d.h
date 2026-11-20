@@ -44,6 +44,11 @@ struct DrawState {
   bool blend = false;              // ALPHABLENDENABLE
   bool additive = false;           // SRCBLEND ONE, DESTBLEND ONE
   bool multiply = false;           // the shadow passes: SRCBLEND ZERO, DESTBLEND SRCCOLOR
+  // Ours, the HD menu's gain and added-light maps (platform::MenuBackgroundGpuMap); both need
+  // blend set. brighten: SRCBLEND DESTCOLOR, DESTBLEND ONE (destination * (1 + source)).
+  // subtract: BLENDOP REVSUBTRACT with ONE, ONE (destination - source).
+  bool brighten = false;
+  bool subtract = false;
   bool unsupported_blend = false;  // Source/destination pair outside the modeled modes
   int32_t source_blend = 5, destination_blend = 6;  // D3D factors retained for failure diagnostics
   bool depth_write = true;         // ZWRITEENABLE
