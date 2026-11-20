@@ -1810,6 +1810,26 @@ TEST(sdl_menu_observation_keeps_present_output) {
     std::printf("SKIPPED sdl_menu_observation_keeps_present_output: no SDL video\n");
     return;
   }
+  // This checks diagnostic observation against the old presentation. The live GPU menu is on
+  // by default and records menu frames too, so it is switched off here with its escape hatch
+  // and restored afterwards.
+  struct LiveMenuOff {
+    std::string previous;
+    bool had_previous = false;
+    LiveMenuOff() {
+      if (const char* value = SDL_getenv("MW3_MENU_GPU")) {
+        had_previous = true;
+        previous = value;
+      }
+      SDL_setenv_unsafe("MW3_MENU_GPU", "0", 1);
+    }
+    ~LiveMenuOff() {
+      if (had_previous)
+        SDL_setenv_unsafe("MW3_MENU_GPU", previous.c_str(), 1);
+      else
+        SDL_unsetenv_unsafe("MW3_MENU_GPU");
+    }
+  } live_menu_off;
   sdlfe::SdlWindow window;
   EXPECT(window.init(true));
   window.create("mw3 menu observation test", 640, 480);

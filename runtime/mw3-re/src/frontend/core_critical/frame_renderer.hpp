@@ -82,6 +82,9 @@ struct StagingTestState {
   // Pending bytes/packets seen at the first local-light flush after the last mission change.
   std::size_t first_flush_pending_bytes{}, first_flush_pending_packets{};
   std::size_t recycled_scenes{}, retained_scene_bytes{};
+  // Packets larger than the whole allowance that were staged alone instead of failing, and the
+  // warning lines written for them (at most one per mission).
+  std::size_t oversized_packets{}, oversized_log_lines{};
 };
 StagingTestState staging_state(VulkanFrameRenderer &renderer);
 

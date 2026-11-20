@@ -90,9 +90,13 @@ class SdlInput : public platform::Input {
   float motion_scale() const;  // the mickeys a window pixel (point on the Mac) of motion makes
   // The frame's shape in the window (sdl_fit.h): with any_resolution the
   // scale is through the pillarboxed rect, else the window's whole width.
+  // When shape->menu_layout_active is true outside a mission, effective_shape()
+  // enforces the uniform centered 4:3 menu layout while keeping the native
+  // canvas client size.
   const FrameShape* shape = nullptr;
+  FrameShape effective_shape() const;
   bool captured() const { return captured_; }
-  bool fitted() const { return shape && shape->fit; }
+  bool fitted() const { return shape && (shape->fit || (shape->menu_layout_active && !(in_mission && in_mission()))); }
 
   // FIX (A), ours (docs/input.md, the mouse in a window): in a window the
   // mouse is the player's to take out. The menus never capture: the cursor
