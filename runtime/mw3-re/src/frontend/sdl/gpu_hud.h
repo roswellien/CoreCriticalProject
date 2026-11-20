@@ -65,6 +65,12 @@ class GpuHud final : public zrndr::DrawObserver {
   void set_menu_presentation(float menu_scale);
   bool menu_presentation_active() const { return menu_presentation_.active; }
   bool wants_source_alpha_images() const override;
+  // Registers (or replaces) one artwork image after construction. Today
+  // artwork is only loaded by the constructor; this is the single path that
+  // changes it later, and it bumps the generation so cached native textures
+  // are rebuilt rather than kept after artwork availability changed.
+  void register_menu_artwork(uint64_t identity,
+                             std::shared_ptr<const platform::HudImage> image);
 
  private:
   // HD menu stage D state for the current frame; begin_frame resets it.
@@ -82,6 +88,9 @@ class GpuHud final : public zrndr::DrawObserver {
   std::set<uint64_t> logged_menu_artwork_misses_;
   bool menu_artwork_miss_limit_logged_{};
   bool menu_text_failure_logged_{};
+  // Bumped on every artwork change after construction; folded into the
+  // native image cache key (0, the constructor's artwork, folds nothing).
+  uint64_t artwork_generation_{};
 
   struct Resource {
     std::shared_ptr<const platform::HudImage> image;

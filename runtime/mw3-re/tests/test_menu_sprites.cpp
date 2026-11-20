@@ -635,6 +635,41 @@ void source_selection_checks(const std::filesystem::path& directory) {
     pixels[1] = 0x07e0;
     pixels[2] = 0x001f;
   }
+  // Artwork registered after a miss is used by the next blit, and an artwork
+  // change rebuilds a cached native texture instead of keeping it.
+  {
+    Recorder recorder;
+    auto options = menu_options();
+    options.text = false;
+    sdlfe::GpuHud hud(recorder, options);
+    auto blit = [&] {
+      hud.begin(shadow.data(), width, height, pitch, height * 4);
+      hud.set_menu_presentation(4);
+      zrndr::blit16(&sprite, 1, 1, 0xf81f, nullptr);
+      require(hud.finish(), "Menu sprite fell back");
+    };
+    blit();
+    blit();
+    require(hud.frame_stats().artwork_hits == 0 && recorder.uploads.size() == 1,
+            "Native sprite was not cached before artwork was registered");
+    auto unrelated = std::make_shared<platform::HudImage>();
+    unrelated->width = unrelated->height = 1;
+    unrelated->pixels = {0xffffffffu};
+    hud.register_menu_artwork(identity ^ 1, unrelated);
+    blit();
+    require(hud.frame_stats().artwork_hits == 0 && recorder.uploads.size() == 2,
+            "An artwork change kept the old native cache entry");
+    auto high = std::make_shared<platform::HudImage>();
+    high->width = 12;
+    high->height = 8;
+    high->pixels.assign(96, 0xff0000ffu);
+    hud.register_menu_artwork(identity, high);
+    blit();
+    require(hud.frame_stats().artwork_hits == 1 && recorder.uploads.size() == 3 &&
+                recorder.uploads[2].width == 12 &&
+                recorder.draws.back().state.texture == 2,
+            "Artwork registered after a miss was not used by the next blit");
+  }
   // Texture allocation failure falls back to CPU composition with a reason.
   {
     Recorder recorder;

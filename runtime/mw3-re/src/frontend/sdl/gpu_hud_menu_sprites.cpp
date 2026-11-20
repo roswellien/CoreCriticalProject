@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 #include "frontend/sdl/gpu_hud.h"
@@ -148,6 +149,18 @@ void GpuHud::set_menu_presentation(float menu_scale) {
   menu_presentation_.scale = usable_scale ? std::max(1.f, menu_scale) : 1.f;
 }
 
+void GpuHud::register_menu_artwork(uint64_t identity,
+                                   std::shared_ptr<const platform::HudImage> image) {
+  if (!image || image->width == 0 || image->height == 0 ||
+      image->pixels.size() != size_t(image->width) * image->height)
+    throw std::runtime_error("Invalid menu artwork image");
+  artwork_[identity] = std::move(image);
+  ++artwork_generation_;
+  // A miss logged before may now hit; let it be reported again if it still misses.
+  logged_menu_artwork_misses_.clear();
+  menu_artwork_miss_limit_logged_ = false;
+}
+
 bool GpuHud::wants_source_alpha_images() const {
   return menu_presentation_.active && target_ != nullptr && !observation_only_;
 }
@@ -216,6 +229,13 @@ bool GpuHud::draw_menu_sprite(const zimg::Texture* source, uint16_t key, int64_t
       if (look_up_artwork) identity_pixels[size_t(row) * width + column] = raw_alpha ? pixel : 0;
       fold_word(content_hash, uint32_t(pixel) | raw_alpha << 16);
     }
+  // Artwork is looked up before this cache on every blit, so a cached native
+  // texture never hides artwork. Folding the generation still rebuilds native
+  // entries made under different artwork, so the cache cannot outlive a change.
+  if (artwork_generation_ != 0) {
+    fold_word(content_hash, uint32_t(artwork_generation_));
+    fold_word(content_hash, uint32_t(artwork_generation_ >> 32));
+  }
 
   std::shared_ptr<const platform::HudImage> selected;
   MenuSpriteSource kind = MenuSpriteSource::kNative;
