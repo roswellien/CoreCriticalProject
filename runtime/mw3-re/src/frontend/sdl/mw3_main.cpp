@@ -339,7 +339,7 @@ void usage() {
       "    [--cc-menu-background FILE] [--cc-menu-background-renderer cpu|gpu (default gpu)]\n"
       "    [--cc-menu-observe]\n"
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
-      "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires Core Critical Vulkan and --cc-lighting normal)]\n"
+      "    [--cc-render-thread 0|1] [--cc-pom off|low|high|0|1 (default off; requires Core Critical Vulkan and --cc-lighting normal)]\n"
       "    [--cc-draw-distance 800|1200|1600|2400|3200 (default 800)]\n"
       "    [--cc-flare-style modern|original (default modern)]\n"
       "    [--cc-controller FILE] (launcher-exported controller profile)\n"
@@ -538,15 +538,23 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-lighting" && next(1)) a.cc_assets.lighting = argv[++i];
     else if (s == "--cc-pom") {
       if (!next(1)) {
-        std::fprintf(stderr, "--cc-pom requires 0 or 1\n");
+        std::fprintf(stderr, "--cc-pom requires off, low, high, 0, or 1\n");
         return false;
       }
       const std::string value = argv[++i];
-      if (value != "0" && value != "1") {
-        std::fprintf(stderr, "--cc-pom supports 0 or 1\n");
+      if (value == "0" || value == "off") {
+        a.cc_assets.pom = false;
+        a.cc_assets.pom_quality = 0;
+      } else if (value == "low") {
+        a.cc_assets.pom = true;
+        a.cc_assets.pom_quality = 1;
+      } else if (value == "1" || value == "high") {
+        a.cc_assets.pom = true;
+        a.cc_assets.pom_quality = 2;
+      } else {
+        std::fprintf(stderr, "--cc-pom supports off, low, high, 0, or 1\n");
         return false;
       }
-      a.cc_assets.pom = value == "1";
     }
     else if (s == "--cc-render-thread" && next(1)) {
       const std::string value = argv[++i];

@@ -32,6 +32,7 @@ public partial class GraphicsPreferencesPanel : UserControl
             ChkShadows.IsEnabled = settings.DynamicLighting;
             ChkWaterDetail.IsChecked = settings.WaterDetail;
             ChkCloudDetail.IsChecked = settings.CloudDetail;
+            Select(ComboPomQuality, settings.PomQuality);
         }
         finally { _loading = false; }
     }
@@ -45,7 +46,7 @@ public partial class GraphicsPreferencesPanel : UserControl
             int.Parse(Value(ComboAF)), int.Parse(Value(ComboDrawDist)),
             ChkDynamicLighting.IsChecked == true, ChkShadows.IsChecked == true,
             ChkHeadlights.IsChecked == true, ChkWaterDetail.IsChecked == true,
-            ChkCloudDetail.IsChecked == true, Value(ComboFlareStyle));
+            ChkCloudDetail.IsChecked == true, Value(ComboFlareStyle), Value(ComboPomQuality));
         result.Validate();
         return result;
     }

@@ -22,6 +22,7 @@ public sealed record Mw3RePlanningOptions
     public Mw3ReLighting Lighting { get; init; } = Mw3ReLighting.Off;
     public Mw3ReFlareStyle FlareStyle { get; init; } = Mw3ReFlareStyle.Modern;
     public bool Pom { get; init; } = false;
+    public string? PomQuality { get; init; } = null;
     public IReadOnlyList<string> Assets { get; init; } = Array.Empty<string>();
     /// <summary>Native preview choices; when set, the request uses wire schema 4.</summary>
     public Mw3RePreviewOptions? Preview { get; init; }
@@ -117,7 +118,8 @@ public static class Mw3ReLaunchRequest
             ["flare_style"] = flareStyle,
             ["assets"] = new JsonArray(options.Assets.Select(asset => (JsonNode?)JsonValue.Create(asset)).ToArray())
         };
-        if (options.Pom) request["visuals"] = new JsonObject { ["pom"] = true };
+        var visuals = BuildVisuals(options);
+        if (visuals != null) request["visuals"] = visuals;
         return GameRunner.SerializeLaunchProfile(request);
     }
 
@@ -157,8 +159,22 @@ public static class Mw3ReLaunchRequest
                 ["stock_headlight_catalog"] = preview.StockHeadlightCatalog
             }
         };
-        if (options.Pom) request["visuals"] = new JsonObject { ["pom"] = true };
+        var visuals = BuildVisuals(options);
+        if (visuals != null) request["visuals"] = visuals;
         return GameRunner.SerializeLaunchProfile(request);
+    }
+
+    private static JsonObject? BuildVisuals(Mw3RePlanningOptions options)
+    {
+        if (options.PomQuality is not null)
+        {
+            if (options.PomQuality is not ("off" or "low" or "high"))
+                throw new InvalidDataException("Unknown native POM quality.");
+            if (options.PomQuality == "off")
+                return null;
+            return new JsonObject { ["pom"] = true, ["pom_quality"] = options.PomQuality };
+        }
+        return options.Pom ? new JsonObject { ["pom"] = true } : null;
     }
 
     private static JsonArray Paths(IEnumerable<string> paths) =>

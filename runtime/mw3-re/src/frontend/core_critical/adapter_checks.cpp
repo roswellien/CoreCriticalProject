@@ -3039,6 +3039,8 @@ void check_renderer_bridge_config() {
       require(test.accepted, "Unsupported POM configuration was accepted");
       require(config.parallax_materials == test.pom,
               "Typed POM option did not reach the renderer bridge");
+      require(config.parallax_quality == (test.pom ? 2U : 0U),
+              "Default POM quality level mismatch");
       require(config.normal_maps_enabled == (pom_assets.lighting == "normal"),
               "POM changed normal-map permission");
     } catch (const std::runtime_error &error) {
@@ -3048,6 +3050,16 @@ void check_renderer_bridge_config() {
     }
     require(rejected != test.accepted,
             "POM configuration acceptance mismatch");
+  }
+  for (unsigned quality : {1U, 2U}) {
+    pom_assets = {};
+    pom_assets.lighting = "normal";
+    pom_assets.pom = true;
+    pom_assets.pom_quality = quality;
+    const auto config = cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, {}, pom_assets);
+    require(config.parallax_materials && config.parallax_quality == quality,
+            "Explicit POM quality level did not reach the renderer bridge");
   }
 
   check_campaign_lighting_and_policy();

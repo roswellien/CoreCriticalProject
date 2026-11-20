@@ -737,14 +737,24 @@ def plan_launch(request):
     if not _FIELDS.issubset(request) or not set(request).issubset(allowed):
         raise ValueError("Missing or unknown native request fields")
     pom = False
+    pom_quality = None
     if schema >= 3 and "visuals" in request:
         visuals = request["visuals"]
-        if type(visuals) is not dict or not set(visuals).issubset({"pom"}):
+        if type(visuals) is not dict or not set(visuals).issubset({"pom", "pom_quality"}):
             raise ValueError("Invalid native visuals fields")
         if "pom" in visuals:
             if type(visuals["pom"]) is not bool:
                 raise ValueError("Native POM selection must be Boolean")
             pom = visuals["pom"]
+        if "pom_quality" in visuals:
+            quality = visuals["pom_quality"]
+            if type(quality) is not str or quality not in ("off", "low", "high"):
+                raise ValueError("Native POM quality must be off, low, or high")
+            if quality == "off" and pom:
+                raise ValueError("Conflicting native POM selection")
+            if quality != "off":
+                pom = True
+                pom_quality = quality
     if pom and request["lighting"] != "normal":
         raise ValueError("Native POM requires normal lighting")
     preview = _preview_choices(request.get("preview", {})) if schema == 4 else None
@@ -831,7 +841,7 @@ def plan_launch(request):
         detail_flag_indices["cloud_detail"] = len(argv) + 1
         argv.extend(("--cc-cloud-detail", "1" if preview["cloud_detail"] else "0"))
     if pom:
-        argv.extend(("--cc-pom", "1"))
+        argv.extend(("--cc-pom", pom_quality if pom_quality is not None else "1"))
     skipped = []
     for choice in disabled_detail:
         skipped.append({

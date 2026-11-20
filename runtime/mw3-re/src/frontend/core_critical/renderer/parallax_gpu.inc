@@ -152,7 +152,15 @@ void height_uniform(const Scene &scene, const Draw &draw, mw34::sun::Uniform &un
   uniform.pom_uv = {material.uv_scale[0], material.uv_scale[1], material.uv_offset[0],
                     material.uv_offset[1]};
   uniform.pom_atlas = material.atlas_rect;
-  uniform.pom_policy = {material.address_mode_u, material.address_mode_v, 8, 32};
+  // Pack step bounds (low byte) and distance LOD fade range in host world units
+  // (bits 8..23) without changing SunLighting's 1056-byte std140 layout.
+  const bool low_quality = bridge_config.parallax_quality == 1U;
+  const std::uint32_t min_steps = low_quality ? 4U : 8U;
+  const std::uint32_t max_steps = low_quality ? 12U : 32U;
+  const std::uint32_t fade_start = low_quality ? 60U : 120U;
+  const std::uint32_t fade_end = low_quality ? 140U : 280U;
+  uniform.pom_policy = {material.address_mode_u, material.address_mode_v,
+                        min_steps | (fade_start << 8U), max_steps | (fade_end << 8U)};
   uniform.surface_eye = draw.surface_eye;
 }
 std::vector<HeightImage *> prepare_height_images(const Scene &scene,
@@ -200,6 +208,7 @@ std::vector<HeightImage *> prepare_height_images(const Scene &scene,
     }
     auto &cached = found->second;
     result[at] = &cached;
+    ++height_draws;
     if (!cached.texture.valid &&
         std::none_of(pending.begin(), pending.end(),
                       [&](const HeightUpload &upload) { return upload.cached == &cached; })) {

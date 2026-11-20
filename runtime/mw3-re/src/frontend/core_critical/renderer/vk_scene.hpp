@@ -1243,7 +1243,7 @@ public:
       world_gpu_draws{}, effect_light_peak{}, fixture_light_peak{};
   std::uint64_t normal_draws{};
   std::uint64_t height_uploads{}, height_uploaded_bytes{}, height_cache_hits{},
-      height_retired_images{};
+      height_retired_images{}, height_draws{};
   std::uint64_t presents{};
   bool presentInFlight{};
   // True when the cached texture for this guest surface already holds content

@@ -146,7 +146,12 @@ public sealed class NativeGameRunner
                 "original" => Mw3ReFlareStyle.Original,
                 _ => throw new InvalidOperationException("Unknown lens flare style: " + settings.FlareStyle)
             },
-            Pom = true,
+            Pom = settings.PomQuality is "low" or "high",
+            PomQuality = settings.PomQuality switch
+            {
+                "off" or "low" or "high" => settings.PomQuality,
+                _ => throw new InvalidOperationException("Unknown parallax occlusion mapping quality: " + settings.PomQuality)
+            },
             Preview = new Mw3RePreviewOptions
             {
                 DrawDistance = drawDistance,
