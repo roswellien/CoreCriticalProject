@@ -29,6 +29,9 @@ void flush() override {
     // A rejected submission retains all payloads for a consistent retry.
     (void)packet_height_bytes(scene_);
     std::size_t local_bytes = 0;
+    // Set when this packet alone exceeds the whole staging allowance (see below).
+    bool oversized_packet = false;
+    PacketByteTerms oversized_terms{};
     if (local_active_) {
       // Compute the byte terms once per flush; the total is checked for overflow.
       const auto terms = packet_byte_terms(scene_);
@@ -85,30 +88,15 @@ void flush() override {
                        terms.clears, terms.height_packet);
         }
       }
-      if (!fits_empty_area) {
-        // The staging area is empty now (any earlier packet was completed above), so this
-        // packet is staged ALONE and its local lights are still attached at the normal point:
-        // the output is the same as for a packet that fits. The next packet of the scene does
-        // not fit beside it and completes it early through the branch above, so at most one
-        // oversized packet is ever held and staging stays bounded by
-        // max(budget, largest single packet).
-        ++staging_oversized_packets_;
-        if (!staging_oversized_logged_) {
-          staging_oversized_logged_ = true;
-          ++staging_oversized_log_lines_;
-          std::fprintf(stderr,
-                       "Local light staging: warning: one packet of %zu bytes exceeds the "
-                       "budget of %zu; staged alone instead of failing (logged once per "
-                       "mission); terms: scene=%zu vertices=%zu color_depth=%zu draws=%zu "
-                       "order=%zu textures=%zu texture_pixels=%zu emissions=%zu geometry=%zu "
-                       "lit_normals=%zu raw_fog=%zu height_metadata=%zu clears=%zu "
-                       "height_packet=%zu (capacity based)\n",
-                       local_bytes, local_staging_budget_, terms.scene, terms.vertices,
-                       terms.color_depth, terms.draws, terms.order, terms.textures,
-                       terms.texture_pixels, terms.emissions, terms.geometry, terms.lit_normals,
-                       terms.raw_fog, terms.height_metadata, terms.clears, terms.height_packet);
-        }
-      }
+      // The staging area is empty now if this packet is oversized (any earlier packet was
+      // completed above), so it is staged ALONE and its local lights are still attached at the
+      // normal point: the output is the same as for a packet that fits. The next packet of the
+      // scene does not fit beside it and completes it early through the branch above, so at
+      // most one oversized packet is ever held and staging stays bounded by
+      // max(budget, largest single packet). It is counted once it is actually staged, below,
+      // so a submission rejected later in this flush and retried is not counted twice.
+      oversized_packet = !fits_empty_area;
+      oversized_terms = terms;
       if (worker_)
         for (const auto &draw : scene_.draws)
           if (draw.shadow_valid)
@@ -136,6 +124,27 @@ void flush() override {
       if (pending_local_bytes_ > staging_peak_bytes_)
         staging_peak_bytes_ = pending_local_bytes_;
       scene_ = {};
+      if (oversized_packet) {
+        ++staging_oversized_packets_;
+        if (!staging_oversized_logged_) {
+          staging_oversized_logged_ = true;
+          ++staging_oversized_log_lines_;
+          std::fprintf(stderr,
+                       "Local light staging: warning: one packet of %zu bytes exceeds the "
+                       "budget of %zu; staged alone instead of failing (logged once per "
+                       "mission); terms: scene=%zu vertices=%zu color_depth=%zu draws=%zu "
+                       "order=%zu textures=%zu texture_pixels=%zu emissions=%zu geometry=%zu "
+                       "lit_normals=%zu raw_fog=%zu height_metadata=%zu clears=%zu "
+                       "height_packet=%zu (capacity based)\n",
+                       local_bytes, local_staging_budget_, oversized_terms.scene,
+                       oversized_terms.vertices, oversized_terms.color_depth, oversized_terms.draws,
+                       oversized_terms.order, oversized_terms.textures,
+                       oversized_terms.texture_pixels, oversized_terms.emissions,
+                       oversized_terms.geometry, oversized_terms.lit_normals,
+                       oversized_terms.raw_fog, oversized_terms.height_metadata,
+                       oversized_terms.clears, oversized_terms.height_packet);
+        }
+      }
       std::lock_guard<std::mutex> lock(recycle_mutex_);
       if (!recycled_scenes_.empty()) {
         scene_ = std::move(recycled_scenes_.back());
@@ -205,6 +214,10 @@ private:
   std::size_t staging_oversized_log_lines_{};
   bool staging_oversized_logged_{};
   void complete_local_light_packets() {
+    // producer_failed_ is set only by clear_producer_work(), which has already dropped every
+    // pending packet and zeroed pending_local_bytes_, and flush() returns before staging while
+    // it is set. So returning here never leaves packets behind for a later packet to be staged
+    // beside over budget.
     if (producer_failed_) return;
     // Detach the batch before posting: an exception must not cause a later
     // drain/destructor to replay packets already submitted to the worker.

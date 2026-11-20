@@ -1121,6 +1121,39 @@ void check_local_light_staging(SDL_Window *window, sdlfe::RendererBackend backen
             "A scene with an oversized packet did not render");
   }
 
+  // An oversized packet is counted once, when it is staged. Flushing again before the scene ends
+  // (and end_scene's own flush) must neither count nor deliver it a second time.
+  {
+    sdlfe::CoreCriticalAssets assets{};
+    assets.lighting = "flat";
+    auto renderer = make_check_renderer(window, backend, {}, assets, 128u * 1024u);
+    producer_view_checks::Observer observer;
+    require(cc_mw3_re::testing::observe_producer_views(*renderer, &observer),
+            "Staging fixture could not observe worker packets");
+    ObserverCleanup observer_cleanup{*renderer};
+    renderer->mission_changed({5, 1});
+    renderer->set_viewport(0, 0, 32, 32);
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    const std::vector<uint8_t> big(std::size_t(256) * 256 * 4, 91);
+    platform::DrawState oversized{};
+    oversized.texture = renderer->create_texture(256, 256, big.data(), 1);
+    quad(*renderer, 4, 28, .5f, 0xffffffff, oversized);
+    renderer->flush();
+    renderer->flush(); // the same oversized packet is still pending
+    renderer->end_scene();
+    renderer->drain();
+    const auto staging = cc_mw3_re::testing::staging_state(*renderer);
+    const std::string repeat_message =
+        "A repeated flush recounted a pending oversized packet: oversized=" +
+        std::to_string(staging.oversized_packets) +
+        " log_lines=" + std::to_string(staging.oversized_log_lines);
+    require(staging.oversized_packets == 1 && staging.oversized_log_lines == 1,
+            repeat_message.c_str());
+    require(observer.rows(producer_view_checks::Stage::packet, true).size() == 1,
+            "A repeated flush delivered a pending oversized packet twice");
+  }
+
   // Several oversized packets in a row: each one completes the one before it, so at most one is
   // ever held. Every 256-square RGBA payload is 256 KiB, so holding two at once would need at
   // least 512 KiB. Every packet is delivered once and in order, the warning is written once per
