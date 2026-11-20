@@ -2079,6 +2079,12 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     auto warmed_renderer =
         make_check_renderer(window, backend, quality, warmed_options);
     warmed_renderer->set_viewport(0, 0, 64, 64);
+    // Leave a frame queued when the mission loads. With --render-thread its
+    // present packet is still on the worker, so the load-time upload has to wait
+    // for it instead of using the shared Vulkan objects at the same time. The
+    // scene stays empty because strict GPU geometry rejects CPU 3D draws.
+    warmed_renderer->begin_scene();
+    warmed_renderer->end_scene();
     warmed_renderer->mission_changed({});
     require(!source_model.render_geometry,
             "Prepared-owned native geometry was warmed unnecessarily");
@@ -2094,6 +2100,14 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
             "Warmed frame should have GPU model draws");
     require(warmed_renderer->asset_statistics().geometry_uploads == 1,
             "First real draw should reuse warm upload");
+    // Tearing the scene down clears the first-world warmup. If it stayed armed,
+    // the next scene would upload the old mission's geometry again right after
+    // its buffers were retired.
+    warmed_renderer->reset_scene_resources();
+    warmed_renderer->begin_scene();
+    warmed_renderer->end_scene();
+    require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+            "Scene reset left the first-world preload armed");
   }
   const auto first = frame();
   require((first[20 * 64 + 23] & 0xff00) != 0 &&

@@ -1230,8 +1230,6 @@ public:
     // HUD source textures update during play. Bulk warmup belongs to loading
     // and this first world scene, after late player and IA assets arrive.
     if (first_world_preload_pending_) {
-      if (worker_)
-        worker_->drain();
       prepared_preload_pending_ = true;
       if (lighting_.normals)
         surface_normals_.preload_pending = true;
@@ -2277,6 +2275,13 @@ private:
       prepared_preload_pending_ = false;
       return;
     }
+    // The preload settles and records on renderer_ (command pool, fence, queue,
+    // texture/model caches and shared staging) from this producer thread. A
+    // present packet still queued for the menu, briefing or previous mission
+    // would use the same objects on the render worker, so finish those first.
+    // Draining here covers every caller, not just the ones that drain already.
+    if (worker_)
+      worker_->drain();
     if (reset_pending_)
       ensure_extent();
     preload_native_model_geometry();
