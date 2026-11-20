@@ -319,6 +319,11 @@ void policy_checks() {
   require(inset.x0 == 5 && inset.x1 == 9 && inset.u0 == .25f + .0625f &&
               inset.u1 == .75f - .0625f && inset.v0 == .25f + .125f && inset.v1 == 1,
           "Linear crop must inset interior edges by half a texel and leave the border");
+  // A one-texel interior crop keeps its centre texel instead of inverting.
+  const auto single = menu_sprite_quad(0, 0, 3, 1, 4, 2, 8, 4, native, TextureFilter::kLinear);
+  require(single.u0 == single.u1 && single.u0 == 3.5f / 8 && single.v0 == single.v1 &&
+              single.v0 == 1.5f / 4 && single.x1 - single.x0 == 1,
+          "A one-texel linear crop must sample its own centre");
   platform::HudImage artwork;
   artwork.width = 64;
   artwork.height = 32;
@@ -606,6 +611,15 @@ void source_selection_checks(const std::filesystem::path& directory) {
     zrndr::blit16(&sprite, 0, 0, 0xf81f, nullptr);
     require(hud.finish() && recorder.uploads.size() == 2,
             "Changed sprite pixels were not uploaded");
+    // The same pixels blitted with another key are a different texture.
+    hud.begin(shadow.data(), width, height, pitch, height * 2);
+    hud.set_menu_presentation(2);
+    zrndr::blit16(&sprite, 0, 0, 0xffff, nullptr);
+    require(hud.finish() && recorder.uploads.size() == 3,
+            "A new colour key reused the texture built for the old key");
+    const auto& rekeyed = recorder.uploads[2].pixels;
+    require((rekeyed[3] >> 24) == 255 && (rekeyed[4] >> 24) == 0,
+            "The rebuilt texture did not follow the new key");
     for (int distinct = 0; distinct < 80; ++distinct) {
       pixels[2] = uint16_t(0x0100 + distinct);
       hud.begin(shadow.data(), width, height, pitch, height * 2);
@@ -620,6 +634,67 @@ void source_selection_checks(const std::filesystem::path& directory) {
     pixels[0] = 0xf800;
     pixels[1] = 0x07e0;
     pixels[2] = 0x001f;
+  }
+  // Artwork registered after a miss is used by the next blit, and an artwork
+  // change rebuilds a cached native texture instead of keeping it.
+  {
+    Recorder recorder;
+    auto options = menu_options();
+    options.text = false;
+    sdlfe::GpuHud hud(recorder, options);
+    auto blit = [&] {
+      hud.begin(shadow.data(), width, height, pitch, height * 4);
+      hud.set_menu_presentation(4);
+      zrndr::blit16(&sprite, 1, 1, 0xf81f, nullptr);
+      require(hud.finish(), "Menu sprite fell back");
+    };
+    blit();
+    blit();
+    require(hud.frame_stats().artwork_hits == 0 && recorder.uploads.size() == 1,
+            "Native sprite was not cached before artwork was registered");
+    auto unrelated = std::make_shared<platform::HudImage>();
+    unrelated->width = unrelated->height = 1;
+    unrelated->pixels = {0xffffffffu};
+    hud.register_menu_artwork(identity ^ 1, unrelated);
+    blit();
+    require(hud.frame_stats().artwork_hits == 0 && recorder.uploads.size() == 2,
+            "An artwork change kept the old native cache entry");
+    auto high = std::make_shared<platform::HudImage>();
+    high->width = 12;
+    high->height = 8;
+    high->pixels.assign(96, 0xff0000ffu);
+    hud.register_menu_artwork(identity, high);
+    blit();
+    require(hud.frame_stats().artwork_hits == 1 && recorder.uploads.size() == 3 &&
+                recorder.uploads[2].width == 12 &&
+                recorder.draws.back().state.texture == 2,
+            "Artwork registered after a miss was not used by the next blit");
+    // An atlas, as the loader can produce: full pixels, the sprite in the right half.
+    auto atlas = std::make_shared<platform::HudImage>();
+    atlas->width = 24;
+    atlas->height = 8;
+    atlas->u0 = .5f;
+    atlas->pixels.assign(24 * 8, 0xff00ff00u);
+    hud.register_menu_artwork(identity, atlas);
+    blit();
+    const auto& atlas_quad = recorder.draws.back().vertices;
+    require(hud.frame_stats().artwork_hits == 1 && recorder.uploads.back().width == 24 &&
+                atlas_quad[0].tu == .5f && atlas_quad[2].tu == 1 && atlas_quad[0].sx == 1 &&
+                atlas_quad[2].sx == 4,
+            "An atlas sub-rectangle artwork image was not drawn from its UV rectangle");
+    auto bad_uv = std::make_shared<platform::HudImage>(*atlas);
+    bad_uv->u1 = 1.5f;
+    auto short_pixels = std::make_shared<platform::HudImage>(*atlas);
+    short_pixels->pixels.resize(10);
+    for (const auto& invalid : {bad_uv, short_pixels}) {
+      bool rejected = false;
+      try {
+        hud.register_menu_artwork(identity, invalid);
+      } catch (const std::runtime_error&) {
+        rejected = true;
+      }
+      require(rejected, "Artwork the loader would reject was registered");
+    }
   }
   // Texture allocation failure falls back to CPU composition with a reason.
   {

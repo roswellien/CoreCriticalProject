@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 #include "frontend/sdl/gpu_hud.h"
@@ -127,6 +128,17 @@ MenuSpriteQuad menu_sprite_quad(int64_t destination_x, int64_t destination_y, in
   return quad;
 }
 
+bool menu_artwork_image_valid(const platform::HudImage& image) {
+  const bool size_ok = image.width > 0 && image.height > 0 && image.width <= 8192 &&
+                       image.height <= 8192 &&
+                       image.pixels.size() == size_t(image.width) * image.height;
+  const bool uvs_finite = std::isfinite(image.u0) && std::isfinite(image.v0) &&
+                          std::isfinite(image.u1) && std::isfinite(image.v1);
+  const bool uvs_ordered = image.u0 >= 0 && image.v0 >= 0 && image.u0 < image.u1 &&
+                           image.v0 < image.v1 && image.u1 <= 1 && image.v1 <= 1;
+  return size_ok && uvs_finite && uvs_ordered;
+}
+
 unsigned menu_sprite_alpha(bool has_alpha_plane, uint8_t alpha_plane_value, bool keyed,
                            uint16_t compared_value, uint16_t key) {
   if (has_alpha_plane) {
@@ -146,6 +158,17 @@ void GpuHud::set_menu_presentation(float menu_scale) {
   const bool usable_scale = std::isfinite(menu_scale) && menu_scale > 0;
   menu_presentation_.active = true;
   menu_presentation_.scale = usable_scale ? std::max(1.f, menu_scale) : 1.f;
+}
+
+void GpuHud::register_menu_artwork(uint64_t identity,
+                                   std::shared_ptr<const platform::HudImage> image) {
+  if (!image || !menu_artwork_image_valid(*image))
+    throw std::runtime_error("Invalid menu artwork image");
+  artwork_[identity] = std::move(image);
+  ++artwork_generation_;
+  // A miss logged before may now hit; let it be reported again if it still misses.
+  logged_menu_artwork_misses_.clear();
+  menu_artwork_miss_limit_logged_ = false;
 }
 
 bool GpuHud::wants_source_alpha_images() const {
@@ -184,10 +207,15 @@ bool GpuHud::draw_menu_sprite(const zimg::Texture* source, uint16_t key, int64_t
   const bool has_alpha_plane = source->alpha != nullptr;
   const bool keyed = !has_alpha_plane && (source->flags & zimg::kAlpha) != 0;
 
-  // First pass: validate, and build the artwork identity and the content hash.
-  // The identity is the HUD pack contract (tools/vulkan-hud/build_hires_pack.py):
-  // RGB565 where the pixel is drawn at all, 0 where it is fully transparent.
-  std::vector<uint16_t> identity_pixels(count);
+  // First pass: validate, and build the content hash (the native texture cache
+  // key) and, only when an artwork pack is loaded, the artwork identity.
+  // The identity is the HUD pack contract (tools/vulkan-hud/build_hires_pack.py,
+  // and gpu_hud.cpp's HUD path): RGB565 wherever the raw alpha is non-zero, 0
+  // only where it is exactly 0. It is deliberately not blit16's draw threshold
+  // (alphas 1..3 are not drawn): packs were keyed this way, and matching blit16
+  // instead would change the identity of every image with faint alpha edges.
+  const bool look_up_artwork = !artwork_.empty();
+  std::vector<uint16_t> identity_pixels(look_up_artwork ? count : 0);
   uint64_t content_hash = 0xcbf29ce484222325ULL;
   fold_word(content_hash, uint32_t(width));
   fold_word(content_hash, uint32_t(height));
@@ -208,9 +236,16 @@ bool GpuHud::draw_menu_sprite(const zimg::Texture* source, uint16_t key, int64_t
       const uint16_t compared = source->palette ? uint16_t(index) : pixel;
       unsigned raw_alpha = has_alpha_plane ? source->alpha[at] : 255;
       if (keyed && compared == key) raw_alpha = 0;
-      identity_pixels[size_t(row) * width + column] = raw_alpha ? pixel : 0;
+      if (look_up_artwork) identity_pixels[size_t(row) * width + column] = raw_alpha ? pixel : 0;
       fold_word(content_hash, uint32_t(pixel) | raw_alpha << 16);
     }
+  // Artwork is looked up before this cache on every blit, so a cached native
+  // texture never hides artwork. Folding the generation still rebuilds native
+  // entries made under different artwork, so the cache cannot outlive a change.
+  if (artwork_generation_ != 0) {
+    fold_word(content_hash, uint32_t(artwork_generation_));
+    fold_word(content_hash, uint32_t(artwork_generation_ >> 32));
+  }
 
   std::shared_ptr<const platform::HudImage> selected;
   MenuSpriteSource kind = MenuSpriteSource::kNative;
@@ -230,13 +265,17 @@ bool GpuHud::draw_menu_sprite(const zimg::Texture* source, uint16_t key, int64_t
   bool native_is_text = false;
   if (!selected) {
     native_is_text = ztwod::host().is_text_image(source);
-    const uint64_t identity = platform::hud_identity(width, height, identity_pixels);
-    const auto found = artwork_.find(identity);
-    if (found != artwork_.end()) {
-      selected = found->second;
-      kind = MenuSpriteSource::kArtwork;
-    } else if (!native_is_text) {
-      log_menu_artwork_miss(identity, width, height);
+    if (!look_up_artwork) {
+      if (!native_is_text) log_menu_artwork_miss(0, width, height);  // logs "no pack" once
+    } else {
+      const uint64_t identity = platform::hud_identity(width, height, identity_pixels);
+      const auto found = artwork_.find(identity);
+      if (found != artwork_.end()) {
+        selected = found->second;
+        kind = MenuSpriteSource::kArtwork;
+      } else if (!native_is_text) {
+        log_menu_artwork_miss(identity, width, height);
+      }
     }
   }
   if (!selected) {
