@@ -2,7 +2,7 @@ cc::geometry::Submission
 submit_prepared_geometry(const ::platform::ModelDrawContext &context,
                          const cc::geometry::Fog &fog) override {
   VisualFloatScope preserve;
-  validate_damage_tint_weight(context.damage_tint_weight);
+  validate_damage_tint(context);
   if (geometry_mode_ == cc::geometry::Mode::legacy ||
       !prepared_.has_binding(context))
     return cc::geometry::Submission::unsupported;
@@ -32,18 +32,21 @@ static cc::geometry::Fog prepared_fog() {
   const auto &source = zmod::render_fog();
   cc::geometry::Fog fog;
   fog.enabled = source.on != 0;
-  std::copy_n(source.color, 3, fog.color.begin());
+  std::copy_n(zmod::render_fog_color(), 3, fog.color.begin());
   fog.near_range = source.near_range;
   fog.inverse_range = source.inv_range;
   fog.low_altitude = source.alt_low;
   fog.inverse_altitude = source.inv_alt;
+  const auto edge = zmod::render_fog_edge();
+  fog.edge_start = edge.start;
+  fog.edge_inverse_range = edge.inverse_range;
   return fog;
 }
 
 void emit_gpu_prepared(const PreparedBatchDraw &source,
                        const ::platform::ModelDrawContext &context,
                        const cc::geometry::Fog &fog) {
-  validate_damage_tint_weight(context.damage_tint_weight);
+  validate_damage_tint(context);
   if (!source.deformed.empty())
     throw std::runtime_error(
         "GPU prepared geometry does not admit CPU-deformed vertices");
@@ -86,7 +89,10 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
       draw.push.mode[3] = 0; // Preserve prepared smooth-normal orientation.
       // Prepared textures are RGB565 and alpha belongs to the source material,
       // so take alpha from the staged diffuse, which already includes node opacity.
-      draw.push.mode[2] = 2U;
+      // The reference emitter's tint flag selects texture alpha for native meshes.
+      draw.push.mode[0] &= ~512U;
+      if (context.damage_tint_weight == 0.f)
+        draw.push.mode[2] = 2U;
       apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
       if (normal >= 0)
         draw.normal_texture = int(bind_texture(normal, false));
@@ -103,7 +109,9 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     instance->geometry_near = context.clip_near;
     instance->geometry_fog0 = {fog.near_range, fog.inverse_range,
                                fog.low_altitude, fog.inverse_altitude};
-    instance->geometry_fog1 = {0, 0, fog.enabled ? 1.f : 0.f, 0};
+    // Reuse spare UBO components; push constants and SunLighting size stay unchanged.
+    instance->geometry_fog1 = {fog.edge_start, fog.edge_inverse_range,
+                               fog.enabled ? 1.f : 0.f, 0};
     instance->projection = {
         context.near_z,
         context.fx_near * scene_.width / viewport_[2],
@@ -112,6 +120,7 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
         (context.cy - viewport_[1]) * scene_.height / viewport_[3] - .5f,
         context.far_z};
     vk::Draw draw{};
+    draw.producer_view = producer_view_;
     // Same key as prepare_draw: a fading node blends and skips depth writes.
     draw.key = {context.opacity < 1.f, 5, 6, 1, 7, context.opacity >= 1.f, 1, 0};
     // Prepared model draws do not use mode.w for alpha testing.
@@ -130,14 +139,15 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     std::copy(fog.color.begin(), fog.color.end(), draw.push.fog);
     // Flag 256 tells the shared native-geometry vertex shader that mode.w holds
     // node opacity for this draw rather than a native normal-orientation marker.
-    draw.push.mode[0] = 2U | 4U | 256U | (fog.enabled && !geometry_debug_ ? 16U : 0U);
-    if (context.damage_tint_weight > 0.f) {
-      draw.push.mode[0] |= 128U;
-      draw.push.fog[3] = context.damage_tint_weight;
-    }
+    draw.push.mode[0] = 2U | 4U | 256U | (fog.active() && !geometry_debug_ ? 16U : 0U);
     draw.push.mode[1] = 4U | (2U << 8);
     draw.push.mode[2] = 2U; // Diffuse alpha: RGB565 textures carry none of their own.
-    draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+    if (context.damage_tint_weight > 0.f) {
+      draw.push.mode[0] |= 128U;
+      draw.push.mode[1] = pack_damage_tint_rgb(context.damage_tint_rgb);
+      draw.push.mode[2] = std::bit_cast<std::uint32_t>(context.damage_tint_weight);
+    }
+    draw.scissor = producer_scissor();
     apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
     scene_.order.push_back({false, unsigned(scene_.draws.size())});
     scene_.draws.push_back(std::move(draw));

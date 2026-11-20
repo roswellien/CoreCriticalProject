@@ -5,13 +5,16 @@
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
 #include "renderer/normal_codec.hpp"
+#include "renderer/fixture_observation_emission.hpp"
 #include "renderer/surface_materials.hpp"
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/geometry/resource.hpp"
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -51,8 +54,11 @@ void same(const cc_mw3_re::PreparedSubmission &a, const cc_mw3_re::PreparedSubmi
                 "Cached model instance changed");
     }
     require(bool(a.draw.sun_tl) == bool(b.draw.sun_tl) &&
-                bool(a.draw.lit_normals) == bool(b.draw.lit_normals),
+                bool(a.draw.lit_normals) == bool(b.draw.lit_normals) &&
+                bool(a.draw.raw_fog) == bool(b.draw.raw_fog),
             "Cached clipping metadata changed");
+    if (a.draw.raw_fog)
+        require(*a.draw.raw_fog == *b.draw.raw_fog, "Cached raw fog changed");
     if (a.draw.sun_tl)
         require(a.draw.sun_tl->camera_world == b.draw.sun_tl->camera_world &&
                     a.draw.sun_tl->projection == b.draw.sun_tl->projection &&
@@ -60,6 +66,13 @@ void same(const cc_mw3_re::PreparedSubmission &a, const cc_mw3_re::PreparedSubmi
                 "Cached clipped normals changed");
 }
 void checks() {
+    const float tint_channels[3]{.3f, .7f, .123f};
+    const auto packed_tint = cc_mw3_re::pack_damage_tint_rgb(tint_channels);
+    for (unsigned channel = 0; channel < 3; ++channel) {
+        const float decoded = float((packed_tint >> (channel * 8)) & 255U) / 255.f;
+        require(std::abs(decoded - tint_channels[channel]) <= .5f / 255.f + 1e-6f,
+                "Packed tint color exceeded half an 8-bit channel step");
+    }
     namespace cc = cc_mw3_re;
     platform::prepared::Batch batch;
     batch.color = 0xffe08040;
@@ -110,15 +123,29 @@ void checks() {
     const auto processed = profile.vertices;
     require(get() == first && cache.statistics().hits == 1 && profile.vertices == processed,
             "Unchanged prepared input was recomputed");
+    context.damage_tint_rgb[0] = 1.f;
     context.damage_tint_weight = .6f;
     const auto tinted = get();
     same(*tinted, reference());
-    require((tinted->draw.push.mode[0] & 128U) && tinted->draw.push.fog[3] == .6f,
+    require((tinted->draw.push.mode[0] & 128U) &&
+                tinted->draw.push.mode[1] == 0x000000ffU &&
+                std::bit_cast<float>(tinted->draw.push.mode[2]) == .6f,
             "Prepared cache lost damage tint");
+    auto emissive_tinted = *tinted;
+    cc_mw3_re::apply_fixture_observation_emission(emissive_tinted.draw.push.fog, .4f);
+    require(emissive_tinted.draw.push.fog[3] > 1.f &&
+                std::bit_cast<float>(emissive_tinted.draw.push.mode[2]) == .6f,
+            "Fixture emission overwrote the independent tint weight");
     context.damage_tint_weight = 0.f;
+    context.damage_tint_rgb[0] = 0.f;
     same(*get(), *first);
     require(!(get()->draw.push.mode[0] & 128U), "Prepared cache retained portrait tint");
     context.damage_tint_weight = .6f;
+    const auto zero_rgb_tint = get();
+    require(zero_rgb_tint->draw.push.mode[1] == 0U &&
+                zero_rgb_tint->draw.push.mode[1] != tinted->draw.push.mode[1],
+            "Prepared cache reused a tint draw after RGB changed");
+    context.damage_tint_rgb[0] = 1.f;
     same(*get(), *tinted);
     context.damage_tint_weight = 1.f;
     same(*get(), reference());
@@ -138,6 +165,21 @@ void checks() {
         }
     }
     context.damage_tint_weight = 0.f;
+    for (float channel : {-.1f, std::numeric_limits<float>::quiet_NaN(),
+                          std::numeric_limits<float>::infinity(), 1.1f}) {
+        context.damage_tint_rgb[1] = channel;
+        for (bool cached : {false, true}) {
+            bool rejected = false;
+            try {
+                if (cached) get();
+                else reference();
+            } catch (const std::runtime_error &error) {
+                rejected = std::string_view(error.what()) == "Model has an invalid native tint color";
+            }
+            require(rejected, "Prepared staging/cache accepted an invalid tint color");
+        }
+    }
+    context.damage_tint_rgb[1] = 0.f;
     const auto miss = [&] {
         const auto before = cache.statistics().misses;
         same(*get(), reference());
@@ -248,7 +290,9 @@ void checks() {
             "Clipped budget fixture has no normal stream");
     const auto payload = clipped.vertices.capacity() + sizeof(cc::PreparedSubmission) +
                          sizeof(*clipped.draw.sun_tl) + sizeof(*clipped.draw.lit_normals) +
-                         clipped.draw.lit_normals->capacity() * sizeof(std::array<float, 3>);
+                         clipped.draw.lit_normals->capacity() * sizeof(std::array<float, 3>) +
+                         sizeof(*clipped.draw.raw_fog) +
+                         clipped.draw.raw_fog->capacity() * sizeof(std::array<float, 4>);
     cc::PreparedDrawCache clipped_budget(payload - 1);
     clipped_budget.get(source, context, viewport, width, height, geometry, lighting);
     require(clipped_budget.statistics().entries == 0 && clipped_budget.statistics().bytes == 0,
@@ -267,6 +311,102 @@ void checks() {
     same(*get(), reference());
     require(!first->vertices.empty() && !owned->vertices.empty(),
             "Eviction invalidated an owned result");
+    {
+        // Identical authored fog and geometry can still have different edge bands.
+        // This fails if the new render-only band is omitted from the cache signature.
+        const auto saved_fog = zmod::fog();
+        zmod::fog() = {};
+        platform::prepared::Batch edge_batch;
+        edge_batch.color = 0xffffffff;
+        edge_batch.vertices = {{-1, -1, 0, 0, 0, 1, 0, 0},
+                               {1, -1, 0, 0, 0, 1, 1, 0},
+                               {0, 1, 0, 0, 0, 1, .5f, 1}};
+        cc::PreparedBatchDraw edge_source;
+        edge_source.batch = &edge_batch;
+        edge_source.camera = edge_source.world = mw34::donor::identity();
+        edge_source.camera[11] = 750;
+        platform::ModelDrawContext edge_context;
+        edge_context.near_z = edge_context.clip_near = 1;
+        edge_context.far_z = 800;
+        edge_context.fx_near = edge_context.fy_near = 20;
+        edge_context.cx = edge_context.cy = 32;
+        cc::PreparedDrawCache edge_cache;
+        const auto stage_edge = [&] {
+            return edge_cache.get(edge_source, edge_context, viewport, width, height, geometry, false);
+        };
+        std::shared_ptr<const cc::PreparedSubmission> default_cover;
+        {
+            zmod::ScopedRenderFog scope(800, 800);
+            default_cover = stage_edge();
+        }
+        {
+            zmod::ScopedRenderFog scope(800, 1200);
+            const auto extended_cover = stage_edge();
+            require(extended_cover != default_cover &&
+                        extended_cover->vertices != default_cover->vertices &&
+                        edge_cache.statistics().misses == 2,
+                    "Prepared staging reused fog from another view-distance edge band");
+        }
+        {
+            zmod::ScopedRenderFog scope(800, 3200);
+            edge_batch.vertices = {{-500, -100, 3000, 0, 0, 1, 0, 0},
+                                   {500, -100, 3000, 0, 0, 1, 1, 0},
+                                   {0, 100, 3400, 0, 0, 1, .5f, 1}};
+            edge_source.camera = mw34::donor::identity();
+            edge_context.far_z = 3200;
+            const auto crossing = cc::prepare_draw(edge_source, edge_context, viewport, width,
+                                                    height, geometry, false);
+            require(!crossing.draw.model && crossing.clipped_triangles == 2,
+                    "Crossing prepared fog fixture did not use CPU depth clipping");
+            unsigned cut_vertices = 0;
+            for (std::size_t offset = 0; offset < crossing.vertices.size();
+                 offset += sizeof(platform::TLVertex)) {
+                platform::TLVertex vertex;
+                std::memcpy(&vertex, crossing.vertices.data() + offset, sizeof vertex);
+                if (vertex.sz != 1.f / 3200.f) continue;
+                require((vertex.specular >> 24) == 0,
+                        "CPU prepared crossing retained visibility at the far cut");
+                ++cut_vertices;
+            }
+            require(cut_vertices == 3, "CPU prepared crossing lost its triangulated cut vertices");
+            edge_batch.vertices = {{-1, -1, 1000, 0, 0, 1, 0, 0},
+                                   {1, -1, 1000, 0, 0, 1, 1, 0},
+                                   {0, 1, 3400, 0, 0, 1, .5f, 1}};
+            const auto interior = cc::prepare_draw(edge_source, edge_context, viewport, width,
+                                                   height, geometry, false);
+            require(!interior.draw.model && interior.draw.raw_fog &&
+                        interior.draw.raw_fog->size() == interior.draw.count,
+                    "Prepared interior fixture lost its parallel raw fog stream");
+            bool negative_edge_factor = false;
+            for (const auto &factors : *interior.draw.raw_fog) {
+                require(factors[3] == 1.f && factors[0] == 0.f && factors[1] == 0.f,
+                        "Prepared fog-off fixture acquired mission fog");
+                negative_edge_factor = negative_edge_factor || factors[2] < -1.f;
+            }
+            require(negative_edge_factor,
+                    "Prepared interior edge factors were clamped before rasterisation");
+        }
+        zmod::fog_set_on(1);
+        zmod::fog_set_linear(1);
+        zmod::fog_set_near(32);
+        zmod::fog_set_far(750);
+        zmod::fog_set_alt_low(1000);
+        zmod::fog_set_alt_high(1001);
+        edge_source.deformed = {{-1, -1, 600, 0, 0, 1, 0, 0},
+                                {1, -1, 600, 0, 0, 1, 1, 0},
+                                {0, 1, 600, 0, 0, 1, .5f, 1}};
+        const auto unscoped = cc::prepare_draw(edge_source, edge_context, viewport, width, height,
+                                               geometry, false);
+        require(unscoped.draw.raw_fog && unscoped.draw.raw_fog->size() == 3,
+                "Unscoped prepared fog lost its raw visibility stream");
+        for (std::size_t index = 0; index < edge_source.deformed.size(); ++index) {
+            const auto &raw_fog = unscoped.draw.raw_fog->at(index);
+            const float visibility = 1.f - zmod::fog_at(edge_source.deformed[index].data());
+            require(raw_fog[3] == 2.f && raw_fog[0] == visibility,
+                    "Unscoped prepared fog changed fog_at's unquantised visibility");
+        }
+        zmod::fog() = saved_fog;
+    }
 }
 
 static std::filesystem::path make_private_staging_dir(const char *prefix) {

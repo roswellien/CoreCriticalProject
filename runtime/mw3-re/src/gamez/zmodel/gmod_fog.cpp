@@ -10,15 +10,10 @@ namespace zmod {
 
 namespace {
 Fog g_fog;
-// The innermost active extended-view copy and its far ratio; null/1 at the original range.
+// The innermost active world-render copy and its far ratio; null/1 outside render scopes.
 Fog* g_render_fog = nullptr;
 float g_render_scale = 1.0f;
-float g_render_far = 0.0f;  // the active copy's visual far plane; 0 at the original range
-
-// How far before the visual far plane linear fog must already have started. World geometry stops
-// at that plane, and the owner's playtests found it pops in visibly unless the fog begins about
-// 200 units before it at 1200 and about 100 units before it at 1600.
-float fog_cover_band(float visual_far) { return visual_far > 1200.0f ? 100.0f : 200.0f; }
+float g_render_far = 0.0f;  // the active copy's visual far plane; 0 only when no scope is active
 
 // Stretch only the distance interval by the visual/authored far ratio. On/off, mode, colour and
 // the altitude taper stay as authored. Always built from the authored fog, never from an outer
@@ -27,13 +22,12 @@ Fog scaled_fog(const Fog& source, float scale, float visual_far) {
   Fog copy = source;
   copy.near_range *= scale;
   copy.far_range *= scale;
-  // Linear fog that reaches the edge of the view must hide where world geometry ends: it is full
-  // at the visual far plane and starts at the cover band before it. A mission whose fog already
-  // ends well short of the edge (a deliberately foggy map) keeps its own scaled interval.
-  const float cover_start = visual_far - fog_cover_band(visual_far);
-  const bool fog_reaches_edge = copy.far_range >= cover_start;
-  if (copy.linear && fog_reaches_edge) {
-    copy.near_range = cover_start;
+  // Preserve proportional haze, including missions that become opaque before the edge.
+  // Only an interval ending beyond the cut needs capping. In that case the table is a
+  // lower bound on the strong-fog start, avoiding unnecessarily dense replacement fog.
+  const float cover_start = zcls::fog_start_for_view_distance(visual_far);
+  if (copy.linear && copy.far_range > visual_far) {
+    copy.near_range = std::clamp(copy.near_range, cover_start, visual_far);
     copy.far_range = visual_far;
   }
   copy.near_sq = copy.near_range * copy.near_range;
@@ -58,9 +52,21 @@ void refresh_render_fog() {
 
 Fog& fog() { return g_fog; }
 const Fog& render_fog() { return g_render_fog ? *g_render_fog : g_fog; }
+RenderFogEdge render_fog_edge() {
+  if (!g_render_fog) return {};
+  const float start = zcls::fog_start_for_view_distance(g_render_far);
+  return {start, 1.0f / (g_render_far - start)};
+}
+bool render_fog_active() { return render_fog().on || g_render_fog != nullptr; }
+const float* render_fog_color() { return render_fog().color; }
 
 ScopedRenderFog::ScopedRenderFog(float authored_far, float visual_far) {
-  if (!(authored_far > 0.0f) || !(visual_far > authored_far)) return;
+  bool supported_identity = false;
+  for (const auto& option : zcls::kViewDistanceOptions) {
+    if (visual_far == static_cast<float>(option.view_distance)) supported_identity = true;
+  }
+  const bool covers_authored_edge = visual_far == authored_far && supported_identity;
+  if (!(authored_far > 0.0f) || (!(visual_far > authored_far) && !covers_authored_edge)) return;
   previous_ = g_render_fog;
   previous_scale_ = g_render_scale;
   previous_far_ = g_render_far;

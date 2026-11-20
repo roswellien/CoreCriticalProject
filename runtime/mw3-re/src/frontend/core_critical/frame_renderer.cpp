@@ -4,6 +4,7 @@
 #include "gamez/zclass/cls_zbd.h"
 #include "gamez/zclass/class.h"
 #include "gamez/zclass/cls_node.h"
+#include "gamez/zclass/visual_distance.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zinput/zinput.h"
 #include "gamez/zmath/zmth_matrix.h"
@@ -19,6 +20,7 @@
 #include "render_worker.hpp"
 #include "renderer/campaign_sun_settings.hpp"
 #include "renderer/effect_light_observations.hpp"
+#include "renderer/flare_alpha.hpp"
 #include "renderer/effect_lighting_stage.inc"
 #include "renderer/geometry/reference.hpp"
 #include "renderer/headlight_original_binding.hpp"
@@ -28,6 +30,7 @@
 #include "gamez/zmodel/gmod_geometry.h"
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/native_fixture_sources.hpp"
+#include "renderer/fixture_observation_emission.hpp"
 #include "platform/prepared_visuals.h"
 #include "platform/sha256.hpp"
 #include "renderer/surface_detail_bindings.hpp"
@@ -56,6 +59,8 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <charconv>
 #include <cstdarg>
 #include <cmath>
+#include <chrono>
+#include <unordered_set>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -287,6 +292,12 @@ mw34::sun::Settings parse_lighting(const sdlfe::CoreCriticalAssets &options) {
   return result;
 }
 
+bool parse_modern_flare_style(const sdlfe::CoreCriticalAssets &assets) {
+  if (assets.flare_style != "modern" && assets.flare_style != "original")
+    throw std::runtime_error("--cc-flare-style supports modern or original");
+  return assets.flare_style == "modern";
+}
+
 vk::Renderer::WindowSurface
 sdl_surface(SDL_Window *window,
             const std::shared_ptr<cc_mw3_re::platform::SdlWindowStateTracker>
@@ -354,6 +365,8 @@ struct Texture {
   unsigned scene_index = no_binding;
   unsigned sharp_index = no_binding;
   bool held_copy{};
+  // Rebuild synthetic alpha from each original RGBA upload on named reload.
+  bool generated_rgba{};
   const ::platform::prepared::Image *replacement{};
   unsigned source_width{}, source_height{};
   std::vector<std::uint32_t> pixels;
@@ -361,6 +374,11 @@ struct Texture {
   mw34::materials::SurfaceKey surface_key{};
   std::optional<mw34::materials::SurfaceKey> fixture_visual_key;
   std::uint64_t group_load_epoch{0};
+};
+
+struct LoggedFlareTexture {
+  std::string name;
+  int32_t handle = -1;
 };
 
 std::vector<uint32_t> image_pixels(const ::platform::prepared::Image &image,
@@ -450,6 +468,7 @@ public:
         hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
+        modern_flare_style_(parse_modern_flare_style(assets)),
         base_lighting_(lighting_), campaign_enabled_(assets.lighting != "off"),
         sun_explicit_(assets.sun_explicit),
         environment_(assets.environment),
@@ -635,7 +654,29 @@ public:
                               surface_normals_.cache.pages.end(),
                               [](const auto &page) { return page.loaded; })),
             binding_rejected_mismatch_,
-            native_fingerprint_evaluations_};
+            native_fingerprint_evaluations_,
+            deferred_material_admissions_};
+  }
+  // Capacity the current producer Scene retains from earlier packets (adopted from the pool).
+  std::size_t retained_scene_capacity_bytes() const {
+    const auto terms = packet_byte_terms(scene_);
+    return terms.vertices + terms.color_depth + terms.draws + terms.order + terms.textures +
+           terms.clears;
+  }
+  static testing::PacketByteBreakdown packet_byte_breakdown_for_test(const vk::Scene &scene) {
+    const auto terms = packet_byte_terms(scene);
+    return {terms.geometry, terms.lit_normals, terms.raw_fog, checked_packet_total(terms)};
+  }
+  testing::StagingTestState staging_state_for_test() {
+    return {staging_peak_bytes_,        staging_early_completions_, staging_early_log_lines_,
+            staging_first_flush_bytes_, staging_first_flush_packets_,
+            recycled_scene_count_for_test(), retained_scene_capacity_bytes()};
+  }
+  testing::NamedTextureTestState named_texture_state_for_test(
+      int32_t handle) const {
+    const auto &entry = textures_.at(std::size_t(handle));
+    return {entry.width, entry.height, entry.source_width, entry.source_height,
+            entry.generated_rgba, entry.pixels};
   }
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
@@ -773,7 +814,18 @@ public:
       zvid::producer_mission_changed(identity);
     // Drain packets queued for the previous mission before switching state.
     drain();
+    // The workers are idle now: release the capacity that recycled Scenes (and the one drain may
+    // have adopted into scene_) kept from the previous mission, so this mission's packets are not
+    // charged for it.
+    // clear_producer_work(false) above already dropped the unsubmitted producer Scene and the
+    // pending packets (and ended any open scene state), so this only discards what drain() may
+    // have adopted from the pool: a mission change never discards unflushed draws here.
+    scene_ = {};
+    invalidate_scene_bindings();
+    release_recycled_scenes();
     local_lights_clear();
+    staging_early_logged_ = false;
+    staging_first_flush_pending_ = true;
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
     mw34::campaign::ResolvedMissionLighting resolved{};
@@ -854,6 +906,9 @@ public:
           "%zu peak bytes, %zu producer waits\n",
           statistics.submitted, statistics.completed, statistics.peak_jobs,
           statistics.peak_bytes, statistics.waits);
+      std::fprintf(stderr,
+                   "Local light staging: peak %zu bytes of %zu, %zu early completions\n",
+                   staging_peak_bytes_, local_staging_budget_, staging_early_completions_);
       worker_.reset(); // All later summary reads and destruction belong to this
                        // thread.
     }
@@ -976,6 +1031,33 @@ public:
     viewport_ = {x, y, width, height};
   }
 
+  void prepare_canvas_textures(const std::vector<int32_t> &handles) override {
+      std::vector<vk::TextureRef> references;
+      for (const auto handle : handles) {
+          const auto &entry = textures_.at(handle);
+          references.push_back({std::uint64_t(handle) * 2 + 2,
+                                entry.version,
+                                entry.width,
+                                entry.height,
+                                vk::TexFormat::rgba8888,
+                                {},
+                                {}});
+      }
+      const auto prepare = [this, &references] {
+          // Return the failure as data: letting it escape a worker job permanently
+          // stops that worker, including the CPU compositor's subsequent uploads.
+          try {
+              renderer_->prepare_canvas_textures(references);
+              return std::exception_ptr{};
+          } catch (...) {
+              return std::current_exception();
+          }
+      };
+      const auto failure = worker_ ? worker_->call(prepare) : prepare();
+      if (failure)
+          std::rethrow_exception(failure);
+  }
+
   int32_t create_texture(int width, int height, const uint8_t *rgba,
                          uint8_t) override {
     if (width <= 0 || height <= 0 || unsigned(width) > texture_limit_ ||
@@ -1010,6 +1092,7 @@ public:
     mw34::materials::SurfaceKey source_key{};
     mw34::materials::get_active_surface_key(&source_key);
     std::vector<uint32_t> replacement;
+    std::vector<std::uint8_t> generated;
     if (entry.replacement) {
       if (!rgba || unsigned(width) != entry.source_width ||
           unsigned(height) != entry.source_height)
@@ -1021,6 +1104,14 @@ public:
       width = int(entry.width);
       height = int(entry.height);
       ++named_textures_;
+    } else if (entry.generated_rgba) {
+      if (!rgba || unsigned(width) != entry.source_width ||
+          unsigned(height) != entry.source_height)
+        throw std::runtime_error(
+            "Generated flare reload changed its source dimensions");
+      generated = mw34::flare::generate_rgba(entry.name, entry.width,
+                                             entry.height, rgba);
+      rgba = generated.data();
     }
     if (!rgba || unsigned(width) != entry.width ||
         unsigned(height) != entry.height) {
@@ -1043,6 +1134,26 @@ public:
     mw34::materials::SurfaceKey active_key{};
     mw34::materials::get_active_surface_key(&active_key);
     const auto *replacement = prepared_.named_texture(name);
+    const bool generate_flare = modern_flare_style_ && name &&
+                                mw34::flare::is_texture(name);
+    if (generate_flare) {
+      if (!rgba || width <= 0 || height <= 0 ||
+          unsigned(width) > texture_limit_ || unsigned(height) > texture_limit_)
+        throw std::runtime_error("Invalid mw3-re texture size or flare input");
+      const auto pixels = mw34::flare::generate_rgba(
+          name, unsigned(width), unsigned(height), rgba);
+      const auto handle = create_texture(width, height, pixels.data(), type);
+      auto &entry = textures_[handle];
+      entry.generated_rgba = true;
+      entry.name = name;
+      entry.source_width = unsigned(width);
+      entry.source_height = unsigned(height);
+      entry.surface_key = active_key;
+      entry.group_load_epoch = group_load_epoch_;
+      // Generated and plain named textures are excluded from the prepared
+      // replacement upload count.
+      return handle;
+    }
     if (!replacement) {
       int32_t handle = create_texture(width, height, rgba, type);
       auto &entry = textures_[handle];
@@ -1110,6 +1221,11 @@ public:
   void draw(Primitive primitive, const TLVertex *vertices, int count,
             const DrawState &state) override {
     require_producer_live();
+    if (state.blend && state.unsupported_blend)
+      throw std::runtime_error(
+          "Unsupported MW3 alpha blend factor pair: SRCBLEND=" +
+          std::to_string(state.source_blend) + " DESTBLEND=" +
+          std::to_string(state.destination_blend));
     // Only the explicitly marked 2D compositor may supply CPU vertices in
     // strict mode. Depth-always also occurs in 3D overlays, so it cannot
     // identify a HUD exemption.
@@ -1122,6 +1238,12 @@ public:
     }
     if (suppress_model_draws_)
       return;
+    if (state.texture >= 0 &&
+        std::size_t(state.texture) < textures_.size() &&
+        deferred_material_binding_ &&
+        validated_deferred_binding(textures_[state.texture].surface_key,
+                                   state.texture))
+      ++deferred_material_admissions_;
     local_lights_observe(vertices, count, state);
     append_draw(primitive, vertices, count, state,
                 state.sharp || (state.depth_always &&
@@ -1174,6 +1296,55 @@ private:
       throw std::runtime_error("Invalid Core producer view provenance");
     // No numeric policy: original NaNs and stale inverses are owned data.
   }
+  VkRect2D producer_scissor(bool hud = false) const {
+    const VkRect2D full_scene{{0, 0}, {scene_.width, scene_.height}};
+    if (hud || !producer_view_.present ||
+        producer_view_.purpose != ::platform::ProducerPurpose::WorldZoom ||
+        !producer_view_.camera_rect_available)
+      return full_scene;
+
+    auto viewport = viewport_;
+    if (producer_view_.canvas_available)
+      viewport = {producer_view_.canvas.x, producer_view_.canvas.y,
+                  producer_view_.canvas.width, producer_view_.canvas.height};
+    if (viewport[2] <= 0 || viewport[3] <= 0 ||
+        producer_view_.camera_rect.width <= 0 ||
+        producer_view_.camera_rect.height <= 0 ||
+        scene_.width > std::uint32_t(std::numeric_limits<std::int32_t>::max()) ||
+        scene_.height > std::uint32_t(std::numeric_limits<std::int32_t>::max())) {
+      static std::atomic_flag invalid_world_zoom_scissor_logged = ATOMIC_FLAG_INIT;
+      if (!invalid_world_zoom_scissor_logged.test_and_set())
+        std::fprintf(stderr,
+                     "Core renderer: invalid WorldZoom scissor inputs; "
+                     "using full scene (logged once)\n");
+      return full_scene;
+    }
+
+    // Match canvas_to_render: transform both edges with integer truncation,
+    // then derive the size. Mapping a size alone can grow fractional edges.
+    const auto map_edge = [](std::int64_t coordinate, std::int32_t origin,
+                             std::uint32_t scene_extent,
+                             std::int32_t viewport_extent) {
+      return (coordinate - origin) * std::int64_t(scene_extent) /
+             viewport_extent;
+    };
+    const auto clamp_edge = [](std::int64_t edge, std::uint32_t extent) {
+      return std::clamp<std::int64_t>(edge, 0, extent);
+    };
+    const auto& rect = producer_view_.camera_rect;
+    const auto left = clamp_edge(
+        map_edge(rect.x, viewport[0], scene_.width, viewport[2]), scene_.width);
+    const auto top = clamp_edge(
+        map_edge(rect.y, viewport[1], scene_.height, viewport[3]), scene_.height);
+    const auto right = clamp_edge(
+        map_edge(std::int64_t(rect.x) + rect.width, viewport[0], scene_.width,
+                 viewport[2]), scene_.width);
+    const auto bottom = clamp_edge(
+        map_edge(std::int64_t(rect.y) + rect.height, viewport[1], scene_.height,
+                 viewport[3]), scene_.height);
+    return {{std::int32_t(left), std::int32_t(top)},
+            {std::uint32_t(right - left), std::uint32_t(bottom - top)}};
+  }
   void clear_producer_work(bool failed) noexcept {
     const auto previous_view = producer_view_;
     scene_ = {};
@@ -1210,6 +1381,9 @@ private:
     observation.packet = packet;
     observation.first = draw.first;
     observation.count = draw.count;
+    observation.scissor_offset = {draw.scissor.offset.x, draw.scissor.offset.y};
+    observation.scissor_extent = {draw.scissor.extent.width,
+                                  draw.scissor.extent.height};
     observation.sun_tl = bool(draw.sun_tl);
     observation.height_binding = bool(draw.height_binding);
     observation.surface_eye = draw.surface_eye;
@@ -1384,13 +1558,17 @@ private:
     // for intentional campaign/profile sky shading in apply_atmosphere.
     if (lighting_.enabled && state.native_sky)
       draw.sky_view = capture_tl_view();
+    // Fixed-function translucent effects and multiply passes retain their
+    // original unlit output. Applying the world sun equation to their texture
+    // and vertex colour turns emissive beams and flashes into dark shadows.
     if (lighting_.enabled && !state.native_sky && state.texture >= 0) {
       const auto &tex_entry = textures_.at(state.texture);
       const auto key = tex_entry.surface_key;
       const auto epoch = tex_entry.group_load_epoch;
       const auto tex_name = tex_entry.name;
       if (epoch == group_load_epoch_ && key.hash != 0) {
-        int norm_idx = lighting_.normals
+        const bool apply_sun_lighting = !state.blend && !state.multiply;
+        int norm_idx = lighting_.normals && apply_sun_lighting
                            ? deferred_surface_normal_index(key, state.texture)
                            : -1;
         if (norm_idx >= 0) {
@@ -1399,9 +1577,10 @@ private:
         } else {
           draw.normal_texture = -1;
         }
-        draw.sun_tl = capture_tl_view();
+        if (apply_sun_lighting)
+          draw.sun_tl = capture_tl_view();
         const auto &proj = projection;
-        if (lighting_.normals) {
+        if (lighting_.normals && apply_sun_lighting) {
           draw.surface_parameters =
               deferred_surface_parameters(key, state.texture);
           if (draw.surface_parameters[3] > .5f && proj.near_z > 0 &&
@@ -1411,9 +1590,11 @@ private:
             draw.surface_eye = {eye[3], eye[7], eye[11], 1.f};
           }
         }
-        auto norms = std::make_shared<std::vector<std::array<float, 3>>>(
-            drawn, std::array<float, 3>{0, 0, 0});
-        draw.lit_normals = std::move(norms);
+        if (apply_sun_lighting) {
+          auto norms = std::make_shared<std::vector<std::array<float, 3>>>(
+              drawn, std::array<float, 3>{0, 0, 0});
+          draw.lit_normals = std::move(norms);
+        }
         if (norm_idx >= 0 && !logged_first_normal_trace_) {
           logged_first_normal_trace_ = true;
           std::fprintf(
@@ -1454,16 +1635,65 @@ private:
             surface_normal_texture(binding->normal_index), false));
       }
     }
-    const bool sharp = state.sharp && state.texture >= 0 &&
+    const bool sharp = state.sharp && state.filter == ::platform::TextureFilter::kDefault &&
+                       state.texture >= 0 &&
                        !textures_.at(state.texture).held_copy;
     draw.sampler = (state.address_u == 3 ? 3U : 1U) << 4 |
                    (state.address_v == 3 ? 3U : 1U) << 8 |
-                   (state.sharp && !sharp ? 0U : 3U);
+                   (state.filter == ::platform::TextureFilter::kNearest ? 0U :
+                    state.filter == ::platform::TextureFilter::kLinear ? 3U :
+                    state.sharp && !sharp ? 0U : 3U);
     if (!hud)
       draw.sampler |= 0x10000U;
+    const auto flare = state.flare_diagnostic;
+    if (flare.slot >= 0 && flare.slot < 4 && state.texture >= 0 &&
+        logged_flare_count_ < logged_flare_textures_.size()) {
+      const auto &entry = textures_.at(state.texture);
+      const auto end = logged_flare_textures_.begin() + logged_flare_count_;
+      const auto logged = std::find_if(
+          logged_flare_textures_.begin(), end,
+          [&](const LoggedFlareTexture &key) {
+            if (entry.name.empty())
+              return key.name.empty() && key.handle == state.texture;
+            return key.name == entry.name;
+          });
+      if (logged == end) {
+        logged_flare_textures_[logged_flare_count_++] = {entry.name, state.texture};
+        const char *queue = "immediate";
+        if (state.queue == ::platform::DrawQueue::Transparent)
+          queue = "transparent";
+        else if (state.queue == ::platform::DrawQueue::Overlay)
+          queue = "overlay";
+        std::fprintf(
+            stderr,
+            "[FLARE_TEXTURE] slot=%d name=\"%s\" uploaded=%ux%u replacement=%s %s "
+            "half_size_screen_px=%g half_size_target_px=[%g,%g] sampler=0x%x "
+            "queue=%s source=%ux%u viewport=%dx%d target=%ux%u hud=%d\n",
+            flare.slot, entry.name.empty() ? "<unknown>" : entry.name.c_str(),
+            entry.width, entry.height, entry.replacement ? "yes" : "no",
+            mw34::flare::generated_field(entry.generated_rgba),
+            flare.half_size_pixels,
+            flare.half_size_pixels * scene_.width / float(viewport[2]),
+            flare.half_size_pixels * scene_.height / float(viewport[3]),
+            draw.sampler, queue,
+            entry.replacement ? entry.source_width : entry.width,
+            entry.replacement ? entry.source_height : entry.height,
+            viewport[2], viewport[3], scene_.width, scene_.height, int(hud));
+      }
+    }
+    // D3DBLEND factors; 14 is ours: ONE, ONE through a reverse subtract (vk_scene's pipeline).
+    uint8_t source_factor = 5, destination_factor = 6;
+    if (state.multiply)
+      source_factor = 1, destination_factor = 3;
+    else if (state.brighten)
+      source_factor = 9, destination_factor = 2;
+    else if (state.subtract)
+      source_factor = vk::kReverseSubtractBlend, destination_factor = 2;
+    else if (state.additive)
+      source_factor = 2, destination_factor = 2;
     draw.key = {uint8_t(state.blend || state.multiply),
-                uint8_t(state.multiply ? 1 : 5),
-                uint8_t(state.multiply ? 3 : 6),
+                source_factor,
+                destination_factor,
                 1,
                 uint8_t(state.depth_always ? 8 : 7),
                 uint8_t(state.depth_write),
@@ -1506,7 +1736,7 @@ private:
     draw.push.mode[2] = draw.texture < 0
                             ? 2 | diffuse
                             : (state.alpha_modulate ? 4 : 2) | texture;
-    draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+    draw.scissor = producer_scissor(hud);
     if (native_ground_draw_eligible(state, hud, depth_only, geometry_debug_,
                                     primitive == Primitive::kPoints))
       apply_fixture_observation(draw, deferred_fixture_observation(state.texture));
@@ -1526,6 +1756,7 @@ private:
            (previous.sky_view->camera_world == draw.sky_view->camera_world &&
             previous.sky_view->projection == draw.sky_view->projection)) &&
           bool(previous.lit_normals) == bool(draw.lit_normals) &&
+          bool(previous.raw_fog) == bool(draw.raw_fog) &&
           previous.surface_parameters == draw.surface_parameters &&
           previous.surface_eye == draw.surface_eye &&
           previous.emission_index == draw.emission_index &&
@@ -1541,6 +1772,15 @@ private:
                                  draw.lit_normals->begin(),
                                  draw.lit_normals->end());
           previous.lit_normals = std::move(merged_normals);
+        }
+        // Raw fog is attached only to CPU-clipped prepared draws, which are pushed directly and
+        // never built here, so today this branch cannot see two raw-fog draws. Merge it exactly
+        // like the normals anyway: a merged draw whose raw_fog stayed short would throw
+        // "Clipped raw-fog range mismatch" at submit.
+        if (previous.raw_fog && draw.raw_fog) {
+          auto merged_fog = std::make_shared<std::vector<std::array<float, 4>>>(*previous.raw_fog);
+          merged_fog->insert(merged_fog->end(), draw.raw_fog->begin(), draw.raw_fog->end());
+          previous.raw_fog = std::move(merged_fog);
         }
         previous.count += drawn;
         observe_producer_draw(previous);
@@ -1698,6 +1938,8 @@ private:
         prepared_geometry(*source.batch), lighting_.enabled,
         cpu_profile_ ? &prepared_cpu_ : nullptr, prepared_cache_enabled_);
     auto draw = staged->draw;
+    draw.producer_view = producer_view_;
+    draw.scissor = producer_scissor();
     const auto texture = prepared_texture(*source.texture);
     apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
                            group_load_epoch_, textures_.at(texture).version);
@@ -1713,6 +1955,7 @@ private:
       apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
       scene_.order.push_back({false, unsigned(scene_.draws.size())});
       scene_.draws.push_back(std::move(draw));
+      observe_producer_draw(scene_.draws.back());
       ++prepared_batches_;
     }
   }
@@ -1895,6 +2138,7 @@ private:
   const bool native_wsi_;
   const vk::Renderer::Quality quality_;
   mw34::sun::Settings lighting_;
+  const bool modern_flare_style_;
   bool display_hdr_ = false;
   const mw34::sun::Settings base_lighting_;
   const bool campaign_enabled_, sun_explicit_;
@@ -1952,6 +2196,11 @@ private:
   std::uint64_t group_load_epoch_{1};
   std::map<int, int32_t> surface_normal_textures_;
   bool logged_first_normal_trace_{false};
+  // Names survive handle reuse/reloads; unknown names use the upload handle.
+  // Stop after four distinct flare textures, with no growing set or log spam.
+  std::array<LoggedFlareTexture, 4> logged_flare_textures_{};
+  std::size_t logged_flare_count_{};
+  std::uint64_t deferred_material_admissions_{};
   std::uint64_t prepared_batches_{}, retired_model_draws_{},
       cpu_clipped_triangles_{}, named_textures_{};
   bool suppress_model_draws_{};
@@ -2056,6 +2305,8 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   }
   config.dxgi_present = (backend != sdlfe::RendererBackend::core_critical_wsi);
   config.window_mode = "windowed";
+  // Tinted world draws reuse mode.z for tint weight; keeping world scale at
+  // 100% prevents them from entering coverage replay, where mode.z is alpha op.
   config.world_scale_percent = 100;
   config.remaster_width = 0;
   config.remaster_height = 0;
@@ -2067,10 +2318,9 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.geometry_debug_normals = assets.geometry_debug_normals;
 
   // Quality
-  if (quality.draw_distance != 800 && quality.draw_distance != 1200 &&
-      quality.draw_distance != 1600)
+  if (!zcls::is_supported_view_distance(quality.draw_distance))
     throw std::runtime_error(
-        "--cc-draw-distance supports only 800, 1200 or 1600");
+        "--cc-draw-distance supports only 800, 1200, 1600, 2400 or 3200");
   config.draw_distance = quality.draw_distance;
   config.antialiasing = quality.antialiasing;
   config.anisotropy = quality.anisotropy;
@@ -2160,6 +2410,24 @@ std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
     SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
     const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget) {
     return std::make_unique<FrameRenderer>(window, backend, quality, assets, local_staging_budget);
+}
+
+testing::PacketByteBreakdown testing::packet_byte_breakdown(const mw34::vkscene::Scene &scene) {
+    return FrameRenderer::packet_byte_breakdown_for_test(scene);
+}
+testing::StagingTestState testing::staging_state(VulkanFrameRenderer &renderer) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->staging_state_for_test();
+}
+
+testing::NamedTextureTestState testing::named_texture_state(
+    VulkanFrameRenderer &renderer, int32_t handle) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->named_texture_state_for_test(handle);
 }
 
 struct RigidCaptureTestAccess {

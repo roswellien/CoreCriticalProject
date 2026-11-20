@@ -147,7 +147,8 @@ inline std::string build_valid_v4_mesh(const std::string &toe_name = "",
                                        const std::string &batch_owner = "control",
                                        const std::string &batch_visibility = "panel",
                                        double toe_x = 0.5, double toe_y = 0.2, double toe_z = -0.1,
-                                       const std::string &omitted_rest = "") {
+                                       const std::string &omitted_rest = "",
+                                       bool mixed_bone = false) {
     Bytes out;
     out.value = std::string("BWMESH4\0", 8);
     out.u32(1); // 1 batch
@@ -212,7 +213,7 @@ inline std::string build_valid_v4_mesh(const std::string &toe_name = "",
 
     out.name(batch_owner.c_str());
     out.name(batch_visibility.c_str());
-    out.u32(donor_bone_idx);
+    out.u32(mixed_bone ? 0xffffffff : donor_bone_idx);
     out.u32(3);          // 3 vertices
     out.u32(0xffffffff); // color
     for (int i = 0; i < 3; ++i) {
@@ -225,6 +226,13 @@ inline std::string build_valid_v4_mesh(const std::string &toe_name = "",
             0, 0, i == 0 ? 1.f : 0.f, 0, 0, 1, 0, 0};
         for (float value : toe_name.empty() ? old_vertex : triangle[i])
             out.f32(value);
+    }
+    if (mixed_bone) {
+        if (toe_name.empty())
+            throw std::runtime_error("Mixed-bone fixture requires a donor toe");
+        const auto foot_bone_idx = toe_name.front() == 'l' ? 10U : 11U;
+        for (const auto bone : {donor_bone_idx, donor_bone_idx, foot_bone_idx})
+            out.u32(bone);
     }
     return out.value;
 }

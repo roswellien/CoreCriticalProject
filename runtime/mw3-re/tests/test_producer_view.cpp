@@ -13,12 +13,18 @@
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_init.h"
 #include "gamez/zmodel/gmod_light.h"
+#include "gamez/zrender/zrndr_draw.h"
+#include "gamez/zrender/zrndr_fog.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "frontend/core_critical/renderer/flare_alpha.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cfenv>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -63,6 +69,163 @@ bool same_record(const ProducerView& a, const ProducerView& b) {
       a.camera_rect.x == b.camera_rect.x && a.camera_rect.y == b.camera_rect.y &&
       a.camera_rect.width == b.camera_rect.width && a.camera_rect.height == b.camera_rect.height &&
       std::memcmp(&a.fog, &b.fog, sizeof(a.fog)) == 0 && a.draw_state_fog == b.draw_state_fog;
+}
+
+TEST(b5_flare_alpha_generation) {
+  EXPECT(std::string_view(mw34::flare::generated_field(true)) ==
+         "generated=yes");
+  EXPECT(std::string_view(mw34::flare::generated_field(false)) ==
+         "generated=no");
+  constexpr unsigned size = 512;
+  std::vector<std::uint8_t> ring(std::size_t(size) * size * 4, 255);
+  std::array<bool, 256> source_levels{};
+  for (unsigned y = 0; y < size; ++y) {
+    for (unsigned x = 0; x < size; ++x) {
+      const unsigned source_x = x / 16;
+      const unsigned source_y = y / 16;
+      const double dx = (double(source_x) + 0.5 - 16.0) / 16.0;
+      const double dy = (double(source_y) + 0.5 - 16.0) / 16.0;
+      const double radius = std::sqrt(dx * dx + dy * dy);
+      const double envelope = std::max(0.0, 1.0 - radius);
+      const double rings = 0.5 + 0.5 * std::cos(radius * 20.0 * 3.141592653589793);
+      const unsigned coarse_alpha = std::min(
+          94U, unsigned(std::lround(94.0 * envelope * rings / 8.0)) * 8);
+      const std::uint8_t alpha = std::uint8_t(radius < 0.05 ? 94 : coarse_alpha);
+      source_levels[alpha] = true;
+      ring[(std::size_t(y) * size + x) * 4 + 3] = alpha;
+    }
+  }
+  const auto generated = mw34::flare::generate_rgba("lflare4", size, size, ring.data());
+  const auto reloaded = mw34::flare::generate_rgba("lflare4", size, size, ring.data());
+  EXPECT(generated == reloaded);
+  unsigned equal_neighbors = 0;
+  unsigned comparisons = 0;
+  unsigned peak = 0;
+  std::array<bool, 256> levels{};
+  for (unsigned y = 0; y < size; ++y)
+    for (unsigned x = 0; x < size; ++x) {
+      const unsigned index = (y * size + x) * 4 + 3;
+      const unsigned alpha = generated[index];
+      levels[alpha] = true;
+      peak = std::max(peak, alpha);
+      if (x + 1 < size) {
+        ++comparisons;
+        equal_neighbors += alpha == generated[index + 4];
+      }
+    }
+  const auto distinct = std::count(levels.begin(), levels.end(), true);
+  const auto original_distinct = std::count(source_levels.begin(), source_levels.end(), true);
+  EXPECT(double(equal_neighbors) / comparisons < 0.90);
+  EXPECT(distinct > 32);
+  EXPECT(distinct > original_distinct + 8);
+  EXPECT(peak == 94);
+  std::array<unsigned, 32> source_profile{}, generated_profile{}, profile_counts{};
+  for (unsigned y = 0; y < size; ++y)
+    for (unsigned x = 0; x < size; ++x) {
+      const double dx = (double(x) + 0.5 - size / 2.0) / (size / 2.0);
+      const double dy = (double(y) + 0.5 - size / 2.0) / (size / 2.0);
+      const unsigned bin = std::min(
+          31U, unsigned(std::sqrt(dx * dx + dy * dy) * 32.0 / std::sqrt(2.0)));
+      const unsigned index = (std::size_t(y) * size + x) * 4 + 3;
+      source_profile[bin] += ring[index];
+      generated_profile[bin] += generated[index];
+      ++profile_counts[bin];
+    }
+  unsigned radial_error = 0;
+  for (unsigned bin = 0; bin < source_profile.size(); ++bin) {
+    if (profile_counts[bin]) {
+      const unsigned source_mean = source_profile[bin] / profile_counts[bin];
+      const unsigned generated_mean = generated_profile[bin] / profile_counts[bin];
+      radial_error += unsigned(std::abs(int(source_mean) - int(generated_mean)));
+    }
+  }
+  EXPECT(radial_error < 80);
+
+  constexpr unsigned star_source = 64;
+  constexpr unsigned star_scale = 16;
+  constexpr unsigned star_size = star_source * star_scale;
+  std::vector<std::uint8_t> star(std::size_t(star_size) * star_size * 4, 255);
+  for (unsigned y = 0; y < star_size; ++y)
+    for (unsigned x = 0; x < star_size; ++x) {
+      const unsigned sx = x / star_scale;
+      const unsigned sy = y / star_scale;
+      const unsigned distance = unsigned(std::abs(int(sx) - 32) +
+                                         std::abs(int(sy) - 32));
+      star[(std::size_t(y) * star_size + x) * 4 + 3] =
+          distance < 4 ? 180 : distance < 18 ? 90 : 0;
+    }
+  const auto smooth_star = mw34::flare::generate_rgba("lflare1", star_size,
+                                                       star_size, star.data());
+  unsigned star_equal = 0;
+  unsigned star_comparisons = 0;
+  bool star_rgb_preserved = true;
+  std::array<bool, 256> star_levels{};
+  for (unsigned y = 0; y < star_size; ++y)
+    for (unsigned x = 0; x < star_size; ++x) {
+      const unsigned index = (y * star_size + x) * 4 + 3;
+      star_levels[smooth_star[index]] = true;
+      for (unsigned channel = 0; channel < 3; ++channel)
+        star_rgb_preserved = star_rgb_preserved &&
+            star[index - 3 + channel] == smooth_star[index - 3 + channel];
+    }
+  // Measure the reconstructed edges of the 16x nearest-neighbour source
+  // blocks. The transparent background occupies most of this texture, so a
+  // whole-image equality ratio would mostly measure empty space instead of
+  // whether authored block edges were smoothed.
+  for (unsigned y = 0; y < star_size; ++y)
+    for (unsigned boundary = star_scale; boundary < star_size;
+         boundary += star_scale) {
+      const unsigned left_source = boundary / star_scale - 1;
+      const unsigned right_source = boundary / star_scale;
+      const unsigned source_y = y / star_scale;
+      const unsigned left_distance = unsigned(std::abs(int(left_source) - 32) +
+                                              std::abs(int(source_y) - 32));
+      const unsigned right_distance = unsigned(std::abs(int(right_source) - 32) +
+                                               std::abs(int(source_y) - 32));
+      const std::uint8_t left_alpha = left_distance < 4 ? 180 : left_distance < 18 ? 90 : 0;
+      const std::uint8_t right_alpha = right_distance < 4 ? 180 : right_distance < 18 ? 90 : 0;
+      if (left_alpha == right_alpha)
+        continue;
+      const unsigned begin = boundary > 8 ? boundary - 8 : 0;
+      const unsigned end = std::min(star_size - 1, boundary + 7);
+      for (unsigned x = begin; x < end; ++x) {
+        const unsigned index = (y * star_size + x) * 4 + 3;
+        ++star_comparisons;
+        star_equal += smooth_star[index] == smooth_star[index + 4];
+      }
+    }
+  EXPECT(star_comparisons > 0);
+  EXPECT(double(star_equal) / star_comparisons < 0.90);
+  EXPECT(std::count(star_levels.begin(), star_levels.end(), true) > 32);
+  EXPECT(star_rgb_preserved);
+
+  std::vector<std::uint8_t> stock(64 * 64 * 4, 255);
+  for (unsigned y = 0; y < 64; ++y)
+    for (unsigned x = 0; x < 64; ++x) {
+      const double dx = (double(x) + 0.5 - 32.0) / 32.0;
+      const double dy = (double(y) + 0.5 - 32.0) / 32.0;
+      stock[(std::size_t(y) * 64 + x) * 4 + 3] =
+          std::sqrt(dx * dx + dy * dy) < 0.2 ? 94 : 0;
+    }
+  const auto stock_result = mw34::flare::generate_rgba("lflare2", 64, 64,
+                                                        stock.data());
+  EXPECT(stock_result.size() == stock.size());
+  unsigned stock_peak = 0;
+  for (std::size_t i = 3; i < stock_result.size(); i += 4)
+    stock_peak = std::max(stock_peak, unsigned(stock_result[i]));
+  EXPECT(stock_peak == 94);
+
+  std::vector<std::uint8_t> native_star(64 * 64 * 4, 255);
+  for (unsigned y = 0; y < 64; ++y)
+    for (unsigned x = 0; x < 64; ++x) {
+      const unsigned distance = unsigned(std::abs(int(x) - 32) +
+                                         std::abs(int(y) - 32));
+      native_star[(std::size_t(y) * 64 + x) * 4 + 3] =
+          distance < 3 ? 180 : distance < 14 ? 90 : 0;
+    }
+  const auto smoothed_native_star = mw34::flare::generate_rgba(
+      "lflare1", 64, 64, native_star.data());
+  EXPECT(smoothed_native_star != native_star);
 }
 template <typename F> bool throws(F operation) {
   try { operation(); } catch (const std::runtime_error&) { return true; }
@@ -171,7 +334,8 @@ struct Fixture {
   zmod::LightHooks old_light_hooks = zmod::light_hooks();
   zmod::Zones old_zones = zmod::zones();
   zmod::ViewPolygon old_polygon = zmod::view_polygon();
-  zcls::SceneWalk old_walk = zcls::scene_walk();
+  std::unique_ptr<zcls::SceneWalk> old_walk =
+      std::make_unique<zcls::SceneWalk>(zcls::scene_walk());
   zcls::WorldRenderHooks old_hooks = zcls::world_render_hooks();
   std::array<platform::TLVertex, 64> old_flat{};
   std::array<uint32_t, 64 * (6 + 2 * (1 + zmod::kShadowSets))> old_multi{};
@@ -204,7 +368,7 @@ struct Fixture {
     zmth::view().camera.m[0] = zmth::view().camera.m[4] = zmth::view().camera.m[8] = 1;
     zmth::reset_stack();
     zcls::world_render_hooks() = {};
-    zcls::scene_walk() = {};
+    zcls::scene_walk().reset();
     zmod::light_hooks() = {};
     zmod::draw_state().shadows = 0;
     zmod::zones().mode = 0;
@@ -225,7 +389,7 @@ struct Fixture {
     zmod::lighting() = old_lighting; zmod::light_list() = old_lights;
     zmod::light_hooks() = old_light_hooks; zmod::zones() = old_zones;
     zmod::view_polygon() = old_polygon;
-    zcls::scene_walk() = old_walk; zcls::world_render_hooks() = old_hooks;
+    zcls::scene_walk() = *old_walk; zcls::world_render_hooks() = old_hooks;
     zvid::set_render3d(old_renderer);
     std::fesetenv(&fp);
 #if defined(_M_X64) || defined(_M_IX86) || defined(__SSE__)
@@ -377,6 +541,78 @@ TEST(b5_view_immediate_scope) {
       f.sink.observed[before+1].state.multiply && !f.sink.observed[before+1].view.draw_state_fog,
       "MULTI_IMMEDIATE_OWNED");
   c.check(!f.sink.current.present && f.sink.restores == f.sink.exchanges, "IMMEDIATE_PRIOR_RESTORED");
+}
+
+TEST(flare_diagnostic_survives_sorted_queues_and_restores_scope) {
+  Fixture f;
+  zvid::D3DTexture texture{};
+  texture.handle = 7;
+  texture.type = 4;
+  {
+    const zvid::FlareDiagnosticScope outer(0, 16);
+    EXPECT(f.queue(10, .75f, &texture) != nullptr);
+    {
+      const zvid::FlareDiagnosticScope inner(1, 8);
+      EXPECT(f.queue(20, .25f, &texture) != nullptr);
+      zvid::draw_textured_white(3, &texture, 0, .5f, 1);
+    }
+    EXPECT(zvid::draw_state().flare_diagnostic.slot == 0);
+    EXPECT(bits(zvid::draw_state().flare_diagnostic.half_size_pixels, 16));
+  }
+  EXPECT(zvid::draw_state().flare_diagnostic.slot == -1);
+  // Flush under a different live label: the queue must retain each producer's
+  // value and attach the actual queue, rather than inheriting this scope.
+  {
+    const zvid::FlareDiagnosticScope unrelated(3, 99);
+    zvid::flush_transparent();
+    zvid::flush_overlay();
+  }
+  EXPECT(f.sink.observed.size() == 3);
+  if (f.sink.observed.size() == 3) {
+    const auto &near_draw = f.sink.observed[0];
+    const auto &far_draw = f.sink.observed[1];
+    const auto &overlay = f.sink.observed[2];
+    EXPECT(bits(near_draw.vertices[0].sx, 20) && bits(far_draw.vertices[0].sx, 10));
+    EXPECT(near_draw.state.flare_diagnostic.slot == 1 && far_draw.state.flare_diagnostic.slot == 0);
+    EXPECT(bits(near_draw.state.flare_diagnostic.half_size_pixels, 8));
+    EXPECT(bits(far_draw.state.flare_diagnostic.half_size_pixels, 16));
+    EXPECT(near_draw.state.queue == platform::DrawQueue::Transparent);
+    EXPECT(far_draw.state.queue == platform::DrawQueue::Transparent);
+    EXPECT(overlay.state.queue == platform::DrawQueue::Overlay);
+    EXPECT(overlay.state.flare_diagnostic.slot == 1);
+  }
+  EXPECT(f.queue(30) != nullptr);
+  zvid::flush_transparent();
+  EXPECT(f.sink.observed.back().state.flare_diagnostic.slot == -1);
+  f.point();
+  EXPECT(f.sink.observed.back().state.queue == platform::DrawQueue::Immediate);
+  EXPECT(f.sink.observed.back().state.flare_diagnostic.slot == -1);
+  try {
+    const zvid::FlareDiagnosticScope failing(2, 24);
+    throw std::runtime_error("scope unwind");
+  } catch (const std::runtime_error&) {}
+  EXPECT(zvid::draw_state().flare_diagnostic.slot == -1);
+}
+
+TEST(flare_sprite_clipping_is_distinct_from_unavailable_device) {
+  Fixture f;
+  const int32_t old_active = zrndr::device_fog().active;
+  zrndr::device_fog().active = 1;
+  auto &clip = zmod::draw_state().clip;
+  const float edge = 100;
+  clip.side_04 = clip.side_08 = 0;
+  std::memcpy(&clip.side_1c, &edge, sizeof(edge));
+  std::memcpy(&clip.side_20, &edge, sizeof(edge));
+  const float positions[][3] = {{110, 50, .99f}, {-11, 50, .99f},
+                                 {50, 110, .99f}, {50, -11, .99f}};
+  for (const auto &position : positions)
+    EXPECT(zrndr::draw_sprite(position, nullptr, 10, .5f, 0) == zrndr::SpriteDrawResult::Clipped);
+  const float center[3] = {50, 50, .99f};
+  EXPECT(zrndr::draw_sprite(center, nullptr, .5f, .5f, 0) == zrndr::SpriteDrawResult::Clipped);
+  zrndr::device_fog().active = 0;
+  EXPECT(zrndr::draw_sprite(center, nullptr, 10, .5f, 0) == zrndr::SpriteDrawResult::Unavailable);
+  zrndr::device_fog().active = old_active;
+  EXPECT(f.sink.observed.empty() && zvid::transparent_queue().count == 0);
 }
 
 TEST(b5_view_canvas_camera) {
@@ -620,4 +856,19 @@ TEST(b5_view_reset_abandon) {
   }
   zvid::flush_transparent();
   c.check(bits(f.sink.observed.back().vertices[0].sx, 6), "RESET_REUSE_OWNED_VALUE");
+}
+
+TEST(b6_idle_snapshot_preserves_mission) {
+  CpuCase c(__func__);
+  Fixture f;
+  zvid::producer_mission_changed({4, 9});
+  const auto configured = zvid::capture_producer_view_state_for_test();
+  zvid::producer_mission_changed({});
+  zvid::restore_producer_view_for_test(configured);
+  {
+    Emission main(ProducerPurpose::MainWorld);
+    const auto view = zvid::capture_producer_view();
+    c.check(view.mission.world_index == 4 && view.mission.number == 9,
+            "IDLE_SNAPSHOT_PRESERVES_CONFIGURED_MISSION");
+  }
 }

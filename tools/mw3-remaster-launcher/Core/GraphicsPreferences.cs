@@ -4,11 +4,11 @@ namespace MW3RemasterLauncher.Core;
 public sealed record GraphicsPreferences(int Width, int Height, string WindowMode,
     string AntiAliasing, int AnisotropicFiltering, int DrawDistance,
     bool DynamicLighting, bool Shadows, bool Headlights = false,
-    bool WaterDetail = true, bool CloudDetail = true)
+    bool WaterDetail = true, bool CloudDetail = true, string FlareStyle = "modern")
 {
     public static GraphicsPreferences From(LauncherSettings s) => new(s.Width, s.Height,
         s.WindowMode, s.AntiAliasing, s.AnisotropicFiltering, s.DrawDistance,
-        s.DynamicLighting, s.Shadows, s.Headlights, s.WaterDetail, s.CloudDetail);
+        s.DynamicLighting, s.Shadows, s.Headlights, s.WaterDetail, s.CloudDetail, s.FlareStyle);
 
     public void Validate()
     {
@@ -20,8 +20,10 @@ public sealed record GraphicsPreferences(int Width, int Height, string WindowMod
             throw new InvalidOperationException("Choose a supported AA setting.");
         if (AnisotropicFiltering is not (1 or 2 or 4 or 8 or 16))
             throw new InvalidOperationException("Choose a supported AF setting.");
-        if (DrawDistance is not (800 or 1200 or 1600))
+        if (DrawDistance is not (800 or 1200 or 1600 or 2400 or 3200))
             throw new InvalidOperationException("Choose a supported scenery setting.");
+        if (FlareStyle is not ("modern" or "original"))
+            throw new InvalidOperationException("Choose a supported lens flare style.");
     }
 
     public void ApplyTo(LauncherSettings s)
@@ -33,5 +35,6 @@ public sealed record GraphicsPreferences(int Width, int Height, string WindowMod
         s.DrawDistance=DrawDistance;
         s.DynamicLighting=DynamicLighting; s.Shadows=Shadows; s.Headlights=Headlights;
         s.WaterDetail=WaterDetail; s.CloudDetail=CloudDetail;
+        s.FlareStyle=FlareStyle;
     }
 }

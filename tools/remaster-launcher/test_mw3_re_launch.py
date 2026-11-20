@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -25,7 +26,8 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
             "executable": "C:/Runtime/bin/mw3.exe", "game_dir": "D:/Original MW3",
             "write_dir": "E:/Data/mw3-re/profiles/default", "renderer": "vulkan-wsi",
             "width": 1280, "height": 720, "aa": "2", "af": 8, "window_mode": "windowed",
-            "render_thread": True, "lighting": "normal", "assets": ["F:/Mods Pack/alpha", "F:/Mods/é"],
+            "render_thread": True, "lighting": "normal", "flare_style": "modern",
+            "assets": ["F:/Mods Pack/alpha", "F:/Mods/é"],
         }
 
     def planner(self):
@@ -36,6 +38,8 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
         plan = self.planner()
         valid = self.request()
         for key in valid:
+            if key == "flare_style":
+                continue
             missing = dict(valid)
             del missing[key]
             with self.subTest(missing=key), self.assertRaises(ValueError):
@@ -46,6 +50,7 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
             ("height", 479), ("height", 4321), ("af", True), ("af", 3), ("af", 32),
             ("render_thread", 1), ("aa", 2), ("aa", "msaa4"), ("window_mode", "maximized"),
             ("lighting", "unknown"), ("assets", ()), ("assets", [True]), ("assets", ["F:/a"] * 129),
+            ("flare_style", "smooth"), ("flare_style", True),
             ("extra", "no-silent-verbosity-option"),
         ]:
             request = dict(valid, **{key: value})
@@ -186,6 +191,20 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                     self.assertEqual(args[args.index("--cc-render-thread") + 1], "0")
                     self.assertNotIn("--nosound", args)
 
+    def test_flare_style_is_validated_and_defaults_to_modern(self):
+        plan = self.planner()
+        for style in ("modern", "original"):
+            request = dict(self.request(), flare_style=style)
+            args = plan(request)["argv"]
+            self.assertEqual(args[args.index("--cc-flare-style") + 1], style)
+        for invalid in ("smooth", "", True, None):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                plan(dict(self.request(), flare_style=invalid))
+        legacy_wire = self.request()
+        del legacy_wire["flare_style"]
+        args = plan(legacy_wire)["argv"]
+        self.assertEqual(args[args.index("--cc-flare-style") + 1], "modern")
+
     def test_all_path_components_precede_normalization(self):
         plan = self.planner()
         fields = ("runtime_root", "executable", "game_dir", "write_dir", "assets")
@@ -245,7 +264,8 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
             "argv": ["C:/Runtime/bin/mw3.exe", "--install", "D:/Original MW3", "--write-dir",
                      "E:/Data/mw3-re/profiles/default", "--cc-vulkan-wsi", "--window", "1280x720",
                      "--windowed", "--cc-aa", "ssaa2", "--cc-af", "8", "--cc-render-thread", "1",
-                     "--cc-lighting", "normal", "--assets", "F:/Mods Pack/alpha", "--assets", "F:/Mods/é"],
+                     "--cc-lighting", "normal", "--cc-flare-style", "modern",
+                     "--assets", "F:/Mods Pack/alpha", "--assets", "F:/Mods/é"],
             "working_directory": "C:\\Runtime\\bin",
             "skipped_features": [{
                 "feature": "Indeo movies",
@@ -254,7 +274,6 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
         })
         self.assertEqual(request, before)
         self.assertEqual(dict(os.environ), environment)
-
 
 class NativePreviewPlanTests(unittest.TestCase):
     """Schema 4: the labelled Native preview reads small pack manifests and emits pack arguments."""
@@ -412,6 +431,30 @@ class NativePreviewPlanTests(unittest.TestCase):
                                "registry": "environment/environment.json"}})
         return os.path.join(self.root, name)
 
+    def menu_pack(self, name="menu", tamper=False):
+        background = struct.pack("<8sIIII", b"MWHDBG1\0", 4, 2, 2, 1) + bytes(range(24))
+        registry = json.dumps({"schema_version": 2, "payload_profile": "prepared-ui-v1",
+                               "kind": "menu", "sprites": {},
+                               "background": "ui/background.mwhd"}).encode()
+        background_path = self.write(f"{name}/ui/background.mwhd", background)
+        registry_path = self.write(f"{name}/ui/ui.json", registry)
+        files = {}
+        for relative, path, file_format in (
+                ("ui/background.mwhd", background_path, "MWHDBG1"),
+                ("ui/ui.json", registry_path, None)):
+            with open(path, "rb") as stream:
+                payload = stream.read()
+            files[relative] = {"bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+            if file_format:
+                files[relative]["format"] = file_format
+        self.write(f"{name}/pack.json", {"schema_version": 2, "files": files,
+            "native_payload": {"profile": "prepared-ui-v1", "registry": "ui/ui.json"}})
+        if tamper:
+            with open(background_path, "r+b") as stream:
+                stream.seek(-1, os.SEEK_END)
+                stream.write(b"x")
+        return os.path.join(self.root, name)
+
     def request(self, **preview):
         return {
             "schema_version": 4, "engine": "mw3-re", "runtime_root": "C:/Runtime",
@@ -432,7 +475,11 @@ class NativePreviewPlanTests(unittest.TestCase):
         payload = lambda name: os.path.join(models, "payload", name + ".bin")
         self.assertTrue(result["ok"])
         self.assertEqual(result["skipped_packs"], [])
-        self.assertEqual(result["argv"][17:], [
+        argv = result["argv"]
+        tail_start = argv.index("--cc-dynamic-lighting")
+        self.assertEqual(argv[argv.index("--cc-lighting") + 2:tail_start],
+                         ["--cc-flare-style", "modern"])
+        self.assertEqual(argv[tail_start:], [
             "--cc-dynamic-lighting", "0", "--cc-sun-shadows", "0", "--cc-water-detail", "0",
             "--cc-cloud-detail", "0", "--cc-pom", "1", "--cc-environment-packs-explicit",
             "--cc-draw-distance", "1200",
@@ -445,7 +492,7 @@ class NativePreviewPlanTests(unittest.TestCase):
             "--cc-model", "owens", "0", payload("solo-mesh"), payload("solo-tex"),
             "--cc-environment-pack", training,
         ])
-        self.assertEqual(result["argv"][16], "normal")
+        self.assertEqual(argv[16], "normal")
 
     def test_original_distance_adds_no_argument_and_defaults_apply(self):
         result = self.plan(self.request())
@@ -455,13 +502,31 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertEqual(result["argv"][result["argv"].index("--cc-sun-shadows") + 1], "0")
         self.assertEqual(result["skipped_packs"], [])
 
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_menu_background_pack_is_hash_checked_and_emitted(self):
+        pack = self.menu_pack()
+        result = self.plan(self.request(hud="core-critical", ui_packs=[pack]))
+        background = os.path.join(pack, "ui", "background.mwhd")
+        self.assertIn("--cc-menu-background", result["argv"])
+        self.assertEqual(result["argv"].index("--cc-menu-background") + 1,
+                         result["argv"].index(background))
+        self.assertEqual(result["skipped_packs"], [])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_tampered_menu_background_is_reported_and_left_off(self):
+        pack = self.menu_pack(tamper=True)
+        result = self.plan(self.request(hud="core-critical", ui_packs=[pack]))
+        self.assertNotIn("--cc-menu-background", result["argv"])
+        self.assertEqual(result["skipped_packs"][0]["feature"], "ui_artwork")
+        self.assertIn("integrity failure", result["skipped_packs"][0]["reason"])
+
     def test_no_ui_packs_leaves_hud_options_unset(self):
         result = self.plan(self.request())
         self.assertNotIn("--cc-hud", result["argv"])
         self.assertNotIn("--cc-hud-text", result["argv"])
 
     @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
-    def test_ui_sprite_packs_route_to_native_artwork_and_menu_background_is_skipped(self):
+    def test_ui_sprite_packs_route_to_native_artwork_and_menu_background(self):
         hud = self.ui_pack("hud", "hud", background=False)
         menu = self.ui_pack("menu", "menu", background=True)
         result = self.plan(self.request(hud="core-critical", ui_packs=[hud, menu]))
@@ -471,10 +536,10 @@ class NativePreviewPlanTests(unittest.TestCase):
             [argv[i + 1] for i, value in enumerate(argv) if value == "--cc-hud-artwork"],
             [hud, menu],
         )
-        skipped = result["skipped_packs"]
-        self.assertEqual(len(skipped), 1)
-        self.assertEqual(skipped[0]["feature"], "menu_hd_background")
-        self.assertIn("no native menu-background", skipped[0]["reason"])
+        background = os.path.join(menu, "ui", "background.mwhd")
+        self.assertEqual(argv.count("--cc-menu-background"), 1)
+        self.assertEqual(argv[argv.index("--cc-menu-background") + 1], background)
+        self.assertEqual(result["skipped_packs"], [])
 
     @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_identical_ui_identity_hashes_are_accepted_in_input_order(self):
@@ -531,13 +596,15 @@ class NativePreviewPlanTests(unittest.TestCase):
                 result = self.plan(self.request(hud="core-critical", ui_packs=[menu]))
                 self.assertTrue(result["ok"])
                 self.assertNotIn("--cc-hud-artwork", result["argv"])
-                self.assertEqual(len(result["skipped_packs"]), 1)
-                skipped = result["skipped_packs"][0]
-                self.assertEqual(skipped["root"], menu)
                 if background:
-                    self.assertEqual(skipped["feature"], "menu_hd_background")
-                    self.assertIn("no native menu-background", skipped["reason"])
+                    # A background-only menu pack is routed to the menu background alone.
+                    self.assertIn("--cc-menu-background", result["argv"])
+                    self.assertEqual(result["skipped_packs"], [])
                 else:
+                    self.assertNotIn("--cc-menu-background", result["argv"])
+                    self.assertEqual(len(result["skipped_packs"]), 1)
+                    skipped = result["skipped_packs"][0]
+                    self.assertEqual(skipped["root"], menu)
                     self.assertEqual(skipped["feature"], "ui_artwork")
                     self.assertIn("no available artwork", skipped["reason"])
 
@@ -814,7 +881,7 @@ class NativePreviewPlanTests(unittest.TestCase):
                 self.assertEqual(len(skipped), 1)
 
     def test_invalid_choices_are_refused(self):
-        for preview in ({"draw_distance": 2400}, {"draw_distance": "1200"}, {"hud": "neon"},
+        for preview in ({"draw_distance": 1000}, {"draw_distance": "1200"}, {"hud": "neon"},
                         {"hud_text": True}, {"hud": "original", "hud_text": True}, {"geometry": "gpu"},
                         {"model_packs": "C:/one"}, {"ui_packs": "C:/one"}, {"unknown": 1},
                         {"model_packs": ["relative/pack"]}):
@@ -861,8 +928,24 @@ class NativePreviewPlanTests(unittest.TestCase):
 
     def test_schema_four_json_round_trip(self):
         plan_json = importlib.import_module("mw3_re_launch").plan_json
-        result = plan_json(json.dumps(self.request(draw_distance=1600)))
-        self.assertEqual(result["argv"][result["argv"].index("--cc-draw-distance") + 1], "1600")
+        for distance in (1200, 1600, 2400, 3200):
+            with self.subTest(distance=distance):
+                result = plan_json(json.dumps(self.request(draw_distance=distance)))
+                argument_index = result["argv"].index("--cc-draw-distance") + 1
+                self.assertEqual(result["argv"][argument_index], str(distance))
+
+    def test_draw_distance_table_matches_runtime(self):
+        repository_root = Path(__file__).resolve().parents[2]
+        header = repository_root / "runtime/mw3-re/src/gamez/zclass/visual_distance.h"
+        source = header.read_text(encoding="utf-8")
+        table = re.search(r"kViewDistanceOptions\[\]\s*=\s*\{(.*?)\};", source, re.DOTALL)
+        self.assertIsNotNone(table, "Runtime view-distance table is missing")
+        pairs = [(int(distance), int(start)) for distance, start in
+                 re.findall(r"\{\s*(\d+)\s*,\s*(\d+)\s*\}", table.group(1))]
+        expected = [(800, 700), (1200, 1050), (1600, 1450), (2400, 2250), (3200, 3050)]
+        self.assertEqual(pairs, expected)
+        planner_distances = importlib.import_module("mw3_re_launch")._PREVIEW_DRAW_DISTANCES
+        self.assertEqual(planner_distances, tuple(distance for distance, _ in pairs))
 
     @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
     def test_dynamic_lighting_uses_enabled_pack_catalog_and_headlight_inputs(self):

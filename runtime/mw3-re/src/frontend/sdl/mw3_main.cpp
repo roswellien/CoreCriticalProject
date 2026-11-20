@@ -341,9 +341,12 @@ void usage() {
       "    [--cc-effect-lights CATALOG] [--cc-fixture-lights 0|1]\n"
       "    [--cc-mech-headlights STOCK-CATALOG BINDINGS]\n"
       "    [--cc-hud original|core-critical] [--cc-hud-artwork PACK-ROOT]... [--cc-hud-text 0|1]\n"
+      "    [--cc-menu-background FILE] [--cc-menu-background-renderer cpu|gpu (default gpu)]\n"
+      "    [--cc-menu-observe]\n"
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
       "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires Core Critical Vulkan and --cc-lighting normal)]\n"
-      "    [--cc-draw-distance 800|1200|1600 (default 800)]\n"
+      "    [--cc-draw-distance 800|1200|1600|2400|3200 (default 800)]\n"
+      "    [--cc-flare-style modern|original (default modern)]\n"
       "    [--cc-controller FILE] (launcher-exported controller profile)\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [--arena SETUP.json --seed N --frame-ms N] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
@@ -504,6 +507,13 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-vulkan") a.backend = sdlfe::RendererBackend::core_critical_dxgi, a.no_launcher = true;
     else if (s == "--cc-hud" && next(1)) a.hud.mode = argv[++i], a.hud_mode_given = true;
     else if (s == "--cc-hud-artwork" && next(1)) a.hud.artwork.emplace_back(argv[++i]), a.hud_artwork_given = true;
+    else if (s == "--cc-menu-background" && next(1)) a.hud.menu_background = argv[++i];
+    else if (s == "--cc-menu-background-renderer" && next(1)) {
+      a.hud.menu_background_renderer = argv[++i];
+      if (a.hud.menu_background_renderer != "cpu" && a.hud.menu_background_renderer != "gpu")
+        return false;
+    }
+    else if (s == "--cc-menu-observe") a.hud.observe_menu = true;
     else if (s == "--cc-hud-text" && next(1)) {
       const std::string value = argv[++i];
       if (value != "0" && value != "1") return false;
@@ -514,13 +524,20 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-controller") return false;
     else if (s == "--cc-aa" && next(1)) a.quality.antialiasing = argv[++i];
     else if (s == "--cc-af" && next(1)) a.quality.anisotropy = argv[++i];
+    else if (s == "--cc-flare-style" && next(1)) {
+      a.cc_assets.flare_style = argv[++i];
+      if (a.cc_assets.flare_style != "modern" && a.cc_assets.flare_style != "original") {
+        std::fprintf(stderr, "--cc-flare-style supports modern or original\n");
+        return false;
+      }
+    }
     else if (s == "--cc-draw-distance") {
       if (!next(1)) {
-        std::fprintf(stderr, "--cc-draw-distance requires 800, 1200 or 1600\n");
+        std::fprintf(stderr, "--cc-draw-distance requires 800, 1200, 1600, 2400 or 3200\n");
         return false;
       }
       if (!sdlfe::parse_draw_distance(argv[++i], &a.quality.draw_distance)) {
-        std::fprintf(stderr, "--cc-draw-distance supports only 800, 1200 or 1600\n");
+        std::fprintf(stderr, "--cc-draw-distance supports only 800, 1200, 1600, 2400 or 3200\n");
         return false;
       }
     }
@@ -1380,10 +1397,16 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   window.set_fullscreen(!a.windowed && !a.window_given && !a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty());
   // FIX (B): a first start's mission at the desktop's size; checks and shots keep 640x480.
   // MW3_FIRST_START=1 keeps it on in a check (sdl_first_start_takes_the_desktop).
-  // The 3D replay, scripted ones too, plays at the screen's shape (options.cpp).
-  mech3::set_replay_screen(!a.watch.replay3d_path.empty());
-  window.set_first_start_desktop((!a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty()) ||
-                                 !a.watch.replay3d_path.empty() || std::getenv("MW3_FIRST_START") != nullptr);
+  const bool play_run_size = (!a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty()) ||
+                             std::getenv("MW3_FIRST_START") != nullptr;
+  // The 3D replay, scripted ones too, plays at the screen's shape (options.cpp, ours #289).
+  const bool replay3d = !a.watch.replay3d_path.empty();
+  mech3::set_replay_screen(replay3d);
+  window.set_first_start_desktop(play_run_size || replay3d);
+  // FIX (B): the launcher passes its resolution as --window WxH; a play run's frame (the menus'
+  // canvas and the mission) follows it rather than a saved or desktop size (resolution.md).
+  if (play_run_size && a.window_given && a.win_w > 0 && a.win_h > 0)
+    window.set_launch_size(a.win_w, a.win_h);
   sdlfe::SdlZinHost zin_host(&input);
   sdlfe::FrontendInputLifetime input_lifetime(zin_host);
   sdlfe::SdlClock clock;

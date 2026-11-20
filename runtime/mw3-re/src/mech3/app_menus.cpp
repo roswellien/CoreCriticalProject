@@ -18,6 +18,7 @@
 #include "gamez/ztwod/twod.h"
 #include "gamez/ztwod/twod_host.h"
 #include "gamez/zimage/zimg_library.h"
+#include "gamez/zrender/zrndr_blit.h"
 #include "upgrades/mods/salvage_chance.h"
 #include "upgrades/settings/upgrades.h"
 #include "mech3/app.h"
@@ -1082,6 +1083,7 @@ bool GameEngine::missions_loaded() { return missions().finished(); }
 // The launch 0x00491150 ends by emptying the missions object's +0xc0 store
 // (mission_launch.cpp walks it through memory); here the ported store.
 bool GameEngine::mission_launch() {
+  zrndr::set_menu_background_source(nullptr);
   const bool ok = launch_player();
   if (ok) mission_salvage().clear();
   // Ours (salvage_chance.h): a campaign mission's odds, when a mounted mod sets them.
@@ -1375,7 +1377,10 @@ std::string GameEngine::message_format_is(int32_t id, int32_t a, const char* s) 
 std::string GameEngine::message_format_isi(int32_t id, int32_t a, const char* s, int32_t b) {
   return zutl::format_message_f(id, a, s, b);
 }
-void GameEngine::mission_cleanup(int32_t unload) { missions().cleanup(unload != 0); }
+void GameEngine::mission_cleanup(int32_t unload) {
+  zrndr::set_menu_background_source(nullptr);
+  missions().cleanup(unload != 0);
+}
 void GameEngine::replace_state(int32_t n) { app().replace(app().state(n), 0); }
 
 Handle GameEngine::voice_play(Handle s, float v) {

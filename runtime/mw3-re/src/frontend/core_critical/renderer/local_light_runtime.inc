@@ -744,7 +744,7 @@ void apply_fixture_observation(vk::Draw &draw,
   if(!current) return;
   // Capture after the path's fog initialization and after copying any cached
   // draw. The returned index belongs to exactly this Scene, never its cache.
-  draw.push.fog[3] = 1.f + observation->intensity;
+  apply_fixture_observation_emission(draw.push.fog, observation->intensity);
   draw.emission_index = scene_.emissions.capture(
       {float(observation->regions.size()), observation->intensity, 0, 0}, observation->regions);
   fixture_remember(observation);

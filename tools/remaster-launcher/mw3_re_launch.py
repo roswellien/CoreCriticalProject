@@ -16,7 +16,7 @@ _FIELDS = frozenset({
     "schema_version", "engine", "runtime_root", "executable", "game_dir", "write_dir", "renderer",
     "width", "height", "aa", "af", "window_mode", "render_thread", "lighting", "assets",
 })
-_OPTIONAL_FIELDS = frozenset({"indeo_codec"})
+_OPTIONAL_FIELDS = frozenset({"indeo_codec", "flare_style"})
 _AA = {"off": "off", "1": "off", "fxaa": "fxaa", "2": "ssaa2", "4": "ssaa4"}
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_JSON_DEPTH = 64
@@ -30,8 +30,8 @@ _PREVIEW_FIELDS = frozenset({"draw_distance", "hud", "hud_text", "geometry", "mo
                              "headlights", "water_detail", "cloud_detail",
                              "headlight_bindings", "stock_effect_catalog",
                              "stock_headlight_catalog"})
-# 800 is the original game's scenery range; the preview runtime also accepts 1200 and 1600.
-_PREVIEW_DRAW_DISTANCES = (800, 1200, 1600)
+# Keep the planner in step with kViewDistanceOptions; 800 is the original scenery range.
+_PREVIEW_DRAW_DISTANCES = (800, 1200, 1600, 2400, 3200)
 _PREVIEW_HUDS = ("original", "core-critical")
 _PREVIEW_GEOMETRY = ("legacy", "partial")
 _RUNTIME_MODEL_STATUSES = ("runtime-ready", "runtime-candidate")
@@ -688,7 +688,7 @@ def _preview_choices(preview):
     choices.update(preview)
     distance = choices["draw_distance"]
     if type(distance) is not int or distance not in _PREVIEW_DRAW_DISTANCES:
-        raise ValueError("Native preview scenery distance must be 800, 1200 or 1600")
+        raise ValueError("Native preview scenery distance must be 800, 1200, 1600, 2400 or 3200")
     if choices["hud"] is not None and choices["hud"] not in _PREVIEW_HUDS:
         raise ValueError("Unknown native preview HUD")
     if choices["hud_text"] is not None:
@@ -756,6 +756,9 @@ def plan_launch(request):
                 disabled_detail.append(choice)
     if request["engine"] != "mw3-re" or request["renderer"] != "vulkan-wsi":
         raise ValueError("Unsupported native engine or renderer")
+    flare_style = request.get("flare_style", "modern")
+    if flare_style not in ("modern", "original"):
+        raise ValueError("Native flare style must be modern or original")
     for field, minimum, maximum in (("width", 640, 7680), ("height", 480, 4320)):
         if type(request[field]) is not int or not minimum <= request[field] <= maximum:
             raise ValueError("Unsupported native window dimensions")
@@ -806,6 +809,7 @@ def plan_launch(request):
         *_window_arguments(request["window_mode"], request["width"], request["height"]),
         "--cc-aa", _AA[request["aa"]], "--cc-af", str(request["af"]),
         "--cc-render-thread", "1" if request["render_thread"] else "0", "--cc-lighting", request["lighting"],
+        "--cc-flare-style", flare_style,
     ]
     skipped_features = []
     if codec is None:
@@ -936,10 +940,10 @@ def plan_launch(request):
                     width, height, source_width, source_height = struct.unpack("<IIII", header[8:])
                     if (not width or not height or not source_width or not source_height
                             or max(width, height, source_width, source_height) > 16384
+                            or width * source_height != height * source_width
                             or background_path.stat().st_size != 24 + 3 * width * height):
                         raise ValueError("menu background dimensions or length are invalid")
-                    skipped.append({"root": str(root), "feature": "menu_hd_background",
-                                    "reason": "MW3-RE has no native menu-background presentation route"})
+                    argv.extend(("--cc-menu-background", str(background_path)))
                 if not sprite_hashes:
                     if background is None:
                         raise ValueError("UI pack has no available artwork")

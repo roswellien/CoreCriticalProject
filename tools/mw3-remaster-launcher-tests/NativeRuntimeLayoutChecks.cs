@@ -541,7 +541,8 @@ static class NativeRuntimeLayoutChecks
                     "--cc-vulkan-wsi" }.Concat(window).Concat(new[] {
                     "--cc-aa", aa, "--cc-af", expected.AnisotropicFiltering.ToString(),
                     "--cc-render-thread", expected.RenderThread ? "1" : "0", "--cc-lighting",
-                    original["options"]!["lighting"]!.GetValue<string>() }).ToArray();
+                    original["options"]!["lighting"]!.GetValue<string>(),
+                    "--cc-flare-style", "modern" }).ToArray();
                 if (!planned["ok"]!.GetValue<bool>() ||
                     !planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).SequenceEqual(argv) ||
                     planned["working_directory"]!.GetValue<string>() != Path.GetDirectoryName(contract.Executable))
@@ -692,10 +693,13 @@ static class NativeRuntimeLayoutChecks
         }
         Reject(() => Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, "../escape"));
         Reject(() => Mw3ReLaunchRequest.Create(contract, options with { Renderer = (Mw3ReRenderer)99 }, "D:/Original MW3", dataRoot, "pilot-a"));
+        Reject(() => Mw3ReLaunchRequest.Create(contract, options with { FlareStyle = (Mw3ReFlareStyle)99 },
+            "D:/Original MW3", dataRoot, "pilot-a"));
         var planned = RunMw3RePlanner(json);
         var expected = new[] { contract.Executable, "--install", "D:/Original MW3", "--write-dir", expectedWrite,
             "--cc-vulkan-wsi", "--window", "1280x720", "--windowed", "--cc-aa", "ssaa2", "--cc-af", "8",
-            "--cc-render-thread", "0", "--cc-lighting", "normal", "--assets", "F:/Mods Pack/alpha", "--assets", "F:/Mods/é" };
+            "--cc-render-thread", "0", "--cc-lighting", "normal", "--cc-flare-style", "modern",
+            "--assets", "F:/Mods Pack/alpha", "--assets", "F:/Mods/é" };
         if (!planned["ok"]!.GetValue<bool>() ||
             !planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).SequenceEqual(expected) ||
             planned["working_directory"]!.GetValue<string>() != Path.GetDirectoryName(contract.Executable))
@@ -777,7 +781,7 @@ static class NativeRuntimeLayoutChecks
                 Width = 1280, Height = 720, WindowMode = "windowed", RenderThread = true,
                 AntiAliasing = "fxaa", AnisotropicFiltering = 16, DrawDistance = 1200,
                 DynamicLighting = true, Shadows = true,
-                WaterDetail = false, CloudDetail = false
+                WaterDetail = false, CloudDetail = false, FlareStyle = "original"
             };
             var options = NativeGameRunner.PlanningOptionsForSettings(settings, contract,
                 NativeGameRunner.PreviewDrawDistance(settings.DrawDistance, out _),
@@ -785,32 +789,36 @@ static class NativeRuntimeLayoutChecks
             var json = Mw3ReLaunchRequest.Create(contract, options, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId);
             var wire = JsonNode.Parse(json)!;
             if (wire["schema_version"]!.GetValue<int>() != 4 || wire["preview"]!["draw_distance"]!.GetValue<int>() != 1200 ||
+                wire["preview"]!["ui_packs"]![0]!.GetValue<string>() != ui ||
                 !wire["preview"]!["dynamic_lighting"]!.GetValue<bool>() ||
                 !wire["preview"]!["shadows"]!.GetValue<bool>() ||
                 wire["visuals"]!["pom"]!.GetValue<bool>() != true ||
                 wire["preview"]!["water_detail"]!.GetValue<bool>() ||
                 wire["preview"]!["cloud_detail"]!.GetValue<bool>())
                 throw new Exception("Native preview projection lost its schema, distance, dynamic lighting, shadows, POM or detail choices.");
+            if (wire["flare_style"]!.GetValue<string>() != "original")
+                throw new Exception("Saved lens flare style did not reach the native preview request.");
             var planned = RunMw3RePlanner(json);
             var argv = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
             if (argv[argv.IndexOf("--cc-dynamic-lighting") + 1] != "1" ||
-                argv[argv.IndexOf("--cc-sun-shadows") + 1] != "1")
+                argv[argv.IndexOf("--cc-sun-shadows") + 1] != "1" ||
+                argv[argv.IndexOf("--cc-flare-style") + 1] != "original")
                 throw new Exception("Native launcher dynamic lighting and shadows choices did not reach the runtime argv.");
             var expectedTail = new[] { "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
-                "--cc-hud-text", "1", "--cc-hud-artwork", ui, "--cc-geometry", "partial",
+                "--cc-hud-text", "1", "--cc-menu-background", Path.Combine(ui, "ui", "background.mwhd"),
+                "--cc-hud-artwork", ui, "--cc-geometry", "partial",
                 "--cc-model", "owens", "0", Path.Combine(mechs, "payload", "mesh.bin"), Path.Combine(mechs, "payload", "tex.bin"),
                 "--cc-model-normals", "owens", "0", Path.Combine(mechs, "payload", "nrm.bin"),
                 "--cc-environment-pack", map };
             // This fixture has no effect-light catalog, so local lights are also skipped.
             if (!planned["ok"]!.GetValue<bool>() || !argv.Skip(argv.Count - expectedTail.Length).SequenceEqual(expectedTail) ||
-                planned["skipped_packs"]!.AsArray().Count != 4 ||
-                // Exact order: the menu pack is reported first, then the shared environment pack
-                // (no feature key), then the dynamic-lighting local-light skips.
-                planned["skipped_packs"]![0]!["feature"]?.GetValue<string>() != "menu_hd_background" ||
-                planned["skipped_packs"]![1]!["root"]!.GetValue<string>() != shared ||
-                planned["skipped_packs"]![1]!["feature"] != null ||
-                planned["skipped_packs"]![2]!["feature"]?.GetValue<string>() != "effect_lights" ||
-                planned["skipped_packs"]![3]!["feature"]?.GetValue<string>() != "fixture_lights")
+                planned["skipped_packs"]!.AsArray().Count != 3 ||
+                // Exact order: the shared environment pack (no feature key), then the
+                // dynamic-lighting local-light skips. The menu background is routed, not skipped.
+                planned["skipped_packs"]![0]!["root"]!.GetValue<string>() != shared ||
+                planned["skipped_packs"]![0]!["feature"] != null ||
+                planned["skipped_packs"]![1]!["feature"]?.GetValue<string>() != "effect_lights" ||
+                planned["skipped_packs"]![2]!["feature"]?.GetValue<string>() != "fixture_lights")
                 throw new Exception("Native preview request did not reach the planner's pack translation intact.");
 
             var noUiOptions = options with
@@ -857,18 +865,31 @@ static class NativeRuntimeLayoutChecks
             if (!suppressedSettings.Shadows || suppressedSettings.DynamicLighting)
                 throw new Exception("Planning mutated the saved lighting choices.");
 
-            // 800 is the original range and adds no argument; 2400 belongs to the Remaster engine.
+            // 800 keeps the original geometry range and needs no explicit argument.
             var original = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options with
                 { Preview = options.Preview with { DrawDistance = 800 } }, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId));
             if (original["argv"]!.AsArray().Any(value => value!.GetValue<string>() == "--cc-draw-distance"))
                 throw new Exception("Original scenery distance added a preview argument.");
+            foreach (var distance in new[] { 2400, 3200 })
+            {
+                var extended = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options with
+                    { Preview = options.Preview with { DrawDistance = distance } },
+                    "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId));
+                var extendedArguments = extended["argv"]!.AsArray()
+                    .Select(value => value!.GetValue<string>()).ToList();
+                var distanceIndex = extendedArguments.IndexOf("--cc-draw-distance");
+                if (distanceIndex < 0 || distanceIndex + 1 >= extendedArguments.Count ||
+                    extendedArguments[distanceIndex + 1] != distance.ToString())
+                    throw new Exception("Planner lost the extended scenery distance.");
+            }
             var refused = RunMw3RePlanner(Mw3ReLaunchRequest.Create(contract, options with
-                { Preview = options.Preview with { DrawDistance = 2400 } }, "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId));
+                { Preview = options.Preview with { DrawDistance = 1000 } },
+                "D:/Original MW3", dataRoot, NativeGameRunner.ProfileId));
             if (refused["validation_error"]?.GetValue<bool>() != true) throw new Exception("Planner accepted an unsupported preview distance.");
 
-            if (NativeGameRunner.PreviewDrawDistance(3200, out var reduced) != 1600 || !reduced ||
+            if (NativeGameRunner.PreviewDrawDistance(3200, out var reduced) != 3200 || reduced ||
                 NativeGameRunner.PreviewDrawDistance(1200, out reduced) != 1200 || reduced)
-                throw new Exception("Saved scenery distance was not mapped to the preview range.");
+                throw new Exception("Saved scenery distance was reduced for the native runtime.");
             // Unknown saved choices are refused before any process starts.
             static void Refused(Action action)
             {
@@ -877,6 +898,7 @@ static class NativeRuntimeLayoutChecks
                 throw new Exception("Native preview accepted an unknown saved choice.");
             }
             Refused(() => NativeGameRunner.PreviewDrawDistance(1000, out _));
+            Refused(() => NativeGameRunner.PreviewDrawDistance(4000, out _));
             if (NativeGameRunner.PreviewAntialiasing("fxaa") != Mw3ReAntialiasing.Fxaa) throw new Exception("Saved FXAA was remapped.");
             Refused(() => NativeGameRunner.PreviewAntialiasing("msaa"));
             if (Directory.Exists(dataRoot)) throw new Exception("Planning unexpectedly created a write directory.");

@@ -132,7 +132,7 @@ double mul_up(double left, double right) noexcept {
 // when every corner of its source AABB is provably < far_z across all finite
 // float multiply/add/FMA orders, rounding modes and intermediate FTZ states.
 bool far_plane_safe(const cc::geometry::Resource &resource,
-                    const platform::ModelDrawContext &context, float clip_far) noexcept {
+                    const platform::ModelDrawContext &context, float clip_far, const platform::Render3D &renderer) {
     if (!resource.source_bounds_valid || !context.model_to_camera)
         return false;
     if (!is_positive_normal(clip_far) || !is_positive_normal(context.far_z) ||
@@ -183,7 +183,21 @@ bool far_plane_safe(const cc::geometry::Resource &resource,
     constexpr double kFloatMinNormal = double(std::numeric_limits<float>::min());
     const double margin = add_up(mul_up(64.0 * kFloatEpsilon, abs_sum), 64.0 * kFloatMinNormal);
     const double max_camera_z = add_up(support_sum, margin);
-    return std::isfinite(max_camera_z) && max_camera_z < double(clip_far);
+    if (!std::isfinite(max_camera_z)) return false;
+    if (max_camera_z < double(clip_far)) return true;
+    // Camera Z never exceeds length(eye). In an authenticated world projection
+    // the hardware far plane therefore clips only samples this renderer already
+    // discards. Keep every source/FP bound above and the legacy rule elsewhere.
+    const unsigned radius = renderer.opaque_world_range();
+    if (!radius || double(radius) > double(clip_far)) return false;
+    const auto view = zvid::capture_producer_view();
+    const auto &p = view.projection;
+    return view.present && (view.purpose == platform::ProducerPurpose::MainWorld ||
+                            view.purpose == platform::ProducerPurpose::WorldZoom) &&
+           p.far_z == context.far_z && p.near_z == context.near_z &&
+           p.fx_near == context.fx_near && p.fy_near == context.fy_near &&
+           p.cx == context.cx && p.cy == context.cy;
+
 }
 } // namespace
 
@@ -398,7 +412,10 @@ bool submit_geometry(zcls::Node &node) {
     context.cy = projection.cy;
     context.opacity = draw_state().opacity;
     const Lighting& tint = lighting();
-    if (tint.tint_on) context.damage_tint_weight = tint.tint_weight;
+    if (tint.tint_on) {
+      std::copy_n(tint.tint, 3, context.damage_tint_rgb);
+      context.damage_tint_weight = tint.tint_weight;
+    }
     context.ordinary = model.count(0) == 0;
     context.morphing = model.count(0x20) != 0;
     context.overlay = draw_state().overlay != 0;
@@ -407,19 +424,24 @@ bool submit_geometry(zcls::Node &node) {
     const auto &source_fog = render_fog();
     cc::geometry::Fog fog_state;
     fog_state.enabled = source_fog.on != 0;
-    std::copy_n(source_fog.color, 3, fog_state.color.begin());
+    std::copy_n(render_fog_color(), 3, fog_state.color.begin());
     fog_state.near_range = source_fog.near_range;
     fog_state.inverse_range = source_fog.inv_range;
     fog_state.low_altitude = source_fog.alt_low;
     fog_state.inverse_altitude = source_fog.inv_alt;
+    const auto edge = render_fog_edge();
+    fog_state.edge_start = edge.start;
+    fog_state.edge_inverse_range = edge.inverse_range;
     // Prepared assets own their materials. Admit their rigid draw before stock
     // registration and all native vertex/polygon loops, retaining effect-bearing
     // producers until their side effects have an explicit GPU contract.
     if (context.ordinary && !context.morphing && !context.overlay && !model.count(0x1c) &&
-        !draw_state().second_pass &&
-        renderer->submit_prepared_geometry(context, fog_state) ==
+        !draw_state().second_pass) {
+        if (zvid::submit_prepared_geometry_for_current_view(renderer, context,
+                                                             fog_state) ==
             cc::geometry::Submission::submitted)
-      return true;
+            return true;
+    }
     // Stock model packets do not carry sky state; keep the original TL producer.
     if (zvid::draw_state().native_sky) {
         // Static baking also indexes cached normals with vertex shading off.
@@ -435,7 +457,7 @@ bool submit_geometry(zcls::Node &node) {
         model.render_geometry = std::move(registered.resource);
         model.render_materials = std::move(registered.original_materials);
     }
-    if (!far_plane_safe(*model.render_geometry, context, draw_state().clip.far_z)) {
+    if (!far_plane_safe(*model.render_geometry, context, draw_state().clip.far_z, *renderer)) {
         // Static baking also indexes cached normals with vertex shading off.
         if (model.count(0x14) > std::uint32_t(kModelVerts) ||
             model.count(0x18) > std::uint32_t(kModelVerts))
@@ -443,7 +465,8 @@ bool submit_geometry(zcls::Node &node) {
         return unsupported();
     }
     const auto materials = copy_rigid_materials(model, *model.render_geometry);
-    if (renderer->submit_model_geometry(model.render_geometry, context, materials, fog_state) !=
+    if (zvid::submit_model_geometry_for_current_view(
+            renderer, model.render_geometry, context, materials, fog_state) !=
         cc::geometry::Submission::submitted)
         return unsupported();
     return true;

@@ -1,4 +1,5 @@
 #include "mech3/app_hooks.h"
+#include "gamez/zrender/zrndr_blit.h"
 
 #include <cstdio>
 #include <cstring>
@@ -237,7 +238,10 @@ void Engine::set_shadow_parts(int32_t v) { mech3::set_shadow_parts(v); }
 int32_t Engine::shadow() { return mech3::shadow(); }
 void Engine::set_shadow(int32_t v) { mech3::set_shadow(v); }
 void Engine::set_gfx_flags(int32_t v) { mech3::set_gfx_flags(v); }
-void Engine::set_in_game_vmode(int32_t v) { options().in_game_vmode = v; }
+void Engine::set_in_game_vmode(int32_t v) {
+  options().in_game_vmode = v;
+  mech3::note_player_screen_choice();  // ours: a launcher size no longer overrides what is saved
+}
 
 // Mech3.exe 1.2 @ 0x004ab860: software 3..5 (320x240 doubled to 640x480);
 // a 3D card 5 up to 7 (1024x768), 6 below 3 x 1.5 MB of free video memory,
@@ -400,9 +404,13 @@ void Engine::screen_tint(uint16_t colour, Handle rect, double alpha) {
 void Engine::replace_with_exit() { app().replace(app().state(4), 0); }
 bool Engine::main_menu_background(zimg::Texture** image, uint8_t* moving) {
   MainMenu* m = main_menu();
-  if (!m) return false;
+  if (!m) {
+    zrndr::set_menu_background_source(nullptr);
+    return false;
+  }
   *image = m->background.image;
   *moving = m->background.moving;
+  zrndr::set_menu_background_source(*image);
   return true;
 }
 uint8_t Engine::mission_running() { return states().core.active_; }

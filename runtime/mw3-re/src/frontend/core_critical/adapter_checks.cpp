@@ -19,6 +19,7 @@
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_fog.h"
+#include "gamez/zmodel/gmod_fogcalc.h"
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "renderer/campaign_environment_policy.hpp"
@@ -34,6 +35,7 @@
 #include "renderer/surface_detail_bindings.hpp"
 #include "renderer/surface_materials.hpp"
 #include "renderer/vk_scene.hpp"
+#include "renderer/flare_alpha.hpp"
 #include "platform/sha256.hpp"
 #include <sstream>
 #include <limits>
@@ -48,12 +50,16 @@ bool get_active_surface_key(SurfaceKey *out);
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <optional>
+#include <random>
 #include <stdexcept>
 #include <string_view>
 
@@ -102,6 +108,173 @@ void quad(platform::Render3D &renderer, float low, float high, float depth,
 }
 
 #include "local_light_gpu_checks.inc"
+
+void check_menu_background_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
+  platform::MenuBackgroundImage image;
+  image.width = image.height = 16;
+  image.source_width = image.source_height = 8;
+  image.rgb.resize(16 * 16 * 3);
+  std::vector<uint32_t> hd_rgba(256);
+  for (unsigned y = 0; y < 16; ++y) {
+    for (unsigned x = 0; x < 16; ++x) {
+      const size_t at = size_t(y) * 16 + x;
+      const uint8_t red = uint8_t(30 + (x * 7 + y * 3) % 160);
+      const uint8_t green = uint8_t(40 + (x * 3 + y * 9) % 150);
+      const uint8_t blue = uint8_t(20 + (x * 5 + y * 5) % 170);
+      image.rgb[at * 3] = red;
+      image.rgb[at * 3 + 1] = green;
+      image.rgb[at * 3 + 2] = blue;
+      hd_rgba[at] = 0xff000000u | uint32_t(red) | uint32_t(green) << 8 | uint32_t(blue) << 16;
+    }
+  }
+  // Integer and fractional output densities catch map filtering and half-texel
+  // mistakes independently. Padding must never be interpreted as frame pixels.
+  for (const auto size : {std::array<int, 2>{32, 32}, std::array<int, 2>{31, 27}}) {
+    require(SDL_SetWindowSize(window, size[0], size[1]) && SDL_SyncWindow(window), SDL_GetError());
+    auto renderer = make_check_renderer(window, backend);
+    renderer->set_viewport(0, 0, 8, 8);
+    const auto hd_texture = renderer->create_texture(16, 16,
+        reinterpret_cast<const uint8_t*>(hd_rgba.data()), 1);
+    require(hd_texture >= 0, "Could not upload synthetic HD menu background");
+    // The real menu art both dims and brightens the background, and its added light can lower
+    // red and blue. Each tint selects different map passes: 2/3 attenuation only, 3/2 one boost,
+    // 7/3 both boosts (gain above 2), each with the same scroll wraps and overlay.
+    struct Tint {
+      int numerator, denominator;
+      bool negative_added_light;
+    };
+    for (const Tint tint : {Tint{2, 3, false}, Tint{3, 2, true}, Tint{7, 3, true}}) {
+    for (bool rgb565 : {true, false}) {
+      for (int offset : {0, 7}) {
+        constexpr int stride = 10;
+        std::vector<uint16_t> source_pixels(8 * stride, 0xf81f);
+        std::vector<uint16_t> frame(8 * stride, 0xf81f);
+        const auto packed = [rgb565](int red, int green, int blue) {
+          return uint16_t((red << (rgb565 ? 11 : 10)) | (green << 5) | blue);
+        };
+        // Brightened tints start darker so the tinted codes stay inside 5 (or 6) bits.
+        const bool brighten = tint.numerator > tint.denominator;
+        const int base_red = brighten ? 6 : 12, base_blue = brighten ? 6 : 12;
+        const int base_green = brighten ? (rgb565 ? 12 : 6) : 20;
+        for (int y = 0; y < 8; ++y)
+          for (int x = 0; x < 8; ++x)
+            source_pixels[size_t(y) * stride + x] =
+                packed(base_red + x % 2, base_green + y % 3, base_blue + y % 2);
+        const int offset_y = offset ? 6 : 0;
+        for (int y = 0; y < 8; ++y) {
+          for (int x = 0; x < 8; ++x) {
+            const int sx = (x + offset) % 8, sy = (y + offset_y) % 8;
+            frame[size_t(y) * stride + x] =
+                packed((base_red + sx % 2) * tint.numerator / tint.denominator,
+                       (base_green + sy % 3) * tint.numerator / tint.denominator,
+                       (base_blue + sy % 2) * tint.numerator / tint.denominator);
+          }
+        }
+        frame[0] = source_pixels[size_t(offset_y) * stride + offset];
+        // A large green delta must be kind 2 rather than a uniformly tinted kind 1 pixel. This
+        // also exercises saturation. With negative added light red and blue drop one code
+        // (8.2 of 255, inside the classifier's -10 limit), which needs the subtract pass.
+        const int glow_x = (1 + offset) % 8, glow_y = (1 + offset_y) % 8;
+        const int glow_drop = tint.negative_added_light ? 1 : 0;
+        frame[stride + 1] = packed(base_red + glow_x % 2 - glow_drop,
+            base_green + glow_y % 3 + (rgb565 ? 24 : 10), base_blue + glow_y % 2 - glow_drop);
+        frame[7 * stride + 7] = packed(31, 0, 31);
+        zimg::Texture source{};
+        source.width = source.height = 8;
+        source.width_again = stride;
+        source.pixels = source_pixels.data();
+        std::vector<zrndr::MenuBackgroundBlit> blits;
+        if (offset == 0) {
+          blits = {{0, 0, 0, 0, 8, 8}};
+        } else {
+          blits = {{0, 0, 7, 6, 1, 2}, {1, 0, 0, 6, 7, 2},
+                   {0, 2, 7, 0, 1, 6}, {1, 2, 0, 0, 7, 6}};
+        }
+        platform::PreparedMenuBackgroundComposer composer;
+        platform::MenuBackgroundGpuLayers layers;
+        require(composer.prepare_gpu(image, &source, blits, frame.data(), 8, 8, stride * 2,
+                                     rgb565, &layers) &&
+                    layers.status == platform::MenuBackgroundGpuStatus::kReady,
+                "Synthetic GPU menu gain/glow/wrap fixture selected the fallback");
+        require(layers.used[platform::kMenuGpuBoost] == brighten &&
+                    layers.used[platform::kMenuGpuBoostHigh] == (tint.numerator > 2 * tint.denominator) &&
+                    layers.used[platform::kMenuGpuSubtract] == tint.negative_added_light,
+                "Synthetic GPU menu tint did not select the expected gain and added-light passes");
+        sdlfe::MenuBackgroundGpuTextures maps{-1, -1, -1, -1, -1, -1};
+        for (unsigned index = 0; index < platform::kMenuGpuMapCount; ++index) {
+          if (!layers.used[index]) continue;
+          maps[index] = renderer->create_texture(8, 8,
+              reinterpret_cast<const uint8_t*>(layers.maps[index].data()), 1);
+          require(maps[index] >= 0, "Could not upload synthetic menu maps");
+        }
+        renderer->clear(true, 0, 0, 0);
+        sdlfe::draw_menu_background_gpu(*renderer, hd_texture, maps, layers, {0, 0, 8, 8});
+        std::vector<uint32_t> gpu, cpu;
+        int width = 0, height = 0;
+        require(renderer->read_back(&gpu, &width, &height) && width == size[0] && height == size[1],
+                "GPU menu readback lost output dimensions");
+        require(platform::compose_menu_background(image, &source, blits, frame.data(), 8, 8,
+                    stride * 2, rgb565, unsigned(width), unsigned(height), &cpu) && cpu.size() == gpu.size(),
+                "CPU menu reference failed at the same output size");
+        // CPU rounds the bilinear sample before gain; hardware rounds after
+        // blending. Allow 4/255 per RGB channel for filtering precision, gain
+        // UNORM quantization, delta rounding and render-target rounding.
+        for (size_t at = 0; at < cpu.size(); ++at) {
+          const uint32_t expected = (cpu[at] & 0xff00ff00u) |
+              ((cpu[at] & 255u) << 16) | ((cpu[at] >> 16) & 255u);
+          require((gpu[at] >> 24) == 255, "GPU menu lost opaque output alpha");
+          for (unsigned shift : {0u, 8u, 16u})
+            require(std::abs(int((gpu[at] >> shift) & 255u) - int((expected >> shift) & 255u)) <= 4,
+                    "GPU/CPU menu pixel mismatch (gain, glow, native overlay or scroll wrap)");
+        }
+        if (size[0] == 31 && rgb565 && offset == 7 && !brighten) {
+          auto flat_image = image;
+          const std::vector<uint32_t> flat_rgba(256, 0xff208040u);
+          for (size_t at = 0; at < 256; ++at) {
+            flat_image.rgb[at * 3] = 64;
+            flat_image.rgb[at * 3 + 1] = 128;
+            flat_image.rgb[at * 3 + 2] = 32;
+          }
+          const int32_t flat_texture = renderer->create_texture(16, 16,
+              reinterpret_cast<const uint8_t*>(flat_rgba.data()), 1);
+          require(flat_texture >= 0, "Could not upload flat menu coverage fixture");
+          // Original 1:1 frame aspect fits into 31x27 as a 27x27 rectangle.
+          // Only the background extends into the two columns on either side.
+          const platform::MenuBackgroundLayerRect fitted{2.f * 8 / 31, 0, 27.f * 8 / 31, 8};
+          const platform::MenuBackgroundLayerRect covered{0, -2.f * 8 / 27, 8, 31.f * 8 / 27};
+          renderer->clear(true, 0, 0, 0);
+          sdlfe::draw_menu_background_gpu(*renderer, flat_texture, maps, layers, fitted, &covered);
+          require(renderer->read_back(&gpu, &width, &height) && width == 31 && height == 27,
+                  "Cover extension changed output dimensions");
+          require(platform::compose_menu_background(flat_image, &source, blits, frame.data(),
+                      8, 8, stride * 2, true, 27, 27, &cpu),
+                  "CPU menu reference failed at the fitted output size");
+          for (int y = 0; y < 27; ++y) {
+            for (int x = 0; x < 31; ++x) {
+              const uint32_t pixel = gpu[size_t(y) * 31 + x];
+              if (x < 2 || x >= 29) {
+                require(pixel == 0xff408020u, "Cover extension left a pillar or drew native artwork in it");
+              } else {
+                const uint32_t reference = cpu[size_t(y) * 27 + x - 2];
+                const uint32_t expected = (reference & 0xff00ff00u) |
+                    ((reference & 255u) << 16) | ((reference >> 16) & 255u);
+                for (unsigned shift : {0u, 8u, 16u})
+                  require(std::abs(int((pixel >> shift) & 255u) - int((expected >> shift) & 255u)) <= 4,
+                          "Menu cover moved native artwork, lighting or control pixel correspondence");
+              }
+            }
+          }
+          renderer->release_texture(flat_texture);
+        }
+        for (int32_t map : maps)
+          if (map >= 0) renderer->release_texture(map);
+      }
+    }
+    }
+    renderer->release_texture(hd_texture);
+  }
+  require(SDL_SetWindowSize(window, 32, 32) && SDL_SyncWindow(window), SDL_GetError());
+}
 
 void check_scene(SDL_Window *window, sdlfe::RendererBackend backend) {
   auto renderer = make_check_renderer(window, backend);
@@ -775,7 +948,9 @@ void check_terrain_surface_normals(SDL_Window *window,
   }
 
   std::vector<uint32_t> flat_pixels;
-  // Flat lighting control: normal_draws == 0
+  std::vector<uint32_t> flat_blended_pixels;
+  std::vector<uint32_t> flat_additive_pixels;
+  // Flat sun lighting control: normal maps are disabled, but the sun is on.
   {
     auto flat_options = options;
     flat_options.lighting = "flat";
@@ -798,6 +973,27 @@ void check_terrain_surface_normals(SDL_Window *window,
             "Flat lighting produced non-zero normal draws");
     require(flat_renderer->asset_statistics().world_normal_decoded_bytes == 0,
             "Flat lighting decoded a world normal page");
+
+    auto blended_state = flat_state;
+    blended_state.blend = true;
+    flat_renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*flat_renderer, 0, 64, .5f, 0xffffffff, blended_state);
+    require(flat_renderer->read_back(&flat_blended_pixels, &width, &height),
+            "Could not read back blended effect fixture");
+    require(flat_blended_pixels[32 * width + 32] == 0xff228b22,
+            "Blended effect did not preserve its bright texture colour");
+
+    auto additive_state = flat_state;
+    additive_state.blend = true;
+    additive_state.additive = true;
+    flat_renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*flat_renderer, 0, 64, .5f, 0xffffffff, additive_state);
+    require(flat_renderer->read_back(&flat_additive_pixels, &width, &height),
+            "Could not read back additive effect fixture");
+    require(flat_additive_pixels != flat_blended_pixels,
+            "Additive effect blend did not preserve ONE/ONE output");
+    require(flat_additive_pixels[32 * width + 32] == 0xff42cb82,
+            "Additive effect did not retain its bright ONE/ONE colour");
   }
 
   // Off lighting control: normal_draws == 0
@@ -820,6 +1016,59 @@ void check_terrain_surface_normals(SDL_Window *window,
             "Off lighting produced non-zero normal draws");
     require(off_renderer->asset_statistics().world_normal_decoded_bytes == 0,
             "Off lighting decoded a world normal page");
+
+    auto blended_state = off_state;
+    blended_state.blend = true;
+    off_renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*off_renderer, 0, 64, .5f, 0xffffffff, blended_state);
+    require(off_renderer->read_back(&pixels, &width, &height),
+            "Could not read back unlit blended effect fixture");
+    require(pixels == flat_blended_pixels,
+            "Flat sun lighting changed translucent effect colour");
+
+    auto additive_state = off_state;
+    additive_state.blend = true;
+    additive_state.additive = true;
+    off_renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*off_renderer, 0, 64, .5f, 0xffffffff, additive_state);
+    require(off_renderer->read_back(&pixels, &width, &height),
+            "Could not read back unlit additive effect fixture");
+    require(pixels == flat_additive_pixels,
+            "Flat sun lighting changed additive effect colour");
+  }
+
+  // Exercise the normal-enabled sun path too. The opaque control must be
+  // visibly lit so these comparisons cannot pass with lighting disabled.
+  {
+    const auto before_lit = renderer->asset_statistics();
+    renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*renderer, 0, 64, .5f, 0xffffffff, state);
+    require(renderer->read_back(&pixels, &width, &height),
+            "Could not read back sun-lit opaque control");
+    const auto lit_control = renderer->asset_statistics();
+    require(lit_control.lit_draws > before_lit.lit_draws &&
+                lit_control.normal_draws > before_lit.normal_draws &&
+                pixels != flat_blended_pixels,
+            "Opaque control did not exercise visible sun and normal lighting");
+
+    auto blended_state = state;
+    blended_state.blend = true;
+    renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*renderer, 0, 64, .5f, 0xffffffff, blended_state);
+    require(renderer->read_back(&pixels, &width, &height) &&
+                pixels == flat_blended_pixels,
+            "Normal-enabled sun lighting changed translucent effect colour");
+
+    blended_state.additive = true;
+    renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*renderer, 0, 64, .5f, 0xffffffff, blended_state);
+    require(renderer->read_back(&pixels, &width, &height) &&
+                pixels == flat_additive_pixels,
+            "Normal-enabled sun lighting changed additive effect colour");
+    const auto after_effects = renderer->asset_statistics();
+    require(after_effects.lit_draws == lit_control.lit_draws &&
+                after_effects.normal_draws == lit_control.normal_draws,
+            "Blended effects entered the sun lighting pipeline");
   }
   // Optional content absent: normal mode is neutral, not a synthetic pack.
 #if defined(_WIN32)
@@ -1012,7 +1261,9 @@ void check_terrain_surface_normals(SDL_Window *window,
     require(checked_renderer->read_back(&pixels, &width, &height),
             "Transparent readback failed");
     const auto after_transparent = checked_renderer->asset_statistics();
-    require(after_transparent.normal_draws > before_deferred.normal_draws &&
+    require(after_transparent.deferred_material_admissions >
+                    before_deferred.deferred_material_admissions &&
+                after_transparent.normal_draws == before_deferred.normal_draws &&
                 after_transparent.binding_rejected_mismatch ==
                     before_deferred.binding_rejected_mismatch,
             "Transparent queue lost qualified material admission");
@@ -1020,17 +1271,31 @@ void check_terrain_surface_normals(SDL_Window *window,
     require(checked_renderer->read_back(&pixels, &width, &height),
             "Overlay readback failed");
     const auto after_deferred = checked_renderer->asset_statistics();
-    require(after_deferred.normal_draws > after_transparent.normal_draws &&
+    // Overlay draws are blended too, so (like the transparent queue above) they keep their
+    // receipt but are deliberately not sun-lit; admission is what normal_draws cannot show.
+    require(after_deferred.deferred_material_admissions >
+                    after_transparent.deferred_material_admissions &&
                 after_deferred.binding_rejected_mismatch ==
                     before_deferred.binding_rejected_mismatch,
             "Overlay queue lost qualified material admission");
+    platform::DrawState receipt_state;
+    receipt_state.texture = device_texture.handle;
+    checked_renderer->clear(true, 0, 0, 0);
+    checked_renderer->begin_deferred_material_draw(receipt);
+    checked_renderer->draw(platform::Primitive::kFan, deferred_vertices, 3,
+                           receipt_state);
+    checked_renderer->end_deferred_material_draw();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Opaque deferred admission readback failed");
+    const auto after_opaque = checked_renderer->asset_statistics();
+    require(after_opaque.deferred_material_admissions ==
+                after_deferred.deferred_material_admissions + 1,
+            "Opaque draw was excluded from deferred material admissions");
     // Same handle after an upload cannot reuse a previously admitted receipt.
     mw34::materials::set_active_surface_key(t1m1_terrain_key);
     checked_renderer->update_texture(device_texture.handle, 128, 128,
                                      green_data.data());
     mw34::materials::clear_active_surface_key();
-    platform::DrawState receipt_state;
-    receipt_state.texture = device_texture.handle;
     checked_renderer->begin_deferred_material_draw(receipt);
     checked_renderer->draw(platform::Primitive::kFan, deferred_vertices, 3,
                            receipt_state);
@@ -1038,9 +1303,9 @@ void check_terrain_surface_normals(SDL_Window *window,
     require(checked_renderer->read_back(&pixels, &width, &height),
             "Stale admission readback failed");
     require(checked_renderer->asset_statistics().normal_draws ==
-                    after_deferred.normal_draws &&
+                    after_opaque.normal_draws &&
                 checked_renderer->asset_statistics().binding_rejected_mismatch >
-                    after_deferred.binding_rejected_mismatch,
+                    after_opaque.binding_rejected_mismatch,
             "Deferred admission survived a same-handle upload");
     // A source mutation inside a model scope explicitly invalidates its hash.
     checked_renderer->begin_model_draw(model_context);
@@ -1748,6 +2013,71 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   renderer->release_texture(named.texture);
   require(renderer->asset_statistics().named_textures == 2,
           "Named texture replacement was not recorded");
+
+  constexpr unsigned flare_size = 64;
+  std::vector<uint8_t> flare_source(flare_size * flare_size * 4, 255);
+  for (unsigned y = 0; y < flare_size; ++y)
+    for (unsigned x = 0; x < flare_size; ++x)
+      flare_source[(std::size_t(y) * flare_size + x) * 4 + 3] =
+          uint8_t((x * 3 + y * 5) % 256);
+  const auto named_uploads_before_flare =
+      renderer->asset_statistics().named_textures;
+  const auto flare = renderer->create_named_texture(
+      "lflare2", flare_size, flare_size, flare_source.data(), 1);
+  auto flare_state = cc_mw3_re::testing::named_texture_state(*renderer, flare);
+  require(flare_state.generated_rgba && flare_state.width == flare_size &&
+              flare_state.height == flare_size &&
+              flare_state.source_width == flare_size &&
+              flare_state.source_height == flare_size,
+          "Generated flare did not retain its source dimensions");
+  const auto first_generation_pixels = flare_state.pixels;
+  renderer->update_texture(flare, flare_size, flare_size, flare_source.data());
+  flare_state = cc_mw3_re::testing::named_texture_state(*renderer, flare);
+  require(flare_state.generated_rgba && flare_state.width == flare_size &&
+              flare_state.height == flare_size &&
+              flare_state.source_width == flare_size &&
+              flare_state.source_height == flare_size &&
+              flare_state.pixels == first_generation_pixels,
+          "Generated flare reload changed dimensions or pixels");
+  bool rejected_changed_flare_source = false;
+  try {
+    renderer->update_texture(flare, flare_size + 1, flare_size,
+                             flare_source.data());
+  } catch (const std::runtime_error &error) {
+    rejected_changed_flare_source =
+        std::string_view(error.what()) ==
+        "Generated flare reload changed its source dimensions";
+  }
+  require(rejected_changed_flare_source,
+          "Generated flare reload did not reject changed source dimensions");
+  require(renderer->asset_statistics().named_textures ==
+              named_uploads_before_flare,
+          "Generated flare was counted as a prepared replacement upload");
+  renderer->release_texture(flare);
+
+  auto original_flare_assets = sdlfe::CoreCriticalAssets{};
+  original_flare_assets.flare_style = "original";
+  auto original_flare_renderer =
+      make_check_renderer(window, backend, {}, original_flare_assets);
+  const auto original_flare = original_flare_renderer->create_named_texture(
+      "lflare2", flare_size, flare_size, flare_source.data(), 1);
+  auto original_flare_state = cc_mw3_re::testing::named_texture_state(
+      *original_flare_renderer, original_flare);
+  std::vector<uint32_t> original_flare_pixels(flare_size * flare_size);
+  std::memcpy(original_flare_pixels.data(), flare_source.data(),
+              flare_source.size());
+  require(!original_flare_state.generated_rgba &&
+              original_flare_state.pixels == original_flare_pixels,
+          "Original flare style changed uploaded source bytes");
+  original_flare_renderer->update_texture(
+      original_flare, flare_size, flare_size, flare_source.data());
+  original_flare_state = cc_mw3_re::testing::named_texture_state(
+      *original_flare_renderer, original_flare);
+  require(!original_flare_state.generated_rgba &&
+              original_flare_state.pixels == original_flare_pixels,
+          "Original flare reload generated or changed source bytes");
+  original_flare_renderer->release_texture(original_flare);
+
   renderer->reset_scene_resources();
   matrix[2] = matrix[9] = matrix[11] = 0;
   require(zcls::object3d_set_matrix(control, matrix) == 0,
@@ -2481,6 +2811,24 @@ void check_renderer_bridge_config() {
   require(cfg_dxgi.af_level == 16, "af_level propagation mismatch");
   require(cfg_dxgi.draw_distance == 1600,
           "draw-distance propagation mismatch");
+  for (const unsigned draw_distance : {2400u, 3200u}) {
+    auto extended_quality = quality;
+    extended_quality.draw_distance = draw_distance;
+    const auto extended_config = cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, extended_quality, assets);
+    require(extended_config.draw_distance == draw_distance,
+            "extended draw-distance propagation mismatch");
+  }
+  auto invalid_quality = quality;
+  invalid_quality.draw_distance = 1000;
+  bool invalid_distance_rejected = false;
+  try {
+    (void)cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, invalid_quality, assets);
+  } catch (const std::runtime_error &) {
+    invalid_distance_rejected = true;
+  }
+  require(invalid_distance_rejected, "unsupported draw distance was accepted");
   require(cfg_dxgi.normal_maps_enabled == true,
           "normal_maps_enabled propagation mismatch");
   require(cfg_dxgi.prepared_cache == true,
@@ -2842,6 +3190,10 @@ int main(int argc, char **argv) {
     else if (ultrawide_check)
       check_ultrawide(window, backend);
     else if (geometry_check) {
+      check_radial_world_visibility();
+      check_radial_model_views(window, backend);
+      check_campaign_fog_color();
+      check_distance_fog(window, backend);
       check_owned_rigid_capture(window, backend);
       check_strict_geometry(window, backend);
       const auto gpu = check_native_geometry(window, backend);
@@ -2870,9 +3222,14 @@ int main(int argc, char **argv) {
       check_local_light_gpu(window, backend);
       check_native_fixture_gpu(window, backend);
       check_scene(window, backend);
+      check_menu_background_gpu(window, backend);
     }
     if (native_wsi || material_check)
       check_fullscreen_resize(window, backend);
+    // The staging checks write a temp effect-light catalog and set effect-light environment
+    // variables (restored by their guards), so they run only in the --materials variants.
+    if (material_check)
+      check_local_light_staging(window, backend);
   } catch (const std::exception &error) {
     std::fprintf(stderr, "%s\n", error.what());
     result = 1;

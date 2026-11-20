@@ -1,10 +1,36 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
+#include <cstddef>
 
 namespace zcls {
 
 constexpr unsigned kDefaultVisualFar = 800;
+
+struct ViewDistanceOption {
+  unsigned view_distance;
+  float fog_start;
+};
+
+// Single source for the altitude-independent edge band. Mission haze keeps its proportional
+// interval; these are also lower bounds on the strong-fog start when that interval exceeds the cut.
+constexpr ViewDistanceOption kViewDistanceOptions[] = {
+    {800, 700}, {1200, 1050}, {1600, 1450}, {2400, 2250}, {3200, 3050}};
+
+constexpr bool is_supported_view_distance(unsigned view_distance) {
+  for (const auto& option : kViewDistanceOptions) {
+    if (option.view_distance == view_distance) return true;
+  }
+  return false;
+}
+
+constexpr float fog_start_for_view_distance(float visual_far) {
+  for (const auto& option : kViewDistanceOptions) {
+    if (static_cast<float>(option.view_distance) == visual_far) return option.fog_start;
+  }
+  return visual_far - 150.0f;
+}
 
 inline float visual_far(float authored_far, unsigned requested_far,
                         bool qualifying_world_camera) {
@@ -45,7 +71,14 @@ inline bool visual_far_corners_need_update(bool clip_changed, float render_far,
 void set_visual_far_request(unsigned requested_far);
 unsigned visual_far_request();
 float visual_far_for_render(const void* camera, float authored_far);
+using VisualFarLogSink = void (*)(const char* line);
+VisualFarLogSink set_visual_far_log_sink(VisualFarLogSink sink);
+constexpr std::size_t kVisualFarLogLinesPerSecond = 4;
+using VisualFarLogNow = std::chrono::steady_clock::time_point (*)();
+// Test seam: supply deterministic time for rate-limit coverage; nullptr uses steady_clock.
+VisualFarLogNow set_visual_far_log_clock_for_testing(VisualFarLogNow now);
 
+// Tracks HUD zoom identity at every distance; camera extension stays request-gated.
 class ScopedZoomVisualFar {
  public:
   explicit ScopedZoomVisualFar(const void* camera);
@@ -55,7 +88,6 @@ class ScopedZoomVisualFar {
 
  private:
   const void* previous_camera_ = nullptr;
-  bool active_ = false;
 };
 
 }  // namespace zcls

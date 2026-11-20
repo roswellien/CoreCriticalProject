@@ -27,14 +27,30 @@ static_assert(sizeof(TLVertex) == 0x20, "TLVertex must match D3DTLVERTEX");
 
 enum class Primitive : uint8_t { kPoints = 1, kStrip = 5, kFan = 6 };  // D3DPRIMITIVETYPE values used
 
+// Host-only diagnostic values; no native texture or vertex layout is changed.
+enum class DrawQueue : uint8_t { Immediate, Transparent, Overlay };
+enum class TextureFilter : uint8_t { kDefault, kNearest, kLinear };
+struct FlareSpriteDiagnostic {
+  int32_t slot = -1;
+  float half_size_pixels = 0;  // before clipping, in the producer's screen pixels
+};
+
 // The render and texture-stage states the draw functions set (section 4).
 struct DrawState {
   bool native_sky{};
   int32_t texture = -1;            // SetTexture(0, ...): a handle from create_texture, -1 none
   uint8_t address_u = 1;           // ADDRESSU: 1 WRAP, 3 CLAMP
   uint8_t address_v = 1;           // ADDRESSV
-  bool blend = false;              // ALPHABLENDENABLE with SRCALPHA / INVSRCALPHA
+  bool blend = false;              // ALPHABLENDENABLE
+  bool additive = false;           // SRCBLEND ONE, DESTBLEND ONE
   bool multiply = false;           // the shadow passes: SRCBLEND ZERO, DESTBLEND SRCCOLOR
+  // Ours, the HD menu's gain and added-light maps (platform::MenuBackgroundGpuMap); both need
+  // blend set. brighten: SRCBLEND DESTCOLOR, DESTBLEND ONE (destination * (1 + source)).
+  // subtract: BLENDOP REVSUBTRACT with ONE, ONE (destination - source).
+  bool brighten = false;
+  bool subtract = false;
+  bool unsupported_blend = false;  // Source/destination pair outside the modeled modes
+  int32_t source_blend = 5, destination_blend = 6;  // D3D factors retained for failure diagnostics
   bool depth_write = true;         // ZWRITEENABLE
   bool depth_always = false;       // ZFUNC ALWAYS (overlays), else GREATEREQUAL
   bool alpha_modulate = false;     // ALPHAOP MODULATE (transparent), else SELECTARG1
@@ -44,6 +60,11 @@ struct DrawState {
   bool color_select = false;       // COLOROP SELECTARG1: the texture's colour alone (shadow passes)
   uint8_t texcoord = 0;            // TEXCOORDINDEX: which UV set of a draw_multi vertex
   bool sharp = false;              // ours: the 2D layer, a texel a game pixel, premultiplied, scaled sharp
+  // Explicit canvas sampling bypasses sharp's fractional edge smoothing.
+  // kDefault preserves every existing world/HUD sampling policy.
+  TextureFilter filter = TextureFilter::kDefault;
+  FlareSpriteDiagnostic flare_diagnostic{};
+  DrawQueue queue = DrawQueue::Immediate;
 };
 
 // A synchronous model-producer view, valid until end_model_draw(). Matrices use
@@ -54,6 +75,7 @@ struct ModelDrawContext {
   const float* model_to_camera = nullptr;
   float near_z = 0, clip_near = 0, far_z = 0, fx_near = 0, fy_near = 0, cx = 0, cy = 0;
   float opacity = 1;
+  float damage_tint_rgb[3] = {};
   float damage_tint_weight = 0;
   bool ordinary = false, morphing = false, overlay = false;
   uint32_t source_vertices = 0, source_polygons = 0;
@@ -97,6 +119,9 @@ class Render3D {
   virtual ~Render3D() = default;
   // What the load screen names as the video driver (ours; 0x005799f0 named the DirectDraw driver).
   virtual const char* driver_name() const { return "Default"; }
+  // Positive only for renderers that discard opaque typed world geometry
+  // outside this 3D eye radius before it can write color or depth.
+  virtual unsigned opaque_world_range() const { return 0; }
   virtual cc::geometry::Mode geometry_mode() const { return cc::geometry::Mode::legacy; }
   virtual cc::geometry::Submission submit_prepared_geometry(const ModelDrawContext&,
                                                             const cc::geometry::Fog&) {

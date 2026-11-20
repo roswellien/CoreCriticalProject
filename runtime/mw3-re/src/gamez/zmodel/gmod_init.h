@@ -21,8 +21,8 @@ struct WalkState {
   // [0x0074a2e0]: 0x0053f2e0 with Direct3D, 0x0053e050 in software.
   int32_t (*draw)(zcls::Node* node, uint32_t mask) = nullptr;
   zcls::Camera* camera = nullptr;  // 0x007402f4 (also zmod::draw_state().camera_data)
-  int32_t screen_w = 640;          // 0x008027c8  zvid's display size, used when the
-  int32_t screen_h = 480;          // 0x008027cc  window has none
+  int32_t screen_w = 640;          // 0x008027c8  legacy zvid display-size value; not the live viewport
+  int32_t screen_h = 480;          // 0x008027cc  use mech3::render() for current render dimensions
 };
 WalkState& walk_state();
 uint32_t& mask_top();              // *[0x0074a324]

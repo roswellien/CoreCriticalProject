@@ -53,6 +53,7 @@ add_library(mw3core STATIC
   src/gamez/zmodel/gmod_geometry.cpp
   src/platform/prepared_visuals.cpp
   src/platform/prepared_hud.cpp
+  src/platform/prepared_menu_background.cpp
   src/crt/msvc_math.cpp
   src/crt/msvc_rand.cpp
   src/crt/msvc_string.cpp
@@ -649,6 +650,14 @@ if(MSVC)
   target_compile_options(mw3prepared_checks PRIVATE /EHsc)
 endif()
 add_test(NAME mw3prepared_checks COMMAND mw3prepared_checks)
+add_executable(mw3menu_background_checks tests/test_prepared_menu_background.cpp)
+target_link_libraries(mw3menu_background_checks PRIVATE mw3core)
+if(MSVC)
+  target_compile_options(mw3menu_background_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3menu_background_checks COMMAND mw3menu_background_checks)
+# Measured local runtime is about 0.04 s; leave headroom for slow and debug CI runners.
+set_tests_properties(mw3menu_background_checks PROPERTIES TIMEOUT 120)
 add_library(mw3ground_export STATIC tools/analysis/ground_targets.cpp)
 target_include_directories(mw3ground_export PRIVATE third_party)
 target_link_libraries(mw3ground_export PUBLIC mw3core)
@@ -761,6 +770,7 @@ if(SDL3_FOUND)
     src/frontend/sdl/sdl_music.cpp
     src/frontend/sdl/sdl_platform.cpp
     src/frontend/sdl/gpu_hud.cpp
+    src/frontend/sdl/gpu_hud_menu_sprites.cpp
     src/frontend/sdl/sdl_mods.cpp
     src/frontend/sdl/editor_context.cpp
     src/frontend/sdl/editor_forms_imgui.cpp
@@ -892,6 +902,22 @@ if(SDL3_FOUND)
     if(MSVC)
       target_compile_options(mw3text PRIVATE /EHsc)
       target_compile_options(mw3 PRIVATE /EHsc)
+      if(WIN32)
+        # Preserve optimized code generation while keeping a PDB for crash RVA symbolization.
+        target_compile_options(mw3core PRIVATE /Zi)
+        target_compile_options(cc_geometry_resources PRIVATE /Zi)
+        target_compile_options(mw3sdl PRIVATE /Zi)
+        target_compile_options(enet PRIVATE /Zi)
+        target_compile_options(miniupnpc PRIVATE /Zi)
+        target_compile_options(mw3imgui PRIVATE /Zi)
+        target_compile_options(mw3text PRIVATE /Zi)
+        target_compile_options(mw3 PRIVATE /Zi)
+        if(MW3_CORE_CRITICAL_VULKAN)
+          target_compile_options(mw3ccvulkan PRIVATE /Zi)
+        endif()
+        target_link_options(mw3 PRIVATE /DEBUG /OPT:REF /OPT:ICF
+                            "/PDB:$<TARGET_FILE_DIR:mw3>/mw3.pdb")
+      endif()
     endif()
     if(MW3_CORE_CRITICAL_VULKAN)
       target_compile_definitions(mw3 PRIVATE CC_MW3_RE_ADAPTER=1)
@@ -977,6 +1003,7 @@ if(SDL3_FOUND)
       tests/test_log_start.cpp
       src/frontend/sdl/sdl_update.cpp
       src/frontend/sdl/sdl_restart.cpp
+      src/frontend/sdl/crash_report.cpp
       src/frontend/sdl/win_cmdline.cpp
       tests/test_net_enet.cpp
       tests/test_net_upnp.cpp
@@ -1004,6 +1031,18 @@ if(SDL3_FOUND)
     if(WIN32 AND NOT CMAKE_VERSION VERSION_LESS 3.21)
       add_custom_command(TARGET mw3hud_checks POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:mw3hud_checks> $<TARGET_FILE_DIR:mw3hud_checks>
+        COMMAND_EXPAND_LISTS)
+    endif()
+    # HD menu stage D: menu text and sprites at output resolution (menu_sprites.h).
+    add_executable(mw3menu_sprite_checks tests/test_menu_sprites.cpp)
+    target_link_libraries(mw3menu_sprite_checks PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    if(MSVC)
+      target_compile_options(mw3menu_sprite_checks PRIVATE /EHsc)
+    endif()
+    add_test(NAME mw3menu_sprite_checks COMMAND mw3menu_sprite_checks)
+    if(WIN32 AND NOT CMAKE_VERSION VERSION_LESS 3.21)
+      add_custom_command(TARGET mw3menu_sprite_checks POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:mw3menu_sprite_checks> $<TARGET_FILE_DIR:mw3menu_sprite_checks>
         COMMAND_EXPAND_LISTS)
     endif()
     target_compile_definitions(mw3sdltests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"

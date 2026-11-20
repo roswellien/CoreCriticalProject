@@ -1066,6 +1066,7 @@ namespace MW3RemasterLauncher
                 AntiAliasing = settings.AntiAliasing,
                 AnisotropicFiltering = settings.AnisotropicFiltering,
                 DrawDistance = settings.DrawDistance,
+                FlareStyle = settings.FlareStyle,
                 FogDistance = settings.FogDistance,
                 LocalCdAudio = settings.LocalCdAudio,
                 InstantReplay = settings.InstantReplay,

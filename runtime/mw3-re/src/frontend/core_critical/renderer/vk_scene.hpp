@@ -17,6 +17,7 @@
 #include "capture_pixels.hpp"
 #include "frontend/sdl/cpu_interval.h"
 #include "frontend/core_critical/producer_view_test_hook.hpp"
+#include "gamez/zclass/visual_distance.h"
 #define VK_NO_PROTOTYPES
 #include "buffer_reserve.hpp"
 #include "camera_history.hpp"
@@ -107,6 +108,9 @@ struct TextureRef {
 };
 // Fixed-function state that selects a pipeline: blend enable/source/destination
 // (D3DBLEND), depth enable/function (D3DCMP)/write, cull mode (D3DCULL).
+// A PipelineKey source factor past D3DBLEND's range: source and destination ONE combined by
+// VK_BLEND_OP_REVERSE_SUBTRACT (destination - source), for the HD menu's negative added light.
+constexpr std::uint8_t kReverseSubtractBlend = 14;
 struct PipelineKey {
   std::uint8_t blend, src, dst, zenable, zfunc, zwrite, cull,
       points = 0; // points: D3DPT_POINTLIST input assembly
@@ -125,6 +129,11 @@ struct Push {
   std::uint32_t mode[4];
 };
 static_assert(sizeof(Push) == 64);
+struct TlPush {
+  Push base;
+  std::array<float, 4> radial_projection;
+};
+static_assert(sizeof(TlPush) == 80 && offsetof(TlPush, radial_projection) == 64);
 using ModelVertex = cc::geometry::Vertex;
 static_assert(sizeof(ModelVertex) == 32);
 struct ModelGeometry {
@@ -169,6 +178,9 @@ struct Draw {
   // Camera-space smooth normals for CPU-clipped/deformed TL geometry.
   // Owned until submission; never retained as immutable model cache entries.
   std::shared_ptr<const std::vector<std::array<float, 3>>> lit_normals{};
+  // Parallel TL fog stream: xyz are unclamped factors when w == 1;
+  // x is unquantised legacy visibility when w == 2. Zero w uses packed alpha.
+  std::shared_ptr<const std::vector<std::array<float, 4>>> raw_fog{};
   unsigned char sky{};
   std::shared_ptr<const mw34::sun::Tl> sky_view{};
   std::shared_ptr<const mw34::temporal::Snapshot> camera_view{};
@@ -261,14 +273,15 @@ public:
     bool fxaa;
   };
   enum class ColorTarget { device_default, rgba8 };
+  static constexpr unsigned scene_texture_bindings = 3;
   static std::array<unsigned, 2> material_descriptor_counts(std::uint64_t capacity) {
-    if (capacity > (std::uint64_t(UINT32_MAX) - 2) / 4)
+    if (capacity > (std::uint64_t(UINT32_MAX) - 2) / 5)
       throw std::runtime_error("Material descriptor pool arithmetic overflow");
-    return {unsigned(capacity * 4 + 2), unsigned(capacity * 2 + 1)};
+    return {unsigned(capacity * 5 + 2), unsigned(capacity * 2 + 1)};
   }
   static unsigned material_descriptor_capacity(std::uint64_t draw_count,
                                                 std::uint64_t caster_count) {
-    constexpr std::uint64_t limit = (std::uint64_t(UINT32_MAX) - 2) / 4;
+    constexpr std::uint64_t limit = (std::uint64_t(UINT32_MAX) - 2) / 5;
     if (draw_count > limit || caster_count > limit - draw_count ||
         draw_count + caster_count > limit - 64)
       throw std::runtime_error("Scene material descriptor capacity overflows Vulkan counts");
@@ -1146,6 +1159,50 @@ public:
     scene_pending = true;
   }
   std::uint64_t fxaa_passes{}, af_samplers{}, mip_levels_uploaded{};
+  void prepare_canvas_textures(const std::vector<TextureRef> &references) {
+      // No commands reference these allocations yet. Settle earlier GPU work
+      // before resizing shared staging storage or replacing an image.
+      if (!device)
+          init();
+      settle();
+      VkDeviceSize upload_bytes = 0;
+      for (const auto &reference : references)
+          upload_bytes += VkDeviceSize(reference.width) * reference.height * 4;
+      Buffer replacement;
+      std::vector<std::uint64_t> allocated_keys;
+      const auto release_buffer = [this](Buffer &buffer) {
+          if (buffer.buffer)
+              f.vkDestroyBuffer(device, buffer.buffer, nullptr);
+          if (buffer.memory)
+              f.vkFreeMemory(device, buffer.memory, nullptr);
+          buffer = {};
+      };
+      try {
+          // Keep the previous staging buffer usable if a larger optional upload fails.
+          if (texUpload.size < upload_bytes)
+              ensure(replacement, upload_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
+          for (const auto &reference : references) {
+              auto &texture = textures[reference.key];
+              if (texture.image && texture.width == reference.width &&
+                  texture.height == reference.height) {
+                  continue;
+              }
+              destroy(texture);
+              // Track before create(): a failed allocation can own partial resources.
+              allocated_keys.push_back(reference.key);
+              create(texture, reference.width, reference.height);
+          }
+      } catch (...) {
+          for (const auto key : allocated_keys)
+              destroy(textures.at(key));
+          release_buffer(replacement);
+          throw;
+      }
+      if (replacement.buffer) {
+          release_buffer(texUpload);
+          texUpload = replacement;
+      }
+  }
   std::uint64_t emission_draw_records{}, emission_payloads{};
   // Query the actual scene/presenter device, avoiding a throwaway render device
   // when enhanced texture banks need dimensions beyond the original 256 cap.
@@ -1342,6 +1399,8 @@ public:
         camera_history.observe(std::move(snapshot));
       }
     }
+    apply_atmosphere(s, lighting_settings);
+    capture_range_backdrops(s, upload_in);
     if (can_reconstruct_world(s, upload_in, readback_out))
       render_reconstructed_world(s);
     else
@@ -1356,7 +1415,7 @@ private:
     if (s.width != width || s.height != height || scale_req != scale ||
         s.frontend_canvas != target_frontend)
       target(s.width, s.height, s.frontend_canvas);
-    if (worldColor.image &&
+    if (!recording_backdrop && worldColor.image &&
         reconstruction_stage == ReconstructionStage::normal) {
       // A depth-only frame may retain full-resolution HUD color. Reduce
       // only when a full color clear replaces every retained pixel.
@@ -1417,10 +1476,24 @@ private:
     if (upload_in)
       mw34::depth::upload(up + depthOffset, s.depth.data(), size_t(pixels));
     const auto &environment = lighting_settings;
-    if (!world_scene_prepared)
-      apply_atmosphere(s, environment);
+
     if (!s.vertices.empty())
       std::memcpy(vertexBuffer.mapped, s.vertices.data(), s.vertices.size());
+    const auto vertex_count = s.vertices.size() / 32;
+    ensure(fogBuffer, std::max<VkDeviceSize>(vertex_count * 16, 16),
+           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    // Zero only what this submission can fetch: ensure() keeps the largest allocation, so clearing
+    // fogBuffer.size would rewrite a past peak on every small HUD or clear-only frame.
+    std::memset(fogBuffer.mapped, 0, size_t(std::max<VkDeviceSize>(vertex_count * 16, 16)));
+    for (const auto &draw : s.draws) {
+      if (!draw.raw_fog)
+        continue;
+      if (draw.raw_fog->size() != draw.count || draw.first > vertex_count ||
+          draw.count > vertex_count - draw.first)
+        throw std::runtime_error("Clipped raw-fog range mismatch");
+      std::memcpy(static_cast<unsigned char *>(fogBuffer.mapped) + size_t(draw.first) * 16,
+                  draw.raw_fog->data(), size_t(draw.count) * 16);
+    }
     if (lighting_settings.enabled) {
       const auto count = s.vertices.size() / 32;
       ensure(normalBuffer, std::max<VkDeviceSize>(count * 12, 12),
@@ -1563,7 +1636,7 @@ private:
       }
       shadowFrame = &world_shadow_frame;
       fixtureLights = &world_fixture_lights;
-    } else {
+    } else if (!recording_backdrop) {
       localShadowFrame = prepare_shadow(s, environment);
       localFixtureLights = prepare_fixture_shadows(s, bound, s.vertices);
     }
@@ -1594,10 +1667,48 @@ private:
           const auto &d = s.draws[at];
           if (s.hud || s.frontend_canvas || d.sky || !sun_lit(d))
             continue;
-          const auto camera =
-              d.model ? mw34::tiled::compose_affine(d.model->camera,
-                                                    mw34::tiled::inverse_affine(d.model->sun_world))
-                      : mw34::tiled::inverse_affine(d.sun_tl->camera_world);
+          mw34::tiled::Mat34 camera{};
+          const auto report_affine_fallback = [&](const char *reason) {
+            const auto &matrix = d.model ? d.model->sun_world : d.sun_tl->camera_world;
+            const auto matrix_scale = [&](unsigned row) {
+              const double x = matrix[row * 4], y = matrix[row * 4 + 1],
+                           z = matrix[row * 4 + 2];
+              return std::sqrt(x * x + y * y + z * z);
+            };
+            std::fprintf(stderr,
+                         "Tiled lights: affine all-light fallback draw=%zu source=%s "
+                         "model_id=",
+                         at, d.model ? "model" : "TL");
+            if (d.model)
+              std::fprintf(stderr, "%llu", static_cast<unsigned long long>(d.model->geometry->key));
+            else
+              std::fprintf(stderr, "none");
+            std::fprintf(stderr,
+                         " model_name=unavailable scale=(%.6g,%.6g,%.6g) "
+                         "translation=(%.6g,%.6g,%.6g) matrix=[",
+                         matrix_scale(0), matrix_scale(1), matrix_scale(2), matrix[3], matrix[7],
+                         matrix[11]);
+            for (unsigned element = 0; element < matrix.size(); ++element)
+              std::fprintf(stderr, "%s%.6g", element ? "," : "", matrix[element]);
+            if (d.model) {
+              std::fprintf(stderr, "] camera=[");
+              for (unsigned element = 0; element < d.model->camera.size(); ++element)
+                std::fprintf(stderr, "%s%.6g", element ? "," : "",
+                             d.model->camera[element]);
+            }
+            std::fprintf(stderr, "] reason=%s\n", reason);
+          };
+          if (!mw34::tiled::try_affine_camera_or_all_lights(
+                  camera, tiledDrawViews[at], allEffectLights, tiledAffineFallbackReported,
+                  [&] {
+                    return d.model
+                               ? mw34::tiled::compose_affine(
+                                     d.model->camera,
+                                     mw34::tiled::inverse_affine(d.model->sun_world))
+                               : mw34::tiled::inverse_affine(d.sun_tl->camera_world);
+                  },
+                  report_affine_fallback))
+            continue;
           const auto &projection = d.model ? d.model->projection : d.sun_tl->projection;
           const auto v = mw34::tiled::draw_view(camera, projection, width, height, rw, rh);
           auto found =
@@ -1732,8 +1843,9 @@ private:
       pool(unsigned(descriptor_count));
     check(f.vkResetDescriptorPool(device, descriptorPool, 0),
           "reset descriptor pool");
-    std::map<std::pair<Tex *, unsigned>, VkDescriptorSet> sets;
+    std::array<std::map<std::pair<Tex *, unsigned>, VkDescriptorSet>, 3> material_sets;
     std::vector<VkDescriptorSet> drawSets(s.draws.size());
+    std::vector<unsigned> visibility_flags(s.draws.size());
     for (size_t i = 0; i < s.draws.size(); ++i) {
       const auto &d = s.draws[i];
       if (d.texture >= 0 && size_t(d.texture) >= bound.size())
@@ -1742,6 +1854,9 @@ private:
             std::to_string(i) + " slot=" + std::to_string(d.texture) +
             " textures=" + std::to_string(bound.size()));
       Tex *t = d.texture >= 0 ? bound[size_t(d.texture)] : &white;
+      const unsigned backdrop = range_backdrop(s, d);
+      if (backdrop) visibility_flags[i] = (1U << 15) | (range_backdrops[backdrop-1].resident ? (1U << 14) : 0U);
+      auto &sets = material_sets[backdrop];
       auto it = sets.find({t, d.sampler});
       if (it == sets.end()) {
         VkDescriptorSetAllocateInfo ai{};
@@ -1760,6 +1875,12 @@ private:
         w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w.pImageInfo = &info;
         f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+        VkDescriptorImageInfo sky{sampler(3U | (3U << 4) | (3U << 8)),
+            backdrop ? range_backdrops[backdrop - 1].color.view : white.view,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        w.dstBinding = 2;
+        w.pImageInfo = &sky;
+        f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
         if (reconstruction_stage == ReconstructionStage::coverage) {
           VkDescriptorImageInfo reconstructed{
               sampler(3U | (3U << 4) | (3U << 8)), reconstructedColor.view,
@@ -1772,7 +1893,7 @@ private:
       }
       drawSets[i] = it->second;
     }
-    fixture_shadow_sets(sets);
+    if (!recording_backdrop) fixture_shadow_sets(material_sets[0]);
     std::map<MaterialDescriptorKey, VkDescriptorSet> normalSets;
     std::vector<VkDescriptorSet> drawNormalSets(s.draws.size());
     if (lighting_settings.enabled) {
@@ -1945,7 +2066,18 @@ private:
         off += VkDeviceSize(t->width) * t->height * 4;
       }
     }
-    if (!upload_in) {
+    if (recording_backdrop) {
+      barrier(recording_backdrop->color.image, VK_IMAGE_LAYOUT_UNDEFINED,
+              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+              VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+              VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+              VK_IMAGE_ASPECT_COLOR_BIT);
+      barrier(range_backdrop_depth.image, VK_IMAGE_LAYOUT_UNDEFINED,
+              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0,
+              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+              VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+              VK_IMAGE_ASPECT_DEPTH_BIT);
+    } else if (!upload_in) {
       // Keep the resident content: from the layout the previous scene left
       // (attachment, or transfer source after a copy-out).
       const bool att = in_attachment_layout;
@@ -2007,7 +2139,7 @@ private:
     if ((s.hud || (s.guest_surface_write && worldColor.image)) &&
         quality_world_dirty && fxaa_enabled())
       record_fxaa();
-    if (!world_scene_prepared || !world_shadow_recorded) {
+    if (!recording_backdrop && (!world_scene_prepared || !world_shadow_recorded)) {
       if (shadowFrame->active && !shadowFrame->reused)
         record_shadow(*shadowFrame);
       record_fixture_shadows(*fixtureLights);
@@ -2017,7 +2149,7 @@ private:
     VkRenderPassBeginInfo rb{};
     rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rb.renderPass = renderPass;
-    rb.framebuffer = framebuffer;
+    rb.framebuffer = recording_backdrop ? recording_backdrop->framebuffer : framebuffer;
     rb.renderArea = {{0, 0}, {rw, rh}};
     f.vkCmdBeginRenderPass(cmd, &rb, VK_SUBPASS_CONTENTS_INLINE);
     VkViewport vp{0, 0, float(rw), float(rh), 0, 1};
@@ -2035,6 +2167,8 @@ private:
       if (left.model || right.model || left.key.points || right.key.points ||
           !left.count || !right.count || left.count % 3 || right.count % 3 ||
           left.key.packed() != right.key.packed() ||
+          left.native_sky != right.native_sky || left.sky != right.sky ||
+          left.depth_only != right.depth_only ||
           !::platform::same_producer_view_bits(left.producer_view, right.producer_view) ||
           drawSets[a] != drawSets[b] ||
           !mw34::materials::same_height_binding(left.height_binding, right.height_binding) ||
@@ -2093,7 +2227,7 @@ private:
           ++orderAt;
         }
       }
-      if (producer_view_observer) {
+      if (producer_view_observer && !recording_backdrop) {
         cc_mw3_re::testing::ProducerViewObservation observation{};
         observation.stage = cc_mw3_re::testing::ProducerViewStage::backend_group;
         observation.view = d.producer_view;
@@ -2105,6 +2239,12 @@ private:
         producer_view_observer->backend(observation);
       }
       const bool model = bool(d.model), lit = !s.hud && sun_lit(d);
+      const auto& view = d.producer_view;
+      // Opaque reduced shading supplies surface RGB. Its full-resolution replay
+      // makes the single coverage/depth decision for each output sample.
+      const unsigned radial_far = reconstruction_stage != ReconstructionStage::shading &&
+          uses_world_range(s, d) ? bridge_config.draw_distance : 0;
+
       const VkPipelineLayout layout =
           (model || lit) ? modelLayout : pipelineLayout;
       f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -2155,6 +2295,10 @@ private:
         }
         ModelPush mp{};
         mp.base = d.push;
+        // mode.x low bits keep the legacy material flags. ModelPush already
+        // occupies Vulkan's guaranteed 128 bytes; its upper half-word carries metres.
+        mp.base.mode[0] |= radial_far << 16;
+        mp.base.mode[0] |= visibility_flags[o.index];
         mp.camera = i.camera;
         mp.base.target[2] = i.projection[0];
         mp.base.target[3] = i.projection[5];
@@ -2176,6 +2320,10 @@ private:
           ++world_gpu_draws;
       } else { // A model draw binds its own VBO; ordinary TL draws must restore
                // theirs.
+        // Every ordinary TL pipeline reads the raw fog at binding 2. Binding 0 is covered below:
+        // it holds vertexBuffer from the start of the pass, and boundVertices forces a rebind
+        // after any model draw replaced it, so only an already-bound vertexBuffer is skipped.
+        f.vkCmdBindVertexBuffers(cmd, 2, 1, &fogBuffer.buffer, &zero);
         if (lit) {
           const VkBuffer buffers[2]{vertexBuffer.buffer, normalBuffer.buffer};
           const VkDeviceSize offsets[2]{0, 0};
@@ -2185,10 +2333,27 @@ private:
           f.vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &zero);
           boundVertices = vertexBuffer.buffer;
         }
+        TlPush tl{d.push, {}};
+        tl.base.mode[0] |= visibility_flags[o.index];
+        tl.base.target[3] = 0;
+        if (radial_far && view.canvas_available) {
+          const auto& p = view.projection;
+          const auto& c = view.canvas;
+          if (c.width > 0 && c.height > 0 && p.fx_near > 0 && p.fy_near > 0 &&
+              p.near_z > 0 && std::isfinite(p.near_z) && std::isfinite(p.fx_near) &&
+              std::isfinite(p.fy_near) && std::isfinite(p.cx) && std::isfinite(p.cy)) {
+            const float sx = float(s.width) / float(c.width);
+            const float sy = float(s.height) / float(c.height);
+            tl.radial_projection = {1.f / (p.fx_near * sx * radial_far),
+                                    1.f / (p.fy_near * sy * radial_far),
+                                    (p.cx - c.x) * sx, (p.cy - c.y) * sy};
+            tl.base.target[3] = p.near_z / radial_far;
+          }
+        }
         f.vkCmdPushConstants(cmd, layout,
                              VK_SHADER_STAGE_VERTEX_BIT |
                                  VK_SHADER_STAGE_FRAGMENT_BIT,
-                             0, sizeof(Push), &d.push);
+                             0, sizeof(tl), &tl);
       }
       if (d.model && !d.model->geometry->indices.empty())
         f.vkCmdDrawIndexed(cmd, vertexCount, 1, d.first, 0, 0);
@@ -2197,13 +2362,18 @@ private:
                     d.model && d.model->world ? 0 : d.first, 0);
       if (reconstruction_stage == ReconstructionStage::coverage)
         coverage_draws += logicalDraws;
-      else {
+      else if (!recording_backdrop) {
         draws += logicalDraws;
         ++submitted_draws;
         combined_draws += logicalDraws - 1;
       }
     }
     f.vkCmdEndRenderPass(cmd);
+    if (recording_backdrop)
+      barrier(recording_backdrop->color.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+              VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
     const bool writes_color =
         std::any_of(s.draws.begin(), s.draws.end(),
                     [](const Draw &draw) { return !draw.depth_only; });
@@ -2252,8 +2422,8 @@ private:
       height_uploaded_bytes += upload.cached->bytes;
     }
     profile_queries_pending = profile_queries != VK_NULL_HANDLE;
-    fixture_atlas_submitted();
-    if (reconstruction_stage != ReconstructionStage::coverage)
+    if (!recording_backdrop) fixture_atlas_submitted();
+    if (reconstruction_stage != ReconstructionStage::coverage && !recording_backdrop)
       ++scenes;
     if (readback_out) {
       check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL),
@@ -2547,7 +2717,7 @@ private:
   VkQueue queue{};
   unsigned family{}, width{}, height{}, descriptorCapacity{};
   bool rgba{};
-  Buffer upload, readback, vertexBuffer, normalBuffer, texUpload, sunBuffer,
+  Buffer upload, readback, vertexBuffer, normalBuffer, fogBuffer, texUpload, sunBuffer,
       effectBuffer;
   VkDeviceSize sunStride{};
   VkDescriptorSetLayout sunSetLayout{}, normalSetLayout{};
@@ -2942,11 +3112,8 @@ private:
                             view[at] && !d.model && !d.sun_tl && d.count &&
                             (d.push.mode[0] & 16);
       if (sun.haze_active && (d.native_sky || (d.push.mode[0] & 16))) {
-        for (unsigned i = 0; i < 3; ++i)
-          d.push.fog[i] =
-              sun.haze_manual
-                  ? sun.haze_color[i]
-                  : std::fmin(1.f, d.push.fog[i] * sun.haze_scale[i]);
+        const auto color = mw34::sun::fog_color(sun, {d.push.fog[0], d.push.fog[1], d.push.fog[2]});
+        std::copy(color.begin(), color.end(), d.push.fog);
         ++haze_draws;
       }
       if (routable && d.key.blend && !d.native_sky) {
@@ -3584,20 +3751,22 @@ private:
       check(f.vkCreateQueryPool(device, &query, nullptr, &profile_queries),
             "scene timestamp query pool");
     }
-    const VkDescriptorSetLayoutBinding bindings[2]{
+    const VkDescriptorSetLayoutBinding bindings[scene_texture_bindings]{
         {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
          VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+         VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
          VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = world_scale_percent() < 100 ? 2 : 1;
+    li.bindingCount = scene_texture_bindings;
     li.pBindings = bindings;
     check(f.vkCreateDescriptorSetLayout(device, &li, nullptr, &setLayout),
           "descriptor set layout");
     VkPushConstantRange pr{VK_SHADER_STAGE_VERTEX_BIT |
                                VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(Push)};
+                           0, sizeof(TlPush)};
     VkPipelineLayoutCreateInfo pli{};
     pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pli.setLayoutCount = 1;
@@ -3645,10 +3814,10 @@ private:
         check(
             f.vkCreateDescriptorSetLayout(device, &si, nullptr, &sunSetLayout),
             "sun descriptor layout");
-        if (p.limits.maxPerStageDescriptorSamplers < 6 ||
-            p.limits.maxPerStageDescriptorSampledImages < 6 ||
-            p.limits.maxDescriptorSetSamplers < 6 ||
-            p.limits.maxDescriptorSetSampledImages < 6)
+        if (p.limits.maxPerStageDescriptorSamplers < 7 ||
+            p.limits.maxPerStageDescriptorSampledImages < 7 ||
+            p.limits.maxDescriptorSetSamplers < 7 ||
+            p.limits.maxDescriptorSetSampledImages < 7)
           throw std::runtime_error("GPU cannot provide the normal/height descriptor contract");
         const std::array<VkDescriptorSetLayoutBinding, 2> nb{{
             {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
@@ -3765,11 +3934,16 @@ private:
       aa_name = "4-sample SSAA";
     else if (grid.x == 2)
       aa_name = "2-sample SSAA";
-    if (fxaa_enabled() || anisotropy() > 1 || grid.x > 1)
+    if (fxaa_enabled() || anisotropy() > 1 || grid.x > 1 ||
+        bridge_config.draw_distance != zcls::kDefaultVisualFar)
       std::fprintf(
           stderr,
-          "Remaster quality: %s, %ux AF, samplerAnisotropy %u, GPU %s\n",
+          "Remaster quality: %s, %ux AF, samplerAnisotropy %u, draw distance %u "
+          "(fog start %.0f), GPU %s\n",
           aa_name, anisotropy(), enabled.samplerAnisotropy,
+          bridge_config.draw_distance,
+          static_cast<double>(zcls::fog_start_for_view_distance(
+              static_cast<float>(bridge_config.draw_distance))),
           device_name.c_str());
     if (bridge_config.seh_log) {
       VkPhysicalDeviceProperties diagnostic_props{};
@@ -4280,6 +4454,10 @@ private:
          {1, 0, VK_FORMAT_R32_UINT, 16},
          {2, 0, VK_FORMAT_R32_UINT, 20},
          {3, 0, VK_FORMAT_R32G32_SFLOAT, 24}}};
+    const std::array<VkVertexInputBindingDescription, 2> fog_bindings{
+        {vb, {2, 16, VK_VERTEX_INPUT_RATE_VERTEX}}};
+    const std::array<VkVertexInputAttributeDescription, 5> fog_attributes{
+        {va[0], va[1], va[2], va[3], {5, 2, VK_FORMAT_R32G32B32A32_SFLOAT, 0}}};
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     const std::array<VkVertexInputAttributeDescription, 3> ma{
@@ -4295,24 +4473,32 @@ private:
          {2, 1, VK_FORMAT_R32_UINT, 20},
          {3, 1, VK_FORMAT_R32G32_SFLOAT, 24},
          {4, 0, VK_FORMAT_R32G32B32_SFLOAT, 12}}};
-    const std::array<VkVertexInputBindingDescription, 2> tb{
+    const std::array<VkVertexInputBindingDescription, 3> tb{
         {{0, 32, VK_VERTEX_INPUT_RATE_VERTEX},
-         {1, 12, VK_VERTEX_INPUT_RATE_VERTEX}}};
-    const std::array<VkVertexInputAttributeDescription, 5> ta{
-        {va[0], va[1], va[2], va[3], {4, 1, VK_FORMAT_R32G32B32_SFLOAT, 0}}};
+         {1, 12, VK_VERTEX_INPUT_RATE_VERTEX},
+         {2, 16, VK_VERTEX_INPUT_RATE_VERTEX}}};
+    const std::array<VkVertexInputAttributeDescription, 6> ta{
+        {va[0], va[1], va[2], va[3], {4, 1, VK_FORMAT_R32G32B32_SFLOAT, 0},
+         {5, 2, VK_FORMAT_R32G32B32A32_SFLOAT, 0}}};
     const bool lit_tl = lit && !model;
-    vi.vertexBindingDescriptionCount = world || lit_tl ? 2 : 1;
+    // The count must follow the SAME order as the pointer below, and come from the chosen array:
+    // a world draw can also be lit_tl, and its two-element array must not be read as three.
+    vi.vertexBindingDescriptionCount = world    ? uint32_t(wb.size())
+                                       : lit_tl ? uint32_t(tb.size())
+                                       : model  ? 1u
+                                                : uint32_t(fog_bindings.size());
     vi.pVertexBindingDescriptions = world    ? wb.data()
                                     : lit_tl ? tb.data()
-                                             : &vb;
-    vi.vertexAttributeDescriptionCount = world    ? (lit ? 5 : 4)
-                                         : model  ? 3
-                                         : lit_tl ? 5
-                                                  : 4;
+                                    : model  ? &vb
+                                             : fog_bindings.data();
+    vi.vertexAttributeDescriptionCount = world    ? (lit ? 5u : 4u)
+                                         : model  ? 3u
+                                         : lit_tl ? uint32_t(ta.size())
+                                                  : uint32_t(fog_attributes.size());
     vi.pVertexAttributeDescriptions = world    ? wa.data()
                                       : model  ? ma.data()
                                       : lit_tl ? ta.data()
-                                               : va.data();
+                                               : fog_attributes.data();
     VkPipelineInputAssemblyStateCreateInfo ia{};
     ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     ia.topology = k.points ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
@@ -4358,7 +4544,10 @@ private:
     cb.colorWriteMask = 15;
     cb.blendEnable = k.blend;
     unsigned src = k.src, dst = k.dst;
-    if (src == 12) {
+    if (src == kReverseSubtractBlend) {
+      src = dst = 2;
+      cb.colorBlendOp = VK_BLEND_OP_REVERSE_SUBTRACT;
+    } else if (src == 12) {
       src = 5;
       dst = 6;
     } else if (src == 13) {
@@ -4843,7 +5032,7 @@ private:
       f.vkDestroyFence(device, presentFence, nullptr);
     if (presentPool)
       f.vkDestroyCommandPool(device, presentPool, nullptr);
-    for (Buffer *b : {&upload, &readback, &vertexBuffer, &normalBuffer,
+    for (Buffer *b : {&upload, &readback, &vertexBuffer, &normalBuffer, &fogBuffer,
                       &texUpload, &presentUpload, &sunBuffer, &effectBuffer, &height_upload})
       if (b->buffer) {
         f.vkDestroyBuffer(device, b->buffer, nullptr);
@@ -4920,6 +5109,7 @@ private:
     device = {};
   }
 #include "quality_stage.inc"
+#include "range_backdrop.inc"
 #include "world_resolution_stage.inc"
 };
 } // namespace mw34::vkscene

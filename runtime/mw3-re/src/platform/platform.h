@@ -73,6 +73,12 @@ class Window {
     (void)width, (void)height;
     return false;
   }
+  // FIX (B) layer: the frame size the launcher chose for this run (--window on a play run);
+  // false when none was chosen (fullscreen at the desktop, checks, shots).
+  virtual bool launch_size(int* width, int* height) {
+    (void)width, (void)height;
+    return false;
+  }
 };
 
 // Stands in for the DirectDraw primary surface the menus' 16-bit back buffer
@@ -83,6 +89,9 @@ class Screen2D {
   virtual ~Screen2D() = default;
   virtual void begin_overlay_16(const uint16_t*, int, int, int) {}
   virtual void cancel_overlay_16() {}
+  virtual void begin_menu_observation(const uint16_t*, int, int, int) {}
+  virtual void cancel_menu_observation() noexcept {}
+  virtual void finish_menu_observation() noexcept {}
   virtual void present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) = 0;
   // FIX (A): the back buffer locked over a Direct3D frame (0x00576d00 /
   // 0x00576d60): what the 2D code drew into the 16-bit layer goes over the

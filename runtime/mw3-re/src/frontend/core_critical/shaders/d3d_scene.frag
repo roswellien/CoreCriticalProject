@@ -1,18 +1,24 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 // Direct3D 6 fixed-function pixel stage for one texture stage: colour/alpha operation and arguments,
 // flat or Gouraud colour, perspective or affine texture coordinates, specular add, vertex fog (specular
 // alpha) and alpha test. Unmodelled states are refused on the host before a draw reaches this shader.
+#include "radial_visibility.glsl"
+layout(location=11) in vec4 radialEye;
 layout(location=0) in vec2 uvPerspective;
 layout(location=1) noperspective in vec2 uvAffine;
 layout(location=2) in vec4 colorSmooth;
 layout(location=3) flat in vec4 colorFlat;
 layout(location=4) in vec4 specularSmooth;
 layout(location=5) flat in vec4 specularFlat;
+layout(location=10) in vec4 fogFactors;
 layout(set=0,binding=0) uniform sampler2D image;
 layout(location=0) out vec4 result;
 // mode.x flags: 1 flat, 2 perspective, 4 textured, 8 specular, 16 fog, 32 alpha test,
-// 64 premultiplied sharp 2D sampling (the native HUD/canvas), 128 damage tint.
-// mode.y colour op | arg1 << 8 | arg2 << 16; mode.z alpha op | arg1 << 8 | arg2 << 16;
+// 64 premultiplied sharp 2D sampling (the native HUD/canvas), 128 damage tint,
+// 512 selects the textured alpha source for tinted model draws.
+// Normally mode.y/z hold colour/alpha operations. With tint, mode.y packs RGB8
+// and mode.z stores the float weight; bit 512 retains textured alpha selection.
 // mode.w alpha function | reference << 8.
 layout(push_constant) uniform Push { vec4 target; vec4 fogColor; vec4 factor; uvec4 mode; } draw;
 vec4 diffuse, specular, texel;
@@ -45,10 +51,17 @@ vec4 operation(uint word) {
     if (op == 13u) return mix(b, a, texel.a);             // BLENDTEXTUREALPHA
     return mix(b, a, draw.factor.a);                      // BLENDFACTORALPHA (14)
 }
-void main() {
+void shadeScene() {
     uint flags = draw.mode.x;
     diffuse = (flags & 1u) != 0u ? colorFlat : colorSmooth;
     specular = (flags & 1u) != 0u ? specularFlat : specularSmooth;
+    if (fogFactors.w > 1.5) {
+        specular.a = clamp(fogFactors.x, 0.0, 1.0);
+    } else if (fogFactors.w > 0.5) {
+        // Native geometry shares this unlit fragment path. Clamp before any consumer.
+        vec3 amounts = clamp(fogFactors.xyz, 0.0, 1.0);
+        specular.a = (1.0 - amounts.x * amounts.y) * (1.0 - amounts.z);
+    }
     vec2 uv = (flags & 2u) != 0u ? uvPerspective : uvAffine;
     if ((flags & 64u) != 0u) {
         // Match SDL's sharp layer sampling at the quad's actual output density.
@@ -63,9 +76,15 @@ void main() {
     } else {
         texel = (flags & 4u) != 0u ? texture(image, uv) : vec4(1.0);
     }
-    vec3 rgb = operation(draw.mode.y).rgb;
-    float alpha = operation(draw.mode.z).a;
-    if ((flags & 128u) != 0u) rgb = mix(rgb, vec3(1.0, 0.0, 0.0), draw.fogColor.a);
+    bool tinted = (flags & 128u) != 0u;
+    vec3 rgb = operation(tinted ? (4u | (2u << 8)) : draw.mode.y).rgb;
+    float alpha = operation(tinted ? ((flags & 512u) != 0u ? (2u | (2u << 8)) : 2u)
+                                   : draw.mode.z).a;
+    if (tinted) {
+        vec3 tint = vec3(draw.mode.y & 255u, (draw.mode.y >> 8) & 255u,
+                         (draw.mode.y >> 16) & 255u) / 255.0;
+        rgb = mix(rgb, tint, uintBitsToFloat(draw.mode.z));
+    }
     if ((flags & 8u) != 0u) rgb = min(rgb + specular.rgb, 1.0);
     if ((flags & 16u) != 0u) rgb = mix(draw.fogColor.rgb, rgb, specular.a);
     if ((flags & 32u) != 0u) {
@@ -76,4 +95,10 @@ void main() {
         if (!pass) discard;
     }
     result = vec4(rgb, alpha);
+}
+
+void main() {
+    vec4 visibility = radialVisibility(radialEye, ivec2(gl_FragCoord.xy), draw.mode.x);
+    shadeScene();
+    result.rgb = mix(visibility.rgb, result.rgb, visibility.a);
 }

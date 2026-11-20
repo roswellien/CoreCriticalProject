@@ -47,6 +47,17 @@ bool node_float(const zrdr::Node* n, float* out) {
 Options& options() { return g_options; }
 void set_replay_screen(bool on) { g_replay_screen = on; }
 void set_options_hooks(OptionsHooks* hooks) { g_hooks = hooks ? hooks : &g_default_hooks; }
+
+namespace {
+// The launcher's size for this run and the saved values it replaced (load_options).
+struct LaunchScreen {
+  bool active = false;
+  int32_t vmode = 0, width = 0, height = 0;
+  int32_t saved_vmode = 0, saved_width = 0, saved_height = 0;
+  bool player_chose = false;  // note_player_screen_choice during the run
+};
+LaunchScreen g_launch_screen;
+}  // namespace
 OptionsHooks& options_hooks() { return *g_hooks; }
 
 // Mech3.exe 1.2 @ 0x0040d4c0
@@ -772,10 +783,19 @@ int32_t load_options(const char* path) {
   g_hooks->controls_set_defaults();
   o.default_cmd_map = zreg::find("DefaultCmdMap");
   zreg::read_all();
-  // Ours (#289): the 3D replay plays at the screen's shape, whatever mode a
-  // player or an earlier hidden run saved; the saved mode is put back before
-  // the save (save_options), so watching a replay changes no setting.
-  if (g_replay_screen) {
+  // FIX (B): the launcher's resolution is the mission's and the menus' frame for this run. Without
+  // this a saved size (the first start's desktop, 3440x1440) won over a 1920x1080 launch, and the
+  // 1920x1080 window showed a 21:9 frame letterboxed inside it.
+  g_launch_screen = {};
+  int32_t launch_width = 0, launch_height = 0;
+  if (zfix::options().any_resolution && g_hooks->launch_screen(&launch_width, &launch_height)) {
+    g_launch_screen = {true, kCustomVMode, launch_width, launch_height,
+                       o.in_game_vmode, o.screen_w, o.screen_h};
+    o.in_game_vmode = kCustomVMode, o.screen_w = launch_width, o.screen_h = launch_height;
+  } else if (g_replay_screen) {
+    // Ours (#289): the 3D replay plays at the screen's shape, whatever mode a
+    // player or an earlier hidden run saved; the saved mode is put back before
+    // the save (save_options), so watching a replay changes no setting.
     int32_t w = 0, h = 0;
     if (zfix::options().any_resolution && g_hooks->first_start_screen(&w, &h)) {
       g_saved_screen = {true, o.in_game_vmode, o.screen_w, o.screen_h};
@@ -792,6 +812,26 @@ int32_t load_options(const char* path) {
   o.window.target = 0;
   if (root) g_hooks->reader_free(root);
   return 1;
+}
+
+void note_player_screen_choice() { g_launch_screen.player_chose = true; }
+
+void launch_screen_for_save(bool saved) {
+  Options& o = g_options;
+  LaunchScreen& launch = g_launch_screen;
+  if (!launch.active) return;
+  if (saved) {
+    // A mode the player chose in the game is saved as it stands, even when it equals the
+    // launcher's: the choice, not the value, decides (note_player_screen_choice).
+    if (launch.player_chose) {
+      launch.active = false;
+      return;
+    }
+    o.in_game_vmode = launch.saved_vmode, o.screen_w = launch.saved_width;
+    o.screen_h = launch.saved_height;
+  } else {
+    o.in_game_vmode = launch.vmode, o.screen_w = launch.width, o.screen_h = launch.height;
+  }
 }
 
 // Mech3.exe 1.2 @ 0x0040cb20, from the app's destructor 0x0047fab0.

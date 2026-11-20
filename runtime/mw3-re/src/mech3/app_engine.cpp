@@ -107,6 +107,13 @@ struct WiredOptionsHooks : OptionsHooks {
     *w = fw, *h = fh;
     return true;
   }
+  bool launch_screen(int32_t* w, int32_t* h) override {
+    platform::Window* win = g_engine ? g_engine->platform_parts().window : nullptr;
+    int lw = 0, lh = 0;
+    if (!win || !win->launch_size(&lw, &lh)) return false;
+    *w = lw, *h = lh;
+    return true;
+  }
   void camera_get_fov(Handle cam, float* x, float* y) override {  // 0x004f3ee0
     *x = *y = 1.0f;
     if (g_engine) zcls::camera_get_fov_angles(static_cast<zcls::Node*>(g_engine->object_of(cam)), x, y);
@@ -808,12 +815,25 @@ void GameEngine::video_lock() {
   zrndr::set_finish_target(buffer_.data(), width_, height_, width_ * 2);  // 0x00558290, as 0x00576de0 sets it
 }
 void GameEngine::video_clear(Handle) {
+  if (p_.screen) p_.screen->cancel_menu_observation();
+  zrndr::begin_menu_background_frame();
   zrndr::observe_framebuffer_write(buffer_.data(), "frame clear");
   std::fill(buffer_.begin(), buffer_.end(), uint16_t{0});
+  // The clear is the native CPU canvas baseline, not a menu overlay draw.
+  if (p_.screen)
+    p_.screen->begin_menu_observation(buffer_.data(), width_, height_, width_ * 2);
 }
 // 0x00576ea0: the back buffer to the screen.
 // A frame whose 3D scene was drawn (the Core state's) shows that instead.
 void GameEngine::video_flip(int32_t, int32_t, int32_t, int32_t) {
+  struct CancelMenuObservation {
+    platform::Screen2D* screen;
+    ~CancelMenuObservation() {
+      if (screen) screen->cancel_menu_observation();
+      // Whatever path presented the frame, its background pieces are now consumed.
+      zrndr::end_menu_background_frame();
+    }
+  } cancel_menu_observation{p_.screen};
   // FIX (B), playtest W25: a message box over a GPU frame shows over that
   // frame at its own size, not over the 16-bit buffer's copy of it (the
   // buffer's size: the menus' 640x480, low-res at 16:9 or in the lab).
@@ -822,6 +842,7 @@ void GameEngine::video_flip(int32_t, int32_t, int32_t, int32_t) {
   // or the lab's held frame was dropped and the box shown over the key's
   // magenta.
   if (held_ && !scene_drawn_ && (!layer_drawn_ || layer_blank_) && p_.render && p_.screen && p_.render->restore_frame()) {
+    p_.screen->cancel_menu_observation();
     p_.screen->overlay_16(buffer_.data(), width_, height_, width_ * 2, true, kLayerKey, nullptr, nullptr);
     p_.render->present();
     ++frames_presented;
@@ -830,7 +851,11 @@ void GameEngine::video_flip(int32_t, int32_t, int32_t, int32_t) {
   }
   if (held_) drop_held();
   if ((scene_drawn_ || layer_drawn_) && p_.render) p_.render->present();
-  else if (p_.screen) p_.screen->present_16(buffer_.data(), width_, height_, width_ * 2, true);
+  else if (p_.screen) {
+    p_.screen->finish_menu_observation();
+    p_.screen->present_16(buffer_.data(), width_, height_, width_ * 2, true);
+  }
+  if ((scene_drawn_ || layer_drawn_) && p_.screen) p_.screen->cancel_menu_observation();
   last_drew_scene_ = scene_drawn_;
   last_via_render_ = (scene_drawn_ || layer_drawn_) && p_.render;
   buffer_is_screen_ = !last_via_render_;
@@ -1027,7 +1052,10 @@ void GameEngine::multiplayer_launch_prep() { net_start(); }
 void GameEngine::network_leave() { net_end(); }
 void GameEngine::video_begin_3d() { zvid::lock_3d(); }
 void GameEngine::video_end_3d() { zvid::unlock_3d(); }
-void GameEngine::video_begin_scene() { zvid::scene_begin(); }
+void GameEngine::video_begin_scene() {
+  if (p_.screen) p_.screen->cancel_menu_observation();
+  zvid::scene_begin();
+}
 void GameEngine::video_draw_3d() { zvid::draw_tint_quad(); }
 void GameEngine::video_end_scene() { zvid::scene_end(); }
 void GameEngine::render_finish() { zrndr::finish(); }
@@ -1035,6 +1063,7 @@ void GameEngine::render_finish() { zrndr::finish(); }
 // The layer's alpha blends are recorded while it is locked, so they go over
 // the frame see-through instead of mixed with the key (zrndr::LayerCover).
 int32_t GameEngine::lock_back(zvid::Surface* s) {
+  if (p_.screen) p_.screen->cancel_menu_observation();
   // The 2D picture the buffer held, kept for a lock that draws nothing (the
   // message box's 0x004ac150 locks and unlocks first): the exe's lock left
   // the back buffer's picture as it was.

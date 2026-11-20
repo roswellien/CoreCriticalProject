@@ -1,6 +1,7 @@
 #include "mech3/mainmenu.h"
 
 #include "gamez/zimage/zimg_library.h"
+#include "gamez/zrender/zrndr_blit.h"
 #include "gamez/zreader/zreader.h"
 #include "mech3/app.h"
 #include "mech3/mods_menu.h"
@@ -151,6 +152,7 @@ MainMenu::MainMenu(Engine& e, Handle s)
 MainMenu::~MainMenu() {
   engine().voice_release("MENU");
   engine().cd_stop();
+  zrndr::set_menu_background_source(nullptr);
   g_main_menu = nullptr;
 }
 

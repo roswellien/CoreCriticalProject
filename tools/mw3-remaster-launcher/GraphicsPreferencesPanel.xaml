@@ -44,10 +44,21 @@
                                     <!-- Scenery Draw Distance -->
                                     <TextBlock Text="Scenery Draw Distance:" FontWeight="SemiBold" Margin="0,0,0,6" />
                                     <ComboBox x:Name="ComboDrawDist" Margin="0,0,0,16" SelectionChanged="ControlChanged">
+                                        <ComboBoxItem Content="3200m - Maximum" Tag="3200" />
+                                        <ComboBoxItem Content="2400m - Very High" Tag="2400" />
                                         <ComboBoxItem Content="1600m - Extended" Tag="1600" />
                                         <ComboBoxItem Content="1200m - High" Tag="1200" />
                                         <ComboBoxItem Content="800m - Original (Default)" Tag="800" />
                                     </ComboBox>
+        <TextBlock Text="2400m and 3200m cost much more GPU time."
+                   FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
+
+        <TextBlock Text="MW3-RE Lens Flare Alpha:" FontWeight="SemiBold" Margin="0,0,0,6" />
+        <ComboBox x:Name="ComboFlareStyle" Margin="0,0,0,6" SelectionChanged="ControlChanged">
+            <ComboBoxItem Content="Smooth (Recommended)" Tag="modern" />
+            <ComboBoxItem Content="Original" Tag="original" />
+        </ComboBox>
+        <TextBlock Text="Smooths the alpha edges of lflare1–4 while preserving their colors and shape. Original restores the source alpha." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
 
         <CheckBox x:Name="ChkDynamicLighting" Content="Dynamic Lighting" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
         <TextBlock Text="Adds lighting from weapons and scene fixtures. Works with stock assets or enabled packs. Off retains original lighting. Applies on the next launch." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />

@@ -36,6 +36,8 @@ TransparentQueue g_queue;
 OverlayList g_overlay;
 bool g_transparent_sky[TransparentQueue::kMaxPolys];
 bool g_overlay_sky[OverlayList::kMax];
+platform::FlareSpriteDiagnostic g_transparent_flares[TransparentQueue::kMaxPolys];
+platform::FlareSpriteDiagnostic g_overlay_flares[OverlayList::kMax];
 platform::Render3D *g_render = nullptr;
 platform::ProducerView g_transparent_views[TransparentQueue::kMaxPolys];
 platform::ProducerView g_overlay_views[OverlayList::kMax];
@@ -62,11 +64,13 @@ void clear_producer_transport(bool failed) noexcept {
     g_transparent_views[i] = {};
     g_transparent_materials[i].reset();
     g_transparent_sky[i] = false;
+    g_transparent_flares[i] = {};
   }
   for (int32_t i = 0; i < OverlayList::kMax; ++i) {
     g_overlay_views[i] = {};
     g_overlay_materials[i].reset();
     g_overlay_sky[i] = false;
+    g_overlay_flares[i] = {};
   }
   g_queue.count = g_queue.vertex_count = 0;
   g_overlay.count = 0;
@@ -109,19 +113,6 @@ void validate_producer_view(const platform::ProducerView& view) {
     throw std::runtime_error("Corrupt or stale producer view provenance");
   // No float is inspected here: neutral nonfinite/stale inverse bits are data.
 }
-
-struct ProducerBindingScope {
-  platform::Render3D* receiver;
-  platform::ProducerViewRestoreToken token{};
-  ProducerBindingScope(platform::Render3D* selected, const platform::ProducerView& view)
-      : receiver(selected) {
-    validate_producer_view(view);
-    if (receiver) token = receiver->exchange_producer_view(view);
-  }
-  ~ProducerBindingScope() noexcept {
-    if (receiver) receiver->restore_producer_view(token);
-  }
-};
 
 struct DeferredMaterialScope {
   platform::Render3D *renderer;
@@ -179,7 +170,12 @@ void set_render_state(int32_t state, int32_t value) {
     case 19:                                      // SRCBLEND: 5 SRCALPHA, 1 ZERO
     case 20:                                      // DESTBLEND: 6 INVSRCALPHA, 3 SRCCOLOR
       (state == 19 ? g_src_blend : g_dest_blend) = value;
+      d.source_blend = g_src_blend;
+      d.destination_blend = g_dest_blend;
       d.multiply = g_src_blend == 1 && g_dest_blend == 3;
+      d.additive = g_src_blend == 2 && g_dest_blend == 2;
+      d.unsupported_blend =
+          !(d.multiply || d.additive || (g_src_blend == 5 && g_dest_blend == 6));
       break;
     case 23: d.depth_always = value == 8; break;  // ZFUNC: 8 ALWAYS, 7 GREATEREQUAL
     case 27: d.blend = value != 0; break;         // ALPHABLENDENABLE
@@ -212,8 +208,15 @@ void set_texture(const D3DTexture* t) { g_draw.texture = t ? t->handle : -1; }
 // no HRESULT, so the original's failure reports (0x00580550) go.
 void dispatch_bound_primitive(platform::Render3D* receiver, int32_t primitive,
                               const TLVertex* verts, int32_t count,
-                              const platform::DrawState& state) {
-  if (receiver) receiver->draw(static_cast<platform::Primitive>(primitive), verts, count, state);
+                              const platform::DrawState& state,
+                              platform::DrawQueue queue = platform::DrawQueue::Immediate,
+                              platform::FlareSpriteDiagnostic flare = {}) {
+  if (!receiver) return;
+  auto emitted = state;
+  emitted.queue = queue;
+  emitted.flare_diagnostic =
+      queue == platform::DrawQueue::Immediate ? state.flare_diagnostic : flare;
+  receiver->draw(static_cast<platform::Primitive>(primitive), verts, count, emitted);
 }
 
 template <typename Dispatch>
@@ -398,6 +401,7 @@ OverlayPoly* overlay_slot(int32_t type, int32_t count, const D3DTexture* texture
       ? g_render->capture_deferred_material_binding(texture->handle) : nullptr;
   g_overlay_views[o.count] = view;
   g_overlay_sky[o.count] = sky;
+  g_overlay_flares[o.count] = g_draw.flare_diagnostic;
   g_overlay_materials[o.count] = std::move(material);
   OverlayPoly& p = o.polys[o.count++];
   p.type = type;
@@ -465,6 +469,39 @@ ProducerPurposeScope::~ProducerPurposeScope() noexcept {
   if (epoch_ == g_producer_epoch) g_requested_purpose = previous_;
 }
 
+ProducerBindingScope::ProducerBindingScope(platform::Render3D* receiver)
+    : ProducerBindingScope(receiver, receiver ? capture_producer_view()
+                                               : platform::ProducerView{}) {}
+ProducerBindingScope::ProducerBindingScope(
+    platform::Render3D* receiver, const platform::ProducerView& view)
+    : receiver_(receiver) {
+  if (!receiver_) return;
+  validate_producer_view(view);
+  token_ = receiver_->exchange_producer_view(view);
+}
+ProducerBindingScope::~ProducerBindingScope() noexcept {
+  if (receiver_) receiver_->restore_producer_view(token_);
+}
+cc::geometry::Submission submit_prepared_geometry_for_current_view(
+    platform::Render3D* receiver,
+    const platform::ModelDrawContext& context,
+    const cc::geometry::Fog& fog) {
+  if (!receiver) return cc::geometry::Submission::unsupported;
+  const ProducerBindingScope producer_view(receiver);
+  return receiver->submit_prepared_geometry(context, fog);
+}
+cc::geometry::Submission submit_model_geometry_for_current_view(
+    platform::Render3D* receiver,
+    std::shared_ptr<const cc::geometry::Resource> source,
+    const platform::ModelDrawContext& context,
+    const std::vector<cc::geometry::Material>& materials,
+    const cc::geometry::Fog& fog) {
+  if (!receiver) return cc::geometry::Submission::unsupported;
+  const ProducerBindingScope producer_view(receiver);
+  return receiver->submit_model_geometry(std::move(source), context, materials,
+                                         fog);
+}
+
 ProducerWorldScope::ProducerWorldScope(bool force_original)
     : previous_(g_emitting_view), previous_request_(g_requested_purpose),
       purpose_(force_original ? platform::ProducerPurpose::Original : g_requested_purpose),
@@ -520,6 +557,16 @@ void set_producer_camera_rect(int32_t x, int32_t y, int32_t width, int32_t heigh
   g_producer_camera_rect = {x, y, width, height};
   g_camera_rect_available = available;
 }
+ProducerViewStateForTest capture_producer_view_state_for_test() {
+  ProducerViewStateForTest state;
+  state.view = capture_producer_view();
+  state.mission = g_producer_mission;
+  state.canvas = g_producer_canvas;
+  state.canvas_available = g_canvas_available;
+  state.camera_rect = g_producer_camera_rect;
+  state.camera_rect_available = g_camera_rect_available;
+  return state;
+}
 platform::ProducerView capture_producer_view() {
   auto result = g_emitting_view;
   validate_producer_view(result);
@@ -542,6 +589,14 @@ platform::ProducerView capture_producer_view() {
   result.camera_rect = g_producer_camera_rect;
   return result;
 }
+void restore_producer_view_for_test(const ProducerViewStateForTest& state) noexcept {
+  g_emitting_view = state.view;
+  g_producer_mission = state.mission;
+  g_producer_canvas = state.canvas;
+  g_canvas_available = state.canvas_available;
+  g_producer_camera_rect = state.camera_rect;
+  g_camera_rect_available = state.camera_rect_available;
+}
 void invalidate_producer_transport(platform::Render3D* owner, bool failed) noexcept {
   if (owner && owner != g_render) return;
   clear_producer_transport(failed);
@@ -557,6 +612,12 @@ void producer_mission_changed(const platform::MissionIdentity& identity) noexcep
 }
 
 TransparentQueue& transparent_queue() { return g_queue; }
+
+FlareDiagnosticScope::FlareDiagnosticScope(int32_t slot, float half_size_pixels)
+    : previous_(g_draw.flare_diagnostic) {
+  g_draw.flare_diagnostic = {slot, half_size_pixels};
+}
+FlareDiagnosticScope::~FlareDiagnosticScope() { g_draw.flare_diagnostic = previous_; }
 OverlayList& overlay_list() { return g_overlay; }
 TintQuad& tint_quad() { return g_tint; }
 
@@ -621,6 +682,7 @@ TLVertex* queue_transparent(int32_t primitive, int32_t count, const D3DTexture* 
       ? g_render->capture_deferred_material_binding(texture->handle) : nullptr;
   g_transparent_views[q.count] = view;
   g_transparent_sky[q.count] = sky;
+  g_transparent_flares[q.count] = g_draw.flare_diagnostic;
   g_transparent_materials[q.count] = std::move(material);
   TransparentPoly& p = q.polys[q.count++];
   p.primitive = primitive;
@@ -971,13 +1033,15 @@ void flush_transparent() {
       set_address(p.texture);
     }
     set_texture(p.texture);
-    dispatch_bound_primitive(receiver, p.primitive, p.verts, p.count, g_draw);
+    dispatch_bound_primitive(receiver, p.primitive, p.verts, p.count, g_draw,
+                             platform::DrawQueue::Transparent, g_transparent_flares[q.order[n]]);
   }
   if (s.alpha_blend != 0) set_render_state(27, 0), s.alpha_blend = 0;
   if (s.z_write != 1) set_render_state(14, 1), s.z_write = 1;
   for (uint32_t i = 0; i < q.count; ++i) {
     g_transparent_views[i] = {};
     g_transparent_sky[i] = false;
+    g_transparent_flares[i] = {};
   }
   q.count = 0;
   q.vertex_count = 0;
@@ -1023,7 +1087,8 @@ void flush_overlay() {
           }
           set_address(t);
         }
-        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw);
+        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw,
+                                 platform::DrawQueue::Overlay, g_overlay_flares[n]);
         if (s.alpha_blend != 0) set_render_state(27, 0), s.alpha_blend = 0;
         if (s.z_write != 1) set_render_state(14, 1), s.z_write = 1;
         break;
@@ -1032,7 +1097,8 @@ void flush_overlay() {
       case 3:
         set_texture(nullptr);
         set_shade(1);
-        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw);
+        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw,
+                                 platform::DrawQueue::Overlay, g_overlay_flares[n]);
         break;
       case 4:
         set_shade(1);
@@ -1042,7 +1108,8 @@ void flush_overlay() {
           set_texture_stage_state(4, t->type == 2 ? 2 : 4);
         }
         set_address(t);
-        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw);
+        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw,
+                                 platform::DrawQueue::Overlay, g_overlay_flares[n]);
         break;
       case 5:
       case 6:
@@ -1050,7 +1117,8 @@ void flush_overlay() {
         set_texture(t);
         if (s.alpha_op != 2) s.alpha_op = 2, set_texture_stage_state(4, 2);
         set_address(t);
-        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw);
+        dispatch_bound_primitive(receiver, s.primitive, p.verts, p.count, g_draw,
+                                 platform::DrawQueue::Overlay, g_overlay_flares[n]);
         break;
       default:
         break;
@@ -1060,6 +1128,7 @@ void flush_overlay() {
   for (int32_t i = 0; i < o.count; ++i) {
     g_overlay_views[i] = {};
     g_overlay_sky[i] = false;
+    g_overlay_flares[i] = {};
   }
   o.count = 0;
   } catch (...) {

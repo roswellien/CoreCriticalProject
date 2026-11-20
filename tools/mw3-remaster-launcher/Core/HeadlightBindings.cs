@@ -11,7 +11,7 @@ namespace MW3RemasterLauncher.Core;
 public sealed record HeadlightBinding
 {
     public int Version { get; init; } = 1;
-    public int Key { get; init; }
+    public int Key { get; init; } = 0x26;
     public int Button { get; init; } = -1;
     public void Validate()
     {

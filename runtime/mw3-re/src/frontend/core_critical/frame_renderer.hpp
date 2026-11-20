@@ -3,11 +3,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "frontend/sdl/sdl_render3d.h"
 #include "renderer/original_rigid_capture.hpp"
 #include "renderer/renderer_bridge_config.hpp"
 #include "producer_view_test_hook.hpp"
+
+namespace mw34::vkscene {
+struct Scene;
+}
 
 namespace cc_mw3_re {
 
@@ -16,8 +21,10 @@ struct QualityStatistics {
   std::uint64_t fxaa_passes{}, anisotropic_samplers{}, mip_levels{};
 };
 struct AssetStatistics {
-  std::uint64_t prepared_batches{}, gpu_model_draws{}, cpu_clipped_triangles{},
-      named_textures{};
+  std::uint64_t prepared_batches{}, gpu_model_draws{}, cpu_clipped_triangles{};
+  // Prepared replacement upload events only; plain and generated named
+  // textures are excluded.
+  std::uint64_t named_textures{};
   std::uint64_t geometry_uploads{};
   std::uint64_t lit_draws{}, normal_draws{};
   std::uint64_t retired_geometry_buffers{};
@@ -27,6 +34,8 @@ struct AssetStatistics {
   std::uint64_t world_normal_decoded_bytes{}, world_normal_peak_decoded_bytes{},
       world_normal_loaded_pages{};
   std::uint64_t binding_rejected_mismatch{}, native_fingerprint_evaluations{};
+  // Draw-time deferred receipt checks, independent of whether sun lighting runs.
+  std::uint64_t deferred_material_admissions{};
 };
 
 // Read-only authored-check observation, sampled on the producer after the
@@ -60,6 +69,28 @@ std::unique_ptr<VulkanFrameRenderer> make_renderer(
     const sdlfe::CoreCriticalAssets &assets = {});
 
 namespace testing {
+struct NamedTextureTestState {
+  unsigned width{}, height{}, source_width{}, source_height{};
+  bool generated_rgba{};
+  std::vector<std::uint32_t> pixels;
+};
+NamedTextureTestState named_texture_state(VulkanFrameRenderer &renderer,
+                                          int32_t handle);
+
+struct StagingTestState {
+  std::size_t peak_bytes{}, early_completions{}, early_log_lines{};
+  // Pending bytes/packets seen at the first local-light flush after the last mission change.
+  std::size_t first_flush_pending_bytes{}, first_flush_pending_packets{};
+  std::size_t recycled_scenes{}, retained_scene_bytes{};
+};
+StagingTestState staging_state(VulkanFrameRenderer &renderer);
+
+// The geometry, lit-normal and raw-fog terms and the checked total of one packet's byte count.
+struct PacketByteBreakdown {
+  std::size_t geometry{}, lit_normals{}, raw_fog{}, total{};
+};
+PacketByteBreakdown packet_byte_breakdown(const mw34::vkscene::Scene &scene);
+
 // Exercise the real retained-packet rejection path without allocating a full
 // production allowance. Normal frontend construction always uses the native cap.
 std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(

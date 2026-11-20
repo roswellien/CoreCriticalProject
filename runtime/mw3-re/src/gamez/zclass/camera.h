@@ -55,8 +55,9 @@ struct WalkColor {                 // 0x0060bc28, 0x10 bytes
   float rgb[3];
   float weight;
 };
-constexpr int32_t kTilerRingCapacity = 128;
-constexpr int32_t kTilerCellsPerRing = 64;
+// Capacity scales with the largest view distance (3200) in kViewDistanceOptions.
+constexpr int32_t kTilerRingCapacity = 256;
+constexpr int32_t kTilerCellsPerRing = 128;
 struct ScreenRing {                // host-owned render storage; original was 50 rings x 30 cells
   struct Cell {                    // preserves the 0x18-byte cell record
     int32_t x, z;                  // +0x00 / +0x04  the stored cell
@@ -67,6 +68,8 @@ struct ScreenRing {                // host-owned render storage; original was 50
   int32_t count = 0;
 };
 struct SceneWalk {
+  void reset();
+
   Camera* camera = nullptr;        // 0x0060bb9c  the camera being drawn
   uint32_t zone = 0;               // 0x0060bb98  its zone list, as drawn
   int32_t lod_dynamic = 0;         // 0x005ea51c  CameraSetDynamicLOD
@@ -138,6 +141,8 @@ void horizon_follow();                             // 0x004f6d40
 // in a scene of its own (the cockpit and the arms over the world). The
 // Direct3D path; the software one (hw 0) is not ported and draws nothing.
 int render_subtree(Node* camera_node, Node* node, int32_t hw);
+int render_subtree(Node* camera_node, Node* node, int32_t hw,
+                   bool use_requested_producer_purpose);
 // Mech3.exe 1.2 @ 0x004f7350 (ECX the camera's data, EDX the frame's first
 // flare): the lens flares in sight, between a BeginScene and an EndScene.
 // Each picked flare (zrndr) is drawn unless the segment from the camera to

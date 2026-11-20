@@ -1,12 +1,16 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 // Output-resolution coverage replay for opaque reduced world submissions.
 // Preserve original texture alpha testing; expensive RGB shading is already in the input.
+#include "radial_visibility.glsl"
+layout(location=11) in vec4 radialEye;
 layout(location=0) in vec2 uvPerspective;
 layout(location=1) noperspective in vec2 uvAffine;
 layout(location=2) noperspective in vec4 colorSmooth;
 layout(location=3) flat in vec4 colorFlat;
 layout(location=4) noperspective in vec4 specularSmooth;
 layout(location=5) flat in vec4 specularFlat;
+layout(location=10) in vec4 fogFactors;
 layout(set=0,binding=0) uniform sampler2D image;
 layout(set=0,binding=1) uniform sampler2D reconstructedWorld;
 layout(location=0) out vec4 result;
@@ -44,12 +48,20 @@ vec4 operation(uint word) {
     if (op == 13u) return mix(b, a, texel.a);             // BLENDTEXTUREALPHA
     return mix(b, a, draw.factor.a);                      // BLENDFACTORALPHA (14)
 }
-void main() {
+void shadeScene() {
     uint flags = draw.mode.x;
     diffuse = (flags & 1u) != 0u ? colorFlat : colorSmooth;
     specular = (flags & 1u) != 0u ? specularFlat : specularSmooth;
+    if (fogFactors.w > 1.5) {
+        specular.a = clamp(fogFactors.x, 0.0, 1.0);
+    } else if (fogFactors.w > 0.5) {
+        vec3 amounts = clamp(fogFactors.xyz, 0.0, 1.0);
+        specular.a = (1.0 - amounts.x * amounts.y) * (1.0 - amounts.z);
+    }
     vec2 uv = (flags & 2u) != 0u ? uvPerspective : uvAffine;
     texel = (flags & 4u) != 0u ? texture(image, uv) : vec4(1.0);
+    // Tinted world draws store their blend weight in mode.z, but renderer setup
+    // pins world scale to 100%, so they never enter this coverage replay pass.
     float alpha = operation(draw.mode.z).a;
     if ((flags & 32u) != 0u) {
         uint f = draw.mode.w & 255u;
@@ -62,4 +74,10 @@ void main() {
     // Later full-resolution passes can use destination-alpha blend factors.
     // Only RGB comes from reconstruction; alpha follows the original fragment.
     result.a = alpha;
+}
+
+void main() {
+    vec4 visibility = radialVisibility(radialEye, ivec2(gl_FragCoord.xy), draw.mode.x);
+    shadeScene();
+    result.rgb = mix(visibility.rgb, result.rgb, visibility.a);
 }

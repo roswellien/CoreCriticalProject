@@ -4,16 +4,29 @@
 #include "gamez/zmodel/gmod_fogcalc.h"
 #include "prepared_models.hpp"
 #include "renderer/donor_retarget.hpp"
+#include "renderer/geometry/resource.hpp"
 #include "renderer/vk_scene.hpp"
 
+#include <bit>
 #include <cmath>
 #include <cstring>
 
 namespace cc_mw3_re {
 
-inline void validate_damage_tint_weight(float weight) {
+inline void validate_damage_tint(const ::platform::ModelDrawContext &context) {
+  for (float channel : context.damage_tint_rgb)
+    if (!std::isfinite(channel) || channel < 0.f || channel > 1.f)
+      throw std::runtime_error("Model has an invalid native tint color");
+  const float weight = context.damage_tint_weight;
   if (!std::isfinite(weight) || weight < 0.f || weight > 1.f)
     throw std::runtime_error("Model has an invalid native tint weight");
+}
+
+inline std::uint32_t pack_damage_tint_rgb(const float (&rgb)[3]) {
+  const auto channel = [](float value) {
+    return static_cast<std::uint32_t>(std::lround(value * 255.f));
+  };
+  return channel(rgb[0]) | (channel(rgb[1]) << 8) | (channel(rgb[2]) << 16);
 }
 
 inline std::uint32_t prepared_opacity_bits(float opacity) {
@@ -75,8 +88,8 @@ inline void apply_surface_material(mw34::vkscene::Draw &draw,
 }
 
 struct PreparedVertex {
-  std::array<float, 3> camera{}, normal{}, color{};
-  float visibility{}, u{}, v{};
+  std::array<float, 3> camera{}, normal{}, color{}, fog{};
+  float u{}, v{};
 };
 
 inline std::vector<PreparedVertex> clip_depth(std::vector<PreparedVertex> input,
@@ -98,9 +111,9 @@ inline std::vector<PreparedVertex> clip_depth(std::vector<PreparedVertex> input,
         vertex.camera[axis] = std::lerp(a.camera[axis], b.camera[axis], t);
         vertex.normal[axis] = std::lerp(a.normal[axis], b.normal[axis], t);
         vertex.color[axis] = std::lerp(a.color[axis], b.color[axis], t);
+        vertex.fog[axis] = std::lerp(a.fog[axis], b.fog[axis], t);
       }
       vertex.camera[2] = plane;
-      vertex.visibility = std::lerp(a.visibility, b.visibility, t);
       vertex.u = std::lerp(a.u, b.u, t);
       vertex.v = std::lerp(a.v, b.v, t);
       result.push_back(vertex);
@@ -133,13 +146,24 @@ prepare_draw(const PreparedBatchDraw &source,
   if (!(context.near_z > 0) || !(context.far_z > context.near_z))
     throw std::runtime_error(
         "Prepared model requires valid native clip planes");
-  validate_damage_tint_weight(context.damage_tint_weight);
+  validate_damage_tint(context);
   const auto camera = matrix_rows(source.camera);
   const auto normal_matrix =
       lighting ? mw34::sun::normal_matrix(source.camera) : camera;
   const auto &vertices =
       source.deformed.empty() ? source.batch->vertices : source.deformed;
   const float near_clip = std::max(context.near_z, context.clip_near);
+  const auto edge = zmod::render_fog_edge();
+  const bool scoped_fog = edge.inverse_range > 0.f;
+  const auto &mission_fog = zmod::render_fog();
+  cc::geometry::Fog fog;
+  fog.enabled = mission_fog.on != 0;
+  fog.near_range = mission_fog.near_range;
+  fog.inverse_range = mission_fog.inv_range;
+  fog.low_altitude = mission_fog.alt_low;
+  fog.inverse_altitude = mission_fog.inv_alt;
+  fog.edge_start = edge.start;
+  fog.edge_inverse_range = edge.inverse_range;
   bool gpu = source.deformed.empty();
   std::vector<PreparedVertex> staged;
   staged.reserve(vertices.size());
@@ -175,8 +199,15 @@ prepare_draw(const PreparedBatchDraw &source,
       for (unsigned channel = 0; channel < 3; ++channel)
         output.color[channel] = std::floor(
             float((source.batch->color >> (16 - channel * 8)) & 255) * light);
-      output.visibility =
-          zmod::render_fog().on ? 1.f - zmod::fog_at(output.camera.data()) : 1.f;
+      if (scoped_fog) {
+        const auto &transform = zmod::fog_calc().camera_to_world;
+        const float height_world = static_cast<float>(
+            double{transform[0][1]} * output.camera[0] +
+            double{transform[1][1]} * output.camera[1] +
+            double{transform[2][1]} * output.camera[2] + transform[3][1]);
+        output.fog = cc::geometry::fog_factors(
+            fog, std::hypot(output.camera[0], output.camera[2]), height_world);
+      }
       output.u = vertex[6];
       output.v = vertex[7];
       gpu = gpu && output.camera[2] >= near_clip &&
@@ -199,17 +230,18 @@ prepare_draw(const PreparedBatchDraw &source,
   draw.push.mode[3] = prepared_opacity_bits(context.opacity);
   draw.push.target[0] = float(width);
   draw.push.target[1] = float(height);
-  std::copy(std::begin(zmod::render_fog().color), std::end(zmod::render_fog().color),
-            draw.push.fog);
-  draw.push.mode[0] = 2U | 4U | (zmod::render_fog().on ? 16U : 0U);
-  if (context.damage_tint_weight > 0.f) {
-    draw.push.mode[0] |= 128U;
-    draw.push.fog[3] = context.damage_tint_weight;
-  }
+  std::copy_n(zmod::render_fog_color(), 3, draw.push.fog);
+  draw.push.mode[0] = 2U | 4U | (zmod::render_fog_active() ? 16U : 0U);
   draw.push.mode[1] = 4U | (2U << 8);
   draw.push.mode[2] = 2;
+  if (context.damage_tint_weight > 0.f) {
+    draw.push.mode[0] |= 128U;
+    draw.push.mode[1] = pack_damage_tint_rgb(context.damage_tint_rgb);
+    draw.push.mode[2] = std::bit_cast<std::uint32_t>(context.damage_tint_weight);
+  }
   draw.scissor = {{0, 0}, {width, height}};
   auto normals = std::make_shared<std::vector<std::array<float, 3>>>();
+  auto raw_fog = std::make_shared<std::vector<std::array<float, 4>>>();
   const auto append = [&](const PreparedVertex &vertex, bool project) {
     const auto opacity = std::clamp(context.opacity, 0.f, 1.f);
     const auto alpha = std::uint32_t(std::lround(
@@ -218,10 +250,19 @@ prepare_draw(const PreparedBatchDraw &source,
     for (unsigned channel = 0; channel < 3; ++channel)
       color |= uint32_t(std::clamp(vertex.color[channel], 0.f, 255.f))
                << (16 - channel * 8);
-    const auto fog =
-        uint32_t(std::clamp(vertex.visibility * 255.f, 0.f, 255.f));
-    ::platform::TLVertex tl{0, 0, 0, 1, color, fog << 24, vertex.u, vertex.v};
+    // Unscoped callers retain fog_at's original approximation, sampled only after clipping.
+    float visibility = 1.f;
+    if (scoped_fog)
+      visibility -= cc::geometry::fog_amount(vertex.fog);
+    else if (zmod::render_fog_active())
+      visibility -= zmod::fog_at(vertex.camera.data());
+    const auto packed_visibility = uint32_t(std::clamp(visibility * 255.f, 0.f, 255.f));
+    ::platform::TLVertex tl{0, 0, 0, 1, color, packed_visibility << 24, vertex.u, vertex.v};
     if (project) {
+      if (scoped_fog)
+        raw_fog->push_back({vertex.fog[0], vertex.fog[1], vertex.fog[2], 1.f});
+      else
+        raw_fog->push_back({visibility, 0.f, 0.f, 2.f});
       tl.rhw = tl.sz = context.near_z / vertex.camera[2];
       tl.sx = ((context.fx_near * vertex.camera[0]) * tl.rhw + context.cx -
                viewport[0]) *
@@ -266,6 +307,8 @@ prepare_draw(const PreparedBatchDraw &source,
         ++result.clipped_triangles;
       }
     }
+    // Every vertex above was appended with project == true, so raw_fog.size() equals the count.
+    draw.raw_fog = std::move(raw_fog);
     if (lighting) {
       auto view = std::make_shared<mw34::sun::Tl>();
       view->camera_world = matrix_rows(mw34::donor::product(

@@ -2011,7 +2011,7 @@ struct WiredMissionHooks : MissionHooks {
     zrndr::device_fog().active = 1;  // the Direct3D path
     zvid::install_model_draw_table();
     zmod::use_device_light_output();  // the lighting's point colour and fog mix to the device
-    zcls::scene_walk() = zcls::SceneWalk{};
+    zcls::scene_walk().reset();
     zmod::walk_state() = zmod::WalkState{};
     zmod::walk_state().draw = zmod::draw_model;
     zmod::zones() = zmod::Zones{};
