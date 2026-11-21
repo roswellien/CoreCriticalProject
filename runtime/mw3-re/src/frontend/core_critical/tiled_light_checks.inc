@@ -358,6 +358,19 @@ void check_tiled_overflow_render() {
       rendered = false;
     }
     require(rendered, "Malformed projection after tiled overflow ended the frame");
+    // That draw registers no tiled view: its all-lights sentinel is consumed without
+    // indexing the view list. Every other draw keeps its own tiled view, so every
+    // other camera stripe still matches the serial reference exactly. (The broken
+    // draw's own stripe is not compared: its zeroed projection also feeds its own
+    // per-pixel light positions.)
+    const unsigned broken_view = unsigned(malformed.draws.size() - 1);
+    for (unsigned y = 0; y < input.height; ++y)
+      for (unsigned x = 0; x < input.width; ++x) {
+        const auto pixel = y * input.width + x;
+        if (x / 32 != broken_view)
+          require(malformed.color[pixel] == expected[pixel],
+                  "An unusable tiled projection disturbed other draws' tiled lights");
+      }
     reused = input;
     renderer.render(reused);
     require(reused.color == expected, "Rejected overflow draw poisoned valid render reuse");
