@@ -2,6 +2,7 @@
 // integrity.
 #include "platform/prepared_environment_bank.hpp"
 #include "platform/sha256.hpp"
+#include "platform/verified_digest.hpp"
 #include <algorithm>
 #include <cfenv>
 #include <cmath>
@@ -768,7 +769,7 @@ static EnvironmentSelection load_environment_packs_impl(
         const auto &pin = member.second;
         const auto path = efs::u8path(pin.path);
         if (efs::file_size(path) != pin.bytes ||
-            integrity::sha256_file(path) != pin.digest ||
+            verified_digest::sha256_file(path, pin.bytes) != pin.digest ||
             efs::file_size(path) != pin.bytes)
           env_fail("member integrity failure: " + member.first);
         fold(member.first);

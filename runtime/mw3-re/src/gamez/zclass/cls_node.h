@@ -52,6 +52,7 @@ struct Node {                      // 0xd4-byte pool slot
   bool source_asset_root = false;
   std::string source_asset_root_name; // Original name survives a death rename.
   uint32_t source_model_vertices = 0;
+  int32_t prepared_skin_index = 0; // Host-only per-instance visual selection.
   std::uint64_t fixture_life = 0; // Never serialized or copied by copy_node_base.
 
   template <typename T> T get(int off) const {

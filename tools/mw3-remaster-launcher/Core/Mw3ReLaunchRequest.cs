@@ -22,6 +22,7 @@ public sealed record Mw3RePlanningOptions
     public Mw3ReLighting Lighting { get; init; } = Mw3ReLighting.Off;
     public Mw3ReFlareStyle FlareStyle { get; init; } = Mw3ReFlareStyle.Modern;
     public bool Pom { get; init; } = false;
+    public bool DiskCache { get; init; } = true;
     public IReadOnlyList<string> Assets { get; init; } = Array.Empty<string>();
     /// <summary>Native preview choices; when set, the request uses wire schema 4.</summary>
     public Mw3RePreviewOptions? Preview { get; init; }
@@ -41,6 +42,7 @@ public sealed record Mw3RePreviewOptions
     public bool? HudText { get; init; } = true;
     public string Geometry { get; init; } = "partial";
     public IReadOnlyList<string> ModelPacks { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> SkinPacks { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> EnvironmentPacks { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> UiPacks { get; init; } = Array.Empty<string>();
     public bool DynamicLighting { get; init; }
@@ -109,7 +111,7 @@ public static class Mw3ReLaunchRequest
         {
             ["schema_version"] = options.Pom ? 3 : 2, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
             ["executable"] = contract.Executable, ["game_dir"] = gameDirectory,
-            ["indeo_codec"] = indeoCodec,
+            ["indeo_codec"] = indeoCodec, ["disk_cache"] = options.DiskCache,
             ["write_dir"] = Path.Combine(dataRoot, "mw3-re", "profiles", id), ["renderer"] = renderer,
             ["width"] = options.Width, ["height"] = options.Height, ["aa"] = antialiasing,
             ["af"] = options.AnisotropicFiltering, ["window_mode"] = windowMode,
@@ -129,11 +131,12 @@ public static class Mw3ReLaunchRequest
         ArgumentNullException.ThrowIfNull(preview.ModelPacks);
         ArgumentNullException.ThrowIfNull(preview.EnvironmentPacks);
         ArgumentNullException.ThrowIfNull(preview.UiPacks);
+        ArgumentNullException.ThrowIfNull(preview.SkinPacks);
         var request = new JsonObject
         {
             ["schema_version"] = 4, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
             ["executable"] = contract.Executable, ["game_dir"] = gameDirectory,
-            ["indeo_codec"] = indeoCodec,
+            ["indeo_codec"] = indeoCodec, ["disk_cache"] = options.DiskCache,
             ["write_dir"] = Path.Combine(dataRoot, "mw3-re", "profiles", id), ["renderer"] = renderer,
             ["width"] = options.Width, ["height"] = options.Height, ["aa"] = antialiasing,
             ["af"] = options.AnisotropicFiltering, ["window_mode"] = windowMode,
@@ -145,6 +148,7 @@ public static class Mw3ReLaunchRequest
                 ["draw_distance"] = preview.DrawDistance, ["hud"] = preview.Hud,
                 ["hud_text"] = preview.HudText, ["geometry"] = preview.Geometry,
                 ["model_packs"] = Paths(preview.ModelPacks),
+                ["skin_packs"] = Paths(preview.SkinPacks),
                 ["environment_packs"] = Paths(preview.EnvironmentPacks),
                 ["ui_packs"] = Paths(preview.UiPacks),
                 ["dynamic_lighting"] = preview.DynamicLighting,

@@ -748,7 +748,12 @@ void wire_mech_parts() {
     std::snprintf(msg, sizeof msg, "Failed to copy stub for %s partId %d", mech ? mech : "", id);
     zerr::report(0x400, "C:\\zipper\\Mech3\\mech_parts.cpp", 0x4a4, msg);
   };
-  f.rename = [](Handle n, Handle from) { zcls::node_set_name(zn(n), zn(from)->name()); };  // 0x004eb300
+  f.rename = [](Handle n, Handle from) {
+    zcls::node_set_name(zn(n), zn(from)->name());  // 0x004eb300
+    // Ours: the stump replacing a flown-off limb is a fresh copy of the pilot's
+    // unpainted stub model; it keeps the mech's chosen paint for the prepared renderer.
+    zcls::tree_set_prepared_skin_index(zn(n), zn(from)->prepared_skin_index);
+  };
   f.parent = [](Handle n) -> Handle { return zn(n)->parent_count() > 0 ? zn(n)->parents[0] : nullptr; };
   f.set_flag8 = [](Handle n, int32_t on) { zcls::node_set_flag8(zn(n), on); };          // 0x004eb620
   f.remove_child = [](Handle p, Handle c) { zcls::node_remove_child(zn(p), zn(c)); };  // 0x004ebb40

@@ -10,6 +10,10 @@ std::vector<uint32_t> tiledOffsets;
 std::vector<VkDeviceSize> tiledLengths;
 bool tiledOverflowReported{};
 bool tiledAffineFallbackReported{};
+// A vk::Renderer data member like the flags above (this file is included inside the
+// class body, vk_scene.hpp), so each renderer warns once about a draw whose projection
+// the tiled stage cannot use; a new renderer (device reset, another test) warns again.
+bool tiledProjectionFallbackReported{};
 
 void init_tiled() {
   if (tiledPipeline)
@@ -79,7 +83,7 @@ void destroy_tiled() {
     if (b->buffer)
       f.vkDestroyBuffer(device, b->buffer, nullptr);
     if (b->memory)
-      f.vkFreeMemory(device, b->memory, nullptr);
+      release_memory(device, b->memory, nullptr);
     *b = {};
   }
 }

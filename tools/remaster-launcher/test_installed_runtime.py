@@ -266,7 +266,7 @@ def native_stage_tests(inputs):
                 skipped_features=[{
                     "feature": "Indeo movies",
                     "reason": "No original Ir50_32.dll passed the launcher's identity check; movie playback will use the existing imported-file fallback.",
-                }]))
+                }], environment={"MW3_DISK_CACHE": "1"}))
             profile_path = self.output / "profile.json"
             profile = json.loads(profile_path.read_text(encoding="utf-8"))
             profile["options"]["aa"] = "8"

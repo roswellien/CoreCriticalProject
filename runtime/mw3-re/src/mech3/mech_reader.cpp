@@ -1,4 +1,5 @@
 #include "mech3/mech_reader.h"
+#include "platform/prepared_skins.h"
 
 #include <cmath>
 #include <cstdio>
@@ -332,6 +333,21 @@ bool read_dfn(MechDfn& dfn) {
   HeadValues head;
   if (!read_head(dfn, &head)) return false;
   dfn.skins = read_skins(dfn.reader);
+  // Catalog skins are appended after the retail list; the prepared renderer numbers
+  // them from base_skin_count(), so only append when the retail count matches it.
+  const bool retail_count_matches =
+      dfn.skins && dfn.skins->skins.size() == platform::prepared::base_skin_count(mech_name(dfn.index));
+  if (retail_count_matches) {
+    for (const auto& skin : *platform::prepared::configured_skin_catalog()) {
+      if (skin.chassis != mech_name(dfn.index)) continue;
+      const Skin* primary = dfn.skins->skins.front();
+      auto* added = new Skin(skin.name.c_str(), static_cast<uint32_t>(primary->entries.size()));
+      // The native material slots retain their original resources. The prepared
+      // renderer consumes the appended index instead of inventing bank names.
+      for (SkinEntry* entry : primary->entries) added->push(entry, false);
+      dfn.skins->add(added);
+    }
+  }
   read_firepoints(dfn);
   read_part_slots(dfn);
   if (read_configurations(dfn, head) && g_load_saved) g_load_saved(dfn.configs);

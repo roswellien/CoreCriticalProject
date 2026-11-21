@@ -90,6 +90,20 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                 self.assertEqual(result["argv"], without_window)
                 self.assertEqual(request, before)
 
+    def test_disk_cache_switch_reaches_only_the_child_environment(self):
+        plan = self.planner()
+        default = plan(self.request())
+        self.assertEqual(default["environment"], {"MW3_DISK_CACHE": "1"})
+        enabled = plan(dict(self.request(), disk_cache=True))
+        disabled = plan(dict(self.request(), disk_cache=False))
+        self.assertEqual(enabled["environment"], {"MW3_DISK_CACHE": "1"})
+        self.assertEqual(disabled["environment"], {"MW3_DISK_CACHE": "0"})
+        # The cache switch never changes the game's own command line.
+        self.assertEqual(enabled["argv"], disabled["argv"])
+        for value in (1, "0", None):
+            with self.subTest(disk_cache=value), self.assertRaisesRegex(ValueError, "disk_cache"):
+                plan(dict(self.request(), disk_cache=value))
+
     def test_verified_indeo_path_is_emitted_and_missing_codec_is_reported(self):
         plan = self.planner()
         verified = plan(dict(self.request(), indeo_codec="D:/Original MW3/native-inputs/Ir50_32.dll"))
@@ -271,6 +285,7 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                 "feature": "Indeo movies",
                 "reason": "No original Ir50_32.dll passed the launcher's identity check; movie playback will use the existing imported-file fallback.",
             }],
+            "environment": {"MW3_DISK_CACHE": "1"},
         })
         self.assertEqual(request, before)
         self.assertEqual(dict(os.environ), environment)
@@ -459,11 +474,35 @@ class NativePreviewPlanTests(unittest.TestCase):
         return {
             "schema_version": 4, "engine": "mw3-re", "runtime_root": "C:/Runtime",
             "executable": "C:/Runtime/bin/mw3.exe", "game_dir": "D:/Original MW3",
-            "write_dir": "E:/Data/mw3-re/profiles/native-preview", "renderer": "vulkan-wsi",
+            # Skin metadata is written below write_dir, so Windows runs need a real directory;
+            # elsewhere the planner only validates the Windows path and never writes there.
+            "write_dir": (os.path.join(self.root, "native-writes") if os.name == "nt"
+                          else "E:/Data/mw3-re/profiles/native-preview"),
+            "renderer": "vulkan-wsi",
             "width": 1280, "height": 720, "aa": "fxaa", "af": 16, "window_mode": "windowed",
             "render_thread": True, "lighting": "normal", "assets": [], "visuals": {"pom": True},
             "preview": preview,
         }
+
+    def skin_bindings(self, result):
+        path = result["argv"][result["argv"].index("--cc-skin-bindings") + 1]
+        blob = Path(path).read_bytes()
+        self.assertEqual(blob[:8], b"BWSKIDX1")
+        count = struct.unpack_from("<I", blob, 8)[0]
+        offset = 12
+        rows = []
+        for _ in range(count):
+            size = struct.unpack_from("<I", blob, offset)[0]
+            offset += 4
+            chassis = blob[offset:offset + size].decode("utf-8")
+            offset += size
+            lod, index, size = struct.unpack_from("<III", blob, offset)
+            offset += 12
+            texture = blob[offset:offset + size].decode("utf-8")
+            offset += size
+            rows.append([chassis, str(lod), str(index), texture])
+        self.assertEqual(offset, len(blob))
+        return rows
 
     # The planner accepts only Windows paths, so tests that read real packs from a temporary
     # directory run on Windows; validation-only tests below run everywhere.
@@ -490,9 +529,92 @@ class NativePreviewPlanTests(unittest.TestCase):
             "--cc-model", "strider", "1", payload("mesh1"), payload("tex1"),
             "--cc-model-normals", "strider", "1", payload("nrm1"),
             "--cc-model", "owens", "0", payload("solo-mesh"), payload("solo-tex"),
+            "--cc-skin-bindings", os.path.join(self.root, "native-writes", "prepared-skins", "stock-skins.bin"),
             "--cc-environment-pack", training,
         ])
         self.assertEqual(argv[16], "normal")
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_retail_skin_indices_both_lods_and_winning_model_pack(self):
+        environment = {"MW34_STRIDER_MESH": "payload/mesh0.bin",
+                       "MW34_STRIDER_TEXTURES": "payload/tex0.bin",
+                       "MW34_STRIDER_LOD1_MESH": "payload/mesh1.bin",
+                       "MW34_STRIDER_LOD1_TEXTURES": "payload/tex1.bin"}
+        for lod, infix in ((0, ""), (1, "LOD1_")):
+            for letter in "BCDEFGH":
+                environment[f"MW34_STRIDER_{infix}SKIN_{letter}_TEXTURES"] = f"payload/tex{lod}.bin"
+        model = {"id": "strider", "backend": "native", "status": "runtime-ready", "environment": environment}
+        first = self.model_pack("skin-first", [model])
+        second = self.model_pack("skin-second", [model])
+        result = self.plan(self.request(model_packs=[first, second]))
+        rows = self.skin_bindings(result)
+        expected = [["strider", str(lod), str(index), os.path.join(first, "payload", f"tex{lod}.bin")]
+                    for lod in (0, 1) for index in range(1, 8)]
+        self.assertEqual(rows, expected)
+        self.assertEqual(len(result["overridden_models"]), 1)
+        environment["MW34_STRIDER_SKIN_B_TEXTURES"] = "../outside.bin"
+        environment["MW34_STRIDER_LOD1_SKIN_H_TEXTURES"] = "payload/missing.bin"
+        self.model_pack("skin-first", [model])
+        result = self.plan(self.request(model_packs=[first]))
+        self.assertEqual(len(self.skin_bindings(result)), 12)
+        self.assertNotIn("--cc-model-skin", result["argv"])
+        self.assertEqual([entry["feature"] for entry in result["skipped_packs"]],
+                         ["skin_textures", "skin_textures"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_named_skin_catalog_validates_selected_mesh_and_integrity(self):
+        from test_prepared_skin_packs import SkinPackTests
+        fixture = SkinPackTests("runTest")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        request = self.request(model_packs=[str(fixture.base)], skin_packs=[str(fixture.pack)])
+        request["write_dir"] = os.path.join(self.root, "native-writes")
+        result = self.plan(request)
+        self.assertEqual(result["skipped_packs"], [])
+        catalog = Path(result["argv"][result["argv"].index("--cc-skin-catalog") + 1])
+        # The catalog writer resolves its path, which expands 8.3 short names in TEMP.
+        self.assertTrue(catalog.resolve().is_relative_to(Path(request["write_dir"]).resolve()))
+        self.assertEqual(catalog.read_bytes()[:12], b"BWSKIN1\0" + struct.pack("<I", 1))
+        self.assertIn(b"Sommerset", catalog.read_bytes())
+        fixture.registry["skins"][0]["mesh_sha256"]["distance"] = "0" * 64
+        fixture.save()
+        result = self.plan(request)
+        self.assertNotIn("--cc-skin-catalog", result["argv"])
+        self.assertIn("distance mesh", result["skipped_packs"][0]["reason"])
+        fixture.registry["skins"][0]["mesh_sha256"]["distance"] = hashlib.sha256(
+            (fixture.base / "payload/MW34_ORION_LOD1_MESH.bin").read_bytes()).hexdigest()
+        fixture.save()
+        (fixture.pack / "texture.bin").write_bytes(fixture.pixels[:-1] + b"x")
+        result = self.plan(request)
+        self.assertNotIn("--cc-skin-catalog", result["argv"])
+        self.assertIn("integrity", result["skipped_packs"][0]["reason"])
+
+    @unittest.skipUnless(os.name == "nt", "pack translation reads Windows paths")
+    def test_full_stock_roster_stays_below_windows_command_line_limit(self):
+        from prepared_mech_packs import CHASSIS
+        payloads = {role: f"payload/{hashlib.sha256(role.encode()).hexdigest()}.bin"
+                    for role in ("mesh0", "mesh1", "tex0", "tex1", "nrm0", "nrm1")}
+        for relative in payloads.values():
+            self.write(f"full-stock-roster/{relative}", "x")
+        models = []
+        for chassis in CHASSIS:
+            environment = {}
+            for lod, infix in ((0, ""), (1, "LOD1_")):
+                prefix = f"MW34_{chassis.upper()}_{infix}"
+                environment[prefix + ("TEST" if chassis == "bushwacker" and lod == 0 else "MESH")] = payloads[f"mesh{lod}"]
+                environment[prefix + "TEXTURES"] = payloads[f"tex{lod}"]
+                environment[prefix + "NORMALS"] = payloads[f"nrm{lod}"]
+                for letter in "BCDEFGH":
+                    environment[prefix + f"SKIN_{letter}_TEXTURES"] = payloads[f"tex{lod}"]
+            models.append({"id": chassis, "backend": "native", "status": "runtime-ready",
+                           "environment": environment})
+        pack = self.model_pack("full-stock-roster", models)
+        result = self.plan(self.request(model_packs=[pack]))
+        self.assertEqual(len(self.skin_bindings(result)), 18 * 2 * 7)
+        self.assertEqual(result["argv"].count("--cc-skin-bindings"), 1)
+        self.assertNotIn("--cc-model-skin", result["argv"])
+        command_line = subprocess.list2cmdline(result["argv"])
+        self.assertLess(len(command_line.encode("utf-16-le")) // 2, 32767)
 
     def test_original_distance_adds_no_argument_and_defaults_apply(self):
         result = self.plan(self.request())
@@ -922,7 +1044,8 @@ class NativePreviewPlanTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--cc-model") + 3], os.path.join(pack, "payload", "mesh0.bin"))
 
     def test_pack_inside_write_root_is_refused(self):
-        request = self.request(model_packs=["E:/Data/mw3-re/profiles/native-preview/mods/pack"])
+        request = self.request()
+        request["preview"]["model_packs"] = [os.path.join(request["write_dir"], "mods", "pack")]
         with self.assertRaises(ValueError):
             self.plan(request)
 

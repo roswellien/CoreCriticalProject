@@ -4,6 +4,7 @@
 #include "frontend/sdl/sdl_render3d.h"
 #include "platform/prepared_visuals.h"
 #include "renderer/surface_materials.hpp"
+#include "prepared_skin_cache.hpp"
 
 #include <optional>
 
@@ -17,6 +18,7 @@ original_headlight_socket(const ::platform::ModelDrawContext &context,
 struct PreparedBatchDraw {
     const ::platform::prepared::Batch *batch{};
     const ::platform::prepared::Image *texture{};
+    std::shared_ptr<const ::platform::prepared::Textures> texture_owner;
     const ::platform::prepared::NormalImage *normal{};
     const ::mw34::materials::SurfaceMaterialRecord *surface_material{};
     std::shared_ptr<const ::mw34::materials::HeightBinding> height_binding;
@@ -29,6 +31,12 @@ struct PreparedBatchDraw {
 struct PreparedModelDraw {
     bool replace{};
     std::vector<PreparedBatchDraw> batches;
+};
+struct PreparedTextureResources {
+    std::vector<const ::platform::prepared::Batch *> rigid_batches;
+    std::size_t matched_source_assets{};
+    std::vector<const ::platform::prepared::Image *> textures;
+    std::vector<const ::platform::prepared::NormalImage *> normals;
 };
 
 using PreparedMaterialBinding = sdlfe::PreparedMaterialBinding;
@@ -48,6 +56,15 @@ class PreparedModels {
     }
     bool has_binding(const ::platform::ModelDrawContext &context) const;
     const ::platform::prepared::Image *named_texture(const char *name) const;
+    PreparedTextureResources
+    resources_for_assets(const std::vector<std::string> &source_assets) const;
+    // Also used by a future mission preloader; draw uses the identical cache.
+    std::shared_ptr<const ::platform::prepared::Textures>
+    resolve_skin(const std::string &source_asset, int32_t index) const;
+    void clear_skin_cache() const { skin_cache_.clear(); }
+    void set_skin_cache_budget_for_test(std::size_t bytes) const { skin_cache_.set_budget(bytes); }
+    std::size_t skin_cache_bytes() const { return skin_cache_.bytes(); }
+    std::size_t skin_texture_loads() const { return skin_cache_.loads(); }
     PreparedModelDraw draw(const ::platform::ModelDrawContext &context,
                            bool rigid_only = false) const;
     std::optional<::platform::prepared::Matrix>
@@ -60,6 +77,10 @@ class PreparedModels {
         std::string source_asset;
         bool distance_lod{};
         mutable bool warned_cross_lod_fallback{};
+        mutable bool warned_skin_fallback{};
+        mutable std::set<int32_t> logged_skins;
+        std::map<int32_t, std::string> skins;
+        mutable std::set<int32_t> failed_skins;
         ::platform::prepared::Mesh mesh;
         ::platform::prepared::Textures textures;
         ::platform::prepared::Normals normals;
@@ -69,6 +90,7 @@ class PreparedModels {
     const Model *model_for_asset(const std::string &source_asset) const;
     ::platform::prepared::Textures named_;
     std::vector<Model> models_;
+    mutable PreparedSkinCache skin_cache_;
     const bool cpu_profile_ = sdlfe::cpu_profile_requested();
     mutable CpuStatistics cpu_statistics_;
     std::shared_ptr<::mw34::materials::SurfaceDecodedBudget> surface_budget_;

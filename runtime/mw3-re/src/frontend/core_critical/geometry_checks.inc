@@ -592,6 +592,88 @@ std::vector<std::vector<std::uint32_t>> check_native_geometry(SDL_Window *window
     float positions[]{-1, -1, 3, 1, -1, 3, 0, 1, 3};
     std::uint32_t indices[]{2, 1, 0};
     bool two_sided = false;
+    if (!cpu_reference) {
+        // Register the real live model during loading, then reuse its exact
+        // owned resource on the first visible native draw.
+        zmod::Material native_material{};
+        native_material.alpha = 255;
+        zmod::Polygon native_polygon{};
+        native_polygon.flags = 3;
+        native_polygon.vertex_indices = indices;
+        native_polygon.material = &native_material;
+        zmod::Model native_model{};
+        native_model.vertices = positions;
+        native_model.polygons = &native_polygon;
+        const std::uint32_t vertex_count = 3, polygon_count = 1;
+        std::memcpy(native_model.header + 0x14, &vertex_count, sizeof vertex_count);
+        std::memcpy(native_model.header + 0x10, &polygon_count, sizeof polygon_count);
+        std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> native_node(
+            zcls::object3d_create(), zcls::tree_destroy);
+        require(bool(native_node), "Cannot allocate native warmup fixture node");
+        native_node->model = &native_model;
+        struct NativeModelBinding {
+            zcls::Node *node;
+            ~NativeModelBinding() { node->model = nullptr; }
+        } native_binding{native_node.get()};
+        auto warmed_renderer = make_check_renderer(window, backend, {}, options);
+        warmed_renderer->set_viewport(0, 0, 32, 32);
+        warmed_renderer->mission_changed({});
+        require(native_model.render_geometry &&
+                    warmed_renderer->asset_statistics().geometry_uploads == 1,
+                "Native model was not registered and uploaded during loading");
+        warmed_renderer->begin_scene();
+        warmed_renderer->end_scene();
+        require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+                "First world boundary duplicated native geometry upload");
+        cc::geometry::Material warmed_material;
+        warmed_material.color = 0xffff0000;
+        warmed_renderer->clear(true, 0, 0, 0);
+        warmed_renderer->begin_scene();
+        const auto prune_passes =
+            warmed_renderer->asset_statistics().native_geometry_prune_passes;
+        require(warmed_renderer->submit_model_geometry(
+                    native_model.render_geometry, context, {warmed_material}, {}) ==
+                    cc::geometry::Submission::submitted,
+                "Warmed native model did not reach the normal draw path");
+        require(warmed_renderer->asset_statistics().native_geometry_prune_passes ==
+                    prune_passes,
+                "Native geometry cache hit repeated full expiry scan");
+        warmed_renderer->end_scene();
+        std::vector<std::uint32_t> warmed_pixels;
+        int warmed_width{}, warmed_height{};
+        require(warmed_renderer->read_back(
+                    &warmed_pixels, &warmed_width, &warmed_height) &&
+                    warmed_width == 32 && warmed_height == 32 &&
+                    warmed_renderer->asset_statistics().gpu_model_draws > 0 &&
+                    warmed_renderer->asset_statistics().geometry_uploads == 1,
+                "First native draw did not reuse its warmed immutable buffer");
+        const auto original_identity = native_model.render_geometry->identity;
+        native_model.invalidate_render_geometry();
+        warmed_renderer->mission_changed({});
+        warmed_renderer->begin_scene();
+        warmed_renderer->end_scene();
+        require(native_model.render_geometry &&
+                    native_model.render_geometry->identity != original_identity &&
+                    warmed_renderer->asset_statistics().geometry_uploads == 2,
+                "Native model invalidation did not refresh load-time geometry");
+        zmod::Material replacement_material = native_material;
+        native_polygon.material = &replacement_material;
+        warmed_renderer->mission_changed({});
+        warmed_renderer->begin_scene();
+        warmed_renderer->end_scene();
+        require(native_model.render_materials.size() == 1 &&
+                    native_model.render_materials[0] == &replacement_material &&
+                    warmed_renderer->asset_statistics().geometry_uploads == 3,
+                "Native material identity change reused stale registered geometry");
+        require(warmed_renderer->asset_statistics().native_geometry_cache_entries > 0,
+                "Native cleanup fixture retained no cached geometry");
+        native_model.invalidate_render_geometry();
+        native_node->model = nullptr;
+        warmed_renderer->begin_scene();
+        warmed_renderer->end_scene();
+        require(warmed_renderer->asset_statistics().native_geometry_cache_entries == 0,
+                "Expired native geometry survived scene-boundary cleanup");
+    }
     const auto make = [&] {
         return cc::geometry::register_resource(positions, 3, nullptr, 0,
                                                {{3, indices, nullptr, nullptr, false, two_sided}});

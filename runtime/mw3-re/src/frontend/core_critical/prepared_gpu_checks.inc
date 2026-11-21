@@ -1079,8 +1079,9 @@ void check_local_light_staging(SDL_Window *window, sdlfe::RendererBackend backen
               "Early completion delivered packets out of producer order");
   }
 
-  // A single packet that can never fit an empty allowance still throws, and does so before any
-  // earlier packet is submitted.
+  // A single packet larger than the whole allowance (the owner's c3m3 crash) must not end the
+  // game. The pending earlier packet is completed first, in producer order, and the oversized
+  // packet is then staged alone and delivered once.
   {
     sdlfe::CoreCriticalAssets assets{};
     assets.lighting = "flat";
@@ -1104,15 +1105,117 @@ void check_local_light_staging(SDL_Window *window, sdlfe::RendererBackend backen
     platform::DrawState oversized{};
     oversized.texture = renderer->create_texture(256, 256, big.data(), 1);
     quad(*renderer, 4, 28, .5f, 0xffffffff, oversized);
-    bool threw = false;
-    try {
-      renderer->end_scene();
-    } catch (const std::runtime_error &error) {
-      threw = std::string(error.what()).find("staging exceeds budget") != std::string::npos;
+    renderer->end_scene();
+    renderer->drain();
+    const auto staging = cc_mw3_re::testing::staging_state(*renderer);
+    require(staging.oversized_packets == 1, "An oversized single packet was not staged alone");
+    require(staging.early_completions == 1,
+            "The packet pending before an oversized packet was not completed first");
+    const auto delivered = observer.rows(producer_view_checks::Stage::packet, true);
+    require(delivered.size() == 2, "An oversized packet or its predecessor was dropped");
+    require(delivered[1].packet > delivered[0].packet,
+            "An oversized packet was delivered before its predecessor");
+    std::vector<std::uint32_t> frame;
+    int width{}, height{};
+    require(renderer->read_back(&frame, &width, &height) && !frame.empty(),
+            "A scene with an oversized packet did not render");
+  }
+
+  // An oversized packet is counted once, when it is staged. Flushing again before the scene ends
+  // (and end_scene's own flush) must neither count nor deliver it a second time.
+  {
+    sdlfe::CoreCriticalAssets assets{};
+    assets.lighting = "flat";
+    auto renderer = make_check_renderer(window, backend, {}, assets, 128u * 1024u);
+    producer_view_checks::Observer observer;
+    require(cc_mw3_re::testing::observe_producer_views(*renderer, &observer),
+            "Staging fixture could not observe worker packets");
+    ObserverCleanup observer_cleanup{*renderer};
+    renderer->mission_changed({5, 1});
+    renderer->set_viewport(0, 0, 32, 32);
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    const std::vector<uint8_t> big(std::size_t(256) * 256 * 4, 91);
+    platform::DrawState oversized{};
+    oversized.texture = renderer->create_texture(256, 256, big.data(), 1);
+    quad(*renderer, 4, 28, .5f, 0xffffffff, oversized);
+    renderer->flush();
+    renderer->flush(); // the same oversized packet is still pending
+    renderer->end_scene();
+    renderer->drain();
+    const auto staging = cc_mw3_re::testing::staging_state(*renderer);
+    const std::string repeat_message =
+        "A repeated flush recounted a pending oversized packet: oversized=" +
+        std::to_string(staging.oversized_packets) +
+        " log_lines=" + std::to_string(staging.oversized_log_lines);
+    require(staging.oversized_packets == 1 && staging.oversized_log_lines == 1,
+            repeat_message.c_str());
+    require(observer.rows(producer_view_checks::Stage::packet, true).size() == 1,
+            "A repeated flush delivered a pending oversized packet twice");
+  }
+
+  // Several oversized packets in a row: each one completes the one before it, so at most one is
+  // ever held. Every 256-square RGBA payload is 256 KiB, so holding two at once would need at
+  // least 512 KiB. Every packet is delivered once and in order, the warning is written once per
+  // mission, and later frames keep rendering.
+  {
+    sdlfe::CoreCriticalAssets assets{};
+    assets.lighting = "flat";
+    auto renderer = make_check_renderer(window, backend, {}, assets, 128u * 1024u);
+    producer_view_checks::Observer observer;
+    require(cc_mw3_re::testing::observe_producer_views(*renderer, &observer),
+            "Staging fixture could not observe worker packets");
+    ObserverCleanup observer_cleanup{*renderer};
+    renderer->mission_changed({5, 1});
+    renderer->set_viewport(0, 0, 32, 32);
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    constexpr int oversized_packet_count = 3;
+    std::vector<platform::DrawState> states;
+    for (int packet = 0; packet < oversized_packet_count; ++packet) {
+      const std::vector<uint8_t> big(std::size_t(256) * 256 * 4, uint8_t(60 + packet * 40));
+      platform::DrawState state{};
+      state.texture = renderer->create_texture(256, 256, big.data(), 1);
+      states.push_back(state);
+      quad(*renderer, 4, 28, .5f, 0xffffffff, state);
+      renderer->flush();
     }
-    require(threw, "An oversized single packet did not throw");
-    require(cc_mw3_re::testing::staging_state(*renderer).early_completions == 0,
-            "An oversized single packet submitted earlier packets before throwing");
+    renderer->end_scene();
+    renderer->drain();
+    const auto staging = cc_mw3_re::testing::staging_state(*renderer);
+    const std::string accumulation_message =
+        "Oversized packets were not completed one at a time: oversized=" +
+        std::to_string(staging.oversized_packets) +
+        " early=" + std::to_string(staging.early_completions) +
+        " peak=" + std::to_string(staging.peak_bytes) +
+        " log_lines=" + std::to_string(staging.oversized_log_lines);
+    require(staging.oversized_packets == oversized_packet_count, accumulation_message.c_str());
+    require(staging.early_completions == oversized_packet_count - 1,
+            accumulation_message.c_str());
+    const std::size_t two_payload_bytes = std::size_t(2) * 256 * 256 * 4;
+    require(staging.peak_bytes > 128u * 1024u && staging.peak_bytes < two_payload_bytes,
+            accumulation_message.c_str());
+    require(staging.oversized_log_lines == 1, accumulation_message.c_str());
+    const auto delivered = observer.rows(producer_view_checks::Stage::packet, true);
+    require(delivered.size() == std::size_t(oversized_packet_count),
+            "Oversized packets were dropped or duplicated");
+    for (std::size_t index = 1; index < delivered.size(); ++index)
+      require(delivered[index].packet > delivered[index - 1].packet,
+              "Oversized packets were delivered out of producer order");
+    // The textures are resident now, so the next frame's packet carries no payload and fits.
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    for (const auto &state : states)
+      quad(*renderer, 4, 28, .5f, 0xffffffff, state);
+    renderer->end_scene();
+    renderer->drain();
+    std::vector<std::uint32_t> frame;
+    int width{}, height{};
+    require(renderer->read_back(&frame, &width, &height) && !frame.empty(),
+            "The frame after oversized packets did not render");
+    require(cc_mw3_re::testing::staging_state(*renderer).oversized_packets ==
+                oversized_packet_count,
+            "A frame with resident textures was still oversized");
   }
 
   // Nothing may be carried from one mission into the next. Mission A completes some packets
@@ -1183,4 +1286,121 @@ void check_local_light_staging(SDL_Window *window, sdlfe::RendererBackend backen
     require(observer.rows(producer_view_checks::Stage::packet, true).size() == delivered_a + 1,
             "Mission A's discarded packet was delivered, or mission B's packet was lost");
   }
+}
+
+// Regression for the c3m3 crash after #395: an alternate skin set evicted from the
+// prepared skin cache while its GPU slot was bound in the current scene. The next
+// prepared draw released that slot, which flushed the scene in the middle of the
+// draw; scene_ was left empty with a zero extent, so the draw's projection
+// (fx * scene width / viewport) became 0 and the tiled-light stage threw
+// "projection ax/ay must be nonzero". A one-byte cache budget evicts on every switch.
+void check_gpu_prepared_skin_eviction(SDL_Window *window, sdlfe::RendererBackend backend) {
+    const auto folder = std::filesystem::temp_directory_path() /
+                        ("cc-gpu-skin-evict-" + std::to_string(SDL_GetPerformanceCounter()));
+    require(std::filesystem::create_directory(folder), "Skin fixture directory already exists");
+    struct Files {
+        std::filesystem::path folder;
+        ~Files() {
+            std::error_code error;
+            std::filesystem::remove_all(folder, error);
+        }
+    } files{folder};
+    std::ofstream(folder / "mesh.bin", std::ios::binary) << prepared_fixture::mesh(2);
+    std::ofstream(folder / "textures.bin", std::ios::binary) << prepared_fixture::textures();
+    std::ofstream(folder / "normals.bin", std::ios::binary)
+        << prepared_fixture::normals(0xffd980d9);
+    sdlfe::CoreCriticalAssets options;
+    options.geometry = "partial";
+    options.lighting = "normal";
+    options.models.push_back({"authored", "0", (folder / "mesh.bin").u8string(),
+                              (folder / "textures.bin").u8string()});
+    options.normals.push_back({"authored", "0", (folder / "normals.bin").u8string()});
+    for (int index = 1; index <= 2; ++index) {
+        // Same layout as the primary, different pixels, so each is a separate set.
+        auto bytes = prepared_fixture::textures();
+        bytes[bytes.size() - 4] = char(index);
+        const auto path = folder / ("skin-" + std::to_string(index) + ".bin");
+        std::ofstream(path, std::ios::binary) << bytes;
+        options.skins.push_back({"authored", "0", path.u8string(), index});
+    }
+    std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> root(zcls::object3d_create(),
+                                                            zcls::tree_destroy);
+    auto *control = zcls::object3d_create(), *panel = zcls::object3d_create();
+    require(root && control && panel && zcls::object3d_add_child(root.get(), control) == 0 &&
+                zcls::object3d_add_child(control, panel) == 0,
+            "Skin fixture hierarchy failed");
+    zcls::node_set_name(root.get(), "actor");
+    zcls::node_set_name(control, "control");
+    zcls::node_set_name(panel, "panel");
+    auto asset = std::make_shared<zcls::SourceAsset>();
+    asset->name = "mech_authored.flt";
+    asset->nodes = {{"actor", 1}, {"control", 1}, {"panel", 1}};
+    root->source_asset = control->source_asset = panel->source_asset = asset;
+    root->source_asset_root = true;
+    zmod::Model model{};
+    const std::uint32_t count = 3;
+    std::memcpy(model.header + 0x14, &count, sizeof count);
+    const std::uint32_t polygons = 1;
+    std::memcpy(model.header + 0x10, &polygons, sizeof polygons);
+    panel->model = &model;
+    panel->source_model_vertices = count;
+    struct ModelPointer {
+        zcls::Node *node;
+        ~ModelPointer() { node->model = nullptr; }
+    } model_pointer{panel};
+    require(SDL_SetWindowSize(window, 64, 64) && SDL_SyncWindow(window), SDL_GetError());
+    std::array<float, 12> matrix{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+    platform::ModelDrawContext context;
+    context.node = panel;
+    context.ordinary = true;
+    context.source_vertices = 3;
+    context.source_polygons = 1;
+    context.model_to_camera = context.model_to_world = matrix.data();
+    context.near_z = context.clip_near = 1;
+    context.far_z = 5;
+    context.fx_near = context.fy_near = 20;
+    context.cx = context.cy = 32;
+    auto renderer = make_check_renderer(window, backend, {}, options);
+    renderer->set_viewport(0, 0, 64, 64);
+    cc_mw3_re::testing::set_skin_cache_budget(*renderer, 1);
+    renderer->clear(true, 0, 0, 0);
+    // Skin 1, then 2 (evicting 1), then 1 again (evicting 2, possibly reusing its
+    // address): every draw stays in the same producer scene with a usable projection.
+    for (const int index : {1, 2, 1}) {
+        panel->prepared_skin_index = index;
+        require(renderer->submit_prepared_geometry(context, {}) ==
+                    cc::geometry::Submission::submitted,
+                "Skinned prepared draw was not admitted");
+        const auto projection = cc_mw3_re::testing::last_model_projection(*renderer);
+        require(projection[1] != 0.f && projection[2] != 0.f,
+                "Evicting a bound skin set flushed the scene mid-draw (zero projection)");
+    }
+    std::vector<std::uint32_t> pixels;
+    int width{}, height{};
+    require(renderer->read_back(&pixels, &width, &height) && width == 64 && height == 64,
+            "Skin eviction scene lost its extent");
+    // Evicted sets' slots wait for a scene boundary; a mission reset releases all of
+    // them once (no double release later) and a fresh scene draws normally.
+    require(cc_mw3_re::testing::pending_skin_retirements(*renderer) > 0,
+            "Same-scene skin evictions left nothing to retire");
+    renderer->reset_scene_resources();
+    require(cc_mw3_re::testing::pending_skin_retirements(*renderer) == 0,
+            "Mission reset did not release retiring skin slots");
+    renderer->set_viewport(0, 0, 64, 64);
+    renderer->clear(true, 0, 0, 0);
+    for (const int index : {2, 1}) {
+        panel->prepared_skin_index = index;
+        require(renderer->submit_prepared_geometry(context, {}) ==
+                    cc::geometry::Submission::submitted,
+                "Skinned prepared draw after a reset was not admitted");
+    }
+    require(renderer->read_back(&pixels, &width, &height) && width == 64 && height == 64,
+            "Skinned scene after a reset lost its extent");
+    // The next scene boundary releases this scene's evictions.
+    renderer->begin_scene();
+    require(cc_mw3_re::testing::pending_skin_retirements(*renderer) == 0,
+            "Scene boundary did not release retiring skin slots");
+    renderer->end_scene();
+    panel->prepared_skin_index = 0;
+    std::fprintf(stderr, "[PREPARED_SKIN_EVICTION] same-scene evictions kept the draw projection\n");
 }

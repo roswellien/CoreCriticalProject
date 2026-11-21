@@ -55,37 +55,9 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
                   [](const auto &admission) { return bool(admission.height_binding); }))
     surface_eye = native_height_eye(
         mw34::donor::product(world, mw34::donor::inverse(camera)));
-  for (auto iterator = native_geometry_.begin();
-       iterator != native_geometry_.end();) {
-    if (iterator->second.source.expired())
-      iterator = native_geometry_.erase(iterator);
-    else
-      ++iterator;
-  }
-  auto &cached = native_geometry_[source->identity];
-  if (!cached.geometry) {
-    cached.source = source;
-    auto geometry = std::make_shared<vk::ModelGeometry>();
-    geometry->key = 0x4700000000000000ULL | source->identity;
-    geometry->vertices = source->vertices;
-    geometry->indices = source->indices;
-    geometry->source = source;
-    geometry->hash = 0xcbf29ce484222325ULL;
-    const auto hash = [&](const void *data, std::size_t bytes) {
-      const auto *input = static_cast<const unsigned char *>(data);
-      for (std::size_t i = 0; i < bytes; ++i) {
-        geometry->hash ^= input[i];
-        geometry->hash *= 0x100000001b3ULL;
-      }
-    };
-    hash(geometry->vertices.data(),
-         geometry->vertices.size() * sizeof(vk::ModelVertex));
-    hash(geometry->indices.data(),
-         geometry->indices.size() * sizeof(std::uint32_t));
-    cached.geometry = std::move(geometry);
-  }
+  const auto geometry = native_model_geometry(source);
   auto instance = std::make_shared<vk::ModelInstance>();
-  instance->geometry = cached.geometry;
+  instance->geometry = geometry;
   instance->source = source;
   instance->gpu_vertices = true;
   instance->camera = matrix_rows(camera);

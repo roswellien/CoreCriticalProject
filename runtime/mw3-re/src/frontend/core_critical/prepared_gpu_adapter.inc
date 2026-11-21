@@ -60,7 +60,7 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     if (!std::isfinite(value))
       throw std::runtime_error("Nonfinite prepared projection");
   const auto geometry = prepared_geometry(*source.batch);
-  const auto texture = prepared_texture(*source.texture);
+  const auto texture = prepared_texture(*source.texture, source.texture_owner);
   const auto normal =
       source.normal && lighting_.normals ? prepared_normal(*source.normal) : -1;
   if (geometry_mode_ == cc::geometry::Mode::cpu_reference) {
