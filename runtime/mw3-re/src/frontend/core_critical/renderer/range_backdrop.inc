@@ -30,7 +30,7 @@ void destroy_range_image(Image &image) {
     if (image.image)
         f.vkDestroyImage(device, image.image, nullptr);
     if (image.memory)
-        f.vkFreeMemory(device, image.memory, nullptr);
+        release_memory(device, image.memory, nullptr);
     image = {};
 }
 

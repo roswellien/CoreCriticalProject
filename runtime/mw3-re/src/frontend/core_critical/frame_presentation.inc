@@ -1,4 +1,6 @@
 void present() override {
+  mw34::timing::PresentBoundaryScope<mw34::timing::ProducerResourceTiming>
+      producer_timing_scope(producer_resource_timing_);
   if (editor_source_ || editor_present_active_) require_editor_producer();
   flush();
   complete_local_light_packets();
