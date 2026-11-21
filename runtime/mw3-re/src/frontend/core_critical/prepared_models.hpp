@@ -54,6 +54,7 @@ class PreparedModels {
     std::shared_ptr<const ::platform::prepared::Textures>
     resolve_skin(const std::string &source_asset, int32_t index) const;
     void clear_skin_cache() const { skin_cache_.clear(); }
+    void set_skin_cache_budget_for_test(std::size_t bytes) const { skin_cache_.set_budget(bytes); }
     std::size_t skin_cache_bytes() const { return skin_cache_.bytes(); }
     std::size_t skin_texture_loads() const { return skin_cache_.loads(); }
     PreparedModelDraw draw(const ::platform::ModelDrawContext &context,

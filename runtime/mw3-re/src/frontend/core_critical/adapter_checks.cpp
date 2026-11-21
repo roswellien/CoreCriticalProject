@@ -3240,6 +3240,7 @@ int main(int argc, char **argv) {
                     "mismatch");
       }
       check_gpu_prepared(window, backend);
+      check_gpu_prepared_skin_eviction(window, backend);
     } else if (prepared_check) {
       if (material_check && threaded_checks) {
         check_sealed_environment(window, backend);

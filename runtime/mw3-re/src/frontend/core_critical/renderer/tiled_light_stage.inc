@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <optional>
 #include <stdexcept>
 
@@ -321,6 +322,38 @@ constexpr float kMax = 1e6f;
     throw std::overflow_error("compose_affine: result out of bounds");
 
   return out;
+}
+
+inline View draw_view(const Mat34 &camera, const std::array<float, 6> &p, unsigned width,
+                      unsigned height, unsigned raster_width, unsigned raster_height);
+
+// draw_view for one draw. Contract for a malformed per-draw projection (e.g. a zero
+// focal length): the draw is drawn without local effect lights (sun and ambient still
+// apply), with a bounded warning (once per renderer), and the game never ends over
+// it. This is deliberate: a malformed projection is broken input and no lighting can
+// be exact from it (every-light shading would still place lights through it).
+// Returns whether `view` was built; otherwise `draw_view_index` = `no_effect_lights`.
+inline bool try_draw_view_or_no_effect_lights(View &view, unsigned &draw_view_index,
+                                              unsigned no_effect_lights, bool &fallback_reported,
+                                              const Mat34 &camera, const std::array<float, 6> &p,
+                                              unsigned width, unsigned height,
+                                              unsigned raster_width, unsigned raster_height) {
+  try {
+    view = draw_view(camera, p, width, height, raster_width, raster_height);
+    return true;
+  } catch (const std::exception &error) {
+    // draw_view and make_view throw only std::invalid_argument today; any exception
+    // here still costs only this draw's effect lights, never the frame.
+    draw_view_index = no_effect_lights;
+    if (!fallback_reported) {
+      std::fprintf(stderr,
+                   "Tiled lights: warning: a draw's projection is unusable (%s; near %g ax %g "
+                   "ay %g); it gets no effect lights (logged once)\n",
+                   error.what(), double(p[0]), double(p[1]), double(p[2]));
+      fallback_reported = true;
+    }
+    return false;
+  }
 }
 
 inline View draw_view(const Mat34 &camera, const std::array<float, 6> &p, unsigned width,
