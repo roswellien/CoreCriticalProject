@@ -184,7 +184,7 @@ void check_tiled_view_budget() {
   unchanged_on_failure(count, 260);
 
   // A degenerate native projection (zero focal length) costs only that draw its
-  // tiled list: it falls back to every effect light and warns once, never throws.
+  // effect lights: it gets the "no effect lights" index and warns once, never throws.
   {
     tiled::View view{};
     unsigned draw_index = 7;
@@ -192,14 +192,14 @@ void check_tiled_view_budget() {
     const std::array<float, 6> zero_focal{1, 0, 0.5f, 32, 24, 100};
     for (int repeat = 0; repeat != 2; ++repeat) {
       draw_index = 7;
-      require(!tiled::try_draw_view_or_all_lights(view, draw_index, 99, reported, identity,
+      require(!tiled::try_draw_view_or_no_effect_lights(view, draw_index, 99, reported, identity,
                                                   zero_focal, 64, 48, 64, 48) &&
                   draw_index == 99 && reported,
-              "Degenerate tiled projection was not routed to all effect lights");
+              "Degenerate tiled projection was not given the no-effect-lights index");
     }
     const std::array<float, 6> usable{1, 0.5f, -0.5f, 32, 24, 100};
     draw_index = 7;
-    require(tiled::try_draw_view_or_all_lights(view, draw_index, 99, reported, identity, usable,
+    require(tiled::try_draw_view_or_no_effect_lights(view, draw_index, 99, reported, identity, usable,
                                                64, 48, 64, 48) &&
                 draw_index == 7 && view.projection[0] != 0.f,
             "Usable tiled projection did not build its view");
@@ -346,7 +346,7 @@ void check_tiled_overflow_render() {
     require(reused.color == expected, "Tiled overflow async reuse changed lighting");
 
     // Break the projection of a draw that has its own tiled view in the healthy frame
-    // (the last draws already overflow to all lights there, which would prove nothing).
+    // (the last draws already overflow to all lights there).
     auto healthy = input;
     renderer.render(healthy);
     const unsigned broken = 0;
@@ -358,7 +358,7 @@ void check_tiled_overflow_render() {
     invalid->projection[1] = 0;
     malformed.draws[broken].sun_tl = invalid;
     // A degenerate draw projection no longer ends the frame (or the game): that draw
-    // falls back to every effect light with one warning, and the frame renders.
+    // gets no effect lights, with one warning, and the frame renders.
     bool rendered = true;
     try {
       renderer.render(malformed);
@@ -366,21 +366,23 @@ void check_tiled_overflow_render() {
       rendered = false;
     }
     require(rendered, "Malformed projection after tiled overflow ended the frame");
-    // The broken draw keeps the all-lights sentinel (shaded by every effect light,
-    // never given a default or another draw's view), and the bookkeeping stays whole:
-    // every lit draw is either in a registered view or in all-lights mode.
-    require(renderer.tiled_draw_modes_last[broken] == 2,
-            "Unusable tiled projection was not shaded by every effect light");
+    // The broken draw takes the existing "no effect lights" index: it is never given
+    // a default or another draw's view, and the bookkeeping stays whole (every other
+    // draw is either in a registered view or in all-lights mode).
+    require(renderer.tiled_draw_modes_last[broken] == 0,
+            "Unusable tiled projection kept effect lighting");
     require(renderer.tiled_views_last + renderer.tiled_all_light_draws_last ==
-                input.draws.size(),
+                input.draws.size() - 1,
             "Tiled bookkeeping lost or duplicated a draw after an unusable projection");
-    // Every other camera stripe still matches the serial reference exactly. (The
-    // broken draw's own stripe is not compared: its zeroed projection also feeds its
-    // own per-pixel light positions.)
+    // Exact pixels: the broken draw's stripe equals the scene with no effect lights,
+    // and every other stripe still matches the serial reference.
     for (unsigned y = 0; y < input.height; ++y)
       for (unsigned x = 0; x < input.width; ++x) {
         const auto pixel = y * input.width + x;
-        if (x / 32 != broken)
+        if (x / 32 == broken)
+          require(malformed.color[pixel] == off.color[pixel],
+                  "Draw with an unusable tiled projection was still effect-lit");
+        else
           require(malformed.color[pixel] == expected[pixel],
                   "An unusable tiled projection disturbed other draws' tiled lights");
       }

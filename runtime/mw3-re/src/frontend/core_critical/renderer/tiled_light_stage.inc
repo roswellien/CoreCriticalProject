@@ -327,23 +327,27 @@ constexpr float kMax = 1e6f;
 inline View draw_view(const Mat34 &camera, const std::array<float, 6> &p, unsigned width,
                       unsigned height, unsigned raster_width, unsigned raster_height);
 
-// draw_view for one draw, or that draw's fallback to every effect light (with one
-// warning per renderer) when its native projection is unusable, e.g. a zero focal
-// length. Returns whether `view` was built.
-inline bool try_draw_view_or_all_lights(View &view, unsigned &draw_view_index,
-                                        unsigned all_effect_lights, bool &fallback_reported,
-                                        const Mat34 &camera, const std::array<float, 6> &p,
-                                        unsigned width, unsigned height, unsigned raster_width,
-                                        unsigned raster_height) {
+// draw_view for one draw, or (when its native projection is unusable, e.g. a zero
+// focal length) that draw gets no effect lights this frame, with one warning per
+// renderer. Every-light shading would still place its lights through the same broken
+// projection, so leaving them off is the only exact choice. Returns whether `view`
+// was built; otherwise `draw_view_index` is set to `no_effect_lights`.
+inline bool try_draw_view_or_no_effect_lights(View &view, unsigned &draw_view_index,
+                                              unsigned no_effect_lights, bool &fallback_reported,
+                                              const Mat34 &camera, const std::array<float, 6> &p,
+                                              unsigned width, unsigned height,
+                                              unsigned raster_width, unsigned raster_height) {
   try {
     view = draw_view(camera, p, width, height, raster_width, raster_height);
     return true;
-  } catch (const std::invalid_argument &error) {
-    draw_view_index = all_effect_lights;
+  } catch (const std::exception &error) {
+    // draw_view and make_view throw only std::invalid_argument today; any exception
+    // here still costs only this draw's effect lights, never the frame.
+    draw_view_index = no_effect_lights;
     if (!fallback_reported) {
       std::fprintf(stderr,
                    "Tiled lights: warning: a draw's projection is unusable (%s; near %g ax %g "
-                   "ay %g); it is lit by every effect light instead (logged once)\n",
+                   "ay %g); it gets no effect lights (logged once)\n",
                    error.what(), double(p[0]), double(p[1]), double(p[2]));
       fallback_reported = true;
     }

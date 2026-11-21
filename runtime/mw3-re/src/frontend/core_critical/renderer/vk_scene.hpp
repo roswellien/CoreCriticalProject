@@ -1715,11 +1715,11 @@ private:
                   report_affine_fallback))
             continue;
           const auto &projection = d.model ? d.model->projection : d.sun_tl->projection;
-          // A degenerate projection must cost this draw its tiled light list, never
-          // the game: it is lit by every effect light instead (exact, only slower).
+          // A degenerate projection must cost this draw its effect lights, never the
+          // game. ~0u is the "no effect lights" index every unlit draw already uses.
           mw34::tiled::View v{};
-          if (!mw34::tiled::try_draw_view_or_all_lights(
-                  v, tiledDrawViews[at], allEffectLights, tiledProjectionFallbackReported,
+          if (!mw34::tiled::try_draw_view_or_no_effect_lights(
+                  v, tiledDrawViews[at], ~0u, tiledProjectionFallbackReported,
                   camera, projection, width, height, rw, rh))
             continue;
           auto found =
