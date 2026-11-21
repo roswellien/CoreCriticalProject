@@ -10,6 +10,8 @@ std::vector<uint32_t> tiledOffsets;
 std::vector<VkDeviceSize> tiledLengths;
 bool tiledOverflowReported{};
 bool tiledAffineFallbackReported{};
+// Once per renderer: a draw whose projection the tiled stage cannot use.
+bool tiledProjectionFallbackReported{};
 
 void init_tiled() {
   if (tiledPipeline)

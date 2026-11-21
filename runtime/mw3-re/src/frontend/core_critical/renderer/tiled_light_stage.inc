@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <optional>
 #include <stdexcept>
 
@@ -321,6 +322,33 @@ constexpr float kMax = 1e6f;
     throw std::overflow_error("compose_affine: result out of bounds");
 
   return out;
+}
+
+inline View draw_view(const Mat34 &camera, const std::array<float, 6> &p, unsigned width,
+                      unsigned height, unsigned raster_width, unsigned raster_height);
+
+// draw_view for one draw, or that draw's fallback to every effect light (with one
+// warning per renderer) when its native projection is unusable, e.g. a zero focal
+// length. Returns whether `view` was built.
+inline bool try_draw_view_or_all_lights(View &view, unsigned &draw_view_index,
+                                        unsigned all_effect_lights, bool &fallback_reported,
+                                        const Mat34 &camera, const std::array<float, 6> &p,
+                                        unsigned width, unsigned height, unsigned raster_width,
+                                        unsigned raster_height) {
+  try {
+    view = draw_view(camera, p, width, height, raster_width, raster_height);
+    return true;
+  } catch (const std::invalid_argument &error) {
+    draw_view_index = all_effect_lights;
+    if (!fallback_reported) {
+      std::fprintf(stderr,
+                   "Tiled lights: warning: a draw's projection is unusable (%s; near %g ax %g "
+                   "ay %g); it is lit by every effect light instead (logged once)\n",
+                   error.what(), double(p[0]), double(p[1]), double(p[2]));
+      fallback_reported = true;
+    }
+    return false;
+  }
 }
 
 inline View draw_view(const Mat34 &camera, const std::array<float, 6> &p, unsigned width,

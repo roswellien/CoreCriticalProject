@@ -183,6 +183,28 @@ void check_tiled_view_budget() {
   }
   unchanged_on_failure(count, 260);
 
+  // A degenerate native projection (zero focal length) costs only that draw its
+  // tiled list: it falls back to every effect light and warns once, never throws.
+  {
+    tiled::View view{};
+    unsigned draw_index = 7;
+    bool reported = false;
+    const std::array<float, 6> zero_focal{1, 0, 0.5f, 32, 24, 100};
+    for (int repeat = 0; repeat != 2; ++repeat) {
+      draw_index = 7;
+      require(!tiled::try_draw_view_or_all_lights(view, draw_index, 99, reported, identity,
+                                                  zero_focal, 64, 48, 64, 48) &&
+                  draw_index == 99 && reported,
+              "Degenerate tiled projection was not routed to all effect lights");
+    }
+    const std::array<float, 6> usable{1, 0.5f, -0.5f, 32, 24, 100};
+    draw_index = 7;
+    require(tiled::try_draw_view_or_all_lights(view, draw_index, 99, reported, identity, usable,
+                                               64, 48, 64, 48) &&
+                draw_index == 7 && view.projection[0] != 0.f,
+            "Usable tiled projection did not build its view");
+  }
+
   const auto wide = tiled::make_view(identity, {1720, -720, 1720, 720}, 1, 100, 3440, 1440);
   tiled::ViewBudget legacy{128ULL * 1024 * 1024, 256};
   unsigned admitted = 0;
@@ -327,13 +349,15 @@ void check_tiled_overflow_render() {
     auto invalid = std::make_shared<sun::Tl>(*malformed.draws.back().sun_tl);
     invalid->projection[1] = 0;
     malformed.draws.back().sun_tl = invalid;
-    bool rejected = false;
+    // A degenerate draw projection no longer ends the frame (or the game): that draw
+    // falls back to every effect light with one warning, and the frame renders.
+    bool rendered = true;
     try {
       renderer.render(malformed);
     } catch (const std::exception &) {
-      rejected = true;
+      rendered = false;
     }
-    require(rejected, "Malformed projection after tiled overflow was accepted");
+    require(rendered, "Malformed projection after tiled overflow ended the frame");
     reused = input;
     renderer.render(reused);
     require(reused.color == expected, "Rejected overflow draw poisoned valid render reuse");

@@ -1710,7 +1710,13 @@ private:
                   report_affine_fallback))
             continue;
           const auto &projection = d.model ? d.model->projection : d.sun_tl->projection;
-          const auto v = mw34::tiled::draw_view(camera, projection, width, height, rw, rh);
+          // A degenerate projection must cost this draw its tiled light list, never
+          // the game: it is lit by every effect light instead (exact, only slower).
+          mw34::tiled::View v{};
+          if (!mw34::tiled::try_draw_view_or_all_lights(
+                  v, tiledDrawViews[at], allEffectLights, tiledProjectionFallbackReported,
+                  camera, projection, width, height, rw, rh))
+            continue;
           auto found =
               std::find_if(tiledFrameViews.begin(), tiledFrameViews.end(), [&](const auto &prior) {
                 return std::memcmp(&prior, &v, sizeof(v)) == 0;

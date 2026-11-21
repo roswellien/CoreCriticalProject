@@ -58,6 +58,8 @@ class PreparedSkinCache {
     }
 
     void clear() { entries_.clear(); failed_.clear(); bytes_ = 0; }
+    // Checks only: a tiny budget forces eviction between two draws of one scene.
+    void set_budget(std::size_t budget) { budget_ = budget; }
     std::size_t bytes() const { return bytes_; }
     std::size_t loads() const { return loads_; }
 
