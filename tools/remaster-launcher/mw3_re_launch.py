@@ -17,7 +17,7 @@ _FIELDS = frozenset({
     "schema_version", "engine", "runtime_root", "executable", "game_dir", "write_dir", "renderer",
     "width", "height", "aa", "af", "window_mode", "render_thread", "lighting", "assets",
 })
-_OPTIONAL_FIELDS = frozenset({"indeo_codec", "flare_style"})
+_OPTIONAL_FIELDS = frozenset({"indeo_codec", "flare_style", "disk_cache"})
 _AA = {"off": "off", "1": "off", "fxaa": "fxaa", "2": "ssaa2", "4": "ssaa4"}
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_JSON_DEPTH = 64
@@ -819,6 +819,9 @@ def plan_launch(request):
     """Return complete argv or explicit unsupported reasons; never probe or start anything."""
     if type(request) is not dict:
         raise ValueError("Missing or unknown native request fields")
+    disk_cache = request.get("disk_cache", True)
+    if type(disk_cache) is not bool:
+        raise ValueError("disk_cache must be a boolean")
     schema = request.get("schema_version")
     if type(schema) is not int or schema not in (2, 3, 4):
         raise ValueError("Unsupported native request schema")
@@ -1125,7 +1128,8 @@ def plan_launch(request):
     for asset in request["assets"]:
         argv.extend(("--assets", asset))
     result = {"ok": True, "argv": argv, "working_directory": str(executable.parent),
-              "skipped_features": skipped_features}
+              "skipped_features": skipped_features,
+              "environment": {"MW3_DISK_CACHE": "1" if disk_cache else "0"}}
     if preview is not None:
         result["skipped_packs"] = skipped
         result["overridden_models"] = overridden_models

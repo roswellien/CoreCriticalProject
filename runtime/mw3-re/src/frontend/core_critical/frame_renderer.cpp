@@ -930,6 +930,24 @@ public:
     drain();
     renderer_->update_lighting_settings(display_lighting());
   }
+  void set_skin_cache_budget_for_test(std::size_t bytes) const {
+    prepared_.set_skin_cache_budget_for_test(bytes);
+  }
+  // Skin slots waiting for retire_skin_textures: queued stale slots plus slots
+  // whose texture set no longer has an owner.
+  std::size_t pending_skin_retirements_for_test() const {
+    std::size_t pending = retiring_skin_textures_.size();
+    for (const auto &[image, owner] : prepared_skin_owners_)
+      if (owner.expired())
+        ++pending;
+    return pending;
+  }
+  std::array<float, 6> last_model_projection_for_test() const {
+    for (auto draw = scene_.draws.rbegin(); draw != scene_.draws.rend(); ++draw)
+      if (draw->model)
+        return draw->model->projection;
+    throw std::runtime_error("No model draw in the producer scene");
+  }
   bool display_lighting_is_stock_for_test() const {
     const auto shown = display_lighting();
     const auto stock = mw34::sun::display_ambient(base_lighting_, campaign_enabled_, display_hdr_);
@@ -1347,6 +1365,8 @@ private:
   void begin_scene_housekeeping() {
     if (!scene_.draws.empty())
       flush();
+    // The scene is empty here, so releasing skin slots cannot split a draw.
+    retire_skin_textures();
     complete_local_light_packets();
     ensure_extent();
     // Cleanup once per scene instead of scanning the preloaded cache per draw.
@@ -2026,6 +2046,12 @@ private:
     return handle;
   }
 
+  // Releases the GPU slots of alternate skin images whose texture set is no longer
+  // owned by anything, plus slots queued by prepared_texture. Call only at a scene
+  // boundary (no draw being emitted): release_texture flushes a scene that still
+  // binds the slot, and a flush in the middle of emitting a draw leaves scene_
+  // empty with a zero extent, so the draw's projection (fx * scene width / viewport)
+  // becomes 0 and the tiled-light stage rejected the frame (c3m3 crash, #395).
   void retire_skin_textures() {
     for (auto it = prepared_skin_owners_.begin(); it != prepared_skin_owners_.end();) {
       if (!it->second.expired()) {
@@ -2034,17 +2060,32 @@ private:
       }
       const auto texture = prepared_textures_.find(it->first);
       if (texture != prepared_textures_.end()) {
-        // release_texture flushes any scene which still references this slot.
         release_texture(texture->second);
         prepared_textures_.erase(texture);
       }
       it = prepared_skin_owners_.erase(it);
     }
+    for (const auto handle : retiring_skin_textures_)
+      release_texture(handle);
+    retiring_skin_textures_.clear();
   }
   int32_t prepared_texture(const ::platform::prepared::Image &image,
       const std::shared_ptr<const ::platform::prepared::Textures> &owner = {}) {
-    retire_skin_textures();
-    const auto found = prepared_textures_.find(&image);
+    auto found = prepared_textures_.find(&image);
+    const auto skin_owner = prepared_skin_owners_.find(&image);
+    // An alternate skin set can be evicted and a new one decoded at the same address
+    // within one scene. The old slot still holds the old pixels and may be bound by
+    // draws already in this scene, so it is queued for release at the next scene
+    // boundary and this image gets a fresh slot.
+    const bool stale_skin_slot = found != prepared_textures_.end() &&
+                                 skin_owner != prepared_skin_owners_.end() &&
+                                 skin_owner->second.lock() != owner;
+    if (stale_skin_slot) {
+      retiring_skin_textures_.push_back(found->second);
+      prepared_textures_.erase(found);
+      prepared_skin_owners_.erase(skin_owner);
+      found = prepared_textures_.end();
+    }
     if (found != prepared_textures_.end()) {
       // PreparedModels owns this immutable image across mission resource
       // resets. A real draw republishes its value identity in the new epoch.
@@ -2315,7 +2356,7 @@ private:
         model.render_materials = std::move(registered.original_materials);
       }
       const auto geometry = native_model_geometry(model.render_geometry);
-      renderer_->preload_model_geometry(*geometry);
+        renderer_->preload_model_geometry(*geometry);
     }
   }
 
@@ -2600,7 +2641,7 @@ private:
                 mw34::timing::ScopedDuration cpu_timer(prepared_cpu_target);
                 geometry = prepared_geometry(*batch);
               }
-              renderer_->preload_model_geometry(*geometry);
+                renderer_->preload_model_geometry(*geometry);
             }
           for (const auto *image : resources.textures) {
             if (renderer_->preload_stopped())
@@ -2870,6 +2911,8 @@ private:
   std::map<const ::platform::prepared::Image *, int32_t> prepared_textures_;
   std::map<const ::platform::prepared::Image *,
            std::weak_ptr<const ::platform::prepared::Textures>> prepared_skin_owners_;
+  // Stale alternate skin slots, released by retire_skin_textures at the next scene boundary.
+  std::vector<int32_t> retiring_skin_textures_;
   std::map<const ::platform::prepared::NormalImage *, int32_t>
       prepared_normals_;
   std::map<const ::platform::prepared::Batch *,
@@ -3106,6 +3149,27 @@ testing::StagingTestState testing::staging_state(VulkanFrameRenderer &renderer) 
     if (!typed)
         throw std::runtime_error("Renderer is not a FrameRenderer");
     return typed->staging_state_for_test();
+}
+
+void testing::set_skin_cache_budget(VulkanFrameRenderer &renderer, std::size_t bytes) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    typed->set_skin_cache_budget_for_test(bytes);
+}
+
+std::size_t testing::pending_skin_retirements(VulkanFrameRenderer &renderer) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->pending_skin_retirements_for_test();
+}
+
+std::array<float, 6> testing::last_model_projection(VulkanFrameRenderer &renderer) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->last_model_projection_for_test();
 }
 
 bool testing::display_lighting_is_stock(VulkanFrameRenderer &renderer) {

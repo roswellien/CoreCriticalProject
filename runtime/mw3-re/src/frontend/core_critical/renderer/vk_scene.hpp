@@ -1249,6 +1249,11 @@ public:
   std::uint64_t retired_model_buffers{};
   std::uint64_t model_uploads{}, model_uploaded_bytes{}, model_draws{},
       world_gpu_draws{}, effect_light_peak{}, fixture_light_peak{};
+  // The last rendered scene's tiled-light bookkeeping (checks): views registered for
+  // tiled lists, draws shaded by every effect light (overflow or unusable view), and
+  // each draw's mode (0 no effect lights, 1 its tiled view, 2 every effect light).
+  std::uint64_t tiled_views_last{}, tiled_all_light_draws_last{};
+  std::vector<std::uint8_t> tiled_draw_modes_last;
   std::uint64_t normal_draws{};
   std::uint64_t height_uploads{}, height_uploaded_bytes{}, height_cache_hits{},
       height_retired_images{};
@@ -1999,7 +2004,13 @@ private:
                   report_affine_fallback))
             continue;
           const auto &projection = d.model ? d.model->projection : d.sun_tl->projection;
-          const auto v = mw34::tiled::draw_view(camera, projection, width, height, rw, rh);
+          // Malformed per-draw projection: draw without local effect lights, bounded
+          // warning, never end the game. ~0u is the index every unlit draw uses.
+          mw34::tiled::View v{};
+          if (!mw34::tiled::try_draw_view_or_no_effect_lights(
+                  v, tiledDrawViews[at], ~0u, tiledProjectionFallbackReported,
+                  camera, projection, width, height, rw, rh))
+            continue;
           auto found =
               std::find_if(tiledFrameViews.begin(), tiledFrameViews.end(), [&](const auto &prior) {
                 return std::memcmp(&prior, &v, sizeof(v)) == 0;
@@ -2023,6 +2034,9 @@ private:
         }
       }
       prepare_tiled(tiledFrameViews);
+      tiled_views_last = tiledFrameViews.size();
+      tiled_all_light_draws_last = 0;
+      tiled_draw_modes_last.assign(s.draws.size(), 0);
       effect_light_peak =
           std::max(effect_light_peak, std::uint64_t(fx.params[0]));
       fixture_light_peak =
@@ -2112,7 +2126,10 @@ private:
           s.emissions.apply(draw.emission_index, u);
           if (tiledDrawViews[at] == allEffectLights) {
             u.tiled_lights = {0, 0, 0, 2};
+            ++tiled_all_light_draws_last;
+            tiled_draw_modes_last[at] = 2;
           } else if (tiledDrawViews[at] != ~0u) {
+            tiled_draw_modes_last[at] = 1;
             const auto id = tiledDrawViews[at];
             u.tiled_lights = {tiledFrameViews[id].extent[2], tiledFrameViews[id].extent[3],
                               tiledOffsets[id], 1};

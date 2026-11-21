@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -92,6 +93,12 @@ StagingTestState staging_state(VulkanFrameRenderer &renderer);
 // True when the lighting the renderer submits equals its configured stock lighting
 // (no mission campaign profile applied).
 bool display_lighting_is_stock(VulkanFrameRenderer &renderer);
+// Checks only: the prepared skin cache's decoded-byte budget.
+void set_skin_cache_budget(VulkanFrameRenderer &renderer, std::size_t bytes);
+// Skin texture slots not yet released (queued stale slots and slots without an owner).
+std::size_t pending_skin_retirements(VulkanFrameRenderer &renderer);
+// The projection {near, ax, ay, cx, cy, far} of the producer scene's last GPU model draw.
+std::array<float, 6> last_model_projection(VulkanFrameRenderer &renderer);
 
 // The geometry, lit-normal and raw-fog terms and the checked total of one packet's byte count.
 struct PacketByteBreakdown {

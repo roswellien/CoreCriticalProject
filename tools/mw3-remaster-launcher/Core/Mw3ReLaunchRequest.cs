@@ -22,6 +22,7 @@ public sealed record Mw3RePlanningOptions
     public Mw3ReLighting Lighting { get; init; } = Mw3ReLighting.Off;
     public Mw3ReFlareStyle FlareStyle { get; init; } = Mw3ReFlareStyle.Modern;
     public bool Pom { get; init; } = false;
+    public bool DiskCache { get; init; } = true;
     public IReadOnlyList<string> Assets { get; init; } = Array.Empty<string>();
     /// <summary>Native preview choices; when set, the request uses wire schema 4.</summary>
     public Mw3RePreviewOptions? Preview { get; init; }
@@ -110,7 +111,7 @@ public static class Mw3ReLaunchRequest
         {
             ["schema_version"] = options.Pom ? 3 : 2, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
             ["executable"] = contract.Executable, ["game_dir"] = gameDirectory,
-            ["indeo_codec"] = indeoCodec,
+            ["indeo_codec"] = indeoCodec, ["disk_cache"] = options.DiskCache,
             ["write_dir"] = Path.Combine(dataRoot, "mw3-re", "profiles", id), ["renderer"] = renderer,
             ["width"] = options.Width, ["height"] = options.Height, ["aa"] = antialiasing,
             ["af"] = options.AnisotropicFiltering, ["window_mode"] = windowMode,
@@ -135,7 +136,7 @@ public static class Mw3ReLaunchRequest
         {
             ["schema_version"] = 4, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
             ["executable"] = contract.Executable, ["game_dir"] = gameDirectory,
-            ["indeo_codec"] = indeoCodec,
+            ["indeo_codec"] = indeoCodec, ["disk_cache"] = options.DiskCache,
             ["write_dir"] = Path.Combine(dataRoot, "mw3-re", "profiles", id), ["renderer"] = renderer,
             ["width"] = options.Width, ["height"] = options.Height, ["aa"] = antialiasing,
             ["af"] = options.AnisotropicFiltering, ["window_mode"] = windowMode,

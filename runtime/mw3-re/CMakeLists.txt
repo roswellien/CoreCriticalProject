@@ -632,6 +632,14 @@ if(MSVC)
 endif()
 add_test(NAME mw3render_worker_checks COMMAND mw3render_worker_checks)
 set_tests_properties(mw3render_worker_checks PROPERTIES TIMEOUT 15)
+add_executable(mw3derived_cache_checks tests/test_derived_cache.cpp)
+target_include_directories(mw3derived_cache_checks PRIVATE src)
+target_link_libraries(mw3derived_cache_checks PRIVATE Threads::Threads)
+if(MSVC)
+  target_compile_options(mw3derived_cache_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3derived_cache_checks COMMAND mw3derived_cache_checks)
+set_tests_properties(mw3derived_cache_checks PROPERTIES TIMEOUT 30)
 add_executable(mw3prepared_checks tests/test_prepared_visuals.cpp)
 target_include_directories(mw3prepared_checks PRIVATE third_party)
 target_link_libraries(mw3prepared_checks PRIVATE mw3core)
@@ -753,6 +761,7 @@ if(SDL3_FOUND)
     src/frontend/sdl/sdl_install.cpp
     src/frontend/sdl/sdl_music.cpp
     src/frontend/sdl/sdl_platform.cpp
+    src/frontend/sdl/sdl_loading.cpp
     src/frontend/sdl/gpu_hud.cpp
     src/frontend/sdl/gpu_hud_menu_sprites.cpp
     src/frontend/sdl/sdl_mods.cpp
@@ -978,6 +987,7 @@ if(SDL3_FOUND)
     add_executable(mw3sdltests
       tests/main.cpp
       tests/test_sdl_frontend.cpp
+      tests/test_loading.cpp
       tests/test_sdl_new_world.cpp
       tests/test_win_cmdline.cpp
       tests/test_log_start.cpp
