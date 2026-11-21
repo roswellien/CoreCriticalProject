@@ -877,9 +877,12 @@ namespace MW3RemasterLauncher
                             Dispatcher.BeginInvoke(new Action(() =>
                             {
                                 if (!_nativeSessionActive) return;
-                                TxtStartupProgress.Text = line;
-                                if (line.StartsWith("Native progress: ", StringComparison.Ordinal))
-                                    SetLaunchPreparing(!line.StartsWith("Native progress: idle", StringComparison.Ordinal));
+                                const string native = "Native progress: ";
+                                // "idle" only means the game's own loading finished; the first
+                                // frame below ends the preparing state.
+                                if (line == native + "idle") return;
+                                TxtStartupProgress.Text = line.StartsWith(native, StringComparison.Ordinal)
+                                    ? line.Substring(native.Length) : line;
                             }));
                         if (line.StartsWith("Native first frame: ", StringComparison.Ordinal))
                             Dispatcher.BeginInvoke(new Action(() =>
