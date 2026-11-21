@@ -59,7 +59,8 @@ enum class PreloadStopReason {
   budget_denied,
   out_of_device_memory,
   out_of_host_memory,
-  allocation_failed
+  allocation_failed,
+  oversized_upload
 };
 
 constexpr const char *
@@ -75,6 +76,8 @@ preload_stop_reason_name(PreloadStopReason reason) noexcept {
     return "out_of_host_memory";
   case PreloadStopReason::allocation_failed:
     return "allocation_failed";
+  case PreloadStopReason::oversized_upload:
+    return "oversized_upload";
   }
   return "unknown";
 }

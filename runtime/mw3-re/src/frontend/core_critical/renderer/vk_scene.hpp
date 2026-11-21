@@ -74,6 +74,7 @@
 #include <optional>
 #include <set>
 #include <stdexcept>
+#include <type_traits>
 #include <string>
 #include <thread>
 #include <utility>
@@ -3609,16 +3610,25 @@ private:
 #include "editor_overlay.inc"
 #endif
 
-  struct PreloadAllocationFailure : std::exception {
+  // Lazy draws throw this too, so it must stay a std::runtime_error like every
+  // other Vulkan failure: callers that report "rendering failed" catch that type.
+  // The message is formatted into a fixed buffer first, so the only host
+  // allocation during out-of-memory handling is runtime_error's one short copy.
+  struct PreloadAllocationFailure : std::runtime_error {
     VkResult result;
-    char message[160]{};
-    PreloadAllocationFailure(VkResult value, const char *operation) : result(value) {
-      // Constructing an OOM diagnostic must not allocate more host memory.
-      std::snprintf(message, sizeof message, "Vulkan scene renderer: %s failed (%d)",
+    PreloadAllocationFailure(VkResult value, const char *operation)
+        : std::runtime_error(format(value, operation).data()), result(value) {}
+
+  private:
+    static std::array<char, 160> format(VkResult value, const char *operation) {
+      std::array<char, 160> message{};
+      std::snprintf(message.data(), message.size(), "Vulkan scene renderer: %s failed (%d)",
                     operation, int(value));
+      return message;
     }
-    const char *what() const noexcept override { return message; }
   };
+  static_assert(std::is_base_of_v<std::runtime_error, PreloadAllocationFailure>,
+                "Allocation failures must reach std::runtime_error handlers");
   struct PreloadBudgetFailure : std::exception {};
   struct MemoryAllocation {
     unsigned heap{};
@@ -3675,7 +3685,9 @@ private:
   }
   bool admit_preload_bytes(VkDeviceSize bytes) {
     if (bytes > preload_batch_cap_) {
-      stop_preload(VK_SUCCESS); // Oversized optional uploads retain their lazy draw path.
+      // Oversized optional uploads keep their lazy draw path. Record why the
+      // warmup stopped instead of reporting it as a failed allocation.
+      stop_preload_oversized(bytes);
       return false;
     }
     if (bytes > preload_batch_cap_ - preload_batch_bytes_)
@@ -3847,7 +3859,8 @@ private:
       if (requirements_available && dedicated.requiresDedicatedAllocation)
         info.pNext = &dedicated_info;
       check_allocation(allocate_memory(device, &info, nullptr, &allocation),
-                       "immutable resource memory");
+                       preload_active_ ? "dedicated preload resource memory"
+                                       : "immutable resource memory");
       offset = 0;
       return;
     }
@@ -3909,6 +3922,13 @@ private:
                            &found->second.indices, &found->second.index_staging})
       destroy_buffer(*buffer);
     model_buffers.erase(found);
+  }
+  void stop_preload_oversized(VkDeviceSize bytes) noexcept {
+    preload_stopped_ = true;
+    if (preload_stop_.reason == PreloadStopReason::none) {
+      preload_stop_.reason = PreloadStopReason::oversized_upload;
+      preload_stop_.requested_bytes = bytes;
+    }
   }
   void stop_preload(VkResult result) noexcept {
     preload_stopped_ = true;

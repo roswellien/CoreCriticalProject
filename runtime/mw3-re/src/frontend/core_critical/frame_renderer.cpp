@@ -906,6 +906,11 @@ public:
       current_mission_lighting_ = resolved;
     }
     preload_test_state_ = {};
+    // reset_preload() clears state the render worker's packets also read. The
+    // drain above already idled it; drain again here so this stays true if the
+    // code between them ever queues work.
+    if (worker_)
+      worker_->drain();
     if (renderer_)
       renderer_->reset_preload();
     preload_mission_normal_textures();

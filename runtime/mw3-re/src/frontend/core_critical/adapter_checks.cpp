@@ -2386,6 +2386,9 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                   !limited.partial_texture(24) && !limited.texture_resident(24) &&
                   limited.preload_allocation_attempts() == 4,
               "Oversized optional texture exceeded the cap or left a partial cache entry");
+      require(limited.preload_stop_info().reason == PreloadStopReason::oversized_upload &&
+                  limited.preload_stop_info().requested_bytes > 32,
+              "Oversized optional texture was not reported as an oversized upload");
       limited.finalize_preload();
       limited.end_preload();
 
