@@ -36,6 +36,7 @@
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/native_fixture_sources.hpp"
 #include "renderer/fixture_observation_emission.hpp"
+#include "platform/loading.hpp"
 #include "platform/prepared_visuals.h"
 #include "platform/sha256.hpp"
 #include "renderer/surface_detail_bindings.hpp"
@@ -2356,7 +2357,8 @@ private:
         model.render_materials = std::move(registered.original_materials);
       }
       const auto geometry = native_model_geometry(model.render_geometry);
-        renderer_->preload_model_geometry(*geometry);
+      preload_checkpoint();
+      renderer_->preload_model_geometry(*geometry);
     }
   }
 
@@ -2482,8 +2484,16 @@ private:
     std::uint64_t bytes{};
     PreloadTextureStage stage{};
   };
+  // The mission preload runs on the game thread inside the mission-load session
+  // and can take several seconds. Pump window messages between uploads so
+  // Windows does not mark the game "Not responding". The observer only pumps
+  // events and draws its own loading window; it never touches this renderer.
+  // Outside a loading session the call is a no-op.
+  static void preload_checkpoint() noexcept { ::platform::loading::checkpoint(); }
+
   void preload_texture_handle(int32_t handle, PreloadTextureStage stage,
                               std::vector<PendingTextureReceipt> &pending) {
+    preload_checkpoint();
     const std::uint64_t texture_key = std::uint64_t(handle) * 2 + 1;
     const auto &entry = textures_.at(std::size_t(handle));
     const unsigned texture_width = entry.width;
@@ -2641,7 +2651,8 @@ private:
                 mw34::timing::ScopedDuration cpu_timer(prepared_cpu_target);
                 geometry = prepared_geometry(*batch);
               }
-                renderer_->preload_model_geometry(*geometry);
+              preload_checkpoint();
+      renderer_->preload_model_geometry(*geometry);
             }
           for (const auto *image : resources.textures) {
             if (renderer_->preload_stopped())
