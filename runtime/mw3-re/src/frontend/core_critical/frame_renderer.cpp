@@ -879,6 +879,15 @@ public:
   void set_skin_cache_budget_for_test(std::size_t bytes) const {
     prepared_.set_skin_cache_budget_for_test(bytes);
   }
+  // Skin slots waiting for retire_skin_textures: queued stale slots plus slots
+  // whose texture set no longer has an owner.
+  std::size_t pending_skin_retirements_for_test() const {
+    std::size_t pending = retiring_skin_textures_.size();
+    for (const auto &[image, owner] : prepared_skin_owners_)
+      if (owner.expired())
+        ++pending;
+    return pending;
+  }
   std::array<float, 6> last_model_projection_for_test() const {
     for (auto draw = scene_.draws.rbegin(); draw != scene_.draws.rend(); ++draw)
       if (draw->model)
@@ -2514,6 +2523,13 @@ void testing::set_skin_cache_budget(VulkanFrameRenderer &renderer, std::size_t b
     if (!typed)
         throw std::runtime_error("Renderer is not a FrameRenderer");
     typed->set_skin_cache_budget_for_test(bytes);
+}
+
+std::size_t testing::pending_skin_retirements(VulkanFrameRenderer &renderer) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->pending_skin_retirements_for_test();
 }
 
 std::array<float, 6> testing::last_model_projection(VulkanFrameRenderer &renderer) {

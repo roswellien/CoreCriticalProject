@@ -1379,6 +1379,28 @@ void check_gpu_prepared_skin_eviction(SDL_Window *window, sdlfe::RendererBackend
     int width{}, height{};
     require(renderer->read_back(&pixels, &width, &height) && width == 64 && height == 64,
             "Skin eviction scene lost its extent");
+    // Evicted sets' slots wait for a scene boundary; a mission reset releases all of
+    // them once (no double release later) and a fresh scene draws normally.
+    require(cc_mw3_re::testing::pending_skin_retirements(*renderer) > 0,
+            "Same-scene skin evictions left nothing to retire");
+    renderer->reset_scene_resources();
+    require(cc_mw3_re::testing::pending_skin_retirements(*renderer) == 0,
+            "Mission reset did not release retiring skin slots");
+    renderer->set_viewport(0, 0, 64, 64);
+    renderer->clear(true, 0, 0, 0);
+    for (const int index : {2, 1}) {
+        panel->prepared_skin_index = index;
+        require(renderer->submit_prepared_geometry(context, {}) ==
+                    cc::geometry::Submission::submitted,
+                "Skinned prepared draw after a reset was not admitted");
+    }
+    require(renderer->read_back(&pixels, &width, &height) && width == 64 && height == 64,
+            "Skinned scene after a reset lost its extent");
+    // The next scene boundary releases this scene's evictions.
+    renderer->begin_scene();
+    require(cc_mw3_re::testing::pending_skin_retirements(*renderer) == 0,
+            "Scene boundary did not release retiring skin slots");
+    renderer->end_scene();
     panel->prepared_skin_index = 0;
     std::fprintf(stderr, "[PREPARED_SKIN_EVICTION] same-scene evictions kept the draw projection\n");
 }
