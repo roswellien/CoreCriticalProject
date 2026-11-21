@@ -1,4 +1,4 @@
-// Regression and integration test suite for platform::derived_cache and normal_codec.
+// Regression and integration test suite for platform::derived_cache and verified_digest.
 #include <chrono>
 #include <atomic>
 #include <cstddef>
@@ -12,7 +12,6 @@
 #include <thread>
 #include <vector>
 
-#include "frontend/core_critical/renderer/normal_codec.hpp"
 #include "platform/derived_cache.hpp"
 #include "platform/verified_digest.hpp"
 
@@ -375,61 +374,6 @@ void test_concurrent_reads_writes(const std::filesystem::path& root) {
   }
 }
 
-void test_normal_codec_integration(const std::filesystem::path& root) {
-  platform::derived_cache::configure_write_directory(root);
-
-  // Valid BWNRM3 encoded token sequence: token = 191 (repeat 64 times), delta = 0
-  const std::vector<unsigned char> valid_encoded = {191, 0};
-  const std::size_t pixel_bytes = 64;
-
-  std::vector<unsigned char> cold_output(pixel_bytes, 0);
-  std::vector<unsigned char> warm_output(pixel_bytes, 0);
-
-  // 1. Cold decode: decodes and writes to cache
-  mw34::materials::decode_normal_pixels(valid_encoded, cold_output.data(), pixel_bytes);
-
-  // 2. Warm decode: reads from cache and matches cold output
-  mw34::materials::decode_normal_pixels(valid_encoded, warm_output.data(), pixel_bytes);
-  TEST_CHECK(cold_output == warm_output);
-
-  // 3. Cached entry corruption recovery
-  platform::derived_cache::KeyBuilder kb("mw34_bwnrm3_normal_pixels_v1");
-  const uint64_t pb = static_cast<uint64_t>(pixel_bytes);
-  kb.update_pod(pb);
-  kb.update(valid_encoded.data(), valid_encoded.size());
-  const std::string ckey = kb.hex();
-
-  const auto target_cache_dir = root / "cache" / "derived-v1";
-  const auto cached_file = target_cache_dir / (ckey + ".bin");
-
-  std::error_code ec;
-  if (std::filesystem::is_regular_file(cached_file, ec)) {
-    // Corrupt payload byte
-    std::fstream f(cached_file, std::ios::in | std::ios::out | std::ios::binary);
-    if (f.is_open()) {
-      f.seekp(-1, std::ios::end);
-      f.put(static_cast<char>(0xFF));
-      f.close();
-    }
-
-    // Decoding corrupted entry must fall back to original decode cleanly and rebuild cache
-    std::vector<unsigned char> recovered_output(pixel_bytes, 0);
-    mw34::materials::decode_normal_pixels(valid_encoded, recovered_output.data(), pixel_bytes);
-    TEST_CHECK(recovered_output == cold_output);
-  }
-
-  // 4. Invalid compressed input: truncated token stream must throw and not corrupt cache
-  const std::vector<unsigned char> invalid_encoded = {191};
-  std::vector<unsigned char> err_output(pixel_bytes, 0);
-  bool threw = false;
-  try {
-    mw34::materials::decode_normal_pixels(invalid_encoded, err_output.data(), pixel_bytes);
-  } catch (const std::runtime_error&) {
-    threw = true;
-  }
-  TEST_CHECK(threw);
-}
-
 } // namespace
 
 // Environment pack members: the full hash is reused only while the file is unchanged.
@@ -494,7 +438,6 @@ int main() {
   test_lock_contention_and_recovery(test_dir / "lock_contention");
   test_opt_out_environment(test_dir / "opt_out");
   test_concurrent_reads_writes(test_dir / "concurrent");
-  test_normal_codec_integration(test_dir / "normal_codec");
   test_verified_digest_reuse_and_invalidation(test_dir / "verified_digest");
 
   std::error_code ec;

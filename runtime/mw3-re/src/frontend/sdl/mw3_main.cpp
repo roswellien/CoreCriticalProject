@@ -1023,8 +1023,9 @@ int program(int argc, char** argv) {
     std::printf("mw3 (MechWarrior 3 rebuild) %s, log %s\n", MW3_VERSION, run_log.path().c_str());
   std::printf("mw3: timing log-open at %lld ms since process start\n",
               platform::loading::since_process_start_ms());
-  // These are derived visual results only. The actual write directory and the
-  // running binary isolate profiles and automatically invalidate game updates.
+  // The derived cache holds remembered environment pack hashes
+  // (platform/verified_digest.hpp). The write directory isolates profiles and
+  // the running binary's hash invalidates everything when the game updates.
   try {
     platform::loading::Phase phase("cache-identity");
     if (!platform::derived_cache::is_disk_cache_disabled_by_env()) {

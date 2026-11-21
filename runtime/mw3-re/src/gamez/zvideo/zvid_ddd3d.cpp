@@ -1,7 +1,6 @@
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "frontend/core_critical/renderer/native_texture_identity.hpp"
 #include "platform/loading.hpp"
-#include "platform/derived_cache.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -1272,47 +1271,9 @@ void texture_rgba(const zimg::Texture& image, int32_t alpha, uint8_t* rgba) {
   const auto* px = static_cast<const uint16_t*>(image.pixels);
   const uint8_t* plane = image.alpha;
   const int32_t n = image.width * image.height;
-  if (!px || !rgba || n <= 0) return;
-
-  const std::size_t expected_bytes = static_cast<std::size_t>(n) * 4;
-  platform::loading::Measure timing(platform::loading::Work::texture, expected_bytes);
-  std::string cache_key;
-  bool key_valid = false;
-  try {
-    if (platform::derived_cache::default_cache().is_enabled()) {
-      platform::derived_cache::KeyBuilder kb("zvid_texture_rgba_v1");
-      kb.update_pod(static_cast<int32_t>(image.width));
-      kb.update_pod(static_cast<int32_t>(image.height));
-      kb.update_pod(alpha);
-      kb.update_pod(m.r);
-      kb.update_pod(m.g);
-      kb.update_pod(m.b);
-      kb.update_pod(g_display.alpha_4444);
-      kb.update_pod(pixel_format().g_bits);
-      const uint8_t has_plane = plane ? 1 : 0;
-      kb.update_pod(has_plane);
-      kb.update(px, static_cast<std::size_t>(n) * sizeof(uint16_t));
-      if (plane) {
-        kb.update(plane, static_cast<std::size_t>(n) * sizeof(uint8_t));
-      }
-      cache_key = kb.hex();
-      key_valid = true;
-    }
-  } catch (...) {
-    key_valid = false;
-  }
-
-  if (key_valid) {
-    try {
-      if (platform::derived_cache::default_cache().read(cache_key, rgba, expected_bytes)) {
-        timing.hit = true;
-        return;
-      }
-    } catch (...) {
-      // Fall through to original conversion on cache read failure
-    }
-  }
-
+  // Timed for the load's phase report; about 9 s of a c2m1 load at 3440x1440.
+  platform::loading::Measure timing(platform::loading::Work::texture,
+                                    n > 0 ? static_cast<std::size_t>(n) * 4 : 0);
   for (int32_t i = 0; i < n; ++i) {
     if (i % 65536 == 0) platform::loading::checkpoint();
     const uint32_t p = px[i];
@@ -1335,14 +1296,6 @@ void texture_rgba(const zimg::Texture& image, int32_t alpha, uint8_t* rgba) {
     }
     q &= 0xffff;
     o[0] = expand(q, ra), o[1] = expand(q, ga), o[2] = expand(q, ba), o[3] = expand(q, aa);
-  }
-
-  if (key_valid) {
-    try {
-      platform::derived_cache::default_cache().write(cache_key, rgba, expected_bytes);
-    } catch (...) {
-      // Write failure is non-fatal
-    }
   }
 }
 

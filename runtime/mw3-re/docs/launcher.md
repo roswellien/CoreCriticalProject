@@ -554,10 +554,16 @@ anything is opened or made (2026-11-11: a package check wants all three programs
   game window. Each session logs `mw3: phase end NAME N ms (longest unpumped
   N ms)` and per-work `mw3: work` totals; `mw3: timing ...` lines give the log
   opening, each state and the first presented main menu in ms since process
-  start, and F.menu is created at that first menu frame. Decoded textures and
-  normal maps are kept between launches under `<write dir>/cache/derived-v1`
-  (`platform/derived_cache.hpp`: keyed by the running executable's hash and the
-  full input bytes, SHA-256 checked on every read, 2 GiB LRU cap); the C#
+  start, and F.menu is created at that first menu frame.
+  Measured on c2m1 at 3440x1440 (2026-11-20): each start spent about 90 s
+  SHA-256 hashing the six campaign environment packs (29 GB) before the window
+  opened. `platform/verified_digest.hpp` keeps each member's full hash between
+  launches under `<write dir>/cache/derived-v1` (`platform/derived_cache.hpp`),
+  keyed by the running executable's hash and the file's path, size, write time
+  and (Windows) volume, file index and creation time, as the old Python
+  launcher's VerificationCache did; a changed file is hashed again. Caching
+  decoded textures was measured and dropped: verifying 3.6 GB of cached RGBA
+  doubled the mission load (28.7 s against 14.1 s converting). The C#
   launcher's Load Cache setting or `MW3_DISK_CACHE=0` turns it off and
   `MW3_DISK_CACHE_MAX_MB` (16..8192) sets the cap.
   Tests: `sdl_program_launcher_starts_mw3_as_its_own_program` (the
