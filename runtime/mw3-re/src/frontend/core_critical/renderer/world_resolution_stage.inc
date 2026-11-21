@@ -269,7 +269,7 @@ void destroy_world_target() {
   if (reconstructedColor.image)
     f.vkDestroyImage(device, reconstructedColor.image, nullptr);
   if (reconstructedColor.memory)
-    f.vkFreeMemory(device, reconstructedColor.memory, nullptr);
+    release_memory(device, reconstructedColor.memory, nullptr);
   reconstructedColor = {};
   if (worldFramebuffer)
     f.vkDestroyFramebuffer(device, worldFramebuffer, nullptr);
@@ -280,7 +280,7 @@ void destroy_world_target() {
     if (image->image)
       f.vkDestroyImage(device, image->image, nullptr);
     if (image->memory)
-      f.vkFreeMemory(device, image->memory, nullptr);
+      release_memory(device, image->memory, nullptr);
     *image = {};
   }
   reduced_world_active = false;

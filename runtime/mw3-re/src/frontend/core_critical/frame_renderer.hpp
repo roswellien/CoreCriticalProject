@@ -8,6 +8,7 @@
 
 #include "frontend/sdl/sdl_render3d.h"
 #include "renderer/original_rigid_capture.hpp"
+#include "renderer/preload_budget.hpp"
 #include "renderer/renderer_bridge_config.hpp"
 #include "producer_view_test_hook.hpp"
 
@@ -37,6 +38,7 @@ struct AssetStatistics {
   std::uint64_t binding_rejected_mismatch{}, native_fingerprint_evaluations{};
   // Draw-time deferred receipt checks, independent of whether sun lighting runs.
   std::uint64_t deferred_material_admissions{};
+  std::uint64_t native_geometry_cache_entries{}, native_geometry_prune_passes{};
 };
 
 // Read-only authored-check observation, sampled on the producer after the
@@ -109,6 +111,48 @@ PacketByteBreakdown packet_byte_breakdown(const mw34::vkscene::Scene &scene);
 std::unique_ptr<VulkanFrameRenderer> make_renderer_with_staging_budget(
     SDL_Window *window, sdlfe::RendererBackend backend, const sdlfe::CoreCriticalQuality &quality,
     const sdlfe::CoreCriticalAssets &assets, std::size_t local_staging_budget);
+
+struct PreloadTestState {
+  bool last_preload_stopped{};
+  int32_t failed_texture_handle{-1};
+  mw34::vkscene::PreloadStopInfo stop_info{};
+  std::size_t preload_allocation_attempts{};
+  std::size_t preload_allocation_successes{};
+  std::size_t stop_log_lines{};
+  std::size_t batch_submissions{};
+  std::uint64_t peak_batch_bytes{};
+  std::size_t pending_count{};
+  std::size_t peak_pending_count{};
+  std::size_t pending_texture_receipt_observations{};
+  std::size_t premature_texture_receipts{};
+  std::uint64_t prepared_staged_bytes{};
+  std::uint64_t world_normal_staged_bytes{};
+  std::uint64_t native_staged_bytes{};
+  std::uint64_t tracked_device_local_bytes{};
+  std::size_t live_allocation_count{};
+  std::vector<std::string> ordered_prepared_assets;
+  std::vector<int32_t> ordered_native_handles;
+  std::vector<int32_t> completed_texture_handles;
+};
+
+void set_preload_fault_injection(
+    VulkanFrameRenderer &renderer,
+    const mw34::vkscene::PreloadFaultInjection &fault);
+void set_preload_batch_cap(VulkanFrameRenderer &renderer, std::uint64_t bytes);
+void set_preload_memory_block_cap(VulkanFrameRenderer &renderer, std::uint64_t bytes);
+PreloadTestState preload_test_state(VulkanFrameRenderer &renderer);
+bool has_texture_receipt(VulkanFrameRenderer &renderer, int32_t handle,
+                         bool sharp = false);
+bool is_texture_gpu_resident(VulkanFrameRenderer &renderer, int32_t handle,
+                             bool sharp = false);
+bool has_partial_texture_cache_entry(VulkanFrameRenderer &renderer,
+                                     int32_t handle, bool sharp = false);
+bool is_model_geometry_gpu_uploaded(VulkanFrameRenderer &renderer,
+                                    std::uint64_t geometry_key);
+bool has_partial_model_buffer_entry(VulkanFrameRenderer &renderer,
+                                    std::uint64_t geometry_key);
+std::uint64_t shared_texture_staging_size(VulkanFrameRenderer &renderer);
+bool shared_texture_staging_mapped(VulkanFrameRenderer &renderer);
 } // namespace testing
 
 } // namespace cc_mw3_re
