@@ -345,10 +345,18 @@ void check_tiled_overflow_render() {
     renderer.render(reused);
     require(reused.color == expected, "Tiled overflow async reuse changed lighting");
 
+    // Break the projection of a draw that has its own tiled view in the healthy frame
+    // (the last draws already overflow to all lights there, which would prove nothing).
+    auto healthy = input;
+    renderer.render(healthy);
+    const unsigned broken = 0;
+    require(renderer.tiled_draw_modes_last.size() == input.draws.size() &&
+                renderer.tiled_draw_modes_last[broken] == 1,
+            "Healthy tiled scene did not give the chosen draw its own view");
     auto malformed = input;
-    auto invalid = std::make_shared<sun::Tl>(*malformed.draws.back().sun_tl);
+    auto invalid = std::make_shared<sun::Tl>(*malformed.draws[broken].sun_tl);
     invalid->projection[1] = 0;
-    malformed.draws.back().sun_tl = invalid;
+    malformed.draws[broken].sun_tl = invalid;
     // A degenerate draw projection no longer ends the frame (or the game): that draw
     // falls back to every effect light with one warning, and the frame renders.
     bool rendered = true;
@@ -358,16 +366,21 @@ void check_tiled_overflow_render() {
       rendered = false;
     }
     require(rendered, "Malformed projection after tiled overflow ended the frame");
-    // That draw registers no tiled view: its all-lights sentinel is consumed without
-    // indexing the view list. Every other draw keeps its own tiled view, so every
-    // other camera stripe still matches the serial reference exactly. (The broken
-    // draw's own stripe is not compared: its zeroed projection also feeds its own
-    // per-pixel light positions.)
-    const unsigned broken_view = unsigned(malformed.draws.size() - 1);
+    // The broken draw keeps the all-lights sentinel (shaded by every effect light,
+    // never given a default or another draw's view), and the bookkeeping stays whole:
+    // every lit draw is either in a registered view or in all-lights mode.
+    require(renderer.tiled_draw_modes_last[broken] == 2,
+            "Unusable tiled projection was not shaded by every effect light");
+    require(renderer.tiled_views_last + renderer.tiled_all_light_draws_last ==
+                input.draws.size(),
+            "Tiled bookkeeping lost or duplicated a draw after an unusable projection");
+    // Every other camera stripe still matches the serial reference exactly. (The
+    // broken draw's own stripe is not compared: its zeroed projection also feeds its
+    // own per-pixel light positions.)
     for (unsigned y = 0; y < input.height; ++y)
       for (unsigned x = 0; x < input.width; ++x) {
         const auto pixel = y * input.width + x;
-        if (x / 32 != broken_view)
+        if (x / 32 != broken)
           require(malformed.color[pixel] == expected[pixel],
                   "An unusable tiled projection disturbed other draws' tiled lights");
       }
