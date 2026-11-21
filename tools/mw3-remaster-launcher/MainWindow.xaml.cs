@@ -870,17 +870,28 @@ namespace MW3RemasterLauncher
                 var process = await System.Threading.Tasks.Task.Run(() =>
                     _nativeGameRunner.Launch(settings, activeDirectories, line =>
                     {
-                        if (line.StartsWith("Scenery distance ", StringComparison.Ordinal) ||
+                        if (line.StartsWith("Startup: ", StringComparison.Ordinal) ||
+                            line.StartsWith("Native progress: ", StringComparison.Ordinal) ||
+                            line.StartsWith("Scenery distance ", StringComparison.Ordinal) ||
                             line.StartsWith("Pack left out: ", StringComparison.Ordinal))
-                            Dispatcher.BeginInvoke(new Action(() => TxtStartupProgress.Text = line));
-                        if (line.StartsWith("MW3-RE PID ", StringComparison.Ordinal))
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                if (!_nativeSessionActive) return;
+                                const string native = "Native progress: ";
+                                // "idle" only means the game's own loading finished; the first
+                                // frame below ends the preparing state.
+                                if (line == native + "idle") return;
+                                TxtStartupProgress.Text = line.StartsWith(native, StringComparison.Ordinal)
+                                    ? line.Substring(native.Length) : line;
+                            }));
+                        if (line.StartsWith("Native first frame: ", StringComparison.Ordinal))
                             Dispatcher.BeginInvoke(new Action(() =>
                             {
                                 if (!_nativeSessionActive) return;
                                 SetLaunchPreparing(false);
                                 BtnLaunchGame.Content = "\u25CF  GAME RUNNING...";
                                 TxtStatusReady.Text = "GAME STATUS: MW3-RE RUNNING";
-                                TxtStartupProgress.Text = "The game process has started.";
+                                TxtStartupProgress.Text = "The game is on screen.";
                             }));
                     }));
                 _ = ObserveNativeGameCompletionAsync(process);

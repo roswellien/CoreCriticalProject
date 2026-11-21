@@ -1,5 +1,6 @@
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "frontend/core_critical/renderer/native_texture_identity.hpp"
+#include "platform/loading.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -1270,7 +1271,11 @@ void texture_rgba(const zimg::Texture& image, int32_t alpha, uint8_t* rgba) {
   const auto* px = static_cast<const uint16_t*>(image.pixels);
   const uint8_t* plane = image.alpha;
   const int32_t n = image.width * image.height;
+  // Timed for the load's phase report; about 9 s of a c2m1 load at 3440x1440.
+  platform::loading::Measure timing(platform::loading::Work::texture,
+                                    n > 0 ? static_cast<std::size_t>(n) * 4 : 0);
   for (int32_t i = 0; i < n; ++i) {
+    if (i % 65536 == 0) platform::loading::checkpoint();
     const uint32_t p = px[i];
     uint8_t* o = rgba + 4 * i;
     if (alpha == 0) {  // the display format, copied

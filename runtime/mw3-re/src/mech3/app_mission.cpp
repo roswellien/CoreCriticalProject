@@ -114,6 +114,7 @@
 #include "mech3/zrdraiv.h"
 #include "mech3/zainetedit.h"
 #include "mech3/zrdrvalve.h"
+#include "platform/loading.hpp"
 #include "platform/render3d.h"
 #include "upgrades/mods/save_mods.h"
 
@@ -1750,6 +1751,7 @@ struct WiredMissionHooks : MissionHooks {
   void progress(float f) override {
     if (f == 0.0f) load_t0_ = std::chrono::steady_clock::now();  // a mission load begins (mission.cpp)
     program_briefing_progress(f);
+    platform::loading::report_percent(static_cast<int>(f * 100));
   }
   std::chrono::steady_clock::time_point load_t0_ = std::chrono::steady_clock::now();
   void fn_431800() override { mech3::mech_canned_nodes_free(); }  // the canned effects' node copies
@@ -1769,6 +1771,7 @@ struct WiredMissionHooks : MissionHooks {
   void progress_text(const char* s) override {
     program_briefing_line(s);
     LoadWatch::step(s);
+    platform::loading::report(s, platform::loading::progress.percent);
     if (s && *s && !e->quiet)
       std::printf("mw3: load: %s (%lld ms)\n", s,
                   static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2485,6 +2488,7 @@ void wire_mission_hooks(GameEngine* e) {
 // addition standing in for the briefing's Launch button) the Core state.
 void GameEngine::missions_start(uint32_t list) {
   if (list != 0x6098d0) return Engine::missions_start(list);
+  platform::loading::Session loading("mission-load", "Loading mission");
   Missions& m = missions();
   // zEntity's list: emptied by the last cleanup (0x0049dc40) but for the
   // stealth object, which the cleanup puts back (the world's, kept when the
@@ -2512,6 +2516,7 @@ void GameEngine::missions_start(uint32_t list) {
       static_cast<int32_t>(launch_.number), !m.failed);
   zvid::producer_mission_changed(identity);
   if (auto *render = platform_parts().render) {
+    platform::loading::Phase phase("renderer-mission-preparation");
     render->mission_changed(identity);
   }
   zcls::Node* cam = mission_node(*this, camera_);

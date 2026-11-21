@@ -1,4 +1,5 @@
 #pragma once
+#include "platform/loading.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -9,6 +10,7 @@ namespace mw34::materials {
 // interleaved pixel allocation; malformed tokens cannot grow that allocation.
 inline void decode_normal_pixels(const std::vector<unsigned char> &encoded, unsigned char *output,
                                  std::size_t pixel_bytes) {
+    platform::loading::Measure timing(platform::loading::Work::normal, pixel_bytes);
     auto fail = [] { throw std::runtime_error("Invalid compressed normal pixels"); };
     if (!pixel_bytes || pixel_bytes % 4 || pixel_bytes > 256ULL * 1024 * 1024 || encoded.empty() ||
         encoded.size() > pixel_bytes * 2)
@@ -16,7 +18,12 @@ inline void decode_normal_pixels(const std::vector<unsigned char> &encoded, unsi
     const auto pixels = pixel_bytes / 4;
     std::size_t cursor{}, decoded{};
     unsigned char previous[4]{};
+    std::size_t checkpoint_at = 0;
     while (cursor < encoded.size()) {
+        if (decoded >= checkpoint_at) {
+            platform::loading::checkpoint();
+            checkpoint_at = decoded + 65536;
+        }
         const auto token = encoded[cursor++];
         const std::size_t count = (token & ((token & 128) ? 63 : 127)) + 1;
         if (count > pixel_bytes - decoded)
