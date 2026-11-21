@@ -113,6 +113,29 @@ public sealed class NativeGameRunner
         return result;
     }
 
+    /// <summary>The planner validates named skin packs against the selected native meshes.</summary>
+    public static List<string> SelectSkinPacks(IEnumerable<string> activeModDirs, Action<string>? log = null)
+    {
+        var result = new List<string>();
+        foreach (var directory in activeModDirs)
+        {
+            try
+            {
+                var root = Path.GetFullPath(PackStorage.CanonicalPackRoot(directory));
+                var manifest = PackStorage.ReadManifest(Path.Combine(root, "pack.json"));
+                if (manifest.SchemaVersion == 2 && manifest.NativePayload?.Profile == "prepared-skins-v1")
+                    result.Add(root);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+                JsonException or ArgumentException or NotSupportedException)
+            {
+                log?.Invoke("Pack left out; skin pack could not be read: " + directory +
+                    " (" + error.Message + ")");
+            }
+        }
+        return result;
+    }
+
     /// <summary>Map the saved antialiasing text to the planner's typed choice.</summary>
     public static Mw3ReAntialiasing PreviewAntialiasing(string saved) => saved switch
     {
@@ -128,7 +151,7 @@ public sealed class NativeGameRunner
     public static Mw3RePlanningOptions PlanningOptionsForSettings(LauncherSettings settings,
         Mw3ReRuntimeContract contract, int drawDistance, IReadOnlyList<string> models,
         IReadOnlyList<string> environments, string? headlightBindings,
-        IReadOnlyList<string>? uiPacks = null)
+        IReadOnlyList<string>? uiPacks = null, IReadOnlyList<string>? skinPacks = null)
     {
         var selectedUiPacks = uiPacks ?? Array.Empty<string>();
         return new Mw3RePlanningOptions
@@ -153,6 +176,7 @@ public sealed class NativeGameRunner
             {
                 DrawDistance = drawDistance,
                 ModelPacks = models,
+                SkinPacks = skinPacks ?? Array.Empty<string>(),
                 EnvironmentPacks = environments,
                 UiPacks = selectedUiPacks,
                 // The launcher has no HUD setting; UI artwork needs this HUD, otherwise the
@@ -260,6 +284,7 @@ public sealed class NativeGameRunner
         var activePacks = activeModDirs.ToList();
         var (models, environments) = SelectPreviewPacks(activePacks);
         var uiPacks = SelectUiPacks(activePacks, log);
+        var skinPacks = SelectSkinPacks(activePacks, log);
         var writeDirectory = Path.Combine(_dataRoot, "mw3-re", "profiles", ProfileId);
         Directory.CreateDirectory(writeDirectory);
         log("Startup: Preparing controls...");
@@ -267,7 +292,7 @@ public sealed class NativeGameRunner
         var headlightBindings = new HeadlightBindings(_dataRoot)
             .WriteNativeBinding(writeDirectory, settings.DynamicLighting && settings.Headlights);
         var options = PlanningOptionsForSettings(settings, contract, drawDistance, models,
-            environments, headlightBindings, uiPacks);
+            environments, headlightBindings, uiPacks, skinPacks);
         var indeoCodec = GameInstallation.FindVerifiedIndeoCodec(validation.GameDirectory, _dataRoot);
         var request = Mw3ReLaunchRequest.Create(contract, options, validation.GameDirectory, _dataRoot,
             ProfileId, indeoCodec);

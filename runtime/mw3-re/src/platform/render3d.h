@@ -144,6 +144,11 @@ class Render3D {
   // Typed mission-change callback from the native missions object. The
   // default is a no-op so renderers that do not care are unaffected.
   virtual void mission_changed(const MissionIdentity &) {}
+  // The Mech Lab preview: a briefing loads its mission before the Lab opens, but the
+  // chassis on the turntable is not part of that mission's scene. While this is on, a
+  // renderer lights it with its configured stock lighting instead of the mission's
+  // campaign profile (Operation 3's red sky tint made every paint look orange).
+  virtual void set_lab_preview_lighting(bool) {}
   virtual bool wants_player_headlight_ticks() const { return false; }
   virtual void player_headlight_tick(const PlayerHeadlightTick&) {}
   virtual void retire_headlight_node(std::uintptr_t /*node*/) {}
