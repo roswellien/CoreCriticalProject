@@ -4,11 +4,13 @@ namespace MW3RemasterLauncher.Core;
 public sealed record GraphicsPreferences(int Width, int Height, string WindowMode,
     string AntiAliasing, int AnisotropicFiltering, int DrawDistance,
     bool DynamicLighting, bool Shadows, bool Headlights = false,
-    bool WaterDetail = true, bool CloudDetail = true, string FlareStyle = "modern")
+    bool WaterDetail = true, bool CloudDetail = true, string FlareStyle = "modern",
+    bool LoadCache = true)
 {
     public static GraphicsPreferences From(LauncherSettings s) => new(s.Width, s.Height,
         s.WindowMode, s.AntiAliasing, s.AnisotropicFiltering, s.DrawDistance,
-        s.DynamicLighting, s.Shadows, s.Headlights, s.WaterDetail, s.CloudDetail, s.FlareStyle);
+        s.DynamicLighting, s.Shadows, s.Headlights, s.WaterDetail, s.CloudDetail, s.FlareStyle,
+        s.LoadCache);
 
     public void Validate()
     {
@@ -36,5 +38,6 @@ public sealed record GraphicsPreferences(int Width, int Height, string WindowMod
         s.DynamicLighting=DynamicLighting; s.Shadows=Shadows; s.Headlights=Headlights;
         s.WaterDetail=WaterDetail; s.CloudDetail=CloudDetail;
         s.FlareStyle=FlareStyle;
+        s.LoadCache=LoadCache;
     }
 }

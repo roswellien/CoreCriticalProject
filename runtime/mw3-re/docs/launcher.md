@@ -542,6 +542,24 @@ anything is opened or made (2026-11-11: a package check wants all three programs
   status line in place of the 20 s "not shown a picture yet" (Owen,
   2026-11-02: a first start sat a minute on "Starting MechWarrior 3...").
   Test: `sdl_program_launcher_shows_the_games_status`.
+  Loads (ours, 2026-11-20; `platform/loading.hpp`, `sdl_loading.cpp`): the start
+  up to the app's first state and every mission load are loading sessions. Their
+  long loops (texture conversion, normal-map and prepared-pack decoding, hashing)
+  call `loading::checkpoint`, which pumps window messages at most every 33 ms so
+  Windows never marks the game "Not responding", drops keyboard, mouse and
+  controller input (quit, window, device and music events stay queued for the
+  game loop), writes the load's text and percentage to F.status, and draws the
+  Core Critical loading mark (the launcher's `CoreCriticalLoadingMark`, same four
+  sections, 2.8 s clockwise cycle) in a small software-rendered popup over the
+  game window. Each session logs `mw3: phase end NAME N ms (longest unpumped
+  N ms)` and per-work `mw3: work` totals; `mw3: timing ...` lines give the log
+  opening, each state and the first presented main menu in ms since process
+  start, and F.menu is created at that first menu frame. Decoded textures and
+  normal maps are kept between launches under `<write dir>/cache/derived-v1`
+  (`platform/derived_cache.hpp`: keyed by the running executable's hash and the
+  full input bytes, SHA-256 checked on every read, 2 GiB LRU cap); the C#
+  launcher's Load Cache setting or `MW3_DISK_CACHE=0` turns it off and
+  `MW3_DISK_CACHE_MAX_MB` (16..8192) sets the cap.
   Tests: `sdl_program_launcher_starts_mw3_as_its_own_program` (the
   launcher's process ends at the ready file, the stand-in game still
   running) and `sdl_program_launcher_stays_when_the_game_fails_or_is_slow`.

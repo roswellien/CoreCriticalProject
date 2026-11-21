@@ -840,6 +840,20 @@ void SdlInput::focus_lost() {
   refresh();
 }
 
+void SdlInput::discard_loading_input() {
+  keys_.clear();
+  overflow_ = false;
+  std::fill(std::begin(held_), std::end(held_), false);
+  std::fill(std::begin(buttons_), std::end(buttons_), 0);
+  std::fill(std::begin(latched_), std::end(latched_), 0);
+  std::fill(std::begin(swallow_), std::end(swallow_), false);
+  dx_ = dy_ = dz_ = raw_dx_ = raw_dy_ = 0;
+  mouse_buttons = 0;
+  chord_held_ = SDL_KMOD_NONE;
+  chord_armed_ = chord_spoiled_ = false;
+  controller_state_ = {};
+}
+
 void SdlInput::on_event(const SDL_Event& e) {
   switch (e.type) {
     case SDL_EVENT_JOYSTICK_REMOVED:  // ours (W54): centred until it is back

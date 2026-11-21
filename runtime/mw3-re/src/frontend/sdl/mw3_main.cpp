@@ -56,6 +56,9 @@
 #include "crt/msvc_rand.h"
 #include "light_invariance.h"
 #include "platform/prepared_visuals.h"
+#include "platform/derived_cache.hpp"
+#include "platform/loading.hpp"
+#include "frontend/sdl/sdl_loading.h"
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -724,6 +727,9 @@ void split_mission(const std::string& name, std::string& dir, std::string& varia
 }
 
 int run(const Args& a, platform::VideoForWindows* vfw);
+// The startup loading session: begun in program() once SDL is up, ended in run() when the
+// app's instance is initialised (the intro or the menu then draws for itself).
+std::unique_ptr<platform::loading::Session> startup_loading;
 
 // The network's log until the lobby screens are ported (ours, piece 4): its
 // local messages as lines, a chat's text, and the per-pass work.
@@ -940,6 +946,19 @@ int program(int argc, char** argv) {
     sdlfe::fatal_box(std::string("MechWarrior 3 cannot start: ") + SDL_GetError(), a.hidden);
     return 1;
   }
+  platform::loading::observer = [](const auto& progress) {
+    sdlfe::pump_loading_events();
+    sdlfe::set_ready_status(progress.active ? progress.text : "");
+  };
+  // Keep the callback from outliving SDL on every early return.
+  struct LoadingObserverOff {
+    ~LoadingObserverOff() {
+      startup_loading.reset();
+      platform::loading::observer = {};
+    }
+  } observer_off;
+  startup_loading = std::make_unique<platform::loading::Session>("native-startup", "Starting MechWarrior 3...");
+  if (!a.ready_file.empty()) sdlfe::set_ready_file(a.ready_file);
   // The write dir: saves and settings, outside the install (assets-layer.md).
   // --write-dir wins; else the usual folder, or the one its pointer names (data_folder.h).
   const bool write_dir_given = !a.write_dir.empty();
@@ -963,6 +982,32 @@ int program(int argc, char** argv) {
     std::printf("mw3 (MechWarrior 3 rebuild) %s: %s\n", MW3_VERSION, argc > 1 ? "started with arguments" : "started");
   else if (!a.write_dir.empty() && run_log.open(a.write_dir))
     std::printf("mw3 (MechWarrior 3 rebuild) %s, log %s\n", MW3_VERSION, run_log.path().c_str());
+  std::printf("mw3: timing log-open at %lld ms since process start\n",
+              platform::loading::since_process_start_ms());
+  // These are derived visual results only. The actual write directory and the
+  // running binary isolate profiles and automatically invalidate game updates.
+  try {
+    platform::loading::Phase phase("cache-identity");
+    if (!platform::derived_cache::is_disk_cache_disabled_by_env()) {
+      const auto cache_write_directory = std::filesystem::u8path(a.write_dir);
+      if (!cache_write_directory.is_absolute())
+        throw std::runtime_error("the user write directory is not absolute");
+      // The program's real file; argv[0] can be a bare name found through PATH.
+      const std::string own_path = sdlfe::restart_own_path();
+      const auto executable =
+          std::filesystem::absolute(std::filesystem::u8path(own_path.empty() ? argv[0] : own_path));
+      platform::derived_cache::configure_producer_identity(
+          platform::integrity::sha256_file(executable));
+      platform::derived_cache::configure_write_directory(cache_write_directory);
+      std::printf("mw3: disk cache enabled (%llu MiB limit)\n",
+          static_cast<unsigned long long>(platform::derived_cache::default_cache().cap() >> 20));
+    } else {
+      std::printf("mw3: disk cache disabled by MW3_DISK_CACHE\n");
+    }
+  } catch (const std::exception& error) {
+    platform::derived_cache::default_cache().reconfigure({}, 0, false);
+    std::fprintf(stderr, "mw3: disk cache unavailable: %s; decoding normally\n", error.what());
+  }
   zutl::repair_old_names(a.write_dir);
   if (!a.hidden && !a.write_dir.empty()) sdlfe::crash_report_install("mw3", a.write_dir + "/mw3.log", true);
   if (!a.write_dir.empty()) read_config(a.write_dir, a);
@@ -1084,7 +1129,6 @@ int program(int argc, char** argv) {
                             a.mission.empty() && !a.fly && a.dialog_file.empty() && a.movie.empty() && a.install.empty() &&
                             a.install_from.empty() && a.patch.empty() && a.original.find("-nofmv") == std::string::npos;
   bool setup_only = false;
-  if (!a.ready_file.empty()) sdlfe::set_ready_file(a.ready_file);
   mech3::mods_other_game() = {a.other_write_dir, a.other_install};  // W15: a mod for the other game goes there
   if (player_start && !a.no_launcher) {
     std::vector<std::string> more;
@@ -1273,6 +1317,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   if (a.backend == sdlfe::RendererBackend::sdl &&
       (a.quality.antialiasing != "off" || a.quality.anisotropy != "1" || !a.cc_assets.empty()))
     return std::fprintf(stderr, "mw3: Core Critical options require a Core Critical Vulkan backend\n"), 1;
+  auto environment_phase = std::make_unique<platform::loading::Phase>("environment-pack-registration");
   auto selected_assets = a.cc_assets;
   if (!selected_assets.environment_packs.empty())
     std::fprintf(stderr, "Environment packs requested: %zu\n",
@@ -1297,13 +1342,17 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       selected_assets.environment ? std::make_shared<const zutl::BankOverrides>(
                                         selected_assets.environment->banks)
                                   : nullptr)};
+  environment_phase.reset();
+  auto renderer_phase = std::make_unique<platform::loading::Phase>("window-renderer-init");
   if (!window.init(a.hidden, a.launcher_window, a.backend, a.quality,
                    selected_assets)) {
     // The reason is in the line before this (SdlWindow::init).
     sdlfe::fatal_box(std::string("MechWarrior 3 could not open its window or graphics (Vulkan on Linux): ") + SDL_GetError(), a.hidden);
     return 1;
   }
+  renderer_phase.reset();
   sdlfe::SdlInput input;
+  sdlfe::LoadingDisplay loading_display(window.sdl(), &input, a.hidden);
   input.joystick_disabled = a.cfg_joystick_disabled;
   input.joystick_want = a.cfg_joystick, input.joystick_axes = a.cfg_joystick_axes;
   input.controller_profile_path = a.controller_profile;
@@ -1669,9 +1718,15 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         }
         // --verbose (ours): each state the app moves to, by name, as the menus' driver prints them.
         static const zgame::State* launch_state = nullptr;
-        if (a.verbose && app.current() != launch_state) {
+        if (app.current() != launch_state) {
           launch_state = app.current();
-          if (auto* st = dynamic_cast<const mech3::State*>(launch_state)) std::printf("mw3: state %s (frame %d)\n", st->name(), shots);
+          if (auto* st = dynamic_cast<const mech3::State*>(launch_state)) {
+            if (a.verbose) std::printf("mw3: state %s (frame %d)\n", st->name(), shots);
+            // Startup timing (launcher -> game -> intro -> menu -> Core), on its own line so
+            // tools that compare the state lines above are unaffected.
+            std::printf("mw3: timing state %s at %lld ms since process start\n", st->name(),
+                        platform::loading::since_process_start_ms());
+          }
         }
         // Counted from the first frame with the scene: then every frame shown
         // (the pause and end screens draw none, and --frames must still end the run).
@@ -1897,6 +1952,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     if (!debug && !launch)
       engine.on_present = [&](int) {
         ++menu_frames;
+        if (app.current() == &mech3::states().main) sdlfe::mark_menu_ready();
         record_frame_time(menu_frames);
         if (chain) chain->frame();
         if (modes) modes->frame();
@@ -2105,10 +2161,13 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         if (!a.shot.empty() && menu_frames == a.shot_frame) std::printf("mw3: wrote %s (frame %d)\n", a.shot.c_str(), menu_frames);
         // --verbose (ours): each state the app moves to, by name.
         static const zgame::State* last_state = nullptr;
-        if (a.verbose && app.current() != last_state) {
+        if (app.current() != last_state) {
           last_state = app.current();
-          if (auto* st = dynamic_cast<const mech3::State*>(last_state))
-            std::printf("mw3: state %s (frame %d)\n", st->name(), menu_frames);
+          if (auto* st = dynamic_cast<const mech3::State*>(last_state)) {
+            if (a.verbose) std::printf("mw3: state %s (frame %d)\n", st->name(), menu_frames);
+            std::printf("mw3: timing state %s at %lld ms since process start\n", st->name(),
+                        platform::loading::since_process_start_ms());
+          }
         }
         // --lab-mech N (ours, for checking the lab's 3D view): once the lab is
         // up its view is handed chassis N (0..18), as the slot switch hands it
@@ -2158,7 +2217,11 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         }
       };
 
-    if (app.init_instance()) {
+    auto app_phase = std::make_unique<platform::loading::Phase>("app-init-instance");
+    const bool initialized = app.init_instance();
+    app_phase.reset();
+    startup_loading.reset();
+    if (initialized) {
       // The state after the intro (the app's +0x1dc): the debug start takes
       // the place the lobby launch gives the Load state.
       if (debug) app.post_intro_ = debug.get();

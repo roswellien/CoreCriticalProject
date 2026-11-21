@@ -144,6 +144,7 @@ class SdlInput : public platform::Input {
 
   // From the message pump: every SDL input event passes through here.
   void on_event(const SDL_Event& e);
+  void discard_loading_input();  // Clear transients without changing capture or acquisition.
 
   // The keys held now, by DIK code (kept from the events, for tools).
   bool key_down(uint8_t dik) const { return held_[dik]; }

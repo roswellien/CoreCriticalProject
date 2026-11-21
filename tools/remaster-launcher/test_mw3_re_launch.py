@@ -90,6 +90,20 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                 self.assertEqual(result["argv"], without_window)
                 self.assertEqual(request, before)
 
+    def test_disk_cache_switch_reaches_only_the_child_environment(self):
+        plan = self.planner()
+        default = plan(self.request())
+        self.assertEqual(default["environment"], {"MW3_DISK_CACHE": "1"})
+        enabled = plan(dict(self.request(), disk_cache=True))
+        disabled = plan(dict(self.request(), disk_cache=False))
+        self.assertEqual(enabled["environment"], {"MW3_DISK_CACHE": "1"})
+        self.assertEqual(disabled["environment"], {"MW3_DISK_CACHE": "0"})
+        # The cache switch never changes the game's own command line.
+        self.assertEqual(enabled["argv"], disabled["argv"])
+        for value in (1, "0", None):
+            with self.subTest(disk_cache=value), self.assertRaisesRegex(ValueError, "disk_cache"):
+                plan(dict(self.request(), disk_cache=value))
+
     def test_verified_indeo_path_is_emitted_and_missing_codec_is_reported(self):
         plan = self.planner()
         verified = plan(dict(self.request(), indeo_codec="D:/Original MW3/native-inputs/Ir50_32.dll"))
@@ -271,6 +285,7 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                 "feature": "Indeo movies",
                 "reason": "No original Ir50_32.dll passed the launcher's identity check; movie playback will use the existing imported-file fallback.",
             }],
+            "environment": {"MW3_DISK_CACHE": "1"},
         })
         self.assertEqual(request, before)
         self.assertEqual(dict(os.environ), environment)

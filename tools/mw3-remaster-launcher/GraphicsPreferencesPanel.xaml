@@ -70,5 +70,7 @@
         <TextBlock Text="MW3-RE adds animated water and shoreline surface detail when an enabled environment pack provides the maps. Off keeps the original surface shading." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
         <CheckBox x:Name="ChkCloudDetail" Content="Cloud Detail" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
         <TextBlock Text="MW3-RE adds cloud surface detail when an enabled environment pack provides the map. Off keeps the original cloud shading." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
+        <CheckBox x:Name="ChkLoadCache" Content="Load Cache" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
+        <TextBlock Text="Keeps decoded textures and normal maps in your profile so later launches and missions load faster. The cache is checked on every use and rebuilt automatically when the game or packs change. Applies on the next launch." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
     </StackPanel>
 </UserControl>
