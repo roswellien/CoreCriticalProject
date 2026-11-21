@@ -1032,10 +1032,12 @@ int program(int argc, char** argv) {
       const auto cache_write_directory = std::filesystem::u8path(a.write_dir);
       if (!cache_write_directory.is_absolute())
         throw std::runtime_error("the user write directory is not absolute");
-      // The program's real file; argv[0] can be a bare name found through PATH.
+      // The program's real file. argv[0] can be a bare name found through PATH or another
+      // program's path, so without the real file the cache stays off (fail closed).
       const std::string own_path = sdlfe::restart_own_path();
-      const auto executable =
-          std::filesystem::absolute(std::filesystem::u8path(own_path.empty() ? argv[0] : own_path));
+      if (own_path.empty())
+        throw std::runtime_error("the program's own file could not be found");
+      const auto executable = std::filesystem::u8path(own_path);
       platform::derived_cache::configure_producer_identity(
           platform::integrity::sha256_file(executable));
       platform::derived_cache::configure_write_directory(cache_write_directory);

@@ -3,6 +3,8 @@
 #include "frontend/sdl/sdl_loading.h"
 #include "platform/loading.hpp"
 #include <cfenv>
+#include <chrono>
+#include <string>
 #include <thread>
 
 TEST(loading_progress_nested_lifetime_and_fp) {
@@ -35,6 +37,30 @@ TEST(loading_progress_nested_lifetime_and_fp) {
   EXPECT(std::fegetround() == FE_TOWARDZERO);
   EXPECT(std::fetestexcept(FE_INVALID) == 0);
   std::fesetenv(&original);
+  observer = previous;
+}
+
+TEST(loading_reports_share_the_redraw_throttle) {
+  using namespace platform::loading;
+  const auto previous = std::move(observer);
+  unsigned redraws = 0;
+  std::string last_text;
+  observer = [&](const Progress& state) {
+    ++redraws;
+    last_text = state.text;
+  };
+  {
+    Session load("throttle-fixture", "Loading fixture");
+    const unsigned at_start = redraws;  // the session itself always shows
+    EXPECT(at_start == 1);
+    for (int line = 0; line < 2000; ++line) report("A load line", line % 100);
+    // 2000 lines in a few milliseconds: a handful of redraws, not one per line.
+    EXPECT(redraws - at_start <= 3);
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    report("Last line", 99);
+    EXPECT(last_text == "Last line");
+  }
+  EXPECT(!progress.active);
   observer = previous;
 }
 

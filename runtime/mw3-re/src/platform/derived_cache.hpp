@@ -234,6 +234,24 @@ private:
   bool locked_ = false;
 };
 
+// Cache file names are ASCII. path::string() can throw on Windows for a name outside the
+// active code page, so names are read from the native form and anything else is skipped.
+inline bool ascii_file_name(const std::filesystem::path& path, std::string& name) {
+  const std::filesystem::path file_name = path.filename();  // owns the native string
+  const auto& native = file_name.native();
+  name.clear();
+  name.reserve(native.size());
+  for (const auto character : native) {
+    using Unit = std::make_unsigned_t<std::filesystem::path::value_type>;
+    const auto code = static_cast<Unit>(character);
+    if (code == 0 || code > 0x7f) {
+      return false;
+    }
+    name.push_back(static_cast<char>(code));
+  }
+  return true;
+}
+
 // Thread-safe stats counters for telemetry and testing.
 struct Stats {
   uint64_t hits = 0;
@@ -454,15 +472,21 @@ public:
         return false;
       }
       std::size_t staged_count = 0;
-      for (const auto& item : std::filesystem::directory_iterator(staging_dir, ec)) {
-        if (ec || ++staged_count > 10000) {
+      // Explicit increment(ec): a range-for's ++ throws on an iteration error.
+      std::filesystem::directory_iterator staged(staging_dir, ec);
+      for (; !ec && staged != std::filesystem::directory_iterator(); staged.increment(ec)) {
+        const auto& item = *staged;
+        if (++staged_count > 10000) {
           return false;
         }
         const auto status = item.symlink_status(ec);
         if (ec) {
           return false;
         }
-        const auto name = item.path().filename().string();
+        std::string name;
+        if (!ascii_file_name(item.path(), name)) {
+          continue;  // Not one of ours.
+        }
         const bool owned_temporary = name.size() >= 72 && name[64] == '.' &&
             name.compare(name.size() - 4, 4, ".tmp") == 0 &&
             is_valid_key(std::string_view(name.data(), 64));
@@ -538,8 +562,10 @@ public:
       std::size_t scan_count = 0;
       static constexpr std::size_t kMaxScanEntries = 10000;
 
-      for (const auto& dir_entry : std::filesystem::directory_iterator(current_root, ec)) {
-        if (ec || ++scan_count > kMaxScanEntries) {
+      std::filesystem::directory_iterator scanned(current_root, ec);
+      for (; !ec && scanned != std::filesystem::directory_iterator(); scanned.increment(ec)) {
+        const auto& dir_entry = *scanned;
+        if (++scan_count > kMaxScanEntries) {
           return false;
         }
         const auto status = dir_entry.symlink_status(ec);
@@ -549,7 +575,10 @@ public:
         if (!std::filesystem::is_regular_file(status)) {
           continue;
         }
-        const auto filename = dir_entry.path().filename().string();
+        std::string filename;
+        if (!ascii_file_name(dir_entry.path(), filename)) {
+          continue;  // Foreign file; never counted or evicted.
+        }
         if (filename.size() != 68 || filename.rfind(".bin") != 64) {
           continue;
         }
@@ -637,7 +666,8 @@ public:
 private:
   std::filesystem::path root_;
   uint64_t cap_ = kDefaultCapacityBytes;
-  bool enabled_ = true;
+  // Read by every decode thread while the frontend may reconfigure; atomic, not mutex-guarded.
+  std::atomic<bool> enabled_{true};
   const std::size_t entry_limit_;
   std::mutex config_mutex_;
   std::atomic<uint64_t> hits_{0};

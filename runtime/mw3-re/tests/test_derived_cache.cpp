@@ -421,6 +421,25 @@ void test_verified_digest_reuse_and_invalidation(const std::filesystem::path& ro
   cache.reconfigure({}, 0, false);
 }
 
+// A foreign file whose name is not ASCII must not stop writes (path::string() can throw).
+void test_foreign_non_ascii_file(const std::filesystem::path& root) {
+  platform::derived_cache::Cache cache(root, 1024 * 1024);
+  std::filesystem::create_directories(root / "staging");
+  {
+    std::ofstream foreign(root / std::filesystem::u8path(u8"r\u00e9sum\u00e9-\u4e2d.bin"));
+    foreign << "not a cache entry";
+    std::ofstream foreign_staging(root / "staging" / std::filesystem::u8path(u8"\u00e9.tmp"));
+    foreign_staging << "not ours";
+  }
+  const std::string key(64, 'c');
+  const char payload[] = "payload";
+  TEST_CHECK(cache.write(key, payload, sizeof payload));
+  char back[sizeof payload] = {};
+  TEST_CHECK(cache.read(key, back, sizeof back));
+  TEST_CHECK(std::memcmp(back, payload, sizeof payload) == 0);
+  TEST_CHECK(std::filesystem::exists(root / std::filesystem::u8path(u8"r\u00e9sum\u00e9-\u4e2d.bin")));
+}
+
 int main() {
   std::fprintf(stderr, "=== Starting mw3derived_cache_checks ===\n");
   TEST_CHECK(!platform::derived_cache::default_cache().is_enabled());
@@ -439,6 +458,7 @@ int main() {
   test_opt_out_environment(test_dir / "opt_out");
   test_concurrent_reads_writes(test_dir / "concurrent");
   test_verified_digest_reuse_and_invalidation(test_dir / "verified_digest");
+  test_foreign_non_ascii_file(test_dir / "foreign_names");
 
   std::error_code ec;
   std::filesystem::remove_all(test_dir, ec);

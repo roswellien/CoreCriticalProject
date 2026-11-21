@@ -73,16 +73,18 @@ inline void checkpoint(bool force = false) noexcept {
   last_notified = Clock::now();
 }
 
+// New text or fraction. Shown at the next throttled checkpoint (at most every 33 ms), so a
+// load that reports many lines a second does not redraw or pump for each one.
 inline void report(const char* text, int percent = -1) {
   progress.text = text ? text : "Loading";
   progress.percent = percent < 0 ? -1 : percent > 100 ? 100 : percent;
-  checkpoint(true);
+  checkpoint();
 }
 
 // Keeps the current text; only the fraction changes.
 inline void report_percent(int percent) {
   progress.percent = percent < 0 ? -1 : percent > 100 ? 100 : percent;
-  checkpoint(true);
+  checkpoint();
 }
 
 enum class Work { texture, normal, mesh, bwtex, restore, cache_read, cache_write, count };
@@ -132,7 +134,9 @@ class Session {
     longest_unpumped_ms = 0;
     last_notified = Clock::now();
     progress.active = true;
-    report(label);
+    progress.text = label ? label : "Loading";
+    progress.percent = -1;
+    checkpoint(true);  // A session always shows at once.
     HostFpScope fp;
     std::printf("mw3: phase begin %s\n", name_);
   }
