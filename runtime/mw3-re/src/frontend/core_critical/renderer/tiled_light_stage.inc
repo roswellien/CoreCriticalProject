@@ -327,11 +327,12 @@ constexpr float kMax = 1e6f;
 inline View draw_view(const Mat34 &camera, const std::array<float, 6> &p, unsigned width,
                       unsigned height, unsigned raster_width, unsigned raster_height);
 
-// draw_view for one draw, or (when its native projection is unusable, e.g. a zero
-// focal length) that draw gets no effect lights this frame, with one warning per
-// renderer. Every-light shading would still place its lights through the same broken
-// projection, so leaving them off is the only exact choice. Returns whether `view`
-// was built; otherwise `draw_view_index` is set to `no_effect_lights`.
+// draw_view for one draw. Contract for a malformed per-draw projection (e.g. a zero
+// focal length): the draw is drawn without local effect lights (sun and ambient still
+// apply), with a bounded warning (once per renderer), and the game never ends over
+// it. This is deliberate: a malformed projection is broken input and no lighting can
+// be exact from it (every-light shading would still place lights through it).
+// Returns whether `view` was built; otherwise `draw_view_index` = `no_effect_lights`.
 inline bool try_draw_view_or_no_effect_lights(View &view, unsigned &draw_view_index,
                                               unsigned no_effect_lights, bool &fallback_reported,
                                               const Mat34 &camera, const std::array<float, 6> &p,

@@ -1715,8 +1715,8 @@ private:
                   report_affine_fallback))
             continue;
           const auto &projection = d.model ? d.model->projection : d.sun_tl->projection;
-          // A degenerate projection must cost this draw its effect lights, never the
-          // game. ~0u is the "no effect lights" index every unlit draw already uses.
+          // Malformed per-draw projection: draw without local effect lights, bounded
+          // warning, never end the game. ~0u is the index every unlit draw uses.
           mw34::tiled::View v{};
           if (!mw34::tiled::try_draw_view_or_no_effect_lights(
                   v, tiledDrawViews[at], ~0u, tiledProjectionFallbackReported,
