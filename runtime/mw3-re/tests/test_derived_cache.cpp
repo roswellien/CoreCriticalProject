@@ -14,6 +14,7 @@
 
 #include "frontend/core_critical/renderer/normal_codec.hpp"
 #include "platform/derived_cache.hpp"
+#include "platform/verified_digest.hpp"
 
 namespace {
 
@@ -431,6 +432,51 @@ void test_normal_codec_integration(const std::filesystem::path& root) {
 
 } // namespace
 
+// Environment pack members: the full hash is reused only while the file is unchanged.
+void test_verified_digest_reuse_and_invalidation(const std::filesystem::path& root) {
+  std::filesystem::create_directories(root);
+  const auto member = root / "member.bin";
+  auto write_member = [&](char fill) {
+    std::ofstream out(member, std::ios::binary | std::ios::trunc);
+    const std::string bytes(4096, fill);
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  };
+  write_member('a');
+  const auto first_truth = platform::integrity::sha256_file(member);
+
+  // With the cache off every call hashes and nothing is stored.
+  platform::derived_cache::default_cache().reconfigure({}, 0, false);
+  TEST_CHECK(platform::verified_digest::sha256_file(member, 4096) == first_truth);
+
+  platform::derived_cache::configure_write_directory(root / "cache");
+  auto& cache = platform::derived_cache::default_cache();
+  TEST_CHECK(cache.is_enabled());
+  cache.reset_stats();
+  TEST_CHECK(platform::verified_digest::sha256_file(member, 4096) == first_truth);
+  TEST_CHECK(cache.stats().hits == 0 && cache.stats().writes == 1);
+  TEST_CHECK(platform::verified_digest::sha256_file(member, 4096) == first_truth);
+  TEST_CHECK(cache.stats().hits == 1);
+
+  // Same size, new contents and a later write time: hashed again, never the old digest.
+  write_member('b');
+  std::filesystem::last_write_time(member, std::filesystem::last_write_time(member) +
+                                               std::chrono::seconds(5));
+  const auto second_truth = platform::integrity::sha256_file(member);
+  TEST_CHECK(second_truth != first_truth);
+  TEST_CHECK(platform::verified_digest::sha256_file(member, 4096) == second_truth);
+
+  // A missing file is not remembered; the plain hash reports it as before.
+  std::filesystem::remove(member);
+  bool failed = false;
+  try {
+    (void)platform::verified_digest::sha256_file(member, 4096);
+  } catch (const std::exception&) {
+    failed = true;
+  }
+  TEST_CHECK(failed);
+  cache.reconfigure({}, 0, false);
+}
+
 int main() {
   std::fprintf(stderr, "=== Starting mw3derived_cache_checks ===\n");
   TEST_CHECK(!platform::derived_cache::default_cache().is_enabled());
@@ -449,6 +495,7 @@ int main() {
   test_opt_out_environment(test_dir / "opt_out");
   test_concurrent_reads_writes(test_dir / "concurrent");
   test_normal_codec_integration(test_dir / "normal_codec");
+  test_verified_digest_reuse_and_invalidation(test_dir / "verified_digest");
 
   std::error_code ec;
   std::filesystem::remove_all(test_dir, ec);
