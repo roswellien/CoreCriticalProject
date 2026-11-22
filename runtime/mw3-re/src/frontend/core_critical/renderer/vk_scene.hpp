@@ -156,6 +156,8 @@ struct ModelGeometry {
 struct ModelInstance {
   std::shared_ptr<const ModelGeometry> geometry;
   std::array<float, 12> camera{};
+  std::array<float, 12> world_to_camera{};
+  bool has_world_to_camera{};
   std::array<float, 6> projection{};
   std::uint32_t color{};
   float diagnostic_fog_factor{1.f};
@@ -306,10 +308,13 @@ public:
                     mw34::sun::Settings lighting = {},
                     bool native_geometry = false,
                     cc_mw3_re::RendererBridgeConfig config = {})
-      : require_rgba8(color_target == ColorTarget::rgba8),
+      : use_native_geometry(native_geometry),
+        profile_cpu(config.cpu_profile || sdlfe::cpu_profile_requested()),
+        profile_gpu(config.gpu_profile),
+        require_rgba8(color_target == ColorTarget::rgba8),
         surface_source(std::move(source)), quality_settings(quality),
         use_gpu_models(models), lighting_settings(lighting),
-        use_native_geometry(native_geometry), bridge_config(std::move(config)),
+        bridge_config(std::move(config)),
         effects_settings(mw34::effects::settings(
             bridge_config, lighting_settings.enabled)) {
     if (surface_source.create) {
@@ -1293,9 +1298,8 @@ public:
   // resources, so the game computes the next scene while the GPU renders this
   // one.
   bool scene_pending{};
-  const bool profile_cpu =
-      bridge_config.cpu_profile || sdlfe::cpu_profile_requested();
-  const bool profile_gpu = bridge_config.gpu_profile;
+  const bool profile_cpu;
+  const bool profile_gpu;
   mw34::timing::GpuResourceTiming gpu_resource_timing_{};
   VkQueryPool profile_queries{};
   bool profile_queries_pending{};
@@ -2002,6 +2006,10 @@ private:
           if (!mw34::tiled::try_affine_camera_or_all_lights(
                   camera, tiledDrawViews[at], allEffectLights, tiledAffineFallbackReported,
                   [&] {
+                    if (d.model && d.model->has_world_to_camera &&
+                        mw34::tiled::matches_model_camera(d.model->world_to_camera,
+                                                         d.model->sun_world, d.model->camera))
+                      return d.model->world_to_camera;
                     return d.model
                                ? mw34::tiled::compose_affine(
                                      d.model->camera,
@@ -2765,6 +2773,7 @@ public:
     return {properties.limits.maxStorageBufferRange,
             properties.limits.minStorageBufferOffsetAlignment};
   }
+  [[nodiscard]] bool tiled_lists_device_local() const { return tiledLists.device_local; }
   // The frontend drains its render worker before updating this CPU snapshot.
   // Diagnostic readback uses the same producer and synchronization as rendering.
   std::vector<std::vector<uint32_t>> probe_tiled_lists(const std::vector<mw34::tiled::View> &views,
@@ -2776,11 +2785,30 @@ public:
     ensure(effectBuffer, sizeof(lights), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     std::memcpy(effectBuffer.mapped, &lights, sizeof(lights));
     prepare_tiled(views);
+    VkDeviceSize total_readback_bytes = 0;
+    for (size_t i = 0; i < views.size(); ++i)
+      total_readback_bytes = std::max(total_readback_bytes,
+                                     VkDeviceSize(tiledOffsets[i]) * 4 + tiledLengths[i]);
+    if (total_readback_bytes)
+      ensure(tiledReadback, total_readback_bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
     check(f.vkResetCommandPool(device, commandPool, 0), "reset tiled probe pool");
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(f.vkBeginCommandBuffer(cmd, &bi), "begin tiled probe");
     record_tiled(views);
+    if (total_readback_bytes) {
+      const VkBufferCopy region{0, 0, total_readback_bytes};
+      f.vkCmdCopyBuffer(cmd, tiledLists.buffer, tiledReadback.buffer, 1, &region);
+      VkBufferMemoryBarrier barrier{};
+      barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+      barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+      barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier.buffer = tiledReadback.buffer;
+      barrier.size = total_readback_bytes;
+      f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                            0, 0, nullptr, 1, &barrier, 0, nullptr);
+    }
     check(f.vkEndCommandBuffer(cmd), "end tiled probe");
     check(f.vkResetFences(device, 1, &fence), "reset tiled probe fence");
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -2793,7 +2821,7 @@ public:
     for (size_t i = 0; i < views.size(); ++i) {
       result.emplace_back(size_t(tiledLengths[i] / 4));
       std::memcpy(result.back().data(),
-                  static_cast<char *>(tiledLists.mapped) + VkDeviceSize(tiledOffsets[i]) * 4,
+                  static_cast<char *>(tiledReadback.mapped) + VkDeviceSize(tiledOffsets[i]) * 4,
                   size_t(tiledLengths[i]));
     }
     return result;
@@ -3006,6 +3034,7 @@ private:
     VkDeviceMemory memory{};
     VkDeviceSize size{};
     void *mapped{};
+    bool device_local{};
     VkDeviceSize memory_offset{}, memory_size{}, memory_alignment{1};
   };
 #include "tiled_light_gpu.inc"
@@ -4943,6 +4972,64 @@ private:
       destroy_buffer(replacement);
       if (!preload_active_ && size != requested) {
         ensure(b, requested, usage, false);
+        return;
+      }
+      throw;
+    } catch (...) {
+      destroy_buffer(replacement);
+      throw;
+    }
+    destroy_buffer(b);
+    b = replacement;
+  }
+  // GPU-only grow-only storage. Diagnostic CPU access uses a separate staging buffer.
+  void ensure_device_buffer(Buffer &b, VkDeviceSize size, VkBufferUsageFlags usage,
+              bool reserve_hint = false) {
+    if (b.buffer && b.size >= size)
+      return;
+    const VkDeviceSize requested = size;
+    if (b.buffer && bridge_config.buffer_reserve && reserve_hint)
+      size = mw34::allocation::stream_capacity(size);
+    if (b.buffer && bridge_config.buffer_growth_trace)
+      std::fprintf(stderr,
+                   "Buffer growth: present=%llu previous=%llu requested=%llu capacity=%llu\n",
+                   (unsigned long long)(presents + 1), (unsigned long long)b.size,
+                   (unsigned long long)requested,
+                   (unsigned long long)size);
+    // Lazy callers already settle earlier uses and refill this buffer. Preserve
+    // their original peak memory requirement; only optional warmup keeps the
+    // old allocation available when its replacement cannot be admitted.
+    if (!preload_active_)
+      destroy_buffer(b);
+    Buffer replacement{};
+    try {
+      VkBufferCreateInfo info{};
+      info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+      info.size = size;
+      info.usage = usage;
+      check_allocation(f.vkCreateBuffer(device, &info, nullptr, &replacement.buffer), "buffer");
+      VkMemoryRequirements requirements{};
+      f.vkGetBufferMemoryRequirements(device, replacement.buffer, &requirements);
+      VkMemoryAllocateInfo allocation{};
+      allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      allocation.allocationSize = requirements.size;
+      const VkMemoryPropertyFlags visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+      allocation.memoryTypeIndex = has_type(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+                                       ? type(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+                                       : type(requirements, visible);
+      replacement.device_local =
+          (memory.memoryTypes[allocation.memoryTypeIndex].propertyFlags &
+           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+      check_allocation(allocate_memory(device, &allocation, nullptr, &replacement.memory),
+                       "buffer memory");
+      check_allocation(f.vkBindBufferMemory(device, replacement.buffer, replacement.memory, 0),
+                       "bind buffer");
+      replacement.size = size;
+    } catch (const PreloadAllocationFailure &) {
+      destroy_buffer(replacement);
+      if (!preload_active_ && size != requested) {
+        ensure_device_buffer(b, requested, usage, false);
         return;
       }
       throw;

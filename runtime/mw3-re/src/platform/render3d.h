@@ -73,6 +73,8 @@ struct ModelDrawContext {
   const void* node = nullptr;
   const float* model_to_world = nullptr;
   const float* model_to_camera = nullptr;
+  // Optional canonical scene view, borrowed only for this synchronous scope.
+  const float* world_to_camera = nullptr;
   float near_z = 0, clip_near = 0, far_z = 0, fx_near = 0, fy_near = 0, cx = 0, cy = 0;
   float opacity = 1;
   float damage_tint_rgb[3] = {};

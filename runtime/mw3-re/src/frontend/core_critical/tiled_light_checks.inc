@@ -393,9 +393,212 @@ void check_tiled_overflow_render() {
   std::fprintf(stderr, "Tiled overflow: 66 exact views, mixed/64 lights, serial reference, "
                        "reverse order, async reuse and malformed recovery passed\n");
 }
+// Use the same float32 operations as the native times_view composition, rather
+// than the double-precision reconstruction that used to defeat exact deduplication.
+mw34::tiled::Mat34 tiled_native_product(const mw34::tiled::Mat34 &a,
+                                        const mw34::tiled::Mat34 &b) {
+  mw34::tiled::Mat34 result{};
+  for (unsigned row = 0; row < 3; ++row)
+    for (unsigned col = 0; col < 4; ++col) {
+      float value = a[row * 4] * b[col];
+      value += a[row * 4 + 1] * b[4 + col];
+      value += a[row * 4 + 2] * b[8 + col];
+      if (col == 3)
+        value += a[row * 4 + 3];
+      result[row * 4 + col] = value;
+    }
+  return result;
+}
+
+void check_tiled_model_view_dedup() {
+  using namespace mw34;
+  sun::Settings settings{};
+  settings.enabled = true;
+  settings.strength = 0;
+  settings.ambient = .1f;
+  cc_mw3_re::RendererBridgeConfig config{};
+  config.effect_lights = true;
+  config.effect_light_catalog = "diagnostic-owned-scene";
+  vkscene::Renderer renderer(vkscene::Renderer::ColorTarget::rgba8, {},
+                             vkscene::Renderer::Quality{1, 1, 1, false}, true, settings, true,
+                             config);
+  auto scene = make_tiled_view_scene(true);
+  const auto prototype = scene.draws.front();
+  scene.draws.clear();
+  scene.order.clear();
+  scene.vertices.clear();
+  const tiled::Mat34 view{.8f, -.6f, 0, .125f, .6f, .8f, 0, -.25f, 0, 0, 1, .5f};
+  const auto view_inverse = tiled::inverse_affine(view);
+  scene.effect_lights.lights[0] = {{0, 0, 1, 10}, {0, 0, 1, 0}, {1, 1, 1, 1}};
+  for (unsigned index = 0; index < 73; ++index) {
+    const float angle = .137f * float(index + 1);
+    const float cosine = std::cos(angle), sine = std::sin(angle);
+    const float scale = index == 72 ? .001f : 1.f;
+    // Non-axis-aligned rotation/scale, with both signs of large translation.
+    tiled::Mat34 world{cosine * .8f * scale, -sine * scale, cosine * .6f * scale,
+                      float(int(index % 7) - 3) * 651.f,
+                      sine * .8f * scale, cosine * scale, sine * .6f * scale,
+                      float(int(index % 9) - 4) * 499.f,
+                      -.6f * scale, 0, .8f * scale, float(int(index % 5) - 2) * 971.f};
+    auto instance = std::make_shared<vkscene::ModelInstance>();
+    instance->world_to_camera = view;
+    instance->has_world_to_camera = true;
+    instance->sun_world = world;
+    instance->camera = tiled_native_product(view, world);
+    require(tiled::matches_model_camera(view, world, instance->camera),
+            "Canonical camera rejected native float32 composition or tiny scale");
+    // Put every model's receiver in front of the same camera. Local vertices
+    // differ, so each draw still exercises its own large translated transform.
+    auto geometry = std::make_shared<vkscene::ModelGeometry>();
+    geometry->key = 10000 + index;
+    auto unscaled_world = world;
+    for (unsigned row = 0; row < 3; ++row)
+      for (unsigned col = 0; col < 3; ++col)
+        unscaled_world[row * 4 + col] /= scale;
+    const auto inverse_world = tiled::inverse_affine(unscaled_world);
+    const auto local_camera = tiled::compose_affine(inverse_world, view_inverse);
+    for (const auto &point : std::array<std::array<float, 3>, 6>{
+             {{-1, -1, 4}, {1, -1, 4}, {1, 1, 4}, {-1, -1, 4}, {1, 1, 4}, {-1, 1, 4}}}) {
+      std::array<float, 3> local{};
+      for (unsigned row = 0; row < 3; ++row) {
+        double value = local_camera[row * 4 + 3];
+        for (unsigned k = 0; k < 3; ++k)
+          value += double(local_camera[row * 4 + k]) * point[k];
+        local[row] = float(value / scale);
+      }
+      geometry->vertices.push_back({local[0], local[1], local[2], 0, 0, -1, 0, 0});
+    }
+    geometry->hash = materials::normal_hash(geometry->vertices.data(),
+                                            geometry->vertices.size() * sizeof(vkscene::ModelVertex));
+    instance->geometry = geometry;
+    instance->sun_normal = world;
+    instance->sun_eligible = true;
+    instance->gpu_vertices = true;
+    instance->projection = {1, 32, 32, 32, 16, 100};
+    instance->geometry_near = 1;
+    instance->color = 0xffffffff;
+    auto draw = prototype;
+    draw.model = instance;
+    draw.sun_tl.reset();
+    draw.lit_normals.reset();
+    draw.first = 0;
+    scene.draws.push_back(draw);
+    scene.order.push_back({false, index});
+  }
+  auto off = scene;
+  off.effect_lights.params[0] = 0;
+  renderer.render(off);
+  renderer.render(scene);
+  require(renderer.tiled_views_last == 1 && renderer.tiled_all_light_draws_last == 0,
+          "Ordinary GPU models exhausted the tiled camera view budget");
+  require(scene.color != off.color, "Canonical model receiver did not illuminate");
+  // Compare pixels to the existing reconstructed-camera/all-lights implementation.
+  // Exclude only the tiny-scale model, whose inverse is intentionally out of bounds.
+  auto reference = scene;
+  reference.draws.pop_back();
+  reference.order.pop_back();
+  auto ordinary = reference;
+  renderer.render(ordinary);
+  for (auto &draw : reference.draws) {
+    auto instance = std::make_shared<vkscene::ModelInstance>(*draw.model);
+    instance->has_world_to_camera = false;
+    draw.model = instance;
+  }
+  renderer.render(reference);
+  require(ordinary.color == reference.color,
+          "Canonical model lighting differs from reconstructed-camera reference");
+
+  auto billboard = std::make_shared<vkscene::ModelInstance>(*scene.draws[0].model);
+  const tiled::Mat34 turn{.8f, -.6f, 0, 0, .6f, .8f, 0, 0, 0, 0, 1, 0};
+  billboard->camera = tiled::compose_affine(turn, billboard->camera);
+  require(!tiled::matches_model_camera(view, billboard->sun_world, billboard->camera),
+          "Billboard camera incorrectly accepted the canonical view");
+  auto mixed = scene;
+  mixed.draws[0].model = billboard;
+  renderer.render(mixed);
+  require(renderer.tiled_views_last == 2 && renderer.tiled_all_light_draws_last == 0,
+          "Billboard did not retain its distinct reconstructed view");
+  const auto mixed_pixels = mixed.color;
+  billboard = std::make_shared<vkscene::ModelInstance>(*billboard);
+  billboard->has_world_to_camera = false;
+  mixed.draws[0].model = billboard;
+  renderer.render(mixed);
+  require(mixed.color == mixed_pixels, "Billboard fallback changed its illuminated pixels");
+
+  const tiled::Mat34 identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+  const tiled::Mat34 tiny_scale{1e-6f, 0, 0, 0, 0, 1e-6f, 0, 0, 0, 0, 1e-6f, 0};
+  require(tiled::matches_model_camera(identity, tiny_scale,
+                                      tiled_native_product(identity, tiny_scale)),
+          "Canonical camera rejected native float32 composition at 1e-6 scale");
+  require(tiled::matches_model_camera(view, tiny_scale,
+                                      tiled_native_product(view, tiny_scale)),
+          "Rotated canonical camera rejected native float32 composition at 1e-6 scale");
+  // A unit-sized tolerance floor would admit this 60-degree billboard rotation.
+  const tiled::Mat34 tiny_rotated{.5e-6f, -.8660254e-6f, 0, 0,
+                                .8660254e-6f, .5e-6f, 0, 0, 0, 0, 1e-6f, 0};
+  require(!tiled::matches_model_camera(identity, tiny_scale, tiny_rotated),
+          "Tiny billboard camera incorrectly accepted the canonical view");
+  auto tiny_billboard = std::make_shared<vkscene::ModelInstance>(*scene.draws[0].model);
+  tiny_billboard->world_to_camera = identity;
+  tiny_billboard->has_world_to_camera = true;
+  tiny_billboard->sun_world = tiny_scale;
+  tiny_billboard->camera = tiny_rotated;
+  auto tiny_mixed = scene;
+  tiny_mixed.draws[0].model = tiny_billboard;
+  renderer.render(tiny_mixed);
+  // Its tiny world transform cannot be inverted within the renderer's bounds.
+  // The other 72 models still share their canonical view; only this draw falls back.
+  require(renderer.tiled_views_last == 1 && renderer.tiled_all_light_draws_last == 1 &&
+              renderer.tiled_draw_modes_last[0] == 2,
+          "Tiny billboard did not use the all-lights fallback outside the canonical view");
+
+  auto invalid = view;
+  invalid[0] = std::numeric_limits<float>::quiet_NaN();
+  require(!tiled::matches_model_camera(invalid, view, view),
+          "Nonfinite canonical camera was accepted");
+  invalid = view;
+  invalid[3] = 1e7f;
+  require(!tiled::matches_model_camera(invalid, view, view),
+          "Unbounded canonical camera was accepted");
+  // Cancellation in native float32 translation at realistic world distances.
+  auto distant = view;
+  distant[3] = -5000;
+  distant[7] = 4000;
+  const tiled::Mat34 translated{1, 0, 0, 5000, 0, 1, 0, -4000, 0, 0, 1, 2000};
+  require(tiled::matches_model_camera(distant, translated,
+                                      tiled_native_product(distant, translated)),
+          "Canonical camera rejected large-coordinate float32 cancellation");
+  std::fprintf(stderr, "Tiled model cameras: 73 models, one view, tiny scale, billboard fallback, "
+                       "1e-6 billboard rejection and reference pixels passed\n");
+}
+
+void check_tiled_profile_flags() {
+  char *prior = nullptr;
+  size_t length = 0;
+  require(_dupenv_s(&prior, &length, "MW3_CC_CPU_PROFILE") == 0,
+          "Could not preserve the CPU profile environment");
+  const std::string saved = prior ? prior : "";
+  std::free(prior);
+  struct RestoreProfile {
+    std::string value;
+    ~RestoreProfile() { _putenv_s("MW3_CC_CPU_PROFILE", value.c_str()); }
+  } restore{saved};
+  _putenv_s("MW3_CC_CPU_PROFILE", "0");
+  for (bool enabled : {false, true}) {
+    cc_mw3_re::RendererBridgeConfig config{};
+    config.cpu_profile = config.gpu_profile = enabled;
+    mw34::vkscene::Renderer renderer(mw34::vkscene::Renderer::ColorTarget::rgba8, {},
+                                    {1, 1, 1, false}, false, {}, false, config);
+    require(renderer.profile_cpu == enabled && renderer.profile_gpu == enabled,
+            "Renderer profile flags did not use the initialized config");
+  }
+  std::fprintf(stderr, "Renderer profile flags: disabled/enabled configuration passed\n");
+}
+
 void check_tiled_gpu() {
   using namespace mw34;
   check_tiled_view_budget();
+  check_tiled_profile_flags();
   {
     const uint8_t rgba[3][4]{{8, 4, 8, 255}, {255, 0, 255, 255}, {0x11, 0x22, 0x33, 0x44}};
     const uint8_t packed[3][2]{{0x21, 0x08}, {0x1f, 0xfc}, {0x23, 0x41}};
@@ -470,6 +673,7 @@ void check_tiled_gpu() {
     fx.lights[0] = {{1, 0, 10, 1}, {1, 0, 10, 0}, {1, 1, 1, 1}};
     auto data = renderer.probe_tiled_lists({v}, fx);
     std::uint32_t offset = (1 * v.extent[2] + 1) * 65;
+    require(renderer.tiled_lists_device_local(), "Tiled lists did not allocate in device-local memory");
     require(data[0][offset] == 1 && data[0][offset + 1] == 0,
             "Tiled camera norm bound lost tangent light");
   }
@@ -584,6 +788,7 @@ void check_tiled_gpu() {
     require(std::abs(roundtrip[i] - identity[i]) < 1e-5f, "Tiled affine inverse/composition");
   std::fprintf(stderr, "Tiled light GPU: exact masks, 64-light ordering, isolated views, maximum "
                        "extent and rejection recovery passed\n");
+  check_tiled_model_view_dedup();
   check_tiled_view_render();
   check_tiled_overflow_render();
 }

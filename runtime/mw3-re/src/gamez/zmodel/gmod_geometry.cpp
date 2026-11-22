@@ -403,6 +403,7 @@ bool submit_geometry(zcls::Node &node) {
     context.node = &node;
     context.model_to_world = stack.below().m;
     context.model_to_camera = stack.matrix().m;
+    context.world_to_camera = zmth::view().view.m;
     context.near_z = projection.near_z;
     context.clip_near = draw_state().clip.near_z;
     context.far_z = projection.far_z;

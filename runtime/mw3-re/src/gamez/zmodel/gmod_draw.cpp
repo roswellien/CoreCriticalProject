@@ -987,6 +987,7 @@ int32_t draw_model(zcls::Node* node, uint32_t mask) {
       context.node = node;
       context.model_to_world = stack.below().m;
       context.model_to_camera = stack.matrix().m;
+      context.world_to_camera = zmth::view().view.m;
       context.near_z = projection.near_z, context.far_z = projection.far_z;
       context.clip_near = s.clip.near_z;
       context.fx_near = projection.fx_near, context.fy_near = projection.fy_near;
