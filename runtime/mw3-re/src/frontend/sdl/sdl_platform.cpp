@@ -636,6 +636,8 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
         if (!preflight_textures.empty()) {
           render_->prepare_canvas_textures(preflight_textures);
         }
+        if (hud_->has_menu_ripples())
+            render_->prepare_menu_ripple();
         live_replay_shown = true;
         if (live_hd_background_quad) {
           gpu_shown = true;

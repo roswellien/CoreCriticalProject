@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cfenv>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -186,6 +187,7 @@ void GpuHud::begin_frame(const uint16_t* target, int width, int height, int pitc
   density_ = std::max(1.f, float(output_height) / height);
   vertices_.clear();
   commands_.clear();
+  menu_ripples_.clear();
   ++frame_;
   if (!observation_only_) {
     evict_old_resources();
@@ -201,6 +203,7 @@ void GpuHud::cancel() {
   target_ = nullptr;
   vertices_.clear();
   commands_.clear();
+  menu_ripples_.clear();
   observation_only_ = false;
   menu_mode_ = false;
   menu_sealed_ = false;
@@ -221,6 +224,7 @@ bool GpuHud::seal_menu() {
     frame_stats_.fallback = true;
     vertices_.clear();
     commands_.clear();
+    menu_ripples_.clear();
     menu_mode_ = false;
     menu_sealed_ = false;
     return false;
@@ -250,6 +254,7 @@ void GpuHud::record_menu_preflight_failure() {
   frame_stats_.fallback = true;
   vertices_.clear();
   commands_.clear();
+  menu_ripples_.clear();
   menu_mode_ = false;
   menu_sealed_ = false;
 }
@@ -263,6 +268,7 @@ bool GpuHud::submit_menu(const platform::MenuBackgroundLayerRect* destination, b
     frame_stats_.fallback = true;
     vertices_.clear();
     commands_.clear();
+    menu_ripples_.clear();
     return false;
   }
   if (commands_.empty() && menu_background_skipped_ == 0) return false;
@@ -279,6 +285,8 @@ bool GpuHud::submit_menu(const platform::MenuBackgroundLayerRect* destination, b
       if (!preflight_textures.empty()) {
         renderer_.prepare_canvas_textures(preflight_textures);
       }
+      if (has_menu_ripples())
+          renderer_.prepare_menu_ripple();
     } catch (...) {
       record_menu_preflight_failure();
       return false;
@@ -299,7 +307,33 @@ bool GpuHud::submit_menu(const platform::MenuBackgroundLayerRect* destination, b
     renderer_.set_viewport(0, 0, width_, height_);
     renderer_.begin_canvas_scene();
   }
+  const float origin_x = destination ? destination->x : 0.f;
+  const float origin_y = destination ? destination->y : 0.f;
+  const float scale_x = destination && width_ > 0 ? destination->width / float(width_) : 1.f;
+  const float scale_y = destination && height_ > 0 ? destination->height / float(height_) : 1.f;
   for (const auto& command : commands_) {
+      if (command.ripple_index >= 0) {
+          const auto &r = menu_ripples_.at(command.ripple_index);
+          MenuRipplePass pass;
+          pass.center_x = origin_x + (float(r.x) + 0.5f) * scale_x;
+          pass.center_y = origin_y + (float(r.y) + 0.5f) * scale_y;
+          pass.scale_x = scale_x;
+          pass.scale_y = scale_y;
+          pass.inner = float(r.inner);
+          pass.outer = float(r.outer);
+          pass.amplitude = float(r.amplitude);
+          pass.wavelength = r.wavelength;
+          pass.phase = r.phase;
+          pass.has_clip = r.has_clip;
+          if (r.has_clip) {
+              pass.clip_left = origin_x + float(r.clip[0]) * scale_x;
+              pass.clip_top = origin_y + float(r.clip[1]) * scale_y;
+              pass.clip_right = origin_x + float(r.clip[2]) * scale_x;
+              pass.clip_bottom = origin_y + float(r.clip[3]) * scale_y;
+          }
+          renderer_.apply_menu_ripple(pass);
+          continue;
+      }
     platform::DrawState state;
     state.texture = command.texture;
     state.blend = true;
@@ -318,6 +352,7 @@ bool GpuHud::submit_menu(const platform::MenuBackgroundLayerRect* destination, b
   ++layers_;
   vertices_.clear();
   commands_.clear();
+  menu_ripples_.clear();
   return true;
 }
 bool GpuHud::finish() {
@@ -332,6 +367,7 @@ bool GpuHud::finish() {
     frame_stats_.fallback = true;
     vertices_.clear();
     commands_.clear();
+    menu_ripples_.clear();
     observation_only_ = false;
     return false;
   }
@@ -342,6 +378,7 @@ bool GpuHud::finish() {
     observation_only_ = false;
     vertices_.clear();
     commands_.clear();
+    menu_ripples_.clear();
     return observed;
   }
   if (commands_.empty()) return false;
@@ -385,6 +422,7 @@ bool GpuHud::finish() {
   ++layers_;
   vertices_.clear();
   commands_.clear();
+  menu_ripples_.clear();
   return true;
 }
 void GpuHud::record_shadow_reason(const char* operation) {
@@ -404,11 +442,54 @@ void GpuHud::record_shadow_reason(const char* operation) {
   log_first_use_reason(logged_shadow_reasons_, reason);
   vertices_.clear();
   commands_.clear();
+  menu_ripples_.clear();
 }
 void GpuHud::framebuffer_write(const void* target, const char* operation) {
   int x, y;
   if (!position(static_cast<const uint16_t*>(target), x, y)) return;
   record_shadow_reason(operation);
+}
+bool GpuHud::ripple(const void *target, int32_t x, int32_t y, int32_t inner, int32_t outer,
+                    int32_t amplitude, float wavelength, float phase, const int32_t *clip_rect) {
+    if (!menu_mode_ || observation_only_ || !renderer_.supports_gpu_menu_ripple())
+        return false;
+    if (shadow_layer_ || !target_)
+        return true;
+    if (target != target_ || zrndr::target2d().base != reinterpret_cast<const uint8_t *>(target_))
+        return false;
+    if (zrndr::target2d().format != 6) {
+        record_shadow_reason("RGB555 target");
+        return true;
+    }
+    if (zrndr::layer_cover().alpha != nullptr) {
+        record_shadow_reason("ripple");
+        return true;
+    }
+    if (outer < 1)
+        outer = 0;
+    if (inner > outer)
+        inner = outer;
+    else if (inner < 0)
+        inner = 0;
+    menu_foreground_seen_ = true;
+    ++observed_draws_;
+    if (inner == outer)
+        return true;
+    if (!std::isfinite(wavelength) || wavelength <= 0.f || !std::isfinite(phase)) {
+        record_shadow_reason("ripple");
+        return true;
+    }
+    MenuRippleCommand ripple{x, y, inner, outer, amplitude, wavelength, phase};
+    if (clip_rect) {
+        ripple.has_clip = true;
+        std::copy_n(clip_rect, 4, ripple.clip);
+        if (clip_rect[2] <= clip_rect[0] || clip_rect[3] <= clip_rect[1])
+            return true;
+    }
+    menu_ripples_.push_back(ripple);
+    commands_.push_back({-1, 0, 0, platform::Primitive::kFan, false,
+                         platform::TextureFilter::kDefault, int(menu_ripples_.size() - 1)});
+    return true;
 }
 void GpuHud::resolved_region(const uint16_t* destination, uint32_t width, uint32_t height,
                              uint32_t pitch_bytes, const char* operation) {

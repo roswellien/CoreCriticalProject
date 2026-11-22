@@ -98,6 +98,12 @@ void set_draw_observer(DrawObserver* value) { g_observer = value; }
 void observe_framebuffer_write(const void* target, const char* operation) {
   if (g_observer) g_observer->framebuffer_write(target, operation);
 }
+bool observe_ripple(const void *target, int32_t x, int32_t y, int32_t inner, int32_t outer,
+                    int32_t amplitude, float wavelength, float phase, const int32_t *clip_rect) {
+    return g_observer ? g_observer->ripple(target, x, y, inner, outer, amplitude, wavelength, phase,
+                                           clip_rect)
+                      : false;
+}
 void observe_resolved_region(const uint16_t* destination, uint32_t width, uint32_t height,
                              uint32_t pitch_bytes, const char* operation) {
   if (g_observer) g_observer->resolved_region(destination, width, height, pitch_bytes, operation);

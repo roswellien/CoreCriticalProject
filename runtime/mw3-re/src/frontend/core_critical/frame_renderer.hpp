@@ -20,7 +20,7 @@ namespace cc_mw3_re {
 
 struct QualityStatistics {
   // mip_levels counts generated levels below each uploaded base image.
-  std::uint64_t fxaa_passes{}, anisotropic_samplers{}, mip_levels{};
+  std::uint64_t fxaa_passes{}, anisotropic_samplers{}, mip_levels{}, menu_ripple_passes{};
 };
 struct AssetStatistics {
   std::uint64_t prepared_batches{}, gpu_model_draws{}, cpu_clipped_triangles{};

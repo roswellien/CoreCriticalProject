@@ -22,6 +22,13 @@ struct EnvironmentSelection;
 }
 
 namespace sdlfe {
+struct MenuRipplePass {
+    float center_x{}, center_y{};
+    float scale_x{1.f}, scale_y{1.f};
+    float inner{}, outer{}, amplitude{}, wavelength{}, phase{};
+    bool has_clip{};
+    float clip_left{}, clip_top{}, clip_right{}, clip_bottom{};
+};
 
 class EditorUiSource;
 
@@ -100,6 +107,9 @@ class FrameRenderer : public platform::Render3D {
   virtual void flush() = 0;
   // Optional canvases must discover deferred texture allocation failures before
   // submitting draws, so their CPU fallback can still use the render worker.
+  virtual bool supports_gpu_menu_ripple() const { return false; }
+  virtual void prepare_menu_ripple() {}
+  virtual void apply_menu_ripple(const MenuRipplePass &) {}
   virtual void prepare_canvas_textures(const std::vector<int32_t> &) {}
   virtual void viewport(int* x, int* y, int* w, int* h) const = 0;
   virtual void set_shape(const FrameShape* shape) = 0;
