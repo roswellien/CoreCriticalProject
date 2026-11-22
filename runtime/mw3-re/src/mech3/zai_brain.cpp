@@ -45,6 +45,13 @@ float cos_quarter_pi() { return static_cast<float>(std::cos(0.78539816339744828)
 BrainHooks& brain_hooks() { return *g_hooks; }
 void set_brain_hooks(BrainHooks* h) { g_hooks = h ? h : &g_default_hooks; }
 
+// Ours (#289)
+namespace {
+DecisionNote g_decision_note = nullptr;
+}  // namespace
+void set_decision_note(DecisionNote note) { g_decision_note = note; }
+DecisionNote decision_note() { return g_decision_note; }
+
 znet::Object* BrainHooks::net_find(int32_t id) { return znet::find(id); }
 void* BrainHooks::sound_find(const char* name) { return zsnd::find(name); }
 Behaviour* BrainHooks::default_behaviour() { return mech3::ai::default_behaviour(); }
@@ -1551,6 +1558,7 @@ bool Brain::frame(BrainControls& c, float dt) {
             if (h.attack(*this, net)) {
               x230 = h.health(owner) - params.get<float>(0xb4);
               xe8 = params.get<float>(0x4c) * h.intensity() + h.now();
+              if (DecisionNote note = decision_note()) note(owner, Decision::kEngage);  // ours (#289)
               push(vn, beh);
             }
       }

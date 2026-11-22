@@ -96,6 +96,7 @@
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/sdl_focus.h"
 #include "frontend/sdl/launcher.h"
+#include "frontend/sdl/watch_launch.h"
 #include "frontend/sdl/sdl_install.h"
 #include "upgrades/editor/help.h"
 #include "upgrades/mods/anim_defs.h"
@@ -144,6 +145,8 @@ extern "C" const char mw3_version_tag[] = "MW3-PROGRAM-VERSION:" MW3_VERSION;
 #include "frontend/sdl/sdl_mods.h"
 #include "mech3/app_engine.h"
 #include "mech3/app_hud.h"
+#include "mech3/arena.h"
+#include "mech3/options.h"
 #include "mech3/app_keys.h"
 #include "mech3/pilot.h"
 #include "mech3/app_mech.h"
@@ -246,6 +249,7 @@ struct Args {
   bool play_original = false;
   sdlfe::HudOptions hud;
   bool hud_mode_given = false, hud_artwork_given = false, hud_text_given = false;
+  bool cfg_hud_mode = false;  // mw3.cfg named cc_hud=
   upgrades::Config cfg_upgrades;
   int cfg_throttle_reverse = 1;  // mw3.cfg's throttle_reverse= (ours, W56: zfix.h)
   bool first_start = false;   // the install found by the search, not mw3.cfg's (ours: the first start's notes)
@@ -324,6 +328,7 @@ struct Args {
   std::string net_upnp;
   bool net_soak = false;
   bool shot_any = false;
+  sdlfe::WatchArgs watch;  // ours (#287, #289): --arena and --replay (watch_launch.h)
 };
 
 void usage() {
@@ -350,6 +355,7 @@ void usage() {
       "    [--cc-flare-style modern|original (default modern)]\n"
       "    [--cc-controller FILE] (launcher-exported controller profile)\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
+      "    [--arena SETUP.json --seed N --frame-ms N] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
 }
@@ -430,6 +436,7 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--net-walk" && next(1)) std::sscanf(argv[++i], "%d,%d", &a.net_walk[0], &a.net_walk[1]);
     else if (s == "--net-drive" && next(1)) a.net_drive = std::strtoll(argv[++i], nullptr, 10);
     else if (s == "--net-soak") a.net_soak = true;
+    else if (sdlfe::parse_watch_option(a.watch, argc, argv, &i)) continue;
     else if (s == "--net-staged" && next(1)) a.net_staged = std::atoi(argv[++i]) != 0;
     else if (s == "--net-ahead" && next(1)) a.net_ahead = std::strtof(argv[++i], nullptr);
     else if (s == "--net-discovery" && next(1)) a.net_discovery = std::atoi(argv[++i]);
@@ -710,6 +717,21 @@ bool parse(int argc, char** argv, Args& a) {
       return usage(), false;
     }
   }
+  // --replay and --arena (ours, #287, #289): the other options given, for
+  // what each refuses (exit 2 before anything starts; watch_launch.h).
+  mech3::replay::ReplayFlags replay;
+  replay.arena = !a.watch.arena_path.empty(), replay.host = a.net_host, replay.join = !a.net_join.empty();
+  replay.net_upnp = !a.net_upnp.empty(), replay.mission = !a.mission.empty(), replay.fly = a.fly;
+  replay.replay = !a.watch.replay_path.empty(), replay.replay3d = !a.watch.replay3d_path.empty();
+  replay.play_original = a.play_original;
+  mech3::arena::Flags arena;
+  arena.host = a.net_host, arena.join = !a.net_join.empty(), arena.net_upnp = !a.net_upnp.empty();
+  arena.original = a.play_original, arena.mission = !a.mission.empty();
+  arena.net_minutes = a.net_minutes > 0, arena.net_soak = a.net_soak, arena.net_drive = a.net_drive >= 0;
+  arena.frames = a.frames > 0, arena.seed = a.seed >= 0, arena.frame_ms = a.frame_ms > 0;
+  arena.fire = a.fire > 0, arena.net_walk = a.net_walk[1] > 0, arena.net_ahead = a.net_ahead > 0;
+  arena.briefing = !a.briefing.empty(), arena.lab_mech = a.lab_mech >= 0;
+  if (!sdlfe::check_watch_options(a.watch, replay, arena, &a.mission, &a.nosound)) return false;
   // --lab-mech alone (ours): the lab is reached from c1m2's briefing (MECHLAB,
   // which Op 1 Mission 1 greys), so it takes that route and clicks MECHLAB.
   if (a.lab_mech >= 0 && a.briefing.empty() && a.mission.empty()) {
@@ -728,7 +750,7 @@ void read_config(const std::string& dir, Args& a) {
     if (line.rfind("install=", 0) == 0) a.cfg_install = zutl::path_from_config(line.substr(8));
     else if (line.rfind("mw1_game=", 0) == 0) a.cfg_mw1_game = zutl::path_from_config(line.substr(9));
     else if (line.rfind("assets=", 0) == 0) a.assets.push_back(line.substr(7));
-    else if (line.rfind("cc_hud=", 0) == 0 && !a.hud_mode_given) a.hud.mode = line.substr(7);
+    else if (line.rfind("cc_hud=", 0) == 0 && !a.hud_mode_given) a.hud.mode = line.substr(7), a.cfg_hud_mode = true;
     else if (line.rfind("cc_hud_artwork=", 0) == 0 && !a.hud_artwork_given) a.hud.artwork.emplace_back(line.substr(15));
     else if (line == "cc_hud_text=0" && !a.hud_text_given) a.hud.text = false;
     else if (line == "cc_hud_text=1" && !a.hud_text_given) a.hud.text = true;
@@ -981,7 +1003,12 @@ int program(int argc, char** argv) {
   }
   if (!a.shot.empty()) a.hidden = true;
   mech3::mods_program_version() = MW3_VERSION;  // game_version= in mod.txt (upgrades/mods/mod_needs.h)
-  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK)) {
+  // Ours (#287): a hidden arena run has no player, so it opens no controllers.
+  // DirectInput's start with a force feedback wheel's driver attached (a
+  // Logitech G920) deadlocked one hidden run in seven while starting up.
+  const bool hidden_arena = a.hidden && !a.watch.arena_path.empty();
+  const SDL_InitFlags controllers = hidden_arena ? 0 : SDL_INIT_JOYSTICK;
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | controllers)) {
     sdlfe::fatal_box(std::string("MechWarrior 3 cannot start: ") + SDL_GetError(), a.hidden);
     return 1;
   }
@@ -1053,6 +1080,7 @@ int program(int argc, char** argv) {
   zutl::repair_old_names(a.write_dir);
   if (!a.hidden && !a.write_dir.empty()) sdlfe::crash_report_install("mw3", a.write_dir + "/mw3.log", true);
   if (!a.write_dir.empty()) read_config(a.write_dir, a);
+  sdlfe::watch_default_hud(a.watch, a.hud_mode_given || a.cfg_hud_mode, &a.hud);  // --replay3d (ours, #289)
   // Ours (docs/mods-campaigns-plan.md): a plain start mounts no mods, the main menu plays the original;
   // mw3.cfg's mod= lines are only moved to the campaign entries (entries_migrate), mods mount for --entry
   // (and --mod NAME, for checks and modders).
@@ -1142,6 +1170,10 @@ int program(int argc, char** argv) {
   // always-on fixes stay: zfix.h's `fixed`, docs/upgrades-sort.md). 1.0.x's
   // bugfixes= becomes the five keys at once.
   sdlfe::apply_upgrades_config(a.write_dir, a.cfg_upgrades, a.play_original);
+  // Ours (#287): an arena match always walks the grid (zai_hunt.cpp), whatever
+  // this machine's mw3.cfg says, so a setup and seed give the same match on
+  // every machine. The arena refuses --original.
+  if (!a.watch.arena_path.empty()) zfix::options().improved_ai = true;
   // Tests only (not a player's switch): MW3_EXE_PATHS=1 runs the exe's own
   // path everywhere, the always-on fixes too, for the tests that compare a
   // child mw3 with the original (zfix.h's `fixed`).
@@ -1168,7 +1200,8 @@ int program(int argc, char** argv) {
   // one (the launcher's main screen is mw3launcher's). Checks, shots, debug starts and a
   // named install or source go straight on.
   const bool player_start = !a.hidden && a.frames == 0 && a.shot.empty() && a.chain.empty() && a.modes.empty() &&
-                            a.mission.empty() && !a.fly && a.dialog_file.empty() && a.movie.empty() && a.install.empty() &&
+                            a.mission.empty() && !a.fly && a.dialog_file.empty() && a.movie.empty() &&
+                            a.watch.replay_path.empty() && a.watch.replay3d_path.empty() && a.install.empty() &&
                             a.install_from.empty() && a.patch.empty() && a.original.find("-nofmv") == std::string::npos;
   bool setup_only = false;
   mech3::mods_other_game() = {a.other_write_dir, a.other_install};  // W15: a mod for the other game goes there
@@ -1266,6 +1299,12 @@ int program(int argc, char** argv) {
   // W15: mods the other game's IMPORT handed over, added now with this game's own check.
   if (!a.write_dir.empty() && !a.install.empty())
     for (const std::string& line : mech3::mods_take_incoming(a.write_dir, a.install)) std::printf("mw3: %s\n", line.c_str());
+  // --replay and --arena (ours, #287, #289): with the install mounted, the
+  // replay viewer alone, or the match's game files and log (watch_launch.h).
+  if (const int code = sdlfe::watch_after_mount(a.watch, a.seed, &a.mission); code >= 0) {
+    SDL_Quit();
+    return code;
+  }
   const mech3::DataVersion data = mech3::detect_data_version();
   std::printf("mw3: %s\n", data.describe().c_str());  // ours: assets.md, Data versions
   // The movies on a first run (ours, FIX (A): first_run_import.h): on a
@@ -1338,6 +1377,12 @@ int program(int argc, char** argv) {
       };
     }
   }
+  // --arena (ours, #287): a lone host's session on the in-process hub, never
+  // the ENet transport above (refused with --host and --join).
+  if (!sdlfe::open_watch_session(a.watch, a.seed, a.frame_ms, a.hidden && a.shot.empty())) {
+    SDL_Quit();
+    return 1;
+  }
   int result = 1;
   try {
     result = run(a, vfw.get());
@@ -1345,6 +1390,7 @@ int program(int argc, char** argv) {
   } catch (const std::exception& error) {
     std::fprintf(stderr, "mw3: rendering failed: %s\n", error.what());
   }
+  sdlfe::close_watch(a.watch);  // the arena's hooks off and its session shut, before SDL goes
   g_net_pass = nullptr;
   vfw.reset();
   SDL_Quit();  // after every SDL object above is gone
@@ -1444,7 +1490,10 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   // MW3_FIRST_START=1 keeps it on in a check (sdl_first_start_takes_the_desktop).
   const bool play_run_size = (!a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty()) ||
                              std::getenv("MW3_FIRST_START") != nullptr;
-  window.set_first_start_desktop(play_run_size);
+  // The 3D replay, scripted ones too, plays at the screen's shape (options.cpp, ours #289).
+  const bool replay3d = !a.watch.replay3d_path.empty();
+  mech3::set_replay_screen(replay3d);
+  window.set_first_start_desktop(play_run_size || replay3d);
   // FIX (B): the launcher passes its resolution as --window WxH; a play run's frame (the menus'
   // canvas and the mission) follows it rather than a saved or desktop size (resolution.md).
   if (play_run_size && a.window_given && a.win_w > 0 && a.win_h > 0)
@@ -1575,7 +1624,11 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     // Through input: FrontendAppLifetime clears input.in_mission before the app is destroyed,
     // and input outlives the screen.
     screen.in_mission = [&input] { return input.in_mission && input.in_mission(); };
-    input.pointer_free = [] { return mech3::editor_state().active != 0; };
+    // Ours (#289): the 3D replay's mouse is the viewer's (clicks pick mechs,
+    // the seek bar), never the mission's, so it is left free as the editor's.
+    input.pointer_free = [replay = !a.watch.replay3d_path.empty()] {
+      return replay || mech3::editor_state().active != 0;
+    };
     // FIX (A), playtest W4 (sdl_focus.h): a shown window's real focus; the mouse is held only when it is ours.
     // MW3_FOCUS_AT=N (checks, a hidden run): the window without the focus until the pump's Nth pass.
     if (const char* f = SDL_getenv("MW3_FOCUS_AT")) {
@@ -1653,6 +1706,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         multi_game = std::make_unique<mech3::MultiplayerGame>(nullptr);
         multi_game->x70 = 1 << 30;  // the kills to win (+0x70)
         l.type = 3, l.multi = multi_game.get();
+        sdlfe::watch_seat(a.watch, multi_game.get(), &l);  // --arena (ours, #287): the spectator's seat
         mech3::program_net_debug_lobby();
       } else {
         split_mission(a.mission, dir, variant, l.number);
@@ -1714,7 +1768,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         if (l_type3 && app.current() == &mech3::states().core && !net_core) {
           net_core = true;
           s_drive_from = SDL_GetTicks() / 1000.0;
-          if (a.net_minutes > 0) mech3::missions().clock = a.net_minutes * 60.0f, mech3::missions().clock_down = 1;
+          sdlfe::start_watch_clock(a.watch, a.net_minutes);  // --net-minutes, or --arena's (ours, #287)
         }
         // --net-drive: a kill staged on the pilot every two minutes, from a
         // minute in, staggered by the seed (the scores' traffic, the respawn).
@@ -1744,6 +1798,9 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
             std::printf("mw3: soak game over, scores %s\n", mech3::program_net_scores().c_str());
           }
         }
+        // --arena (ours, #287): the run ends once the match is decided and its
+        // fade has left the mission, as the soak test's does.
+        if (net_core && !net_over && sdlfe::watch_run_over(a.watch, app.current())) net_over = launch_done = true;
         // --valve-map DIR (ours, upgrades/valve_map): at the mission's first Core frame, its valve map
         // written as DIR/<mission>.md, then the run ends.
         if (!a.valve_map.empty() && !launch_done && app.current() == &mech3::states().core) {
@@ -2463,6 +2520,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       // A quit outside the Exit state returns through ExitInstance, as the exe's WM_QUIT does,
       // and leaves the world to the process's end: stop_game after zSound's shutdown freed
       // the sounds the world's nodes still held (the exit's SIGTRAP, docs/program.md).
+      if (!sdlfe::watch_attach(a.watch, pump, window.render())) return 2;  // --replay3d's view (ours, #289)
       try {
         result = app.run(pump);
       } catch (...) {
@@ -2471,6 +2529,9 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         log_loop_exception(std::current_exception());
         throw;
       }
+      // An arena match that could not start exits 1 (arena.h, Result::failed).
+      if (result == 0 && !a.watch.arena_path.empty() && mech3::arena::arena_result().failed) result = 1;
+      sdlfe::watch_detach(pump);
       window.render()->drain();
       if (!frame_ms.empty()) {  // --frame-times: the frames' wall times
         std::vector<double> s = frame_ms;

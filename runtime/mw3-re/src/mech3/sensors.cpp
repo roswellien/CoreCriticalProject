@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "crt/msvc_sort.h"
+#include "mech3/zai_brain.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -426,9 +427,13 @@ void finish(SensorRecord& r) {
   t.ally_target = r.ally;
   t.enemy_target = r.enemy;
   t.saved_target = r.saved;
-  if (r.target) H().set_target(r.self, r.target, true);
-  else if (r.target_was == r.ally_was && r.target_was) t.nearest_ally(0);
-  else if (r.target_was) t.nearest_enemy(0);
+  if (r.target) {
+    H().set_target(r.self, r.target, true);
+  } else if (r.target_was) {
+    if (DecisionNote note = decision_note()) note(r.self, Decision::kTargetLost);  // ours (#289)
+    if (r.target_was == r.ally_was) t.nearest_ally(0);
+    else t.nearest_enemy(0);
+  }
   if (!(vt(r.self, 0xd0) & 0xff)) H().set_sensed(r.self, 0);
 }
 
@@ -545,6 +550,7 @@ void forget_entity(Handle self, Handle x) {
     t.own_lance = t.nearest_lance = nullptr;
   }
   if (on(t.target)) {
+    if (DecisionNote note = decision_note()) note(self, Decision::kTargetLost);  // ours (#289)
     h.set_target(self, nullptr, false);  // vt+0xc0(0, 0)
     t.target = nullptr;
   }
