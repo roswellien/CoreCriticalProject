@@ -324,6 +324,33 @@ constexpr float kMax = 1e6f;
   return out;
 }
 
+// Admit only the original camera composition. Bound float32 dot-product rounding
+// by its absolute terms, so cancellation at large world coordinates is safe while
+// a billboard's altered orientation still uses its reconstructed camera.
+[[nodiscard]] inline bool matches_model_camera(const Mat34 &world_to_camera,
+                                               const Mat34 &model_to_world,
+                                               const Mat34 &model_to_camera) noexcept {
+  if (!detail::valid_result(world_to_camera) || !detail::finite_all(model_to_world) ||
+      !detail::finite_all(model_to_camera))
+    return false;
+  for (unsigned row = 0; row < 3; ++row) {
+    for (unsigned col = 0; col < 4; ++col) {
+      double expected = col == 3 ? world_to_camera[row * 4 + 3] : 0;
+      double magnitude = std::abs(expected);
+      for (unsigned k = 0; k < 3; ++k) {
+        const double term = double(world_to_camera[row * 4 + k]) * model_to_world[k * 4 + col];
+        expected += term;
+        magnitude += std::abs(term);
+      }
+      const double tolerance = 8.0 * 0x1p-23 * (magnitude + 1.0);
+      if (!std::isfinite(expected) || std::abs(expected) > 1e6 ||
+          std::abs(expected - model_to_camera[row * 4 + col]) > tolerance)
+        return false;
+    }
+  }
+  return true;
+}
+
 inline View draw_view(const Mat34 &camera, const std::array<float, 6> &p, unsigned width,
                       unsigned height, unsigned raster_width, unsigned raster_height);
 

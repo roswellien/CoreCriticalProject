@@ -62,6 +62,10 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
   instance->gpu_vertices = true;
   instance->camera = matrix_rows(camera);
   instance->sun_world = matrix_rows(world);
+  if (context.world_to_camera) {
+    instance->world_to_camera = matrix_rows(matrix(context.world_to_camera));
+    instance->has_world_to_camera = true;
+  }
   instance->sun_normal = mw34::sun::normal_matrix(world);
   instance->sun_eligible = true;
   instance->geometry_near = context.clip_near;
