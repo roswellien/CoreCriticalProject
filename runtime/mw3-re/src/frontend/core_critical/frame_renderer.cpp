@@ -1116,6 +1116,12 @@ public:
           static_cast<unsigned long long>(assets.gpu_model_draws),
           static_cast<unsigned long long>(assets.cpu_clipped_triangles),
           static_cast<unsigned long long>(assets.named_textures));
+    if (prepared_.skin_texture_loads() > 0 || prepared_.skin_cache_evictions() > 0)
+      std::fprintf(
+          stderr,
+          "Prepared skins: %zu loads, %zu evictions, %zu bytes (budget %zu)\n",
+          prepared_.skin_texture_loads(), prepared_.skin_cache_evictions(),
+          prepared_.skin_cache_bytes(), prepared_.skin_cache_budget());
     if (lighting_.enabled)
       std::fprintf(
           stderr,
