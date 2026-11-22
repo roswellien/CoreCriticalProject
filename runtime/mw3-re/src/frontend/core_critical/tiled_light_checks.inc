@@ -525,6 +525,33 @@ void check_tiled_model_view_dedup() {
   renderer.render(mixed);
   require(mixed.color == mixed_pixels, "Billboard fallback changed its illuminated pixels");
 
+  const tiled::Mat34 identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+  const tiled::Mat34 tiny_scale{1e-6f, 0, 0, 0, 0, 1e-6f, 0, 0, 0, 0, 1e-6f, 0};
+  require(tiled::matches_model_camera(identity, tiny_scale,
+                                      tiled_native_product(identity, tiny_scale)),
+          "Canonical camera rejected native float32 composition at 1e-6 scale");
+  require(tiled::matches_model_camera(view, tiny_scale,
+                                      tiled_native_product(view, tiny_scale)),
+          "Rotated canonical camera rejected native float32 composition at 1e-6 scale");
+  // A unit-sized tolerance floor would admit this 60-degree billboard rotation.
+  const tiled::Mat34 tiny_rotated{.5e-6f, -.8660254e-6f, 0, 0,
+                                .8660254e-6f, .5e-6f, 0, 0, 0, 0, 1e-6f, 0};
+  require(!tiled::matches_model_camera(identity, tiny_scale, tiny_rotated),
+          "Tiny billboard camera incorrectly accepted the canonical view");
+  auto tiny_billboard = std::make_shared<vkscene::ModelInstance>(*scene.draws[0].model);
+  tiny_billboard->world_to_camera = identity;
+  tiny_billboard->has_world_to_camera = true;
+  tiny_billboard->sun_world = tiny_scale;
+  tiny_billboard->camera = tiny_rotated;
+  auto tiny_mixed = scene;
+  tiny_mixed.draws[0].model = tiny_billboard;
+  renderer.render(tiny_mixed);
+  // Its tiny world transform cannot be inverted within the renderer's bounds.
+  // The other 72 models still share their canonical view; only this draw falls back.
+  require(renderer.tiled_views_last == 1 && renderer.tiled_all_light_draws_last == 1 &&
+              renderer.tiled_draw_modes_last[0] == 2,
+          "Tiny billboard did not use the all-lights fallback outside the canonical view");
+
   auto invalid = view;
   invalid[0] = std::numeric_limits<float>::quiet_NaN();
   require(!tiled::matches_model_camera(invalid, view, view),
@@ -541,8 +568,8 @@ void check_tiled_model_view_dedup() {
   require(tiled::matches_model_camera(distant, translated,
                                       tiled_native_product(distant, translated)),
           "Canonical camera rejected large-coordinate float32 cancellation");
-  std::fprintf(stderr, "Tiled model cameras: 73 models, one view, tiny scale, billboard fallback "
-                       "and reference pixels passed\n");
+  std::fprintf(stderr, "Tiled model cameras: 73 models, one view, tiny scale, billboard fallback, "
+                       "1e-6 billboard rejection and reference pixels passed\n");
 }
 
 void check_tiled_profile_flags() {

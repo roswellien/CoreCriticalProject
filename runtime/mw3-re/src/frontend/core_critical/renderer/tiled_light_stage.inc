@@ -342,7 +342,7 @@ constexpr float kMax = 1e6f;
         expected += term;
         magnitude += std::abs(term);
       }
-      const double tolerance = 8.0 * 0x1p-23 * (magnitude + 1.0);
+      const double tolerance = 8.0 * 0x1p-23 * magnitude;
       if (!std::isfinite(expected) || std::abs(expected) > 1e6 ||
           std::abs(expected - model_to_camera[row * 4 + col]) > tolerance)
         return false;
