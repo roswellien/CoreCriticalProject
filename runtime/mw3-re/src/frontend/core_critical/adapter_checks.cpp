@@ -110,6 +110,160 @@ void quad(platform::Render3D &renderer, float low, float high, float depth,
 
 #include "local_light_gpu_checks.inc"
 
+void check_menu_ripple_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
+    auto renderer = make_check_renderer(window, backend);
+    require(renderer->supports_gpu_menu_ripple(), "Vulkan menu ripple capability missing");
+    renderer->prepare_menu_ripple(); // preflight before the first resident target exists
+    std::uint64_t passes = 0;
+    for (const auto size : {std::array{96, 80}, std::array{124, 96}}) {
+        require(SDL_SetWindowSize(window, size[0], size[1]) && SDL_SyncWindow(window),
+                SDL_GetError());
+        const int width = size[0], height = size[1];
+        // Nonzero viewport origin and unequal scales exercise adapter conversion.
+        constexpr float origin_x = 7, origin_y = 11, scale_x = 2, scale_y = 1.5f;
+        renderer->set_viewport(7, 11, width, height);
+        auto rectangle = [&](float left, float top, float right, float bottom, uint32_t colour) {
+            platform::DrawState state;
+            state.depth_always = true;
+            state.depth_write = false;
+            const platform::TLVertex vertices[]{
+                {left + origin_x, top + origin_y, 0, 1, colour, 0, 0, 0},
+                {right + origin_x, top + origin_y, 0, 1, colour, 0, 0, 0},
+                {right + origin_x, bottom + origin_y, 0, 1, colour, 0, 0, 0},
+                {left + origin_x, bottom + origin_y, 0, 1, colour, 0, 0, 0}};
+            renderer->draw(platform::Primitive::kFan, vertices, 4, state);
+        };
+        for (int scenario = 0; scenario < 3; ++scenario) {
+            const bool clipped = scenario != 0;
+            const bool inset = scenario == 2;
+            const int clip_left = inset ? 20 : 0;
+            int clip_top = clipped ? 17 : 0;
+            int clip_right = clipped ? 30 : width;
+            int clip_bottom = clipped ? 58 : height;
+            if (inset) {
+                clip_top = 16;
+                clip_right = 68;
+                clip_bottom = 60;
+            }
+            const float center_x = inset ? 22.5f : 3.5f;
+            for (bool read_before : {false, true}) {
+                auto background = [&] {
+                    renderer->begin_canvas_scene();
+                    if (inset) {
+                        // Red can only enter the inset by sampling the surrounding sentinel.
+                        renderer->clear(true, 255, 0, 255);
+                        rectangle(float(clip_left), float(clip_top), float(clip_right),
+                                  float(clip_bottom), 0xffa05000);
+                        for (int x = clip_left; x < clip_right; x += 4)
+                            rectangle(float(x), float(clip_top), float(x + 2), float(clip_bottom),
+                                      0xff50dc00);
+                        rectangle(float(clip_left), 23, 39, 46, 0xff30a000);
+                    } else {
+                        renderer->clear(true, 40, 80, 160);
+                        for (int x = 0; x < width; x += 4)
+                            rectangle(float(x), 0, float(x + 2), float(height), 0xff50dcf0);
+                        rectangle(0, 23, 39, 46, 0xff30a050);
+                    }
+                };
+                background();
+                std::vector<uint32_t> baseline, result;
+                int actual_width = 0, actual_height = 0;
+                require(renderer->read_back(&baseline, &actual_width, &actual_height) &&
+                            actual_width == width && actual_height == height,
+                        "Ripple baseline dimensions changed");
+                if (!read_before)
+                    background(); // exercise attachment layout as well as readback layout
+                sdlfe::MenuRipplePass pass;
+                pass.center_x = origin_x + center_x;
+                pass.center_y = origin_y + 36.5f;
+                pass.scale_x = scale_x;
+                pass.scale_y = scale_y;
+                pass.inner = clipped ? 0.f : 4.f;
+                pass.outer = 25;
+                pass.amplitude = 5;
+                pass.wavelength = 3;
+                pass.phase = .7f;
+                pass.has_clip = clipped;
+                pass.clip_left = origin_x + clip_left;
+                pass.clip_top = origin_y + clip_top;
+                pass.clip_right = origin_x + clip_right;
+                pass.clip_bottom = origin_y + clip_bottom;
+                renderer->apply_menu_ripple(pass);
+                require(renderer->read_back(&result, &actual_width, &actual_height) &&
+                            result.size() == baseline.size(),
+                        "Ripple readback failed");
+                require(renderer->quality_statistics().menu_ripple_passes == ++passes,
+                        "Ripple pass count lost a draw or resize");
+                auto smooth = [](double a, double b, double value) {
+                    const double t = std::clamp((value - a) / (b - a), 0.0, 1.0);
+                    return t * t * (3 - 2 * t);
+                };
+                unsigned displaced = 0, edge_samples = 0;
+                for (int y = 0; y < height; ++y) {
+                    for (int x = 0; x < width; ++x) {
+                        const size_t at = size_t(y) * width + x;
+                        const double dx = (x + .5 - center_x) / scale_x;
+                        const double dy = (y + .5 - 36.5) / scale_y;
+                        const double radius = std::hypot(dx, dy);
+                        const bool in_clip =
+                            x >= clip_left && x < clip_right && y >= clip_top && y < clip_bottom;
+                        if (inset && in_clip)
+                            require((result[at] & 255) == 0,
+                                    "Inset ripple sampled the red sentinel outside its clip");
+                        if (!in_clip || radius <= pass.inner || radius >= pass.outer ||
+                            radius <= 1e-4) {
+                            require(result[at] == baseline[at],
+                                    "Ripple changed a pixel outside its circular ring or clip");
+                            continue;
+                        }
+                        const double t = (radius - pass.inner) / (pass.outer - pass.inner);
+                        const double envelope = smooth(0, .25, t) * (1 - smooth(.75, 1, t));
+                        const double guard = pass.inner <= 0 ? smooth(0, 6, radius) : 1;
+                        const double wave = std::sin(radius / pass.wavelength + pass.phase) *
+                                            pass.amplitude * envelope * guard;
+                        const double sx = std::clamp(x + .5 + dx / radius * wave * scale_x,
+                                                     clip_left + .5, clip_right - .5) -
+                                          .5;
+                        const double sy = std::clamp(y + .5 + dy / radius * wave * scale_y,
+                                                     clip_top + .5, clip_bottom - .5) -
+                                          .5;
+                        const int x0 = int(std::floor(sx)), y0 = int(std::floor(sy));
+                        const int x1 = std::min(x0 + 1, width - 1),
+                                  y1 = std::min(y0 + 1, height - 1);
+                        const double fx = sx - x0, fy = sy - y0;
+                        for (unsigned shift : {0U, 8U, 16U}) {
+                            auto channel = [&](int px, int py) {
+                                return double((baseline[size_t(py) * width + px] >> shift) & 255);
+                            };
+                            const double expected =
+                                (channel(x0, y0) * (1 - fx) + channel(x1, y0) * fx) * (1 - fy) +
+                                (channel(x0, y1) * (1 - fx) + channel(x1, y1) * fx) * fy;
+                            require(std::abs(double((result[at] >> shift) & 255) - expected) <= 2,
+                                    "Ripple differed from smooth clamped bilinear displacement");
+                        }
+                        require((result[at] & 0x00ffffff) != 0,
+                                "Ripple sampled black border garbage");
+                        if (result[at] != baseline[at])
+                            ++displaced;
+                        if (x == clip_left)
+                            ++edge_samples;
+                    }
+                }
+                require(displaced > 20 && edge_samples > 0,
+                        "Ripple fixture did not exercise displacement and left edge");
+                // Later draws cover the rippled image, rather than becoming inputs to it.
+                const int draw_left = inset ? 21 : 1;
+                rectangle(float(draw_left), 30, float(draw_left + 6), 36, 0xffe03090);
+                require(renderer->read_back(&result, &actual_width, &actual_height) &&
+                            result[size_t(32) * width + draw_left + 2] == 0xffe03090,
+                        "Draw after ripple lost command order");
+            }
+        }
+    }
+    std::puts("GPU menu ripple: circular bounds, smooth displacement, left edge, clip, order and "
+              "resize passed");
+}
+
 void check_menu_background_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
   platform::MenuBackgroundImage image;
   image.width = image.height = 16;
@@ -3802,14 +3956,16 @@ void check_renderer_bridge_config() {
 
 int main(int argc, char **argv) {
   bool geometry_check = false, ultrawide_check = false;
-  bool native_wsi = false, quality_check = false, prepared_check = false,
-       material_check = false, scene_bindings_check = false, pom_check = false,
-       producer_view_check = false;
+  bool native_wsi = false, quality_check = false, prepared_check = false, material_check = false,
+       scene_bindings_check = false, pom_check = false, producer_view_check = false,
+       menu_ripple_check = false;
   sdlfe::CoreCriticalQuality quality;
   for (int i = 1; i < argc; ++i) {
     const std::string_view option(argv[i]);
     if (option == "--render-thread")
       threaded_checks = true;
+    else if (option == "--menu-ripple")
+        menu_ripple_check = true;
     else if (option == "--wsi")
       native_wsi = true;
     else if (option == "--prepared")
@@ -3831,10 +3987,11 @@ int main(int argc, char **argv) {
       quality.anisotropy = "16";
       quality_check = true;
     } else {
-      std::fprintf(stderr, "usage: mw3ccvulkan_checks [--wsi] "
-                           "[--prepared|--materials|--scene-bindings|--producer-view|--pom] "
-                           "[--quality MODE]\n");
-      return 1;
+        std::fprintf(
+            stderr, "usage: mw3ccvulkan_checks [--wsi] "
+                    "[--menu-ripple|--prepared|--materials|--scene-bindings|--producer-view|--pom] "
+                    "[--quality MODE]\n");
+        return 1;
     }
   }
   if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -3924,8 +4081,10 @@ int main(int argc, char **argv) {
     const auto backend = native_wsi
                              ? sdlfe::RendererBackend::core_critical_wsi
                              : sdlfe::RendererBackend::core_critical_dxgi;
-    if (producer_view_check)
-      check_producer_views(window, backend);
+    if (menu_ripple_check)
+        check_menu_ripple_gpu(window, backend);
+    else if (producer_view_check)
+        check_producer_views(window, backend);
     else if (scene_bindings_check)
       check_scene_bindings(window, backend);
     else if (pom_check) {
@@ -3971,6 +4130,7 @@ int main(int argc, char **argv) {
       check_native_fixture_gpu(window, backend);
       check_scene(window, backend);
       check_menu_background_gpu(window, backend);
+      check_menu_ripple_gpu(window, backend);
     }
     if (native_wsi || material_check)
       check_fullscreen_resize(window, backend);

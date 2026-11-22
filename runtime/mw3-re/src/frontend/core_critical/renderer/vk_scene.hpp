@@ -37,12 +37,14 @@
 #include "geometry/resource.hpp"
 #include "launcher_display.hpp"
 #include "light_cull_tiled_comp.h"
+#include "menu_ripple_frag.h"
 #include "model_scene_vert.h"
 #include "native_geometry_vert.h"
 #include "native_texture_identity.hpp"
 #include "platform/vk_loader.hpp"
 #include "platform/wsi_surface.hpp"
 #include "platform/wsi_win32_dxgi.hpp"
+#include "preload_budget.hpp"
 #include "renderer_bridge_config.hpp"
 #include "resource_timing.hpp"
 #include "status_model_fit.hpp"
@@ -59,7 +61,6 @@
 #include "world_coverage_frag.h"
 #include "world_fast_binding.hpp"
 #include "world_scene_vert.h"
-#include "preload_budget.hpp"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -74,9 +75,9 @@
 #include <optional>
 #include <set>
 #include <stdexcept>
-#include <type_traits>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 #include <vulkan/vulkan_core.h>
@@ -96,6 +97,12 @@
 #endif
 
 namespace mw34::vkscene {
+struct MenuRipplePass {
+    float center_u{}, center_v{}, scale_u{}, scale_v{};
+    float inner{}, outer{}, amplitude{}, wavelength{}, phase{};
+    bool has_clip{};
+    float clip_u0{}, clip_v0{}, clip_u1{}, clip_v1{};
+};
 // rgba8888: host-composed straight-alpha RGBA (GPU HUD images: RGB565 colour
 // with the image's alpha mask or colour key), carried in pixels32 (R, G, B, A
 // bytes in memory order).
@@ -1166,7 +1173,7 @@ public:
     check(f.vkQueueSubmit(queue, 1, &si, fence), "submit quality");
     scene_pending = true;
   }
-  std::uint64_t fxaa_passes{}, af_samplers{}, mip_levels_uploaded{};
+  std::uint64_t fxaa_passes{}, af_samplers{}, mip_levels_uploaded{}, menu_ripple_passes{};
   void prepare_canvas_textures(const std::vector<TextureRef> &references) {
       // No commands reference these allocations yet. Settle earlier GPU work
       // before resizing shared staging storage or replacing an image.
@@ -3575,6 +3582,13 @@ private:
 #include "fixture_shadow_stage.inc"
   Image colorImage, depthImage;
   Image qualitySource;
+  Image menuRippleSource;
+  unsigned menu_ripple_rw{}, menu_ripple_rh{};
+  VkDescriptorPool menuRipplePool{};
+  VkDescriptorSet menuRippleSet{};
+  VkPipelineLayout menuRippleLayout{};
+  VkShaderModule menuRippleVert{}, menuRippleFrag{};
+  VkPipeline menuRipplePipeline{};
   VkDescriptorPool qualityPool{};
   VkDescriptorSet qualitySet{};
   VkPipelineLayout qualityLayout{};
@@ -5109,14 +5123,14 @@ private:
     if (framebuffer)
       f.vkDestroyFramebuffer(device, framebuffer, nullptr);
     for (Image *i :
-         {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource}) {
-      if (i->view)
-        f.vkDestroyImageView(device, i->view, nullptr);
-      if (i->image)
-        f.vkDestroyImage(device, i->image, nullptr);
-      if (i->memory)
-        release_memory(device, i->memory, nullptr);
-      *i = {};
+         {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource, &menuRippleSource}) {
+        if (i->view)
+            f.vkDestroyImageView(device, i->view, nullptr);
+        if (i->image)
+            f.vkDestroyImage(device, i->image, nullptr);
+        if (i->memory)
+            release_memory(device, i->memory, nullptr);
+        *i = {};
     }
     scale = scale_req;
     if (scale != 1.f || widescreen()) { // scaling needs blits of both formats
@@ -5833,6 +5847,7 @@ private:
                  "adjacent TL draws combined\n",
                  (unsigned long long)draws, (unsigned long long)submitted_draws,
                  (unsigned long long)combined_draws);
+    destroy_menu_ripple_pipeline();
     if (qualityPipeline)
       f.vkDestroyPipeline(device, qualityPipeline, nullptr);
     if (qualityLayout)
@@ -5908,13 +5923,13 @@ private:
     if (framebuffer)
       f.vkDestroyFramebuffer(device, framebuffer, nullptr);
     for (Image *i :
-         {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource}) {
-      if (i->view)
-        f.vkDestroyImageView(device, i->view, nullptr);
-      if (i->image)
-        f.vkDestroyImage(device, i->image, nullptr);
-      if (i->memory)
-        release_memory(device, i->memory, nullptr);
+         {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource, &menuRippleSource}) {
+        if (i->view)
+            f.vkDestroyImageView(device, i->view, nullptr);
+        if (i->image)
+            f.vkDestroyImage(device, i->image, nullptr);
+        if (i->memory)
+            release_memory(device, i->memory, nullptr);
     }
     f.vkDestroyRenderPass(device, renderPass, nullptr);
     f.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
@@ -5968,6 +5983,7 @@ private:
     loader.unload();
     device = {};
   }
+#include "menu_ripple_stage.inc"
 #include "quality_stage.inc"
 #include "range_backdrop.inc"
 #include "world_resolution_stage.inc"

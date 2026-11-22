@@ -636,7 +636,8 @@ public:
       worker_->drain();
     return {retired_quality_.fxaa_passes + renderer_->fxaa_passes,
             retired_quality_.anisotropic_samplers + renderer_->af_samplers,
-            retired_quality_.mip_levels + renderer_->mip_levels_uploaded};
+            retired_quality_.mip_levels + renderer_->mip_levels_uploaded,
+            retired_quality_.menu_ripple_passes + renderer_->menu_ripple_passes};
   }
   AssetStatistics asset_statistics() const override {
     if (worker_)
@@ -1136,6 +1137,55 @@ public:
       throw std::runtime_error("Invalid mw3-re viewport");
     }
     viewport_ = {x, y, width, height};
+  }
+
+  bool supports_gpu_menu_ripple() const override { return true; }
+  void prepare_menu_ripple() override {
+      require_producer_live();
+      const auto prepare = [this] {
+          try {
+              renderer_->prepare_menu_ripple();
+              return std::exception_ptr{};
+          } catch (...) {
+              return std::current_exception();
+          }
+      };
+      const auto failure = worker_ ? worker_->call(prepare) : prepare();
+      if (failure)
+          std::rethrow_exception(failure);
+  }
+  void apply_menu_ripple(const sdlfe::MenuRipplePass &pass) override {
+      require_producer_live();
+      ensure_extent();
+      flush();
+      for (float value : {pass.center_x, pass.center_y, pass.scale_x, pass.scale_y, pass.inner,
+                          pass.outer, pass.amplitude, pass.wavelength, pass.phase, pass.clip_left,
+                          pass.clip_top, pass.clip_right, pass.clip_bottom})
+          if (!std::isfinite(value))
+              return;
+      if (viewport_[2] <= 0 || viewport_[3] <= 0 || pass.scale_x <= 0.f || pass.scale_y <= 0.f ||
+          pass.outer <= 0.f || pass.outer <= pass.inner || pass.wavelength <= 0.f)
+          return;
+      vk::MenuRipplePass vk_pass;
+      vk_pass.center_u = (pass.center_x - viewport_[0]) / viewport_[2];
+      vk_pass.center_v = (pass.center_y - viewport_[1]) / viewport_[3];
+      vk_pass.scale_u = pass.scale_x / viewport_[2];
+      vk_pass.scale_v = pass.scale_y / viewport_[3];
+      vk_pass.inner = pass.inner;
+      vk_pass.outer = pass.outer;
+      vk_pass.amplitude = pass.amplitude;
+      vk_pass.wavelength = pass.wavelength;
+      vk_pass.phase = pass.phase;
+      vk_pass.has_clip = pass.has_clip;
+      vk_pass.clip_u0 = (pass.clip_left - viewport_[0]) / viewport_[2];
+      vk_pass.clip_v0 = (pass.clip_top - viewport_[1]) / viewport_[3];
+      vk_pass.clip_u1 = (pass.clip_right - viewport_[0]) / viewport_[2];
+      vk_pass.clip_v1 = (pass.clip_bottom - viewport_[1]) / viewport_[3];
+      if (worker_)
+          worker_->post([this, vk_pass] { renderer_->apply_menu_ripple(vk_pass); },
+                        sizeof(vk_pass));
+      else
+          renderer_->apply_menu_ripple(vk_pass);
   }
 
   void prepare_canvas_textures(const std::vector<int32_t> &handles) override {

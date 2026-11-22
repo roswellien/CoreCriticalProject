@@ -51,8 +51,16 @@ class DrawObserver {
   // HD menu stage D: true when the observer draws alpha-plane images itself
   // from their source pixels (with blit16's thresholds), so blit16 hands it the
   // image instead of reporting each blended run as a resolved region.
+  virtual bool ripple(const void *target, int32_t x, int32_t y, int32_t inner, int32_t outer,
+                      int32_t amplitude, float wavelength, float phase, const int32_t *clip_rect) {
+      (void)target, (void)x, (void)y, (void)inner, (void)outer, (void)amplitude, (void)wavelength,
+          (void)phase, (void)clip_rect;
+      return false;
+  }
   virtual bool wants_source_alpha_images() const { return false; }
 };
+bool observe_ripple(const void *target, int32_t x, int32_t y, int32_t inner, int32_t outer,
+                    int32_t amplitude, float wavelength, float phase, const int32_t *clip_rect);
 DrawObserver* draw_observer();
 void set_draw_observer(DrawObserver*);
 void observe_framebuffer_write(const void* target, const char* operation);
