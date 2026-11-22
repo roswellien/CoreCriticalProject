@@ -404,6 +404,7 @@ void controls_save(const char* path) {
 // command, stays as the player set it.
 bool controls_repair_mouse_fire() {  // after the tables' rebuild (the hook's)
   constexpr int32_t kTrigger1 = 0x3d;
+  if (zin::state().di && zin::state().di->command_has_extended_binding(kTrigger1)) return false;
   const zin::CmdMap* m = zin::state().map;
   if (!m || m->count < 0xa7 || zin::mouse_of(kTrigger1) != 0) return false;
   for (int32_t c = 1; c < 0xa7; ++c)

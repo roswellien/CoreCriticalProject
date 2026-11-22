@@ -150,6 +150,14 @@ class Input {
   // Additional profile buttons/triggers share the command state queried by
   // keyboard and joystick bindings. Most input backends have no overlay.
   virtual uint32_t command_state(int32_t) { return 0; }
+  // Snapshot extended inputs before the legacy reads consume buffered events.
+  virtual void begin_poll(bool /*text_entry*/, bool /*commands_enabled*/) {}
+  virtual bool key_suppressed(uint32_t /*key*/) const { return false; }
+  virtual bool mouse_suppressed(int32_t /*button*/) const { return false; }
+  virtual bool extended_command_pressed(int32_t /*command*/) const { return false; }
+  virtual bool mouse_input_down(int32_t /*mouse_id*/) const { return false; }
+  virtual void set_headlight_wheel(uint32_t /*mask*/) {}
+  virtual bool command_has_extended_binding(int32_t /*command*/) const { return false; }
 
   // SetCooperativeLevel's DISCL_ flags (1 exclusive, 2 non-exclusive, 4
   // foreground, 8 background): the keyboard 10, the mouse the game's input
