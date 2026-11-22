@@ -314,6 +314,19 @@ bool GpuHud::submit_menu(const platform::MenuBackgroundLayerRect* destination, b
   for (const auto& command : commands_) {
       if (command.ripple_index >= 0) {
           const auto &r = menu_ripples_.at(command.ripple_index);
+          int32_t bound_left = 0;
+          int32_t bound_top = 0;
+          int32_t bound_right = width_;
+          int32_t bound_bottom = height_;
+          if (r.has_clip) {
+              bound_left = std::max(bound_left, r.clip[0]);
+              bound_top = std::max(bound_top, r.clip[1]);
+              bound_right = std::min(bound_right, r.clip[2]);
+              bound_bottom = std::min(bound_bottom, r.clip[3]);
+          }
+          if (bound_right <= bound_left || bound_bottom <= bound_top) {
+              continue;
+          }
           MenuRipplePass pass;
           pass.center_x = origin_x + (float(r.x) + 0.5f) * scale_x;
           pass.center_y = origin_y + (float(r.y) + 0.5f) * scale_y;
@@ -324,13 +337,15 @@ bool GpuHud::submit_menu(const platform::MenuBackgroundLayerRect* destination, b
           pass.amplitude = float(r.amplitude);
           pass.wavelength = r.wavelength;
           pass.phase = r.phase;
-          pass.has_clip = r.has_clip;
-          if (r.has_clip) {
-              pass.clip_left = origin_x + float(r.clip[0]) * scale_x;
-              pass.clip_top = origin_y + float(r.clip[1]) * scale_y;
-              pass.clip_right = origin_x + float(r.clip[2]) * scale_x;
-              pass.clip_bottom = origin_y + float(r.clip[3]) * scale_y;
-          }
+          pass.has_clip = true;
+          pass.clip_left = origin_x + float(bound_left) * scale_x;
+          pass.clip_top = origin_y + float(bound_top) * scale_y;
+          pass.clip_right = (destination && bound_right == width_)
+                                ? origin_x + destination->width
+                                : origin_x + float(bound_right) * scale_x;
+          pass.clip_bottom = (destination && bound_bottom == height_)
+                                 ? origin_y + destination->height
+                                 : origin_y + float(bound_bottom) * scale_y;
           renderer_.apply_menu_ripple(pass);
           continue;
       }
@@ -479,13 +494,24 @@ bool GpuHud::ripple(const void *target, int32_t x, int32_t y, int32_t inner, int
         record_shadow_reason("ripple");
         return true;
     }
-    MenuRippleCommand ripple{x, y, inner, outer, amplitude, wavelength, phase};
+    int32_t clip_left = 0;
+    int32_t clip_top = 0;
+    int32_t clip_right = width_;
+    int32_t clip_bottom = height_;
     if (clip_rect) {
-        ripple.has_clip = true;
-        std::copy_n(clip_rect, 4, ripple.clip);
-        if (clip_rect[2] <= clip_rect[0] || clip_rect[3] <= clip_rect[1])
-            return true;
+        clip_left = std::max(clip_left, clip_rect[0]);
+        clip_top = std::max(clip_top, clip_rect[1]);
+        clip_right = std::min(clip_right, clip_rect[2]);
+        clip_bottom = std::min(clip_bottom, clip_rect[3]);
     }
+    if (clip_right <= clip_left || clip_bottom <= clip_top)
+        return true;
+    MenuRippleCommand ripple{x, y, inner, outer, amplitude, wavelength, phase};
+    ripple.has_clip = true;
+    ripple.clip[0] = clip_left;
+    ripple.clip[1] = clip_top;
+    ripple.clip[2] = clip_right;
+    ripple.clip[3] = clip_bottom;
     menu_ripples_.push_back(ripple);
     commands_.push_back({-1, 0, 0, platform::Primitive::kFan, false,
                          platform::TextureFilter::kDefault, int(menu_ripples_.size() - 1)});

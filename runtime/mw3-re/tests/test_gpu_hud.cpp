@@ -249,12 +249,16 @@ void menu_ripple_checks() {
                             pass.center_y == 17 + (y + .5f) * 3 && pass.scale_x == 2 &&
                             pass.scale_y == 3 && pass.inner == 5 && pass.outer == 40 &&
                             pass.amplitude == 3 && pass.wavelength == 4 && pass.phase == .5f &&
-                            pass.has_clip == clipped,
+                            pass.has_clip,
                         "Ripple destination transform or wave parameters changed");
                 if (clipped)
                     require(pass.clip_left == 13 && pass.clip_top == 20 && pass.clip_right == 233 &&
                                 pass.clip_bottom == 302,
                             "Ripple clip transform changed");
+                else
+                    require(pass.clip_left == 13 && pass.clip_top == 17 && pass.clip_right == 253 &&
+                                pass.clip_bottom == 317,
+                            "Unclipped ripple lost destination sampling bounds");
             }
         }
     }
@@ -268,6 +272,33 @@ void menu_ripple_checks() {
         require(hud.begin_menu(shadow.data(), width, height, pitch_pixels * 2, height),
                 "Ripple fallback begin failed");
     };
+    // Exercise surface intersections directly; invalid clips must not reach legacy CPU math.
+    const int32_t oversized_clip[4]{-20, -10, width + 30, height + 25};
+    begin();
+    require(hud.ripple(shadow.data(), 20, 20, 1, 10, 3, 4.f, .5f, oversized_clip) &&
+                hud.has_menu_ripples() && hud.seal_menu(),
+            "Oversized ripple clip was not recorded");
+    platform::MenuBackgroundLayerRect destination{13, 17, 240, 300};
+    require(hud.submit_menu(&destination, false) && recorder.ripples.size() == 1,
+            "Oversized ripple clip replay failed");
+    const auto &oversized_pass = recorder.ripples.back();
+    require(oversized_pass.has_clip && oversized_pass.clip_left == 13 &&
+                oversized_pass.clip_top == 17 && oversized_pass.clip_right == 253 &&
+                oversized_pass.clip_bottom == 317,
+            "Oversized ripple clip escaped destination sampling bounds");
+    for (const auto outside_clip : {std::array<int32_t, 4>{width, 0, width + 10, 20},
+                                    std::array<int32_t, 4>{-20, -10, 0, 20}}) {
+        begin();
+        const auto command_count = recorder.order.size();
+        const auto ripple_count = recorder.ripples.size();
+        require(hud.ripple(shadow.data(), 20, 20, 1, 10, 3, 4.f, .5f, outside_clip.data()) &&
+                    !hud.has_menu_ripples(),
+                "Off-surface ripple clip produced a command");
+        require(!hud.seal_menu() && !hud.submit_menu(&destination, false) &&
+                    recorder.order.size() == command_count &&
+                    recorder.ripples.size() == ripple_count,
+                "Off-surface ripple submission emitted commands");
+    }
     // Validate rejection at the observer boundary without feeding invalid FP into legacy CPU math.
     for (int failure = 0; failure < 5; ++failure) {
         begin();
