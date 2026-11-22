@@ -770,6 +770,9 @@ std::vector<mw34::headlights::StockProfile> headlight_catalog_;
 std::vector<mw34::effects::Candidate> headlight_candidates_;
 mw34::headlights::PlayerState headlight_player_;
 unsigned headlight_key_{};
+unsigned headlight_mouse_{};
+bool headlight_key_suppressed_latch_{};
+bool headlight_mouse_suppressed_latch_{};
 std::size_t headlight_peak_{};
 std::array<float, 6> local_projection_{};
 std::array<float, 12> local_camera_{};
@@ -826,22 +829,19 @@ void local_lights_load() {
     return;
   }
   std::ifstream bindings(std::filesystem::u8path(bridge_config_.headlight_bindings));
-  std::string magic, extra;
-  int button = -1;
-  if (!(bindings >> magic >> headlight_key_ >> button) ||
-      magic != "CC_MW3_HEADLIGHTS_V1" || headlight_key_ >= zin::kKeys ||
-      (headlight_key_ && !(headlight_key_ & 255)) || button < -1 || button > 25 ||
-      (bindings >> extra))
-    throw std::runtime_error("Headlights: invalid input binding");
-  const auto scan = headlight_key_ & 255;
-  if (scan == 0x43 || scan == 0x44 || scan == 0x57)
-    throw std::runtime_error("Headlights: key reserved for capture/replay");
-  if (!headlight_key_ || headlight_catalog_.empty())
-    fprintf(stderr, "[HEADLIGHTS] inactive: no keyboard binding or stock profile\n");
+  const auto binding = ::platform::HeadlightBinding::read(bindings, zin::kKeys);
+  headlight_key_ = binding.key;
+  headlight_mouse_ = binding.mouse;
+  if ((!headlight_key_ && !headlight_mouse_) || headlight_catalog_.empty())
+    fprintf(stderr, "[HEADLIGHTS] inactive: no keyboard or mouse binding, or no stock profile\n");
+}
+
+uint32_t headlight_wheel_mask() const override {
+  return ::platform::HeadlightBinding::wheel_mask(headlight_mouse_);
 }
 
 bool wants_player_headlight_ticks() const override {
-  return headlight_key_ && !headlight_catalog_.empty() && !current_mission_id_.empty();
+  return (headlight_key_ || headlight_mouse_) && !headlight_catalog_.empty() && !current_mission_id_.empty();
 }
 
 void player_headlight_tick(const ::platform::PlayerHeadlightTick &tick) override {
@@ -852,12 +852,29 @@ void player_headlight_tick(const ::platform::PlayerHeadlightTick &tick) override
   const auto *profile = asset ? mw34::headlights::match_original(
       headlight_catalog_, asset->name, asset->member_sha256) : nullptr;
   const auto &input = zin::state();
-  const auto key = zin::key_state(headlight_key_);
-  const bool pressed = (key & (zin::kPressed | zin::kHeld)) && !(key & zin::kReleased) &&
-                       input.modifiers == (headlight_key_ & 0x700);
+  const bool key_ready = headlight_key_ && input.kbd_ready;
+  const bool mouse_ready = headlight_mouse_ && input.mouse_ready && input.di;
+  const bool allowed = profile && tick.dt >= 0 && (key_ready || mouse_ready) && !input.char_callback;
+  if (!allowed || tick.shutdown || tick.generation != headlight_player_.owner.generation) {
+    headlight_key_suppressed_latch_ = false;
+    headlight_mouse_suppressed_latch_ = false;
+  }
+  bool pressed = false;
+  if (allowed && !tick.shutdown) {
+    const auto key = key_ready ? zin::key_state(headlight_key_) : 0;
+    const bool key_raw = (key & (zin::kPressed | zin::kHeld)) && !(key & zin::kReleased);
+    const bool key_down = ::platform::headlight_input_down(
+        key_raw, input.di && input.di->key_suppressed(headlight_key_ & 255),
+        headlight_key_suppressed_latch_) && input.modifiers == (headlight_key_ & 0x700);
+    const bool mouse_down = ::platform::headlight_input_down(
+        mouse_ready && input.di->mouse_input_down(headlight_mouse_),
+        mouse_ready && input.di->mouse_suppressed(headlight_mouse_),
+        headlight_mouse_suppressed_latch_);
+    pressed = key_down || mouse_down;
+  }
   headlight_player_.update(tick.generation, reinterpret_cast<std::uintptr_t>(node),
                            tick.tick, std::max(0.0f, tick.dt), tick.shutdown, pressed,
-                           profile && tick.dt >= 0 && input.kbd_ready && !input.char_callback);
+                           allowed);
   const auto intensity = headlight_player_.owner.envelope.current;
   if (!profile || intensity <= 0)
     return;
@@ -904,6 +921,8 @@ void local_lights_clear() {
   fixture_view_.clear();
   local_fixture_sources_.clear();
   headlight_player_ = {};
+  headlight_key_suppressed_latch_ = false;
+  headlight_mouse_suppressed_latch_ = false;
   headlight_candidates_.clear();
   local_observed_.clear();
   local_native_.clear();
