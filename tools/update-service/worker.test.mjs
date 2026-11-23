@@ -21,6 +21,18 @@ const env = {
 };
 const request = (suffix = path, options) =>
     new Request("https://updates.example.test" + suffix, options);
+test("uses the supplemental binding while keeping the primary routes", async () => {
+    const next = "/launcher/1.0.54/1.0.54.zip";
+    const routes = {
+        ...env,
+        PUBLIC_OBJECTS_EXTRA: JSON.stringify({
+            [next]: { key: "online-updates/launcher/1.0.54/1.0.54.zip", bytes: data.length },
+            [path]: { key: "packs/private.zip", bytes: 0 },
+        }),
+    };
+    assert.equal((await worker.fetch(request(next, { method: "HEAD" }), routes)).status, 200);
+    assert.equal((await worker.fetch(request(path, { method: "HEAD" }), routes)).status, 200);
+});
 test("only approved public update objects are served", async () => {
     const result = await worker.fetch(request(), env);
     assert.equal(result.status, 200);
