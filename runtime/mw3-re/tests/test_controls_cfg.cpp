@@ -65,10 +65,10 @@ void count_command(int32_t cmd) { ++calls[cmd]; }
 
 class ScopedInput final : public platform::Input {
  public:
-  ScopedInput() : saved_(std::move(zin::state())) {
+  explicit ScopedInput(bool attach = true) : saved_(std::move(zin::state())) {
     zin::reset_state();
     zin::init(167, "DefaultCmdMap");
-    zin::state().di = this;
+    if (attach) zin::state().di = this;
     zin::state().events.resize(128);
     zin::state().mouse_open = true;
     zin::state().mouse_acquired = 1;
@@ -204,6 +204,25 @@ TEST(controls_repair_mouse_fire_only_mends_the_quit_boxs_damage) {
   zin::bind_mouse(1, 0x17);  // button 1 on free look: fire has none
   EXPECT(!mech3::controls_repair_mouse_fire());
   EXPECT(zin::mouse_of(0x3d) == 0 && zin::mouse_command(1) == 0x17);
+}
+
+TEST(controls_repair_mouse_fire_uses_platform_input_before_zinput_starts) {
+  ScopedInput mock_input(false);
+  fresh();
+  mech3::controls_set_defaults();
+  constexpr int32_t kTrigger1 = 0x3d;
+  zin::bind_mouse(0, kTrigger1);
+  EXPECT(zin::state().di == nullptr);
+  EXPECT(zin::mouse_of(kTrigger1) == 0 && zin::mouse_command(1) == 0);
+
+  mock_input.extended_fire = true;
+  EXPECT(!mech3::controls_repair_mouse_fire(&mock_input));
+  EXPECT(zin::mouse_of(kTrigger1) == 0 && zin::mouse_command(1) == 0);
+
+  mock_input.extended_fire = false;
+  EXPECT(mech3::controls_repair_mouse_fire(&mock_input));
+  EXPECT(zin::mouse_of(kTrigger1) == 1 && zin::mouse_command(1) == kTrigger1);
+  EXPECT(zin::state().di == nullptr);
 }
 
 TEST(controls_stock_axes_and_missing_files) {

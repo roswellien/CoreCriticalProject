@@ -38,6 +38,36 @@ class InstalledPreparationTests(unittest.TestCase):
         self.assertIn("resources/stock-headlights.bin", descriptor["dependencies"])
         self.assertEqual(descriptor["capabilities"], {"controller-profile": [1], "input-bindings": [1]})
 
+    def test_source_capabilities_omit_input_bindings_for_older_sources(self):
+        import stage_mw3_re_runtime as producer
+
+        repo_caps = producer._source_capabilities(Path(__file__).resolve().parents[2])
+        self.assertEqual(repo_caps, producer._DEFAULT_CAPABILITIES)
+        with tempfile.TemporaryDirectory() as temporary:
+            old_source = Path(temporary)
+            (old_source / "runtime/mw3-re/src/frontend/sdl").mkdir(parents=True)
+            (old_source / "runtime/mw3-re/src/platform").mkdir(parents=True)
+            (old_source / "runtime/mw3-re/src/frontend/sdl/mw3_main.cpp").write_text("int main() {}", encoding="utf-8")
+            (old_source / "runtime/mw3-re/src/platform/render3d.h").write_text("CC_MW3_HEADLIGHTS_V1\n", encoding="utf-8")
+            old_caps = producer._source_capabilities(old_source)
+            self.assertEqual(old_caps, (("controller-profile", (1,)),))
+            descriptor = json.loads(producer._descriptor(producer._pins([], ()), "a" * 40, "fixture", "build", capabilities=old_caps))
+            self.assertEqual(descriptor["capabilities"], {"controller-profile": [1]})
+            (old_source / "runtime/mw3-re/src/frontend/sdl/input_bindings.h").write_text("// ok\n", encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(old_source), (("controller-profile", (1,)),))
+        with tempfile.TemporaryDirectory() as temporary:
+            capable_source = Path(temporary)
+            (capable_source / "runtime/mw3-re/src/frontend/sdl").mkdir(parents=True)
+            (capable_source / "runtime/mw3-re/src/platform").mkdir(parents=True)
+            main_source = capable_source / "runtime/mw3-re/src/frontend/sdl/mw3_main.cpp"
+            (capable_source / "runtime/mw3-re/src/frontend/sdl/input_bindings.h").write_text("// ok\n", encoding="utf-8")
+            (capable_source / "runtime/mw3-re/src/platform/render3d.h").write_text("CC_MW3_HEADLIGHTS_V2\n", encoding="utf-8")
+            main_source.write_text("--cc-input\n", encoding="utf-8")
+            # Header, CLI token and V2 magic without the SdlInput startup call stay controller-only.
+            self.assertEqual(producer._source_capabilities(capable_source), (("controller-profile", (1,)),))
+            main_source.write_text("--cc-input\ninput.set_input_bindings(a.input_bindings, &count);\n", encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(capable_source), producer._DEFAULT_CAPABILITIES)
+
     def test_sdl3_sound_recipe_pins_version_and_enables_selected_sdk(self):
         import stage_mw3_re_runtime as producer
 

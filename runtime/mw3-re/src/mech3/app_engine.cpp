@@ -132,7 +132,8 @@ struct WiredOptionsHooks : OptionsHooks {
     // FIX (bug), W40: the registry's read filled the bindings only; without a
     // controls file the reverse tables stayed the defaults' (input.md).
     zin::map_refresh();
-    mech3::controls_repair_mouse_fire();  // ours (W40): an older build's damage undone
+    // Controls load before zInput starts, so consult the platform input directly.
+    mech3::controls_repair_mouse_fire(g_engine ? g_engine->platform_input() : nullptr);
     mech3::controls_keep_saved();         // the map the settings save (W40)
     mech3::settings_keep_mouse();         // and the mouse's values (ours)
   }
