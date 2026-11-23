@@ -310,6 +310,10 @@ class ApiPrReviewTests(unittest.TestCase):
 
     def test_path_patch_ci(self):
         self.assertEqual(validate_safe_path("src/a.py"), "src/a.py")
+        launcher_project = "tools/mw3-remaster-launcher/MW3RemasterLauncher.csproj"
+        self.assertEqual(validate_safe_path(launcher_project), launcher_project)
+        with self.assertRaises(domain.AutomationError):
+            validate_safe_path("src/Other.csproj")
         self.assertEqual(parse_patch_lines(PATCH), frozenset({1, 2}))
         for path in ["/etc/passwd", "a\\b.py", "../x.py", ".env", "secret.key"]:
             with self.subTest(path=path), self.assertRaises(domain.AutomationError):
