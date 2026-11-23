@@ -26,8 +26,15 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={sd}\Games\Core Critical\Launcher
+#ifdef NativePreviewUpgradeOnly
+UsePreviousAppDir=no
+DisableDirPage=yes
+Uninstallable=no
+CreateUninstallRegKey=no
+#else
 UsePreviousAppDir=yes
 DisableDirPage=no
+#endif
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=no
 AllowNoIcons=yes
@@ -89,7 +96,11 @@ Source: "launcher-installation.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
 ; Default asset and font directories
 Source: "Assets\*"; Excludes: "Installer\*"; DestDir: "{app}\Assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-#ifdef NativePreviewIncluded
+#ifdef NativePreviewUpgradeOnly
+; Keep the existing delivery marker and write the descriptor after its pinned files.
+Source: "{#PublishDirectory}\NativePreview\*"; Excludes: "runtime.json"; DestDir: "{app}\NativePreview"; Flags: ignoreversion recursesubdirs; Check: HasBundledMw3Re
+Source: "{#PublishDirectory}\NativePreview\runtime.json"; DestDir: "{app}\NativePreview"; Flags: ignoreversion; Check: HasBundledMw3Re
+#elif defined(NativePreviewIncluded)
 ; MW3-RE native runtime
 Source: "{#PublishDirectory}\NativePreview\*"; DestDir: "{app}\NativePreview"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PublishDirectory}\NativePreview\runtime.json"; DestDir: "{app}\NativePreview"; Flags: ignoreversion
@@ -104,6 +115,7 @@ Source: "{#PublishDirectory}\Planner\content_capabilities.py"; DestDir: "{app}\P
 Source: "{#PublishDirectory}\Planner\native_assets.py"; DestDir: "{app}\Planner"; Flags: ignoreversion
 Source: "{#PublishDirectory}\Planner\legacy_content_capabilities.json"; DestDir: "{app}\Planner"; Flags: ignoreversion
 
+#ifndef NativePreviewUpgradeOnly
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
@@ -131,7 +143,24 @@ Type: files; Name: "{app}\Preparation\initial.zip"
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--setup-game"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
+#endif
+
 [Code]
+#ifdef NativePreviewUpgradeOnly
+function HasBundledMw3Re: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\NativePreview\runtime.json'));
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  if not WizardSilent or (ExpandConstant('{param:DIR|}') = '') or
+     not FileExists(ExpandConstant('{app}\launcher-installation.json')) or
+     not FileExists(ExpandConstant('{app}\{#MyAppExeName}')) then
+    Result := 'Apply this upgrade from an existing Core Critical installation.';
+end;
+#else
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
@@ -141,3 +170,4 @@ begin
         '--add-steam --silent', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
         MsgBox('The Steam shortcut could not be added. Exit Steam completely, then open Core Critical and use Settings & Steam > Add to Steam Library. Your launcher installation is ready.', mbInformation, MB_OK);
 end;
+#endif

@@ -7,6 +7,7 @@ param(
     [string]$PreparationBundle = '',
     # MW3-RE Native preview runtime staged by tools/remaster-launcher/stage_mw3_re_runtime.py.
     [string]$NativePreviewDirectory = '',
+    [switch]$NativePreviewUpgradeOnly,
     [string]$PlannerPythonArchive = '',
     [string]$WindowsSignTool = '',
     [string]$SigningDlib = '',
@@ -16,6 +17,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $Compiler = [IO.Path]::GetFullPath($Compiler)
 if ($PreparationBundle -and $NativePreviewDirectory) { throw 'Choose source preparation or the MW3-RE runtime, not both' }
+if ($NativePreviewUpgradeOnly -and !$NativePreviewDirectory) { throw 'An in-place MW3-RE update requires a staged runtime' }
 if (!(Test-Path -LiteralPath $Compiler -PathType Leaf)) { throw 'Select an installed Inno Setup ISCC.exe compiler. No compiler is downloaded or installed by this build.' }
 if ($InstallerVersion -notmatch '^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$') { throw 'Invalid installer version' }
 $id = [Guid]::Parse($InstallerId).ToString().ToUpperInvariant()
@@ -123,6 +125,7 @@ $arguments = @('/Qp',('/O'+$OutputDirectory),('/DPublishDirectory='+$PublishDire
     ('/DMyAppVersion='+$InstallerVersion),('/DInstallerAppId={{'+$id+'}'),(Join-Path $PSScriptRoot 'installer.iss'))
 if ($PreparationBundle) { $arguments = @('/DSourcePreparationIncluded=1') + $arguments }
 if ($NativePreviewDirectory) { $arguments = @('/DNativePreviewIncluded=1') + $arguments }
+if ($NativePreviewUpgradeOnly) { $arguments = @('/DNativePreviewUpgradeOnly=1') + $arguments }
 if ($WindowsSignTool) {
     $signCommand='$q'+[IO.Path]::GetFullPath($WindowsSignTool)+'$q sign /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $q'+[IO.Path]::GetFullPath($SigningDlib)+'$q /dmdf $q'+[IO.Path]::GetFullPath($SigningMetadata)+'$q $f'
     $arguments=@('/DWindowsSigning=1',('/Sartifact-signing='+$signCommand))+$arguments
@@ -137,7 +140,7 @@ if ($WindowsSignTool) {
     if ($LASTEXITCODE -or (Get-AuthenticodeSignature -LiteralPath $setup).Status -ne 'Valid') { throw 'Final installer signature verification failed' }
 }
 @{
-    kind = $(if ($NativePreviewDirectory) {'mw3-re-playtest-preview'} elseif ($PreparationBundle) {'private-source-preparation-playtest-preview'} else {'local-launcher-preview-not-playable-release'})
+    kind = $(if ($NativePreviewUpgradeOnly) {'mw3-re-in-place-update'} elseif ($NativePreviewDirectory) {'mw3-re-playtest-preview'} elseif ($PreparationBundle) {'private-source-preparation-playtest-preview'} else {'local-launcher-preview-not-playable-release'})
     version = $InstallerVersion
     setup_filename = $setupFilename
     compiler_sha256 = (Get-FileHash -LiteralPath $Compiler).Hash.ToLowerInvariant()
@@ -145,6 +148,7 @@ if ($WindowsSignTool) {
     setup_bytes = (Get-Item -LiteralPath $setup).Length
     source_preparation_included = [bool]$PreparationBundle
     native_preview_included = [bool]$NativePreviewDirectory
+    native_preview_upgrade_only = [bool]$NativePreviewUpgradeOnly
     native_preview_source_commit = $(if ($NativePreviewDirectory) { [string]$previewManifest.provenance.source_commit } else { $null })
     windows_signed = [bool]$WindowsSignTool
     clean_windows_verified = $false
