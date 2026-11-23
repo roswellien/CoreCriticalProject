@@ -19,6 +19,31 @@ public sealed class NativeGameRunner
     /// <summary>Installed folder name, next to the launcher executable.</summary>
     public const string RuntimeFolder = "NativePreview";
     public const string PlannerFolder = "Planner";
+
+    public static bool UsesBundledMw3Re(string applicationDirectory)
+    {
+        var marker = Path.Combine(applicationDirectory, "launcher-installation.json");
+        if (File.Exists(marker))
+        {
+            using var document = JsonDocument.Parse(LauncherUpdates.ReadMetadata(marker));
+            if (document.RootElement.TryGetProperty("native_runtime", out var runtime) &&
+                runtime.GetString() == "mw3-re")
+                return true;
+        }
+
+        return File.Exists(Path.Combine(applicationDirectory, RuntimeFolder, "runtime.json"));
+    }
+
+    public string RequireBundledMw3Re()
+    {
+        var root = FindRuntimeRoot() ?? throw new FileNotFoundException(
+            "The bundled MW3-RE runtime is missing. Repair the Core Critical installation.");
+        var planner = Path.Combine(_basePath, PlannerFolder, "mw3_re_launch.py");
+        if (!File.Exists(planner))
+            throw new FileNotFoundException("The MW3-RE planner is missing. Repair the Core Critical installation.", planner);
+        return root;
+    }
+
     public const string ProfileId = "native-preview";
     /// <summary>The largest scenery distance the native runtime accepts in this release.</summary>
     public const int MaxDrawDistance = 3200;
@@ -47,6 +72,25 @@ public sealed class NativeGameRunner
     {
         var root = Path.Combine(_basePath, RuntimeFolder);
         return File.Exists(Path.Combine(root, "runtime.json")) ? root : null;
+    }
+
+    public string FindPlannerPython()
+    {
+        var bundled = Path.Combine(_basePath, "Tools", "PlannerPython", "python.exe");
+        if (File.Exists(bundled))
+        {
+            PackStorage.EnsureNoLinks(bundled);
+            if (!D7VkRunner.CanPrepareNativeAssets(bundled, requirePillow: false))
+                throw new InvalidDataException("The bundled planner Python is incomplete. Repair the Core Critical installation.");
+            return bundled;
+        }
+
+        var runtimeDirectory = Path.Combine(_basePath, "Runtime");
+        var legacyPython = File.Exists(Path.Combine(runtimeDirectory, "runtime.json"))
+            ? NativeRuntimeLayout.ReadRoot(runtimeDirectory).Python
+            : null;
+        return legacyPython ?? D7VkRunner.FindPythonExecutable(requirePython311: true)
+            ?? throw new FileNotFoundException("MW3-RE needs Python 3.11 or newer. Repair the Core Critical installation.");
     }
 
     /// <summary>
@@ -269,17 +313,14 @@ public sealed class NativeGameRunner
         }
 
         log("Startup: Verifying native runtime...");
-        var root = FindRuntimeRoot() ?? throw new FileNotFoundException("This installation has no MW3-RE runtime.");
+        var root = RequireBundledMw3Re();
         var contract = Mw3ReRuntimeContract.ReadStructure(root);
         var controllerProfile = new ControllerProfiles(_dataRoot).Load();
         if (controllerProfile.Enabled && !contract.SupportsControllerProfiles)
             throw new InvalidOperationException("The installed MW3-RE runtime does not support controller profiles.");
         var launchControls = ReadLaunchControls(contract, _dataRoot, settings);
         var planner = Path.Combine(_basePath, PlannerFolder, "mw3_re_launch.py");
-        if (!File.Exists(planner)) throw new FileNotFoundException("The MW3-RE planner is missing.", planner);
-        var python = NativeRuntimeLayout.FindInstalled(_basePath, _dataRoot)?.Python
-            ?? D7VkRunner.FindPythonExecutable(requirePython311: true)
-            ?? throw new FileNotFoundException("MW3-RE needs Python 3.11 or newer.");
+        var python = FindPlannerPython();
 
         var drawDistance = PreviewDrawDistance(settings.DrawDistance, out _);
         var activePacks = activeModDirs.ToList();

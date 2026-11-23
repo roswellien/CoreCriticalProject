@@ -54,6 +54,11 @@ public sealed class OnlineUpdateService : IDisposable
 
     public static string InstalledRuntimeVersion(string application, string? dataRoot = null, bool bundled = false)
     {
+        if (NativeGameRunner.UsesBundledMw3Re(application))
+            return new NativeGameRunner(application, dataRoot).FindRuntimeRoot() == null
+                ? "MW3-RE missing (repair the installation)"
+                : "MW3-RE (bundled with Core Critical)";
+
         var root = bundled ? Path.Combine(application, "Runtime") :
             RuntimeUpdates.SelectedRoot(application, dataRoot) ?? Path.Combine(application, "Runtime");
         var path = Path.Combine(root, "runtime.json");
@@ -67,7 +72,8 @@ public sealed class OnlineUpdateService : IDisposable
         var launcher = new LauncherUpdates(_application, _trust, _dataRoot);
         var products = new List<InstalledUpdateProduct> { new(GameCatalog.LauncherId,
             typeof(OnlineUpdateService).Assembly.GetName().Version!.ToString(3), launcher.InstalledSequence) };
-        if (GameValidator.Validate(_game).IsValid)
+        // This catalog's MW3 package installs the legacy runtime, not the bundled MW3-RE engine.
+        if (!NativeGameRunner.UsesBundledMw3Re(_application) && GameValidator.Validate(_game).IsValid)
         {
             var runtime = InstalledRuntimeVersion(_application, _dataRoot);
             if (runtime == "not installed") runtime = "0.0.0";
@@ -108,6 +114,8 @@ public sealed class OnlineUpdateService : IDisposable
     private OnlineRelease[] RevalidatePending(PendingOnlineUpdates plan)
     {
         if (Catalog == null) throw new InvalidOperationException("Check for updates before continuing.");
+        if (NativeGameRunner.UsesBundledMw3Re(_application) && plan.Products.Contains(GameCatalog.Mw3))
+            throw new InvalidDataException("This saved plan targets the previous MW3 runtime. Select a current launcher update instead.");
         var saved = ReleaseCatalog.Verify(Convert.FromBase64String(plan.CatalogEnvelope), _trust, _config, DateTimeOffset.UtcNow);
         var releases = new List<OnlineRelease>();
         foreach (var product in plan.Products)

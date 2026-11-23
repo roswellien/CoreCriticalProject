@@ -45,7 +45,13 @@ public sealed class OnlineUpdatesWindow : Window
         var launcherImport = Button("Import .ccupdate…");
         var runtimeImport = Button("Import .mw3update…");
         var rollback = Button("Use previous MW3 runtime");
-        local.Children.Add(launcherImport); local.Children.Add(runtimeImport); local.Children.Add(rollback); bottom.Children.Add(local);
+        local.Children.Add(launcherImport);
+        if (!NativeGameRunner.UsesBundledMw3Re(application))
+        {
+            local.Children.Add(runtimeImport);
+            local.Children.Add(rollback);
+        }
+        bottom.Children.Add(local);
         panel.Children.Add(new ScrollViewer { Content = _releases, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
         Content = panel;
         _download.IsEnabled = _install.IsEnabled = _resume.IsEnabled = _cancel.IsEnabled = false;
