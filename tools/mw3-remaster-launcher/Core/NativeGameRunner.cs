@@ -274,6 +274,7 @@ public sealed class NativeGameRunner
         var controllerProfile = new ControllerProfiles(_dataRoot).Load();
         if (controllerProfile.Enabled && !contract.SupportsControllerProfiles)
             throw new InvalidOperationException("The installed MW3-RE runtime does not support controller profiles.");
+        var launchControls = ReadLaunchControls(contract, _dataRoot, settings);
         var planner = Path.Combine(_basePath, PlannerFolder, "mw3_re_launch.py");
         if (!File.Exists(planner)) throw new FileNotFoundException("The MW3-RE planner is missing.", planner);
         var python = NativeRuntimeLayout.FindInstalled(_basePath, _dataRoot)?.Python
@@ -286,11 +287,9 @@ public sealed class NativeGameRunner
         var uiPacks = SelectUiPacks(activePacks, log);
         var skinPacks = SelectSkinPacks(activePacks, log);
         var writeDirectory = Path.Combine(_dataRoot, "mw3-re", "profiles", ProfileId);
-        Directory.CreateDirectory(writeDirectory);
         log("Startup: Preparing controls...");
-        NativeControls.PrepareLaunch(_dataRoot, writeDirectory, validation.GameDirectory, settings, log);
-        var headlightBindings = new HeadlightBindings(_dataRoot)
-            .WriteNativeBinding(writeDirectory, settings.DynamicLighting && settings.Headlights);
+        var (inputBindings, headlightBindings) = PrepareLaunchControls(launchControls, _dataRoot,
+            writeDirectory, validation.GameDirectory, settings, controllerProfile, log);
         var options = PlanningOptionsForSettings(settings, contract, drawDistance, models,
             environments, headlightBindings, uiPacks, skinPacks);
         var indeoCodec = GameInstallation.FindVerifiedIndeoCodec(validation.GameDirectory, _dataRoot);
@@ -330,6 +329,11 @@ public sealed class NativeGameRunner
                 throw new InvalidOperationException("The enabled controller profile was not exported for this session.");
             argv.AddRange(NativeControls.ControllerArguments(controllerProfile, controllerPath));
         }
+        if (inputBindings != null)
+        {
+            argv.Add("--cc-input");
+            argv.Add(inputBindings);
+        }
         // Music is optional: a broken or locked soundtrack file must not stop the game from starting.
         try
         {
@@ -363,6 +367,38 @@ public sealed class NativeGameRunner
         log("MW3-RE PID " + process.Id);
         _ = ObserveReadinessAsync(process, readyFile, log);
         return process;
+    }
+
+    /// <summary>Run the launch preflight and write-profile projection without starting a process.</summary>
+    public static (string? InputBindingsPath, string? HeadlightBindingsPath) PrepareLaunchControls(
+        Mw3ReRuntimeContract contract, string dataRoot, string writeDirectory, string gameDirectory,
+        LauncherSettings settings, ControllerProfile controllerProfile, Action<string> log) =>
+        PrepareLaunchControls(ReadLaunchControls(contract, dataRoot, settings), dataRoot, writeDirectory,
+            gameDirectory, settings, controllerProfile, log);
+
+    private static (ControlProfile? Profile, HeadlightBinding? Headlights) ReadLaunchControls(
+        Mw3ReRuntimeContract contract, string dataRoot, LauncherSettings settings)
+    {
+        var profile = NativeControls.LoadSelectedProfile(dataRoot);
+        var headlights = settings.DynamicLighting && settings.Headlights
+            ? new HeadlightBindings(dataRoot).Load() : null;
+        var needsExtendedInput = (profile != null && ControlProfiles.UsesExtendedInputBindings(profile)) ||
+            headlights?.Mouse > 0;
+        if (needsExtendedInput && !contract.SupportsInputBindings)
+            throw new InvalidOperationException(
+                "The installed MW3-RE runtime does not support extended input bindings. Update MW3-RE to use this controls layout or mouse headlight binding.");
+        return (profile, headlights);
+    }
+
+    private static (string? InputBindingsPath, string? HeadlightBindingsPath) PrepareLaunchControls(
+        (ControlProfile? Profile, HeadlightBinding? Headlights) bindings, string dataRoot,
+        string writeDirectory, string gameDirectory, LauncherSettings settings,
+        ControllerProfile controllerProfile, Action<string> log)
+    {
+        var inputPath = NativeControls.PrepareLaunch(dataRoot, writeDirectory, gameDirectory,
+            settings, bindings.Profile, controllerProfile, log);
+        var headlightPath = HeadlightBindings.WriteNativeBinding(writeDirectory, bindings.Headlights);
+        return (inputPath, headlightPath);
     }
 
     /// <summary>Only the planner's typed cache switch may change the child environment.</summary>

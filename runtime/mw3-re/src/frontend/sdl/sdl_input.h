@@ -8,6 +8,7 @@
 
 #include "frontend/sdl/sdl_fit.h"
 #include "frontend/sdl/controller_profile.h"
+#include "frontend/sdl/input_bindings.h"
 #include "gamez/zinput/zinput.h"
 #include "platform/platform.h"
 
@@ -77,6 +78,14 @@ class SdlInput : public platform::Input {
   int32_t joystick_get_range(uint32_t ofs, int32_t* min, int32_t* max) override;
   int32_t joystick_set_deadzone(uint32_t ofs, uint32_t dz) override;
   uint32_t command_state(int32_t command) override;
+  bool set_input_bindings(const std::string& path, size_t* count_out = nullptr);
+  void begin_poll(bool text_entry, bool commands_enabled) override;
+  bool key_suppressed(uint32_t scan) const override;
+  bool mouse_suppressed(int32_t id) const override;
+  bool extended_command_pressed(int32_t command) const override;
+  bool mouse_input_down(int32_t mouse_id) const override;
+  void set_headlight_wheel(uint32_t mask) override;
+  bool command_has_extended_binding(int32_t command) const override;
 
   // The window an exclusive mouse captures (relative mouse mode, as
   // DirectInput's DISCL_EXCLUSIVE hides and holds the cursor). Held or not,
@@ -163,6 +172,9 @@ class SdlInput : public platform::Input {
   bool open_joystick();
   std::string controller_key(SDL_JoystickID id, SDL_Gamepad* pad) const;
   void poll_controller();
+  void reset_extended_input();
+  void swallow_held_buttons(size_t first);
+  void route_wheel(bool eligible);
   void map_axes();
   void neutral(platform::JoyState* out) const;
   double pad_axis(int i) const;
@@ -189,7 +201,7 @@ class SdlInput : public platform::Input {
   bool cursor_moved_ = false;  // the cursor moved since the menus took it (else zInput's place stays)
   SDL_Keymod chord_held_ = SDL_KMOD_NONE;
   bool chord_armed_ = false, chord_spoiled_ = false;
-  bool swallow_[4] = {};  // the recapturing click's buttons, kept from the game until let go
+  bool swallow_[5] = {};  // the recapturing click's buttons, kept from the game until let go
   // Ours (playtest, Owen): a held mission's mouse comes back with the focus,
   // no click needed; the click that brought it back (within kActivationNs of
   // the focus) is still not the game's (input.md section 8).
@@ -205,8 +217,14 @@ class SdlInput : public platform::Input {
   bool held_[256] = {};
   float dx_ = 0, dy_ = 0, dz_ = 0;
   float raw_dx_ = 0, raw_dy_ = 0;
-  uint8_t buttons_[4] = {};
-  uint8_t latched_[4] = {};  // a press not yet read (FIX (A): a click inside one frame)
+  uint8_t buttons_[5] = {};
+  uint8_t latched_[5] = {};  // a press not yet read (FIX (A): a click inside one frame)
+  InputBindingConfig input_config_;
+  InputBindingState input_state_;
+  bool input_poll_eligible_ = false;
+  uint32_t headlight_wheel_mask_ = 0, bound_wheel_mask_ = 0;
+  std::array<double, 2> wheel_pending_{};
+  float wheel_frac_up_ = 0, wheel_frac_down_ = 0;
   SDL_Joystick* joy_ = nullptr;
   // FIX (A): a gamepad SDL knows (an XInput pad, a PlayStation one) is read
   // as DirectInput showed an XInput pad on Windows: X, Y the left stick, Z the

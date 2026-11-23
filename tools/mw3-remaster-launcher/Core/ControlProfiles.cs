@@ -3,6 +3,8 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace MW3RemasterLauncher.Core;
 
@@ -17,18 +19,33 @@ public sealed record ControlAction(string Name, int Command)
         Name.Contains("CENTER") || Name.Contains("TMODE") || Name.Contains("JJ_") || Name.Contains("CROUCH") || Name.Contains("GETUP") ? "Movement & aiming" :
         Name.Contains("WEP") || Name.Contains("WEAPON") || Name.Contains("TRIGGER") || Name.Contains("FIRE") || Name.Contains("ALPHA") ? "Weapons" : "Systems & commands";
 }
+public enum ControlComboInputKind { Key, Mouse }
+
+public sealed record ControlComboInput(
+    [property: JsonRequired] ControlComboInputKind Kind,
+    [property: JsonRequired] int Code);
+
+public sealed class ControlCombo
+{
+    public List<ControlComboInput> Inputs { get; set; } = [];
+    public bool Suppress { get; set; } = true;
+}
+
 public sealed class ControlBinding
 {
     public int Primary { get; set; }
     public int Secondary { get; set; }
     public int Mouse { get; set; }
     public int Joystick { get; set; } // Preserved; editing controllers is a later feature.
+    public List<ControlCombo>? Combos { get; set; }
 }
 public sealed class ControlProfile
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Name { get; set; } = "My controls";
     public string Description { get; set; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Mw2JumpJets { get; set; }
     public Dictionary<string, ControlBinding> Bindings { get; set; } = new();
 }
 public sealed class ControlDocument
@@ -43,7 +60,24 @@ public sealed class ControlDocument
 public sealed class ControlProfiles
 {
     public static IReadOnlyList<ControlAction> Actions { get; } = LoadActions();
-    private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+    private const int ProfileSizeLimit = 1024 * 1024;
+    private const int MaxCombosPerAction = 8;
+    private const int MaxCombosPerProfile = 64;
+    private static readonly JsonSerializerOptions Json = CreateJsonOptions();
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var resolver = new DefaultJsonTypeInfoResolver();
+        resolver.Modifiers.Add(type =>
+        {
+            if (type.Type != typeof(ControlBinding)) return;
+            var combos = type.Properties.Single(property => property.Name == nameof(ControlBinding.Combos));
+            combos.ShouldSerialize = (_, value) => value is List<ControlCombo> { Count: > 0 };
+        });
+        var options = new JsonSerializerOptions { WriteIndented = true, TypeInfoResolver = resolver };
+        options.Converters.Add(new JsonStringEnumConverter<ControlComboInputKind>(allowIntegerValues: false));
+        return options;
+    }
     private const string RegistryKey = @"hkcu\software\microprose\mechwarrior 3\1.0";
     private readonly string directory;
     private string Store => Path.Combine(directory, "profiles.json");
@@ -64,53 +98,63 @@ public sealed class ControlProfiles
         if (new FileInfo(path).Length > limit) throw new InvalidDataException("Controls file is too large: " + path);
         return File.ReadAllText(path);
     }
-    private static T Read<T>(string path) => JsonSerializer.Deserialize<T>(ReadBounded(path))
+    private static T Read<T>(string path, int limit = 256 * 1024) =>
+        JsonSerializer.Deserialize<T>(ReadBounded(path, limit), Json)
         ?? throw new InvalidDataException("Controls file is empty: " + path);
     public ControlDocument Load()
     {
-        var doc = File.Exists(Store) ? Read<ControlDocument>(Store) : new();
-        Validate(doc);
-        // Seed optional layouts, never replacing edits or the active selection.
-        bool added = false;
+        var doc = ReadLaunchDocument();
+        var changed = MigrateLegacyMw5(doc);
+        // Seed optional layouts without replacing edits or changing the active selection.
         foreach (var preset in new[] { ControlPresets.Mw5(), Mw3DefaultControls.Create() })
         {
-            var existing = doc.Profiles.FindIndex(p => p.Id == preset.Id);
-            if (existing >= 0)
-            {
-                // Repair only the exact old factory layout. Renamed, rebound or
-                // deliberately cleared user layouts retain every customization.
-                var previous = doc.Profiles[existing];
-                if (preset.Id == ControlPresets.Mw5Id && ControlPresets.IsUnmodifiedLegacyMw5(previous))
-                {
-                    doc.Profiles[existing] = preset;
-                    if (Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(doc, Json)) <= 256 * 1024) added = true;
-                    else doc.Profiles[existing] = previous;
-                }
-                continue;
-            }
-            if (doc.Profiles.Count >= 24) continue;
+            if (doc.Profiles.Count >= 24 || doc.Profiles.Any(profile => profile.Id == preset.Id)) continue;
             doc.Profiles.Add(preset);
-            if (Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(doc, Json)) <= 256 * 1024) added = true;
+            if (WithinSizeLimit(doc)) changed = true;
             else doc.Profiles.RemoveAt(doc.Profiles.Count - 1);
         }
-        if (added) Save(doc);
+        if (changed) Save(doc);
         return doc;
     }
-    /// <summary>Read the selected layout for launch without seeding or changing user controls.</summary>
+
+    /// <summary>Read and migrate the selected layout in memory without writing user controls.</summary>
     public ControlDocument LoadForLaunch()
     {
-        if (!File.Exists(Store)) return new();
-        var doc = Read<ControlDocument>(Store);
+        var doc = ReadLaunchDocument();
+        MigrateLegacyMw5(doc);
+        return doc;
+    }
+
+    private ControlDocument ReadLaunchDocument()
+    {
+        var doc = File.Exists(Store) ? Read<ControlDocument>(Store, ProfileSizeLimit) : new ControlDocument();
         Validate(doc);
         return doc;
     }
+
+    private static bool MigrateLegacyMw5(ControlDocument doc)
+    {
+        var index = doc.Profiles.FindIndex(profile => profile.Id == ControlPresets.Mw5Id);
+        if (index < 0 || !ControlPresets.IsUnmodifiedLegacyMw5(doc.Profiles[index])) return false;
+        var previous = doc.Profiles[index];
+        doc.Profiles[index] = ControlPresets.Mw5();
+        if (WithinSizeLimit(doc)) return true;
+        doc.Profiles[index] = previous;
+        return false;
+    }
+
+    private static bool WithinSizeLimit(ControlDocument doc) =>
+        Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(doc, Json)) <= ProfileSizeLimit;
+
     public void Save(ControlDocument doc)
     {
         Validate(doc);
         var text = JsonSerializer.Serialize(doc, Json);
-        if (Encoding.UTF8.GetByteCount(text) > 256 * 1024) throw new InvalidDataException("The layout library is full. Keep fewer saved layouts.");
+        if (Encoding.UTF8.GetByteCount(text) > ProfileSizeLimit)
+            throw new InvalidDataException("The layout library is full. Keep fewer saved layouts.");
         AtomicWrite(Store, text);
     }
+
     public static void Validate(ControlDocument doc)
     {
         if (doc.Version != 1 || doc.GameId != GameCatalog.Mw3 || doc.Profiles == null || doc.Profiles.Count > 24)
@@ -123,25 +167,101 @@ public sealed class ControlProfiles
                 p.Description == null || p.Description.Length > 2048 ||
                 p.Bindings == null || p.Bindings.Count != Actions.Count || Actions.Any(a => !p.Bindings.ContainsKey(a.Name)))
                 throw new InvalidDataException("Invalid or incomplete controls profile.");
-            foreach (var b in p.Bindings.Values)
-                if (b == null || b.Primary is < 0 or > 0x7ff || b.Secondary is < 0 or > 0x7ff ||
-                    b.Mouse is < 0 or > 3 || b.Joystick is < 0 or > 15 ||
-                    (b.Primary != 0 && (b.Primary & 255) == 0) || (b.Secondary != 0 && (b.Secondary & 255) == 0))
+            var extendedMouse = new HashSet<int>();
+            var combos = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var binding in p.Bindings.Values)
+            {
+                if (binding == null || binding.Primary is < 0 or > 0x7ff || binding.Secondary is < 0 or > 0x7ff ||
+                    binding.Mouse is < 0 or > 7 || binding.Joystick is < 0 or > 15 ||
+                    (binding.Primary != 0 && (binding.Primary & 255) == 0) ||
+                    (binding.Secondary != 0 && (binding.Secondary & 255) == 0))
                     throw new InvalidDataException("Invalid control binding.");
+                // Retail command maps can contain shared Mouse 1–3 assignments.
+                if (binding.Mouse > 3 && !extendedMouse.Add(binding.Mouse))
+                    throw new InvalidDataException("An extended mouse input is assigned to more than one action.");
+                if (binding.Combos is not { Count: > 0 } actionCombos) continue;
+                if (actionCombos.Count > MaxCombosPerAction || combos.Count + actionCombos.Count > MaxCombosPerProfile)
+                    throw new InvalidDataException("A controls layout may have up to eight combos per action and 64 total.");
+                foreach (var combo in actionCombos)
+                {
+                    ValidateCombo(combo);
+                    if (!combos.Add(CanonicalCombo(combo)))
+                        throw new InvalidDataException("A controls layout cannot contain duplicate combos.");
+                }
+            }
         }
-        if (doc.ActiveId != null && !doc.Profiles.Any(p => p.Id == doc.ActiveId)) throw new InvalidDataException("The selected controls profile is missing.");
+        if (doc.ActiveId != null && !doc.Profiles.Any(p => p.Id == doc.ActiveId))
+            throw new InvalidDataException("The selected controls profile is missing.");
     }
+
+    public static void ValidateCombo(ControlCombo combo)
+    {
+        if (combo?.Inputs == null || combo.Inputs.Count is < 2 or > 3 ||
+            combo.Inputs.Any(input => input == null || !IsPhysicalInput(input)) ||
+            combo.Inputs.Distinct().Count() != combo.Inputs.Count)
+            throw new InvalidDataException("A combo must contain two or three distinct supported physical inputs.");
+        if (combo.Inputs.Count(input => input.Kind == ControlComboInputKind.Mouse && input.Code is 6 or 7) == 2)
+            throw new InvalidDataException("A combo cannot contain both wheel directions.");
+    }
+
+    private static bool IsPhysicalInput(ControlComboInput input) => input.Kind switch
+    {
+        ControlComboInputKind.Key => input.Code is >= 1 and <= 0xff && !ControlKeys.IsReservedScan(input.Code),
+        ControlComboInputKind.Mouse => input.Code is >= 1 and <= 7,
+        _ => false
+    };
+
+    internal static IEnumerable<ControlComboInput> OrderedInputs(ControlCombo combo) =>
+        combo.Inputs.OrderBy(input => input.Kind).ThenBy(input => input.Code);
+
+    public static string CanonicalCombo(ControlCombo combo) =>
+        string.Join(' ', OrderedInputs(combo).Select(input => input.Kind == ControlComboInputKind.Key
+            ? FormattableString.Invariant($"K:0x{input.Code:x2}")
+            : FormattableString.Invariant($"M:{input.Code}")));
+
+    public static bool UsesExtendedInputBindings(ControlProfile profile) =>
+        profile.Bindings.Values.Any(binding => binding.Mouse > 3 || binding.Combos is { Count: > 0 });
+
     public static ControlProfile Clone(ControlProfile source, string name) => new()
     {
-        Name = name, Description = source.Description, Bindings = source.Bindings.ToDictionary(p => p.Key, p => new ControlBinding {
-            Primary = p.Value.Primary, Secondary = p.Value.Secondary, Mouse = p.Value.Mouse, Joystick = p.Value.Joystick })
+        Name = name,
+        Description = source.Description,
+        Mw2JumpJets = source.Mw2JumpJets,
+        Bindings = source.Bindings.ToDictionary(pair => pair.Key, pair => new ControlBinding
+        {
+            Primary = pair.Value.Primary,
+            Secondary = pair.Value.Secondary,
+            Mouse = pair.Value.Mouse,
+            Joystick = pair.Value.Joystick,
+            Combos = pair.Value.Combos?.Select(combo => new ControlCombo
+            {
+                Suppress = combo.Suppress,
+                Inputs = combo.Inputs.Select(input => input with { }).ToList()
+            }).ToList()
+        })
     };
-    public static IReadOnlyList<string> Conflicts(ControlProfile p)
+
+    public static IReadOnlyList<string> Conflicts(ControlProfile profile)
     {
-        return p.Bindings.SelectMany(b => new[] { b.Value.Primary, b.Value.Secondary }.Where(k => k != 0).Distinct()
-            .Select(k => (Key: k, Action: b.Key))).GroupBy(x => x.Key).Where(g => g.Count() > 1)
-            .Select(g => $"{ControlKeys.Label(g.Key)}: " + string.Join(", ", g.Select(x => Actions.First(a => a.Name == x.Action).Label))).ToArray();
+        var bindings = Actions.SelectMany(action => ConflictInputs(profile.Bindings[action.Name])
+            .Select(input => (input.Identity, input.Label, Action: action.Label)));
+        return bindings.GroupBy(binding => binding.Identity, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .Select(group => $"{group.First().Label}: " + string.Join(", ", group.Select(binding => binding.Action)))
+            .ToArray();
     }
+
+    private static IEnumerable<(string Identity, string Label)> ConflictInputs(ControlBinding binding)
+    {
+        foreach (var key in new[] { binding.Primary, binding.Secondary }.Where(key => key != 0).Distinct())
+            yield return ($"key:{key}", ControlKeys.Label(key));
+        if (binding.Mouse > 0)
+            yield return ($"mouse:{binding.Mouse}", ControlKeys.MouseLabel(binding.Mouse));
+        foreach (var combo in binding.Combos ?? [])
+            yield return ("combo:" + CanonicalCombo(combo), string.Join(" + ", OrderedInputs(combo).Select(input =>
+                input.Kind == ControlComboInputKind.Key ? ControlKeys.Label(input.Code) : ControlKeys.MouseLabel(input.Code))));
+    }
+
     private static bool IsControlRow(string row)
     {
         var f = row.Split('\t');
@@ -192,7 +312,8 @@ public sealed class ControlProfiles
         {
             var b = p.Bindings[a.Name];
             // Emit zero fields too: clearing a key must not retain a prior game's binding.
-            s.AppendLine($"  ({a.Name} keya(0x{b.Primary:x}) keyb(0x{b.Secondary:x}) joybtn(0x{b.Joystick:x}) mousebtn(0x{b.Mouse:x}))");
+            var legacyMouse = b.Mouse <= 3 ? b.Mouse : 0;
+            s.AppendLine($"  ({a.Name} keya(0x{b.Primary:x}) keyb(0x{b.Secondary:x}) joybtn(0x{b.Joystick:x}) mousebtn(0x{legacyMouse:x}))");
         }
         var keys = s.Append(")").ToString();
         if (originalPreset == null) return "(\n" + keys + "\n)\n";
@@ -246,19 +367,21 @@ public sealed class ControlProfiles
         string.Join('\n', text.Split('\n').Select(r => r.TrimEnd('\r')).Where(r => !IsControlRow(r) && r.Length > 0).Concat(rows)) + "\n";
     public void PrepareLaunch(JsonObject profile, string dataRoot, string gameDirectory)
     {
-        var doc = Load();
-        if (doc.ActiveId == null && !File.Exists(StatePath)) return; // Existing installations are untouched by default.
+        var doc = LoadForLaunch();
+        var selected = doc.Profiles.SingleOrDefault(p => p.Id == doc.ActiveId);
+        if (selected != null && UsesExtendedInputBindings(selected))
+            throw new InvalidDataException("Extended mouse and combo controls require MW3-RE. Choose a compatible layout for D7VK.");
+        if (selected == null && !File.Exists(StatePath)) return; // Existing installations are untouched by default.
         var state = File.Exists(StatePath) ? ReadState() : new RestoreState();
-        if (doc.ActiveId == null && !state.Applied) return;
+        if (selected == null && !state.Applied) return;
         // Bind a per-user copy in development too. Never modify the published registry seed.
         var registry = PlayerRegistry.Bind(profile, dataRoot);
         var text = ReadBounded(registry, 8 * 1024 * 1024);
-        if (doc.ActiveId == null)
+        if (selected == null)
         {
             AtomicWrite(registry, ReplaceControls(text, state.OriginalRows));
             state.Applied = false; AtomicWrite(StatePath, JsonSerializer.Serialize(state, Json)); return;
         }
-        var selected = doc.Profiles.Single(p => p.Id == doc.ActiveId);
         ImportRegistry(text); // Reject unknown/missing formats before touching game settings.
         var content = Preset(selected, OriginalPreset(state.Applied ? state.OriginalRows : ControlRows(text), gameDirectory));
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(content)))[..20];

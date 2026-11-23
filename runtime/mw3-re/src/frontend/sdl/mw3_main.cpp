@@ -214,6 +214,7 @@ struct Args {
   std::string cfg_mw1_game;  // mw3.cfg's mw1_game= (ours: the launcher's MechWarrior 1989 folder)
   std::string cfg_joystick, cfg_joystick_axes;  // mw3.cfg's joystick=, joystick_axes= (ours, W54: sdl_input.h)
   std::string controller_profile;  // --cc-controller FILE (launcher-exported CC_MW3_CONTROLLER_V1)
+  std::string input_bindings;
   bool cfg_joystick_disabled = false;
   int wide_menus = -1, cfg_wide_menus = -1;  // --wide-menus / --no-wide-menus, mw3.cfg's widemenus= (ours)
   bool debug_camera = false;  // --debug-camera (ours, docs/editor.md S4): the game editor anywhere; developers only
@@ -354,6 +355,7 @@ void usage() {
       "    [--cc-draw-distance 800|1200|1600|2400|3200 (default 800)]\n"
       "    [--cc-flare-style modern|original (default modern)]\n"
       "    [--cc-controller FILE] (launcher-exported controller profile)\n"
+      "    [--cc-input FILE] (launcher-exported extended mouse and combo bindings)\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [--arena SETUP.json --seed N --frame-ms N] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
@@ -528,6 +530,13 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-vulkan-wsi") a.backend = sdlfe::RendererBackend::core_critical_wsi, a.no_launcher = true;
     else if (s == "--cc-controller" && next(1)) a.controller_profile = argv[++i];
     else if (s == "--cc-controller") return false;
+    else if (s == "--cc-input") {
+      if (!next(1) || !argv[i + 1][0] || std::string_view(argv[i + 1]).substr(0, 2) == "--") {
+        std::fprintf(stderr, "mw3: --cc-input requires a file path\n");
+        return false;
+      }
+      a.input_bindings = argv[++i];
+    }
     else if (s == "--cc-aa" && next(1)) a.quality.antialiasing = argv[++i];
     else if (s == "--cc-af" && next(1)) a.quality.anisotropy = argv[++i];
     else if (s == "--cc-flare-style" && next(1)) {
@@ -1431,6 +1440,15 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
                                         selected_assets.environment->banks)
                                   : nullptr)};
   environment_phase.reset();
+  sdlfe::SdlInput input;
+  input.joystick_disabled = a.cfg_joystick_disabled;
+  input.joystick_want = a.cfg_joystick, input.joystick_axes = a.cfg_joystick_axes;
+  input.controller_profile_path = a.controller_profile;
+  if (!a.input_bindings.empty()) {
+    size_t count = 0;
+    input.set_input_bindings(a.input_bindings, &count);
+    std::printf("mw3: input bindings: loaded %zu extended bindings\n", count);
+  }
   auto renderer_phase = std::make_unique<platform::loading::Phase>("window-renderer-init");
   if (!window.init(a.hidden, a.launcher_window, a.backend, a.quality,
                    selected_assets)) {
@@ -1439,11 +1457,8 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     return 1;
   }
   renderer_phase.reset();
-  sdlfe::SdlInput input;
+  if (auto* r = window.render()) input.set_headlight_wheel(r->headlight_wheel_mask());
   sdlfe::LoadingDisplay loading_display(window.sdl(), &input, a.hidden);
-  input.joystick_disabled = a.cfg_joystick_disabled;
-  input.joystick_want = a.cfg_joystick, input.joystick_axes = a.cfg_joystick_axes;
-  input.controller_profile_path = a.controller_profile;
   sdlfe::SdlForceDevice force([&input] { return input.joystick(); });  // FIX (A): IFORCE2 as rumble (sdl_force.h)
   input.window = window.sdl();
   int focus_at = 0, focus_passes = 0;  // MW3_FOCUS_AT (checks)

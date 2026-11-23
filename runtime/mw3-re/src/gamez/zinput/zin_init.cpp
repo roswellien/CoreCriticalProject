@@ -145,9 +145,21 @@ uint32_t mouse_unuse() {
 // A device is read when present, not suspended (flags exactly 1) and used.
 void poll(bool callbacks) {
   State& s = g_state;
+  CmdMap* poll_map = s.map;
+  const bool commands_enabled = poll_map && poll_map->enabled;
+  const bool text_entry = s.char_callback != nullptr;
+  if (s.di) s.di->begin_poll(text_entry, commands_enabled);
   if (s.mouse_flags == 1 && s.mouse_users != 0) mouse_poll(callbacks);
   if (s.joy_flags == 1 && s.joy_users != 0) joy_read(callbacks);
   if (s.kbd_flags == 1 && s.kbd_users != 0) kbd_read(callbacks);
+  // An input callback can close a map or open text entry. Remaining edges
+  // belong to the context in which the snapshot was taken.
+  if (!callbacks || !commands_enabled || text_entry) return;
+  for (int32_t cmd = 0; s.map == poll_map && cmd < s.map->count; ++cmd) {
+    if (!s.di || !s.map->enabled || s.char_callback) break;
+    const auto callback = s.map->callbacks[cmd];
+    if (callback && s.di->extended_command_pressed(cmd)) callback(cmd);
+  }
 }
 
 // Mech3.exe 1.2 @ 0x0051ddc0

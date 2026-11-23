@@ -521,6 +521,7 @@ class GameEngine : public Engine {
   void camera_set_hse_test(int32_t on) override;  // 0x004f3550
   void update_shadows() override;  // 0x004814e0 on the program's entities (app_mech)
   // zInput (gamez/zinput, docs/input.md).
+  const platform::Input* platform_input() const { return p_.input; }
   void input_init(int32_t commands, const char* map) override;
   void input_start(uint32_t window, uint32_t cmd_show) override;
   void input_devices_shutdown() override;

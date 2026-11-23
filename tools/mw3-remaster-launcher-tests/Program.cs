@@ -131,7 +131,12 @@ if (args.Length == 2 && args[0] == "--preview-controller")
 
 if (args.Length == 1 && args[0] == "--controls-only")
 {
-    ControlProfileChecks.Run(); NativeControlChecks.Run(); return;
+    ControlProfileChecks.Run();
+    NativeControlChecks.Run();
+    var tempRoot = Directory.CreateTempSubdirectory("MW3ControlsUi-");
+    try { GraphicsSetupUiChecks.RunControlsUi(tempRoot.FullName); }
+    finally { tempRoot.Delete(recursive: true); }
+    return;
 }
 if (args.Length == 3 && args[0] == "--preview-controls")
 {
@@ -410,6 +415,14 @@ OriginalSupportChecks.Run();
 PlayerRegistryChecks.Run();
 ControlProfileChecks.Run();
 NativeControlChecks.Run();
+var tempUi = Directory.CreateTempSubdirectory("MW3LauncherUi-");
+try
+{
+    var tempHeadlights = tempUi.CreateSubdirectory("headlights");
+    var tempControls = tempUi.CreateSubdirectory("controls");
+    GraphicsSetupUiChecks.RunControlsAndHeadlights(tempHeadlights.FullName, tempControls.FullName);
+}
+finally { tempUi.Delete(recursive: true); }
 ControllerChecks.Run();
 JoystickSelectionChecks.Run();
 SaveBackupChecks.Run();

@@ -92,6 +92,7 @@ static class NativeRuntimeLayoutChecks
             File.AppendAllText(installed.Coordinator, "damaged");
             Reject(() => NativeRuntimeLayout.FindInstalled(app));
             RunMw3ReStageA();
+            CheckInputBindingsCapability(app);
             Console.WriteLine("Installed runtime discovery, containment, integrity and startup checks passed.");
         }
         finally { Directory.Delete(app, true); }
@@ -1133,6 +1134,126 @@ static class NativeRuntimeLayoutChecks
         NativeGameRunner.ApplyCacheEnvironment(olderStart, older.RootElement);
         if (olderStart.Environment.ContainsKey("MW3_DISK_CACHE"))
             throw new Exception("An older planner without an environment changed the game's environment.");
+    }
+
+    private static void CheckInputBindingsCapability(string app)
+    {
+        var root = Path.Combine(app, "input-runtime");
+        Directory.CreateDirectory(root);
+        File.Copy(Path.Combine(AppContext.BaseDirectory, "LauncherChecks.exe"), Path.Combine(root, "mw3.exe"));
+        File.WriteAllText(Path.Combine(root, "profile.json"), "{}");
+        var pins = new JsonObject();
+        foreach (var name in new[] { "mw3.exe", "profile.json" })
+        {
+            var bytes = File.ReadAllBytes(Path.Combine(root, name));
+            pins[name] = new JsonObject { ["bytes"] = bytes.Length, ["sha256"] = Convert.ToHexString(SHA256.HashData(bytes)) };
+        }
+        var descriptor = new JsonObject
+        {
+            ["schema_version"] = 2,
+            ["engine"] = "mw3-re",
+            ["roles"] = new JsonObject { ["executable"] = "mw3.exe", ["profile"] = "profile.json" },
+            ["dependencies"] = new JsonArray(),
+            ["files"] = pins,
+            ["provenance"] = new JsonObject
+            {
+                ["source_commit"] = new string('a', 40), ["build_id"] = "input-fixture", ["builder"] = "fixture"
+            }
+        };
+        var data = Path.Combine(app, "input-data");
+        var layouts = new ControlProfiles(data);
+        var headlights = new HeadlightBindings(data);
+        var game = Path.Combine(app, "input-game");
+        var write = Path.Combine(data, "native profile with spaces");
+        Directory.CreateDirectory(write);
+        var settingsPath = Path.Combine(write, "settings.reg");
+        var restorePath = Path.Combine(write, "launcher-controls.restore.json");
+        var inputPath = Path.Combine(write, "mw3-input.txt");
+        var headlightPath = Path.Combine(write, "mw3-headlights.txt");
+        const string originalSettings = "[HKEY_CURRENT_USER\\SOFTWARE\\MicroProse\\MechWarrior 3\\1.0]\r\n" +
+            "\"GameOptions\"=dword:00000049\r\n";
+        File.WriteAllText(settingsPath, originalSettings);
+        File.WriteAllText(inputPath, "stale input fixture");
+        File.WriteAllText(headlightPath, "stale headlight fixture");
+
+        Mw3ReRuntimeContract ReadContract(params int[] versions)
+        {
+            var capabilities = new JsonObject();
+            if (versions.Length != 0)
+                capabilities["input-bindings"] = new JsonArray(versions.Select(version => (JsonNode)JsonValue.Create(version)).ToArray());
+            descriptor["capabilities"] = capabilities;
+            File.WriteAllText(Path.Combine(root, "runtime.json"), descriptor.ToJsonString());
+            return Mw3ReRuntimeContract.ReadStructure(root);
+        }
+
+        void Select(ControlProfile profile, bool active = true) =>
+            layouts.Save(new ControlDocument { Profiles = [profile], ActiveId = active ? profile.Id : null });
+
+        (string Input, string Headlight) Prepare(Mw3ReRuntimeContract contract, bool lighting, bool enabled) =>
+            NativeGameRunner.PrepareLaunchControls(contract, data, write, game,
+                new LauncherSettings { DynamicLighting = lighting, Headlights = enabled },
+                new ControllerProfile(), _ => { });
+
+        void Reject(Mw3ReRuntimeContract contract, bool lighting, bool enabled)
+        {
+            try
+            {
+                Prepare(contract, lighting, enabled);
+                throw new Exception("Unsupported runtime accepted extended input bindings.");
+            }
+            catch (InvalidOperationException error) when (error.Message.Contains("Update MW3-RE")) { }
+            if (File.ReadAllText(settingsPath) != originalSettings || File.Exists(restorePath) ||
+                File.ReadAllText(inputPath) != "stale input fixture" || File.ReadAllText(headlightPath) != "stale headlight fixture")
+                throw new Exception("The input capability gate ran after preparing launch controls.");
+        }
+
+        foreach (var unsupported in new[] { ReadContract(), ReadContract(2) })
+        {
+            if (unsupported.SupportsInputBindings)
+                throw new Exception("Runtime without input-bindings v1 was marked compatible.");
+            Select(ControlPresets.Mw5());
+            Reject(unsupported, lighting: false, enabled: false);
+
+            var mouseOnly = Mw3DefaultControls.Create();
+            mouseOnly.Bindings["CMD_TRIGGER1"].Mouse = 5;
+            Select(mouseOnly);
+            Reject(unsupported, lighting: false, enabled: false);
+            mouseOnly.Bindings["CMD_TRIGGER1"].Mouse = 1;
+            mouseOnly.Bindings["CMD_TRIGGER1"].Combos =
+                [new ControlCombo { Inputs = [new(ControlComboInputKind.Key, 0x39), new(ControlComboInputKind.Mouse, 1)] }];
+            Select(mouseOnly);
+            Reject(unsupported, lighting: false, enabled: false);
+
+            Select(Mw3DefaultControls.Create());
+            headlights.Save(new HeadlightBinding { Key = 0, Mouse = 1 });
+            Reject(unsupported, lighting: true, enabled: true);
+        }
+
+        var legacyRuntime = ReadContract();
+        foreach (var (lighting, enabled) in new[] { (false, true), (true, false) })
+        {
+            var result = Prepare(legacyRuntime, lighting, enabled);
+            if (!File.Exists(restorePath) || File.ReadAllText(settingsPath) == originalSettings ||
+                result.Input != null || result.Headlight != null || File.Exists(inputPath))
+                throw new Exception("Disabled mouse headlights blocked legacy-compatible control preparation.");
+        }
+        headlights.Save(new HeadlightBinding { Key = 0x26 });
+        var legacyResult = Prepare(legacyRuntime, lighting: true, enabled: true);
+        if (legacyResult.Input != null || legacyResult.Headlight != headlightPath ||
+            !File.ReadAllText(headlightPath).StartsWith("CC_MW3_HEADLIGHTS_V1\n", StringComparison.Ordinal))
+            throw new Exception("Legacy-compatible headlight bindings required the extended capability.");
+        Select(ControlPresets.Mw5(), active: false);
+        if (Prepare(legacyRuntime, lighting: false, enabled: false).Input != null)
+            throw new Exception("An inactive extended layout required the extended capability.");
+
+        var supported = ReadContract(2, 1);
+        Select(ControlPresets.Mw5());
+        headlights.Save(new HeadlightBinding { Key = 0, Mouse = 7 });
+        var extendedResult = Prepare(supported, lighting: true, enabled: true);
+        if (!supported.SupportsInputBindings || extendedResult.Input != inputPath ||
+            extendedResult.Headlight != headlightPath || !File.Exists(inputPath) ||
+            File.ReadAllText(headlightPath) != "CC_MW3_HEADLIGHTS_V2\n0 -1 7\n")
+            throw new Exception("An admitted runtime did not receive its extended input and headlight sidecars.");
     }
 
     private static JsonNode RunMw3RePlanner(string json)
