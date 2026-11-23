@@ -58,6 +58,8 @@ public sealed class NativeGameRunner
     }
 
     public string? LastLogPath { get; private set; }
+    public string? LastRuntimeVersion { get; private set; }
+    public Task<int>? LastSessionCompletion { get; private set; }
 
     public static Mw3ReWindowMode WindowModeForSettings(string savedWindowMode) => savedWindowMode switch
     {
@@ -271,7 +273,7 @@ public sealed class NativeGameRunner
                 if (!logCreated)
                 {
                     File.WriteAllText(logPath, "MW3-RE, launcher " +
-                        typeof(NativeGameRunner).Assembly.GetName().Version + Environment.NewLine +
+                        PlaytestDiagnostics.LauncherVersionString(typeof(NativeGameRunner).Assembly) + Environment.NewLine +
                         string.Join(Environment.NewLine, pendingLog) + Environment.NewLine);
                     pendingLog.Clear();
                     logCreated = true;
@@ -280,17 +282,34 @@ public sealed class NativeGameRunner
             }
         }
 
+        LastRuntimeVersion = null;
+        LastSessionCompletion = null;
+        NativeSessionDiagnosticsBaseline? baseline = null;
         // Keep updates and pack changes out of the active MW3-RE session.
         var gate = GameUpdateGate.Acquire(_dataRoot);
         try
         {
             Log("Startup: Checking game files...");
             var process = Start(settings, activeModDirs, line =>
-                Log($"{line} [launcher elapsed {launchClock.ElapsedMilliseconds} ms]"), session);
+                Log($"{line} [launcher elapsed {launchClock.ElapsedMilliseconds} ms]"), session,
+                capturedBaseline => baseline = capturedBaseline);
             PublishLog();
-            process.EnableRaisingEvents = true;
-            process.Exited += (_, _) => gate.Dispose();
-            if (process.HasExited) gate.Dispose();
+            async Task<int> ObserveSessionExitAsync()
+            {
+                try
+                {
+                    var exit = await GameRunner.WaitForCompletionAsync(process).ConfigureAwait(false);
+                    if (exit != 0)
+                        PlaytestDiagnostics.CollectNativeSessionArtifacts(baseline, session);
+                    return exit;
+                }
+                finally
+                {
+                    gate.Dispose();
+                }
+            }
+
+            LastSessionCompletion = ObserveSessionExitAsync();
             return process;
         }
         catch (Exception error)
@@ -302,19 +321,23 @@ public sealed class NativeGameRunner
         }
     }
 
-    private Process Start(LauncherSettings settings, IEnumerable<string> activeModDirs, Action<string> log, string session)
+    private Process Start(LauncherSettings settings, IEnumerable<string> activeModDirs, Action<string> log, string session,
+        Action<NativeSessionDiagnosticsBaseline>? onBaseline)
     {
         var validation = GameValidator.Validate(settings.GamePath);
         if (!validation.IsValid) throw new InvalidOperationException("Cannot launch game: " + validation.StatusMessage);
         if (!string.IsNullOrWhiteSpace(settings.ModularContentProfile))
         {
-            var profileProcess = ModProfiles.Launch(settings, validation.GameDirectory, _dataRoot, log);
+            LastRuntimeVersion = DescribeExternalRuntimeVersion(settings.ModularRuntimeExecutable);
+            var profileProcess = ModProfiles.Launch(settings, validation.GameDirectory, _dataRoot, log,
+                writeDir => onBaseline?.Invoke(PlaytestDiagnostics.CaptureNativeBaseline(writeDir)));
             return profileProcess;
         }
 
         log("Startup: Verifying native runtime...");
         var root = RequireBundledMw3Re();
         var contract = Mw3ReRuntimeContract.ReadStructure(root);
+        LastRuntimeVersion = PlaytestDiagnostics.FormatRuntimeVersion(contract);
         var controllerProfile = new ControllerProfiles(_dataRoot).Load();
         if (controllerProfile.Enabled && !contract.SupportsControllerProfiles)
             throw new InvalidOperationException("The installed MW3-RE runtime does not support controller profiles.");
@@ -394,6 +417,8 @@ public sealed class NativeGameRunner
             CreateNoWindow = true
         };
         ApplyCacheEnvironment(start, plan.RootElement);
+        // The launcher can show the captured crash and offer a report after the process exits.
+        start.Environment["MW3_LAUNCHER_WATCHES"] = "1";
         var readyFile = Path.Combine(session, "native-ready");
         argv.AddRange(new[] { "--ready-file", readyFile });
         foreach (var argument in argv.Skip(1)) start.ArgumentList.Add(argument);
@@ -402,12 +427,40 @@ public sealed class NativeGameRunner
         var process = new Process { StartInfo = start };
         process.OutputDataReceived += (_, line) => { if (line.Data != null) log(line.Data); };
         process.ErrorDataReceived += (_, line) => { if (line.Data != null) log(line.Data); };
+        Directory.CreateDirectory(writeDirectory);
+        onBaseline?.Invoke(PlaytestDiagnostics.CaptureNativeBaseline(writeDirectory));
         if (!process.Start()) throw new InvalidOperationException("MW3-RE did not start.");
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         log("MW3-RE PID " + process.Id);
         _ = ObserveReadinessAsync(process, readyFile, log);
         return process;
+    }
+
+    private static string DescribeExternalRuntimeVersion(string executablePath)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(executablePath))
+            {
+                var full = Path.GetFullPath(executablePath);
+                if (File.Exists(full))
+                {
+                    var info = FileVersionInfo.GetVersionInfo(full);
+                    var version = !string.IsNullOrWhiteSpace(info.ProductVersion) ? info.ProductVersion.Trim()
+                        : !string.IsNullOrWhiteSpace(info.FileVersion) ? info.FileVersion.Trim() : null;
+                    if (!string.IsNullOrEmpty(version))
+                    {
+                        var plus = version.IndexOf('+');
+                        if (plus >= 0) version = version[..plus].Trim();
+                        var label = $"external ({version})";
+                        return label.Length <= 80 ? label : label[..80];
+                    }
+                }
+            }
+        }
+        catch { }
+        return "external";
     }
 
     /// <summary>Run the launch preflight and write-profile projection without starting a process.</summary>

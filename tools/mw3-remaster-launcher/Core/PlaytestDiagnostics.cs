@@ -1,16 +1,280 @@
 using System.IO;
 using System.IO.Compression;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Win32;
 
 namespace MW3RemasterLauncher.Core;
+
+/// <summary>Pre-launch profile state so current-session native logs can be separated from stale prior runs.</summary>
+public sealed record NativeSessionDiagnosticsBaseline(
+    string WriteDirectory,
+    string LogPath,
+    bool LogExisted,
+    DateTime LogCreationTimeUtc,
+    DateTime LogLastWriteTimeUtc,
+    long LogLength,
+    string CrashPath,
+    long CrashOffset,
+    DateTime StartedUtc);
 
 /// <summary>Export a small local support bundle, using an explicit allowlist of metadata and log tails.</summary>
 public static class PlaytestDiagnostics
 {
     public const int MaxLogBytes = 64 * 1024;
+    public const int MaxAggregateLogBytes = 160 * 1024;
+    public const int MaxRequestBytes = 256 * 1024;
+    public const string GenericFailureSummary = "No specific failure was recorded.";
+    public const string NativeCrashFileName = "crash.txt";
+    public const string NativeRunFileName = "mw3.log";
+
+    // Keep only the fixed diagnostic suffix of the legacy host fault record (issue #150).
+    private static readonly Regex WindowsPathWithNativeSuffix = new(
+        @"^(?<prefix>HOST EXCEPTION (?:0x)?[0-9a-f]{1,8} at )(?<path>(?:[A-Z]:[\\/]|\\\\)[^\r\n\t""<>|:]{1,1024}?)(?<suffix>\.(?:exe|dll)[ \t]*\+0x[0-9a-f]{1,16}(?: \(access [0-9]+ address (?:0x)?[0-9a-f]{1,16}\))?)(?=\r?$)",
+        RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    public static string LauncherVersionString(Assembly? assembly = null)
+    {
+        var target = assembly ?? typeof(GameRunner).Assembly;
+        var informational = target.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informational))
+        {
+            var plus = informational.IndexOf('+');
+            var clean = (plus >= 0 ? informational[..plus] : informational).Trim();
+            if (clean.Length > 0) return clean;
+        }
+        return target.GetName().Version?.ToString(3) ?? "unknown";
+    }
+
+    public static string OperatingSystemDescription()
+    {
+        try
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                var version = Environment.OSVersion.Version;
+                string? installationType = null;
+                string? displayVersion = null;
+                int? ubr = null;
+                try
+                {
+                    using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+                    installationType = key?.GetValue("InstallationType") as string;
+                    displayVersion = (key?.GetValue("DisplayVersion") as string) ?? (key?.GetValue("ReleaseId") as string);
+                    if (key?.GetValue("UBR") is int ubrValue) ubr = ubrValue;
+                }
+                catch { }
+
+                return FormatWindowsDescription(version.Build, ubr, installationType, displayVersion);
+            }
+        }
+        catch { }
+        return RuntimeInformation.OSDescription;
+    }
+
+    public static string FormatWindowsDescription(int build, int? ubr = null, string? installationType = null, string? displayVersion = null)
+    {
+        if (build <= 0) return RuntimeInformation.OSDescription;
+        var isServer = !string.IsNullOrWhiteSpace(installationType) &&
+            installationType.Contains("Server", StringComparison.OrdinalIgnoreCase);
+        string family;
+        if (isServer)
+        {
+            family = build >= 26100 ? "Windows Server 2025"
+                : build >= 20348 ? "Windows Server 2022"
+                : build >= 17763 ? "Windows Server 2019"
+                : build >= 14393 ? "Windows Server 2016"
+                : "Windows Server";
+        }
+        else
+        {
+            family = build >= 22000 ? "Windows 11"
+                : build >= 10240 ? "Windows 10"
+                : "Windows";
+        }
+
+        var parts = new List<string> { family };
+        if (!string.IsNullOrWhiteSpace(displayVersion)) parts.Add(displayVersion.Trim());
+        var buildText = ubr is > 0 ? $"10.0.{build}.{ubr}" : $"10.0.{build}";
+        parts.Add($"(OS Build {buildText})");
+        return string.Join(" ", parts);
+    }
+
+    public static string FormatExitCode(int exitCode) =>
+        $"{exitCode} (0x{unchecked((uint)exitCode):X8})";
+
+    public static string FormatRuntimeVersion(Mw3ReRuntimeContract contract)
+    {
+        var buildId = string.IsNullOrWhiteSpace(contract.BuildId) ? "mw3-re" : contract.BuildId.Trim();
+        var commit = contract.SourceCommit?.Trim() ?? "";
+        if (commit.Length >= 12)
+        {
+            var shortCommit = commit[..12];
+            var combined = $"{buildId} ({shortCommit})";
+            if (combined.Length <= 80) return combined;
+        }
+        if (commit.Length >= 7)
+        {
+            var shortCommit = commit[..7];
+            var combined = $"{buildId} ({shortCommit})";
+            if (combined.Length <= 80) return combined;
+        }
+        return buildId.Length <= 80 ? buildId : buildId[..80];
+    }
+
+    public static NativeSessionDiagnosticsBaseline CaptureNativeBaseline(string writeDirectory)
+    {
+        var fullWriteDir = Path.GetFullPath(writeDirectory);
+        var logPath = Path.Combine(fullWriteDir, NativeRunFileName);
+        var crashPath = Path.Combine(fullWriteDir, NativeCrashFileName);
+        bool logExisted = false;
+        DateTime logCreated = DateTime.MinValue;
+        DateTime logWritten = DateTime.MinValue;
+        long logLength = 0;
+        try
+        {
+            if (File.Exists(logPath) && !HasLinkInChain(logPath))
+            {
+                var info = new FileInfo(logPath);
+                logExisted = true;
+                logCreated = info.CreationTimeUtc;
+                logWritten = info.LastWriteTimeUtc;
+                logLength = info.Length;
+            }
+        }
+        catch { }
+
+        long crashOffset = 0;
+        try
+        {
+            if (File.Exists(crashPath) && !HasLinkInChain(crashPath))
+            {
+                crashOffset = new FileInfo(crashPath).Length;
+            }
+        }
+        catch { }
+
+        return new NativeSessionDiagnosticsBaseline(
+            fullWriteDir,
+            logPath,
+            logExisted,
+            logCreated,
+            logWritten,
+            logLength,
+            crashPath,
+            crashOffset,
+            DateTime.UtcNow);
+    }
+
+    public static void CollectNativeSessionArtifacts(NativeSessionDiagnosticsBaseline? baseline, string sessionDirectory)
+    {
+        if (baseline == null || string.IsNullOrWhiteSpace(sessionDirectory)) return;
+        try
+        {
+            PackStorage.EnsureNoLinks(sessionDirectory);
+            var nativeDir = Path.Combine(sessionDirectory, "native");
+            Directory.CreateDirectory(nativeDir);
+            PackStorage.EnsureNoLinks(nativeDir);
+
+            // 1. Newly appended crash.txt bytes from this session only.
+            try
+            {
+                if (File.Exists(baseline.CrashPath) && !HasLinkInChain(baseline.CrashPath))
+                {
+                    using var stream = new FileStream(baseline.CrashPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    var length = stream.Length;
+                    if (length > baseline.CrashOffset && baseline.CrashOffset >= 0)
+                    {
+                        var start = Math.Max(baseline.CrashOffset, length - MaxLogBytes);
+                        stream.Position = start;
+                        var text = ReadStreamSlice(stream, (int)Math.Min(MaxLogBytes, length - start), start > baseline.CrashOffset);
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                            File.WriteAllText(Path.Combine(nativeDir, NativeCrashFileName), text, new UTF8Encoding(false));
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            // 2. Current-session mw3.log, guarded against stale pre-launch log files.
+            try
+            {
+                if (File.Exists(baseline.LogPath) && !HasLinkInChain(baseline.LogPath))
+                {
+                    var info = new FileInfo(baseline.LogPath);
+                    var fresh = !baseline.LogExisted ||
+                        info.LastWriteTimeUtc != baseline.LogLastWriteTimeUtc ||
+                        info.CreationTimeUtc != baseline.LogCreationTimeUtc ||
+                        info.Length != baseline.LogLength;
+                    if (fresh)
+                    {
+                        var text = ReadLogForSession(baseline.LogPath);
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                            File.WriteAllText(Path.Combine(nativeDir, NativeRunFileName), text, new UTF8Encoding(false));
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+        catch { }
+    }
+
+    private static bool HasLinkInChain(string path)
+    {
+        try
+        {
+            PackStorage.EnsureNoLinks(path);
+            return false;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static string ReadStreamSlice(Stream stream, int maxBytes, bool trimPartialFirstLine)
+    {
+        var buffer = new byte[Math.Min(MaxLogBytes, Math.Max(0, maxBytes))];
+        var length = 0;
+        int count;
+        while (length < buffer.Length && (count = stream.Read(buffer, length, buffer.Length - length)) != 0)
+            length += count;
+        var text = Encoding.UTF8.GetString(buffer, 0, length);
+        if (trimPartialFirstLine)
+        {
+            var newline = text.IndexOf('\n');
+            text = newline < 0 ? "" : text[(newline + 1)..];
+        }
+        return text;
+    }
+
+    private static string ReadLogForSession(string path)
+    {
+        if (!File.Exists(path)) return "";
+        PackStorage.EnsureNoLinks(path);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        if (stream.Length <= MaxLogBytes)
+            return ReadStreamSlice(stream, (int)stream.Length, trimPartialFirstLine: false);
+
+        // Retain informative startup/fault lines from the head when a long session log is truncated.
+        const int headBudget = 12 * 1024;
+        const int tailBudget = MaxLogBytes - headBudget - 64;
+        stream.Position = 0;
+        var head = ReadStreamSlice(stream, headBudget, trimPartialFirstLine: false);
+        var lastHeadNewline = head.LastIndexOf('\n');
+        if (lastHeadNewline >= 0) head = head[..(lastHeadNewline + 1)];
+
+        var tailStart = Math.Max(headBudget, stream.Length - tailBudget);
+        stream.Position = tailStart;
+        var tail = ReadStreamSlice(stream, (int)(stream.Length - tailStart), trimPartialFirstLine: true);
+        return head + "...\n" + tail;
+    }
 
     public static object CreateCrashReport(LauncherSettings settings, IEnumerable<PackManifest> packs,
         string? launchLog, string applicationRoot, string? runtimeVersion = null, int? exitCode = null,
@@ -18,42 +282,138 @@ public static class PlaytestDiagnostics
     {
         var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
-        var logs = new Dictionary<string, string>();
-        if (launchLog != null)
-        {
-            var folder = Path.GetDirectoryName(launchLog)!;
-            foreach (var (name, path) in new[] { ("launcher", launchLog),
-                ("native_stderr", Path.Combine(folder, "native", "stderr.txt")),
-                ("native_stdout", Path.Combine(folder, "native", "stdout.txt")) })
-                if (File.Exists(path)) logs[name] = Redact(ReadTail(path), roots);
-        }
+        var logs = ReadSessionLogs(launchLog, roots);
         var failureSummary = Redact(FailureSummary(launchLog), roots);
         if (failureSummary.Length > 2000) failureSummary = failureSummary[..2000];
 
-        return new
+        var packArray = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray();
+        var settingsObject = settings.EngineMode == "d7vk"
+            ? (object)new { settings.D7VkResolution, settings.D7VkAntiAliasing,
+                settings.D7VkAnisotropicFiltering, settings.D7VkAiTextures }
+            : new { settings.Width, settings.Height, settings.WindowMode, settings.AntiAliasing,
+                settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
+                settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor,
+                settings.RenderThread };
+        var hardware = hardwareInventory ?? HardwareInventory.Capture();
+        var reportId = Guid.NewGuid().ToString("N");
+        var createdUtc = DateTimeOffset.UtcNow;
+        var launcherVersion = LauncherVersionString();
+        var resolvedRuntimeVersion = string.IsNullOrWhiteSpace(runtimeVersion) ? "unknown" : runtimeVersion;
+        var os = OperatingSystemDescription();
+        var architecture = RuntimeInformation.ProcessArchitecture.ToString();
+        var dotnetRuntime = RuntimeInformation.FrameworkDescription;
+
+        object BuildPayload(Dictionary<string, string> currentLogs) => new
         {
             format_version = 1,
-            report_id = Guid.NewGuid().ToString("N"),
-            created_utc = DateTimeOffset.UtcNow,
-            launcher_version = typeof(GameRunner).Assembly.GetName().Version?.ToString(),
-            runtime_version = runtimeVersion ?? "unknown",
+            report_id = reportId,
+            created_utc = createdUtc,
+            launcher_version = launcherVersion,
+            runtime_version = resolvedRuntimeVersion,
             mode = settings.EngineMode,
             exit_code = exitCode,
-            os = RuntimeInformation.OSDescription,
-            architecture = RuntimeInformation.ProcessArchitecture.ToString(),
-            dotnet_runtime = RuntimeInformation.FrameworkDescription,
-            hardware = hardwareInventory ?? HardwareInventory.Capture(),
+            os,
+            architecture,
+            dotnet_runtime = dotnetRuntime,
+            hardware,
             failure_summary = failureSummary,
-            settings = settings.EngineMode == "d7vk"
-                ? (object)new { settings.D7VkResolution, settings.D7VkAntiAliasing,
-                    settings.D7VkAnisotropicFiltering, settings.D7VkAiTextures }
-                : new { settings.Width, settings.Height, settings.WindowMode, settings.AntiAliasing,
-                    settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
-                    settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor,
-                    settings.RenderThread },
-            packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
-            logs
+            settings = settingsObject,
+            packs = packArray,
+            logs = currentLogs
         };
+
+        TrimLogsToFitRequest(logs, BuildPayload);
+        return BuildPayload(logs);
+    }
+
+    private static readonly (string WireKey, string ZipName, string RelativePath)[] SessionLogMappings =
+    {
+        ("native_crash", "native-crash.txt", Path.Combine("native", NativeCrashFileName)),
+        ("native_run", "native-mw3.log", Path.Combine("native", NativeRunFileName)),
+        ("native_stderr", "native-stderr.txt", Path.Combine("native", "stderr.txt")),
+        ("launcher", "launcher.log", ""),
+        ("native_stdout", "native-stdout.txt", Path.Combine("native", "stdout.txt"))
+    };
+
+    private static Dictionary<string, string> ReadSessionLogs(string? launchLog, string[] roots)
+    {
+        var logs = new Dictionary<string, string>();
+        if (launchLog == null) return logs;
+        string? folder;
+        try { folder = Path.GetDirectoryName(launchLog); }
+        catch { return logs; }
+        if (string.IsNullOrEmpty(folder)) return logs;
+
+        var remainingBudget = MaxAggregateLogBytes;
+        foreach (var (wireKey, _, relativePath) in SessionLogMappings)
+        {
+            if (remainingBudget <= 0) break;
+            var path = relativePath.Length == 0 ? launchLog : Path.Combine(folder, relativePath);
+            var text = TryReadRedactedTail(path, roots);
+            if (string.IsNullOrEmpty(text)) continue;
+            var cap = Math.Min(MaxLogBytes, remainingBudget);
+            if (text.Length > cap)
+            {
+                text = wireKey == "native_crash" ? text[..cap] : SliceTailOnLineBoundary(text, cap);
+            }
+            if (text.Length == 0) continue;
+            logs[wireKey] = text;
+            remainingBudget -= text.Length;
+        }
+        return logs;
+    }
+
+    private static string SliceTailOnLineBoundary(string text, int maxChars)
+    {
+        if (text.Length <= maxChars) return text;
+        var sliced = text[^maxChars..];
+        var newline = sliced.IndexOf('\n');
+        return newline >= 0 && newline + 1 < sliced.Length ? sliced[(newline + 1)..] : sliced;
+    }
+
+    private static void TrimLogsToFitRequest(Dictionary<string, string> logs, Func<Dictionary<string, string>, object> buildPayload)
+    {
+        var trimOrder = new[] { "native_stdout", "launcher", "native_stderr", "native_run", "native_crash" };
+        var webOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        for (var attempt = 0; attempt < 16; attempt++)
+        {
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(buildPayload(logs), webOptions).Length;
+            if (bytes <= MaxRequestBytes) return;
+
+            var targetKey = trimOrder.FirstOrDefault(key => logs.TryGetValue(key, out var val) && val.Length > 0);
+            if (targetKey == null) return;
+            var current = logs[targetKey];
+            var excess = bytes - MaxRequestBytes;
+            var cut = Math.Max(1024, excess);
+            if (current.Length <= cut)
+            {
+                logs.Remove(targetKey);
+            }
+            else
+            {
+                var nextLen = Math.Max(0, current.Length - cut);
+                logs[targetKey] = targetKey == "native_crash"
+                    ? current[..nextLen]
+                    : SliceTailOnLineBoundary(current, nextLen);
+                if (logs[targetKey].Length == 0) logs.Remove(targetKey);
+            }
+        }
+    }
+
+    private static string TryReadRedactedTail(string path, string[] roots)
+    {
+        try
+        {
+            if (!File.Exists(path)) return "";
+            var raw = Path.GetFileName(path).Equals(NativeRunFileName, StringComparison.OrdinalIgnoreCase)
+                ? ReadLogForSession(path)
+                : ReadTail(path);
+            return string.IsNullOrEmpty(raw) ? "" : Redact(raw, roots);
+        }
+        catch
+        {
+            return "";
+        }
     }
 
     public static string ReadTail(string path)
@@ -78,26 +438,124 @@ public static class PlaytestDiagnostics
 
     public static string FailureSummary(string? launchLog)
     {
-        if (launchLog == null) return "No launch details were recorded.";
-        var directory = Path.GetDirectoryName(launchLog)!;
-        foreach (var file in new[] { Path.Combine(directory, "native", "stderr.txt"), launchLog })
+        if (launchLog == null) return GenericFailureSummary;
+        string? directory;
+        try { directory = Path.GetDirectoryName(launchLog); }
+        catch { return GenericFailureSummary; }
+        if (string.IsNullOrEmpty(directory)) return GenericFailureSummary;
+
+        // 1. Check native/crash.txt first for direct crash_report.cpp fault lines.
+        var crashFile = Path.Combine(directory, "native", NativeCrashFileName);
+        var crashLines = SafeReadLines(crashFile);
+        if (crashLines.Length > 0)
         {
-            var lines = ReadTail(file).Split('\n', StringSplitOptions.RemoveEmptyEntries);
-            var error = lines.LastOrDefault(line => line.StartsWith("ERROR:", StringComparison.Ordinal) ||
-                line.StartsWith("[D7VK ERR]", StringComparison.Ordinal) ||
-                line.Contains("loader-order entry fault:", StringComparison.Ordinal) ||
-                line.Contains("Unhandled exception", StringComparison.OrdinalIgnoreCase) ||
-                line.Contains("Fatal error", StringComparison.OrdinalIgnoreCase));
-            if (error != null) return error.Trim();
+            var faultLine = FindNativeCrashFaultLine(crashLines);
+            if (faultLine != null) return faultLine;
         }
-        return "The launch or game ended unexpectedly. Open Logs for details.";
+
+        // 2. Check native/stderr.txt, native/mw3.log, and the launcher log for specific errors.
+        var runFile = Path.Combine(directory, "native", NativeRunFileName);
+        var stderrFile = Path.Combine(directory, "native", "stderr.txt");
+        foreach (var file in new[] { stderrFile, runFile, launchLog })
+        {
+            var lines = SafeReadLines(file);
+            if (lines.Length == 0) continue;
+
+            var nativeFault = FindNativeCrashFaultLine(lines);
+            if (nativeFault != null) return nativeFault;
+
+            var error = lines.LastOrDefault(IsSpecificErrorLine);
+            if (error != null) return CleanSummaryLine(error);
+        }
+        return GenericFailureSummary;
+    }
+
+    private static string[] SafeReadLines(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return Array.Empty<string>();
+            var text = Path.GetFileName(path).Equals(NativeRunFileName, StringComparison.OrdinalIgnoreCase)
+                ? ReadLogForSession(path)
+                : ReadTail(path);
+            return text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    private static string? FindNativeCrashFaultLine(string[] lines)
+    {
+        string? crashedLine = null;
+        string? accessLine = null;
+        foreach (var raw in lines)
+        {
+            var line = CleanSummaryLine(raw);
+            if (Regex.IsMatch(line, @"^[A-Za-z0-9._-]{1,64}: crashed: ", RegexOptions.CultureInvariant))
+                crashedLine = line;
+            else if (Regex.IsMatch(line, @"^[A-Za-z0-9._-]{1,64}: access violation: ", RegexOptions.CultureInvariant))
+                accessLine = line;
+        }
+        if (crashedLine != null && accessLine != null)
+        {
+            var accessSuffix = accessLine[(accessLine.IndexOf(": access violation:", StringComparison.Ordinal) + 2)..];
+            return $"{crashedLine} ({accessSuffix})";
+        }
+        if (crashedLine != null) return crashedLine;
+        if (accessLine != null) return accessLine;
+        return null;
+    }
+
+    private static bool IsSpecificErrorLine(string line)
+    {
+        var trimmed = line.Trim();
+        if (trimmed.Length == 0) return false;
+        if (trimmed.Contains("crash details, if any, are written to", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return trimmed.StartsWith("ERROR:", StringComparison.Ordinal) ||
+            trimmed.StartsWith("[D7VK ERR]", StringComparison.Ordinal) ||
+            trimmed.StartsWith("HOST EXCEPTION ", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains("loader-order entry fault:", StringComparison.Ordinal) ||
+            trimmed.Contains("SEH flat fault", StringComparison.Ordinal) ||
+            trimmed.Contains("Unhandled exception", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains("uncaught exception:", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains("Fatal error", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains("crash report file could not be opened", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains("minidump worker unavailable", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains("crash reporting not installed", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains("could not create minidump:", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains("minidump failed:", StringComparison.OrdinalIgnoreCase) ||
+            Regex.IsMatch(trimmed, @"^mw3(?:pm|launcher)?: (?:cannot|could not|failed|error|fatal)\b", RegexOptions.IgnoreCase);
+    }
+
+    private static string CleanSummaryLine(string line)
+    {
+        var trimmed = line.Trim();
+        return Regex.Replace(trimmed, @"\s+\[launcher elapsed \d+ ms\]$", "");
     }
 
     public static string Redact(string text, params string[] privateRoots)
     {
+        if (string.IsNullOrEmpty(text)) return "";
+
+        text = WindowsPathWithNativeSuffix.Replace(text, match =>
+        {
+            var prefix = match.Groups["prefix"].Value;
+            var path = match.Groups["path"].Value;
+            var suffix = match.Groups["suffix"].Value;
+            var token = path.StartsWith(@"\\", StringComparison.Ordinal) ? "<network-path>" : "<local-path>";
+            var lastSep = path.LastIndexOfAny(new[] { '\\', '/' });
+            var moduleStem = lastSep >= 0 ? path[(lastSep + 1)..] : path;
+            if (Regex.IsMatch(moduleStem, @"\A[A-Za-z0-9._-]{1,64}\z"))
+                return $"{prefix}{token}/{moduleStem}{suffix}";
+            return $"{prefix}{token}{suffix}";
+        });
+
         // Replace complete path tokens before substituting known roots, or a
         // replaced root prefix could leave the remainder of a path visible.
-        text = Regex.Replace(text, @"\b[A-Za-z]:[\\/][^\r\n\t\""<>|]*", "<local-path>");
+        text = Regex.Replace(text, @"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n\t\""<>|]*", "<local-path>");
         text = Regex.Replace(text, @"\\\\[^\r\n\t""<>|]+", "<network-path>");
         foreach (var root in privateRoots.Where(root => !string.IsNullOrWhiteSpace(root)).OrderByDescending(root => root.Length))
         {
@@ -108,18 +566,27 @@ public static class PlaytestDiagnostics
     }
 
     public static void Export(string destination, LauncherSettings settings, IEnumerable<PackManifest> packs,
-        string? launchLog, string applicationRoot, HardwareInventoryData? hardwareInventory = null)
+        string? launchLog, string applicationRoot, HardwareInventoryData? hardwareInventory = null,
+        string? runtimeVersion = null, int? exitCode = null)
     {
         // No profiles, settings files, saves, archives, media, dumps or recursive directory walks.
+        var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
+        var failureSummary = Redact(FailureSummary(launchLog), roots);
+        if (failureSummary.Length > 2000) failureSummary = failureSummary[..2000];
         var report = new
         {
             format_version = 1,
             created_utc = DateTimeOffset.UtcNow,
-            launcher_version = typeof(GameRunner).Assembly.GetName().Version?.ToString(),
-            os = RuntimeInformation.OSDescription,
+            launcher_version = LauncherVersionString(),
+            runtime_version = runtimeVersion ?? "unknown",
+            mode = settings.EngineMode,
+            exit_code = exitCode,
+            os = OperatingSystemDescription(),
             architecture = RuntimeInformation.ProcessArchitecture.ToString(),
             dotnet_runtime = RuntimeInformation.FrameworkDescription,
             hardware = hardwareInventory ?? HardwareInventory.Capture(),
+            failure_summary = failureSummary,
             settings = new { settings.EngineMode, settings.Width, settings.Height, settings.WindowMode,
                 settings.AntiAliasing, settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
                 settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor,
@@ -127,26 +594,22 @@ public static class PlaytestDiagnostics
             packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
             note = "Review this local report before sharing. It includes selected settings, pack metadata, a limited hardware inventory and redacted log tails."
         };
-        var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
+        var sessionLogs = ReadSessionLogs(launchLog, roots);
         var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             using (var zip = ZipFile.Open(temporary, ZipArchiveMode.Create))
             {
-                void Add(string name, string content)
+                void AddRaw(string name, string redactedContent)
                 {
                     using var writer = new StreamWriter(zip.CreateEntry(name, CompressionLevel.Optimal).Open(), Encoding.UTF8);
-                    writer.Write(Redact(content, roots));
+                    writer.Write(redactedContent);
                 }
-                Add("report.json", JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
-                if (launchLog != null)
+                AddRaw("report.json", Redact(JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), roots));
+                foreach (var (wireKey, zipName, _) in SessionLogMappings)
                 {
-                    var folder = Path.GetDirectoryName(launchLog)!;
-                    foreach (var (name, path) in new[] { ("launcher.log", launchLog),
-                        ("native-stderr.txt", Path.Combine(folder, "native", "stderr.txt")),
-                        ("native-stdout.txt", Path.Combine(folder, "native", "stdout.txt")) })
-                        if (File.Exists(path)) Add(name, ReadTail(path));
+                    if (sessionLogs.TryGetValue(wireKey, out var content) && !string.IsNullOrEmpty(content))
+                        AddRaw(zipName, content);
                 }
             }
             File.Move(temporary, destination, overwrite: true);
