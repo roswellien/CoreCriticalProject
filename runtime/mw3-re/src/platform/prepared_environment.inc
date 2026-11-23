@@ -25,6 +25,7 @@ constexpr std::uint64_t env_json_limit = 2ULL * 1024 * 1024;
 constexpr std::uint64_t env_total_limit = 16ULL * 1024 * 1024 * 1024;
 constexpr std::uint64_t env_world_limit = 4096ULL * 1024 * 1024;
 constexpr std::uint64_t env_page_limit = 16ULL * 1024 * 1024;
+constexpr std::size_t env_world_page_limit = 512;
 constexpr std::uint64_t env_target_limit = 4ULL * 1024 * 1024;
 [[noreturn]] void env_fail(const std::string &message) {
   throw std::runtime_error("Environment pack: " + message);
@@ -498,7 +499,7 @@ void env_catalog(const EnvPack &pack, const char *role, const char *magic,
     ++pages;
     const bool world = std::string(role) == "world";
     if ((world && (it->second.bytes > env_page_limit ||
-                   bytes > env_world_limit || pages > 256)) ||
+                   bytes > env_world_limit || pages > env_world_page_limit)) ||
         (!world && (bytes > 1536ULL * 1024 * 1024 || pages > 16)))
       env_fail("normal catalog budget exceeded");
   }
