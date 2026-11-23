@@ -765,7 +765,17 @@ test("keeps the report archive inaccessible without a valid admin Access token",
         env: adminEnvironment,
     });
     assert.equal(tampered.status, 403);
-    assert.ok(!(await tampered.text()).includes("abcdef1234567890"));
+    const invalidTokenPage = await tampered.text();
+    assert.ok(!invalidTokenPage.includes("abcdef1234567890"));
+
+    const tamperedAgain = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": tamperedToken },
+        }),
+        env: { ...adminEnvironment, CRASH_REPORT_ADMIN_EMAIL: "other@example.com" },
+    });
+    assert.equal(tamperedAgain.status, tampered.status);
+    assert.equal(await tamperedAgain.text(), invalidTokenPage);
 });
 
 test("allows both configured archive admins and rejects a partial match", async () => {
