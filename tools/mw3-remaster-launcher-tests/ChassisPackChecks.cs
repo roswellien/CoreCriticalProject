@@ -155,12 +155,14 @@ static class ChassisPackChecks
             SetResource("legacy.json",JsonSerializer.SerializeToUtf8Bytes(legacyDescriptor));
             SetResource(ChassisPack.Registry,JsonSerializer.SerializeToUtf8Bytes(legacyRegistry));
             installed.NativePayload.RequiredFormats=new(){"MW3LEGACY"};
+            installed.NativePayload.RequiredCapabilities=new(){["additional-mech-chassis"]=2};
             try {ChassisPack.Read(installed.DirectoryPath,installed);throw new Exception("Legacy data accepted without version 3.");}
             catch(InvalidDataException) {}
             installed.NativePayload.RequiredCapabilities["additional-mech-chassis"]=3;
             ChassisPack.Read(installed.DirectoryPath,installed);
             try {RuntimeContentCapabilities.Require(host,installed.NativePayload,installed.Id);throw new Exception("Old host accepted legacy chassis.");}
             catch(InvalidDataException) {}
+            ChassisAppearanceChecks.Run(installed, legacyRegistry, SetResource);
             foreach (var invalid in new[]{"undeclared.bin","../raw.bin"})
             {
                 legacyDescriptor["motions"]!["example_walk"]=invalid;

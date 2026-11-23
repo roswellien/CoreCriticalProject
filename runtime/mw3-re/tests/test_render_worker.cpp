@@ -1,0 +1,224 @@
+#include "frontend/core_critical/native_staging_budget.hpp"
+#include "frontend/core_critical/render_worker.hpp"
+
+#include <atomic>
+#include <thread>
+#include <chrono>
+#include <cstdio>
+#include <limits>
+#include <string>
+#include <vector>
+
+namespace {
+using cc_mw3_re::RenderWorker;
+void require(bool condition, const char *message) {
+    if (!condition)
+        throw std::runtime_error(message);
+}
+
+void native_staging_bounds() {
+    using cc_mw3_re::staging::fits;
+    constexpr auto limit = cc_mw3_re::staging::native_budget_bytes;
+    constexpr auto largest = std::numeric_limits<std::size_t>::max();
+    struct Case {
+        std::size_t current, pending, maximum;
+        bool allowed;
+    };
+    const Case cases[] = {
+        {0, 0, limit, true},
+        {limit, 0, limit, true},
+        {limit + 1, 0, limit, false},
+        {1, limit - 1, limit, true},
+        {2, limit - 1, limit, false},
+        {0, limit, limit, true},
+        {0, limit + 1, limit, false},
+        {largest, 0, limit, false},
+        {1, largest, limit, false},
+        {largest, largest, largest, false},
+        {largest, 0, largest, true},
+        {0, largest, largest, true},
+        {1, largest, largest, false},
+        {0, 0, 0, true},
+        {1, 0, 0, false},
+        {344029601, 0, limit, true},
+        {128u * 1024u * 1024u + 1, 0, limit, true},
+    };
+    for (const auto &test : cases)
+        require(fits(test.current, test.pending, test.maximum) == test.allowed,
+                "Native local-light staging admission boundary changed");
+    require(limit == std::size_t{1024} * 1024 * 1024 && fits(344029601, 0),
+            "Native default staging allowance does not admit the measured enhanced packet");
+}
+
+void ordered_ownership() {
+    RenderWorker worker;
+    const auto caller = std::this_thread::get_id();
+    require(worker.call([] { return std::this_thread::get_id(); }) != caller,
+            "Submission still executes on the producer");
+    std::vector<int> order;
+    auto packet = std::make_shared<std::vector<int>>(std::initializer_list<int>{7});
+    std::weak_ptr<std::vector<int>> lifetime = packet;
+    std::promise<void> entered, release;
+    auto gate = release.get_future().share();
+    worker.post([packet, gate, &entered, &order] {
+        entered.set_value();
+        gate.wait();
+        order.push_back(packet->at(0));
+    });
+    entered.get_future().get();
+    packet.reset();
+    require(!lifetime.expired(), "Queued packet lost its resource ownership");
+    worker.post([&] { order.push_back(8); });
+    release.set_value();
+    const auto size = worker.call([&] { return order.size(); });
+    require(size == 2 && order == std::vector<int>{7, 8}, "Submission order or barrier changed");
+    require(lifetime.expired(), "Completed packet retains its resource ownership");
+    bool rejected = false;
+    worker.call([&] {
+        try {
+            worker.drain();
+        } catch (const std::logic_error &) {
+            rejected = true;
+        }
+    });
+    require(rejected, "Worker can deadlock waiting on itself");
+    worker.stop();
+    try {
+        worker.post([] {});
+    } catch (const std::runtime_error &) {
+        return;
+    }
+    throw std::runtime_error("Closed worker accepted new work");
+}
+
+void bounded_queue(std::size_t maximum_jobs, std::size_t maximum_bytes) {
+    RenderWorker worker(maximum_jobs, maximum_bytes);
+    std::promise<void> entered, release;
+    auto gate = release.get_future().share();
+    worker.post(
+        [&] {
+            entered.set_value();
+            gate.wait();
+        },
+        7);
+    entered.get_future().get();
+    std::promise<void> submitting;
+    auto producer = std::async(std::launch::async, [&] {
+        submitting.set_value();
+        worker.post([] {}, 4);
+    });
+    submitting.get_future().get();
+    // Wait for actual backpressure, independent of thread scheduling speed.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!worker.statistics().waits && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    const bool blocked =
+        worker.statistics().waits == 1 &&
+        producer.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready;
+    release.set_value();
+    producer.get();
+    worker.drain();
+    require(blocked && worker.statistics().peak_bytes <= maximum_bytes &&
+                worker.statistics().peak_jobs <= maximum_jobs,
+            "Packet job/byte budget is not enforced");
+    worker.post([] {}, maximum_bytes * 2); // An oversize packet must not deadlock admission.
+    worker.drain();
+    require(worker.statistics().peak_bytes == maximum_bytes * 2 &&
+                worker.statistics().peak_jobs == 1,
+            "Oversize packet was not admitted exclusively");
+}
+
+void floating_point() {
+    RenderWorker worker;
+    std::fenv_t saved{};
+    std::fegetenv(&saved);
+    std::fesetround(FE_DOWNWARD);
+    const int rounding = worker.call([] { return std::fegetround(); });
+    std::fesetenv(&saved);
+    require(rounding == FE_DOWNWARD, "Packet did not snapshot producer FP rounding");
+#if defined(__SSE__) || defined(_M_X64) || defined(_M_IX86)
+    const auto original = _mm_getcsr();
+    _mm_setcsr(original ^ (1U << 15));
+    const auto expected = _mm_getcsr();
+    const auto observed = worker.call([] { return _mm_getcsr(); });
+    _mm_setcsr(original);
+    require((observed & (1U << 15)) == (expected & (1U << 15)),
+            "Packet did not snapshot producer flush-to-zero state");
+#endif
+}
+
+void failure_cancels_barrier() {
+    RenderWorker worker;
+    std::promise<void> entered, release;
+    auto gate = release.get_future().share();
+    worker.post([&] {
+        entered.set_value();
+        gate.wait();
+        throw std::runtime_error("intentional worker failure");
+    });
+    entered.get_future().get();
+    std::atomic<bool> executed{false};
+    auto barrier = std::async(std::launch::async, [&] {
+        try {
+            worker.call([&] { executed = true; });
+        } catch (const std::runtime_error &error) {
+            return std::string(error.what());
+        }
+        return std::string{};
+    });
+    while (worker.statistics().submitted != 2)
+        std::this_thread::yield();
+    release.set_value();
+    require(barrier.get() == "intentional worker failure" && !executed,
+            "Failure did not cancel and wake a pending barrier");
+    try {
+        worker.drain();
+    } catch (const std::runtime_error &error) {
+        require(std::string(error.what()) == "intentional worker failure", "Failure identity lost");
+        return;
+    }
+    throw std::runtime_error("Failure silently recovered");
+}
+} // namespace
+
+// The presenter keeps one frame in flight by waiting for the previous present's submission number.
+// wait_for_job must return only after that job (and every earlier one) has run, and must not wait
+// for jobs submitted after it.
+void numbered_wait() {
+    RenderWorker worker(8, 1024);
+    std::atomic<bool> release_first{false};
+    std::atomic<int> finished{0};
+    const auto first = worker.post_numbered([&] {
+        while (!release_first.load()) std::this_thread::yield();
+        finished.fetch_add(1);
+    });
+    const auto second = worker.post_numbered([&] { finished.fetch_add(1); });
+    require(second == first + 1, "Submission numbers are not consecutive");
+    std::thread releaser([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        release_first.store(true);
+    });
+    worker.wait_for_job(first);
+    require(finished.load() >= 1, "wait_for_job returned before its job ran");
+    releaser.join();
+    worker.wait_for_job(second);
+    require(finished.load() == 2, "wait_for_job did not cover the later job");
+    worker.wait_for_job(first); // an already-finished job returns at once
+}
+
+int main() {
+    try {
+        native_staging_bounds();
+        ordered_ownership();
+        bounded_queue(2, 10);  // Byte budget binds first.
+        bounded_queue(1, 100); // Job limit binds even when bytes would fit.
+        floating_point();
+        failure_cancels_barrier();
+        numbered_wait();
+        std::puts("Render worker ownership, bounds, FP and failure checks passed");
+        return 0;
+    } catch (const std::exception &error) {
+        std::fprintf(stderr, "%s\n", error.what());
+        return 1;
+    }
+}

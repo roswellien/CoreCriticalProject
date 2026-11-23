@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "repository": "roswellien/MW3Recomp-Private",
+  "board_id": "PVT_kwHODf7y6M4BpC8L",
+  "enabled": false,
+  "rollout_complete": false,
+  "controller_sha": null,
+  "model": null,
+  "effort": null,
+  "input_price_micro_usd_per_million": null,
+  "output_price_micro_usd_per_million": null,
+  "api_budget_micro_usd": null,
+  "request_budget_micro_usd": null,
+  "actions_budget_minutes": null,
+  "cycle_start": null,
+  "cycle_end": null,
+  "max_input_bytes": 64000,
+  "max_output_tokens": 2000,
+  "headroom_percent": 25,
+  "prerequisites": {
+    "credits": false,
+    "project_cap": false,
+    "secret_isolation": false,
+    "platform_no_merge": false,
+    "app_identity": false,
+    "projects_identity": false,
+    "ready_setters": false,
+    "hosted_data": false,
+    "canary": false
+  }
+}

@@ -25,7 +25,7 @@ void surface_resident_texture_prewarm(mw34::vkscene::Scene& scene) {
         if(!format || proof.version!=surface.version || proof.width!=surface.width ||
            proof.height!=surface.height || proof.pitch!=surface.pitch || proof.memory!=surface.mem || proof.format!=format)return false;
         return !std::any_of(scene.textures.begin(),scene.textures.end(),[&](const vs::TextureRef& ref){return ref.key==surface.guest;}) &&
-            !(host.sren && host.sren->current(surface.guest,surface.version,surface.width,surface.height));
+            !(host.sren && host.sren->sent_current(surface.guest,surface.version,surface.width,surface.height));
     };
     struct Candidate {unsigned guest;std::uint64_t bytes,version;};
     std::vector<Candidate> candidates;

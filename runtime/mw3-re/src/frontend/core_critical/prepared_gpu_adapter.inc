@@ -1,0 +1,167 @@
+cc::geometry::Submission
+submit_prepared_geometry(const ::platform::ModelDrawContext &context,
+                         const cc::geometry::Fog &fog) override {
+  VisualFloatScope preserve;
+  validate_damage_tint(context);
+  if (geometry_mode_ == cc::geometry::Mode::legacy ||
+      !prepared_.has_binding(context))
+    return cc::geometry::Submission::unsupported;
+  const auto selected = prepared_.draw(context, true);
+  if (!selected.replace)
+    return cc::geometry::Submission::unsupported;
+  ensure_geometry_scene();
+  for (const auto &draw : selected.batches)
+    emit_gpu_prepared(draw, context, fog);
+  ++early_prepared_models_;
+  ++geometry_statistics_.submitted_models;
+  geometry_statistics_.skipped_vertices += context.source_vertices;
+  geometry_statistics_.skipped_polygons += context.source_polygons;
+  return cc::geometry::Submission::submitted;
+}
+
+void ensure_geometry_scene() {
+  ensure_extent();
+  if (scene_.hud && !scene_.draws.empty()) {
+    flush();
+    ensure_extent();
+  }
+  scene_.hud = false;
+}
+
+static cc::geometry::Fog prepared_fog() {
+  const auto &source = zmod::render_fog();
+  cc::geometry::Fog fog;
+  fog.enabled = source.on != 0;
+  std::copy_n(zmod::render_fog_color(), 3, fog.color.begin());
+  fog.near_range = source.near_range;
+  fog.inverse_range = source.inv_range;
+  fog.low_altitude = source.alt_low;
+  fog.inverse_altitude = source.inv_alt;
+  const auto edge = zmod::render_fog_edge();
+  fog.edge_start = edge.start;
+  fog.edge_inverse_range = edge.inverse_range;
+  return fog;
+}
+
+void emit_gpu_prepared(const PreparedBatchDraw &source,
+                       const ::platform::ModelDrawContext &context,
+                       const cc::geometry::Fog &fog) {
+  validate_damage_tint(context);
+  if (!source.deformed.empty())
+    throw std::runtime_error(
+        "GPU prepared geometry does not admit CPU-deformed vertices");
+  if (!(context.near_z > 0) ||
+      !(context.far_z > std::max(context.near_z, context.clip_near)))
+    throw std::runtime_error(
+        "GPU prepared geometry requires valid clip planes");
+  for (const auto value :
+       {context.fx_near, context.fy_near, context.cx, context.cy,
+        context.near_z, context.clip_near, context.far_z})
+    if (!std::isfinite(value))
+      throw std::runtime_error("Nonfinite prepared projection");
+  const auto geometry = prepared_geometry(*source.batch);
+  const auto texture = prepared_texture(*source.texture, source.texture_owner);
+  const auto normal =
+      source.normal && lighting_.normals ? prepared_normal(*source.normal) : -1;
+  if (geometry_mode_ == cc::geometry::Mode::cpu_reference) {
+    // This deliberately slow oracle evaluates the same modern fog/material
+    // policy and hardware clipping inputs, independently of the GPU stream.
+    cc::geometry::Resource reference;
+    reference.vertices = geometry->vertices;
+    reference.indices.reserve(reference.vertices.size());
+    for (std::uint32_t index = 0; index < reference.vertices.size(); ++index)
+      reference.indices.push_back(index);
+    reference.ranges.push_back(
+        {0, std::uint32_t(reference.indices.size()), 0, true, 0});
+    cc::geometry::Material material;
+    material.texture = texture;
+    material.color = source.batch->color;
+    NativeGroundRangeAdmission admission;
+    admission.height_binding = source.height_binding;
+    const auto first = scene_.draws.size();
+    emit_reference_geometry(reference, {material}, context, source.camera,
+                            source.world, fog, {admission}, false);
+    for (auto index = first; index < scene_.draws.size(); ++index) {
+      auto &draw = scene_.draws[index];
+      apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
+                             group_load_epoch_, textures_.at(texture).version);
+      draw.sampler |= 0x10000U;
+      draw.push.mode[3] = 0; // Preserve prepared smooth-normal orientation.
+      // Prepared textures are RGB565 and alpha belongs to the source material,
+      // so take alpha from the staged diffuse, which already includes node opacity.
+      // The reference emitter's tint flag selects texture alpha for native meshes.
+      draw.push.mode[0] &= ~512U;
+      if (context.damage_tint_weight == 0.f)
+        draw.push.mode[2] = 2U;
+      apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
+      if (normal >= 0)
+        draw.normal_texture = int(bind_texture(normal, false));
+    }
+    prepared_reference_vertices_ += reference.vertices.size();
+  } else {
+    auto instance = std::make_shared<vk::ModelInstance>();
+    instance->geometry = geometry;
+    instance->gpu_vertices = instance->sun_eligible = true;
+    instance->camera = matrix_rows(source.camera);
+    instance->sun_world = matrix_rows(source.world);
+    if (const auto *view = context.world_to_camera) {
+      for (unsigned i = 0; i < 12; ++i)
+        if (!std::isfinite(view[i]))
+          throw std::runtime_error("Nonfinite prepared camera transform");
+      const ::platform::prepared::Matrix camera{
+          view[0], view[3], view[6], view[9], view[1], view[4],
+          view[7], view[10], view[2], view[5], view[8], view[11], 0, 0, 0, 1};
+      instance->world_to_camera = matrix_rows(camera);
+      instance->has_world_to_camera = true;
+    }
+    instance->sun_normal = mw34::sun::normal_matrix(source.world);
+    instance->color = source.batch->color;
+    instance->geometry_near = context.clip_near;
+    instance->geometry_fog0 = {fog.near_range, fog.inverse_range,
+                               fog.low_altitude, fog.inverse_altitude};
+    // Reuse spare UBO components; push constants and SunLighting size stay unchanged.
+    instance->geometry_fog1 = {fog.edge_start, fog.edge_inverse_range,
+                               fog.enabled ? 1.f : 0.f, 0};
+    instance->projection = {
+        context.near_z,
+        context.fx_near * scene_.width / viewport_[2],
+        context.fy_near * scene_.height / viewport_[3],
+        (context.cx - viewport_[0]) * scene_.width / viewport_[2] - .5f,
+        (context.cy - viewport_[1]) * scene_.height / viewport_[3] - .5f,
+        context.far_z};
+    vk::Draw draw{};
+    draw.producer_view = producer_view_;
+    // Same key as prepare_draw: a fading node blends and skips depth writes.
+    draw.key = {context.opacity < 1.f, 5, 6, 1, 7, context.opacity >= 1.f, 1, 0};
+    // Prepared model draws do not use mode.w for alpha testing.
+    draw.push.mode[3] = prepared_opacity_bits(context.opacity);
+    apply_surface_material(draw, source, lighting_.normals, bridge_config_.parallax_materials,
+                           group_load_epoch_, textures_.at(texture).version);
+    draw.model = std::move(instance);
+    draw.geometry_debug_normals = geometry_debug_;
+    draw.count = unsigned(geometry->vertices.size());
+    draw.texture = int(bind_texture(texture, false));
+    if (normal >= 0)
+      draw.normal_texture = int(bind_texture(normal, false));
+    draw.sampler = 3U | (1U << 4) | (1U << 8) | 0x10000U;
+    draw.push.target[0] = float(scene_.width);
+    draw.push.target[1] = float(scene_.height);
+    std::copy(fog.color.begin(), fog.color.end(), draw.push.fog);
+    // Flag 256 tells the shared native-geometry vertex shader that mode.w holds
+    // node opacity for this draw rather than a native normal-orientation marker.
+    draw.push.mode[0] = 2U | 4U | 256U | (fog.active() && !geometry_debug_ ? 16U : 0U);
+    draw.push.mode[1] = 4U | (2U << 8);
+    draw.push.mode[2] = 2U; // Diffuse alpha: RGB565 textures carry none of their own.
+    if (context.damage_tint_weight > 0.f) {
+      draw.push.mode[0] |= 128U;
+      draw.push.mode[1] = pack_damage_tint_rgb(context.damage_tint_rgb);
+      draw.push.mode[2] = std::bit_cast<std::uint32_t>(context.damage_tint_weight);
+    }
+    draw.scissor = producer_scissor();
+    apply_fixture_observation(draw, capture_fixture_prepared(source, texture));
+    scene_.order.push_back({false, unsigned(scene_.draws.size())});
+    scene_.draws.push_back(std::move(draw));
+    gpu_prepared_vertices_ += geometry->vertices.size();
+  }
+  ++prepared_batches_;
+}

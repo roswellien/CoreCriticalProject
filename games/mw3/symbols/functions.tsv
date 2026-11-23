@@ -31,6 +31,7 @@ address	name	confidence	evidence	purpose
 00475C20	std_vector__Ufill	confirmed	games/mw3/docs/functions/containers.md#sub_00475c20	Library vector helper that stores a count of copies of a 4-byte value at a destination, skipping a null destination
 00493040	sub_00493040	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Enters the original Pause State and creates its pause dialog
 004931E0	sub_004931E0	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Tears down the original Pause State and releases its dialog resources
+004B3F40	sub_004B3F40	likely	docs/atlas-weapon-visual-attachments.md#evidence-and-current-limits	Observed player beam factory; successful584A70 return4B3FA5 retains weapon in ESI
 004BF910	LinkedNumberedObject_Init	confirmed	games/mw3/docs/functions/objects.md#sub_004bf910	Constructor of a numbered object that also holds a vector of object pointers, sized to a count and filled from an optional array
 004C8600	SimpleObject_Init	confirmed	games/mw3/docs/functions/objects.md#sub_004c8600	Base constructor shared by many classes: sets vtable 005CB180 and clears a field and a flag bit
 004D2A70	sub_004D2A70	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Returns the receiver pointer without modification
@@ -46,10 +47,17 @@ address	name	confidence	evidence	purpose
 004F36B0	sub_004F36B0	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Writes camera rotation and selects its ordinary pose storage
 004F3870	sub_004F3870	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Writes absolute camera translation into the selected pose storage
 004F3920	sub_004F3920	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Adds relative translation to the selected camera pose storage
+004F4AB0	sub_004F4AB0	likely	docs/atlas-weapon-visual-attachments.md#evidence-and-current-limits	Observed beam mesh traversal and deferred descriptor producer
+004F5910	sub_004F5910	likely	docs/atlas-weapon-visual-attachments.md#evidence-and-current-limits	Observed beam node traversal; retains render-only source scope
 004FD1C0	std_vector_size	confirmed	games/mw3/docs/functions/containers.md#sub_004fd1c0	Library vector size: the number of elements in a vector of 4-byte elements
 00517DF0	Texture_ReadData	confirmed	games/mw3/docs/functions/textures.md#sub_00517df0	Reads a texture's pixels, optional extra block and palette from an open bank file, converting 16-bit colors from 5-6-5 to 5-5-5 when a global format setting is 5
 00518DB0	TextureBank_LoadByName	confirmed	games/mw3/docs/functions/textures.md#sub_00518db0	Finds a texture by name in a bank's archive table, seeks to it, builds it and attaches its shared palette
 00520B00	sub_00520B00	confirmed	docs/fidelityfx-camera-history.md#original-controller-and-reset-producers	Activates the renderer camera basis and prepares its inverse view
+00581230	sub_00581230	likely	docs/atlas-weapon-visual-attachments.md#evidence-and-current-limits	Starts and links beam into definition list; observed native lifecycle
+00581400	sub_00581400	likely	docs/atlas-weapon-visual-attachments.md#evidence-and-current-limits	Stops and unlinks beam; hides segment nodes; observed native lifecycle
+005814B0	sub_005814B0	likely	docs/atlas-weapon-visual-attachments.md#evidence-and-current-limits	Original beam definition-list collision and damage update; executes unchanged
+00584A70	sub_00584A70	likely	docs/atlas-weapon-visual-attachments.md#evidence-and-current-limits	Allocates0x150 beam with source pointers and segment nodes; observed player creation
+00584B40	sub_00584B40	likely	docs/atlas-weapon-visual-attachments.md#evidence-and-current-limits	Destroys beam segment resources; static teardown contract
 0058AEC0	NumberedObject_Init	confirmed	games/mw3/docs/functions/objects.md#sub_0058aec0	Base constructor of numbered objects: stores the ID and adds the object to the global list at 00603FD8
 0058B160	NumberedObjects_FindByNumber	confirmed	games/mw3/docs/functions/objects.md#sub_0058b160	Finds the object in the global list whose ID matches, or returns 0
 0058B1C0	NumberedObjects_PickFreeNumber	confirmed	games/mw3/docs/functions/objects.md#sub_0058b1c0	Picks an ID in a range that no object in the global list uses, or returns -1

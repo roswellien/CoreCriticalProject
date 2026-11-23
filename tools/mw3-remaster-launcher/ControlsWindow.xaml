@@ -2,8 +2,9 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Controls — Core Critical" Width="1060" Height="730" MinWidth="860" MinHeight="600"
+        WindowState="Maximized"
         WindowStartupLocation="CenterOwner" Background="{DynamicResource BrushGround}" Foreground="{DynamicResource BrushInk}"
-        FontFamily="{DynamicResource FontBody}" FontSize="14" PreviewKeyDown="CaptureKey" PreviewMouseDown="CancelCaptureOnClick" Closing="OnClosing">
+        FontFamily="{DynamicResource FontBody}" FontSize="14" PreviewKeyDown="CaptureKey" PreviewMouseDown="CancelCaptureOnClick" PreviewMouseWheel="CaptureMouseWheel" Closing="OnClosing">
     <Window.Resources>
         <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
             <Setter Property="Margin" Value="0,0,8,0"/><Setter Property="Padding" Value="12,8"/>
@@ -15,19 +16,19 @@
         <Style TargetType="DataGridColumnHeader"><Setter Property="Background" Value="#252B2B"/><Setter Property="Foreground" Value="#C4C4BE"/>
             <Setter Property="Padding" Value="8,10"/></Style>
     </Window.Resources>
-    <Grid Margin="24">
+    <Grid Margin="16">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <StackPanel>
-            <TextBlock Text="CONTROLS" FontFamily="{DynamicResource FontDisplay}" FontSize="22" Margin="0,0,0,8"/>
+            <TextBlock Text="CONTROLS" FontFamily="{DynamicResource FontDisplay}" FontSize="22" Margin="0,0,0,6"/>
             <TextBlock Text="Save a layout for each game. Your selected layout is applied the next time you launch the native game." Foreground="{DynamicResource BrushMuted}" TextWrapping="Wrap"/>
         </StackPanel>
-        <DockPanel Grid.Row="1" Margin="0,18,0,16">
+        <DockPanel Grid.Row="1" Margin="0,10,0,8">
             <TextBlock Text="Game" VerticalAlignment="Center" Margin="0,0,12,0"/>
             <ComboBox x:Name="Game" Width="295" HorizontalAlignment="Left" DisplayMemberPath="DisplayName" SelectionChanged="GameChanged"/>
             <TextBlock x:Name="ActiveSummary" TextWrapping="Wrap" VerticalAlignment="Center" Margin="18,0,0,0" Foreground="{DynamicResource BrushAmber}"/>
         </DockPanel>
-        <StackPanel Grid.Row="2" x:Name="JoystickSection" Margin="0,0,0,12">
+        <StackPanel Grid.Row="2" x:Name="JoystickSection" Margin="0,0,0,8">
             <TextBlock Text="DIRECTINPUT JOYSTICK (NATIVE MW3)" Foreground="{DynamicResource BrushMuted}" Margin="0,0,0,6"/>
             <DockPanel>
                 <Button DockPanel.Dock="Right" Content="Refresh devices" Click="RefreshJoystickChoices" Margin="8,0,0,0"/>
@@ -51,11 +52,16 @@
             <Grid Grid.Column="2" x:Name="ProfileEditor" IsEnabled="False">
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <DockPanel Margin="0,0,0,12">
+                <DockPanel Margin="0,0,0,10">
                     <TextBlock Text="Layout name" Margin="0,0,12,0" VerticalAlignment="Center"/>
                     <TextBox x:Name="ProfileName" MaxLength="64" TextChanged="NameChanged" AutomationProperties.Name="Layout name"/>
                 </DockPanel>
-                <DockPanel Grid.Row="1" Margin="0,0,0,10">
+                <DockPanel Grid.Row="1" Margin="0,0,0,8">
+                    <CheckBox x:Name="Mw2JumpJets" DockPanel.Dock="Right" VerticalAlignment="Center" Margin="14,0,0,0"
+                              Content="MW2 Jump Jets (press Jump Jets + directional jump)" IsThreeState="True"
+                              Checked="JumpJetsChanged" Unchecked="JumpJetsChanged" Indeterminate="JumpJetsChanged"
+                              ToolTip="Checked = MW2 Jump Jets, Unchecked = Classic MW3, Indeterminate = Use game setting"
+                              AutomationProperties.Name="MW2 Jump Jets"/>
                     <TextBlock Text="Find action" VerticalAlignment="Center" Margin="0,0,14,0"/>
                     <TextBox x:Name="Search" TextChanged="FilterChanged" AutomationProperties.Name="Find an action" ToolTip="Find an action or group"/>
                 </DockPanel>
@@ -71,22 +77,26 @@
                         <DataGridTextColumn Header="Action" Binding="{Binding Label}" Width="2*"/>
                         <DataGridTextColumn Header="Primary" Binding="{Binding Primary}" Width="*"/>
                         <DataGridTextColumn Header="Secondary" Binding="{Binding Secondary}" Width="*"/>
-                        <DataGridTextColumn Header="Mouse" Binding="{Binding Mouse}" Width="90"/>
+                        <DataGridTextColumn Header="Mouse" Binding="{Binding Mouse}" Width="110"/>
+                        <DataGridTextColumn Header="Combos" Binding="{Binding Combos}" Width="1.4*"/>
                     </DataGrid.Columns>
                 </DataGrid>
-                <WrapPanel Grid.Row="3" Margin="0,12,0,0" x:Name="BindingButtons" IsEnabled="False">
+                <WrapPanel Grid.Row="3" Margin="0,8,0,0" x:Name="BindingButtons" IsEnabled="False">
                     <Button Content="Set primary" Click="SetPrimary"/><Button Content="Clear primary" Click="ClearPrimary"/>
                     <Button Content="Set secondary" Click="SetSecondary"/><Button Content="Clear secondary" Click="ClearSecondary"/>
+                    <Button Content="Set mouse" Click="BeginMouseCapture" AutomationProperties.Name="Set mouse"/>
                     <Button Content="Mouse button…" Click="SetMouse"/>
+                    <Button Content="Clear mouse" Click="ClearMouse"/>
+                    <Button Content="Edit combos…" Click="EditCombos"/>
                 </WrapPanel>
             </Grid>
         </Grid>
-        <StackPanel Grid.Row="4" Margin="0,14,0,12">
+        <StackPanel Grid.Row="4" Margin="0,8,0,6">
             <TextBlock x:Name="LayoutDescription" TextWrapping="Wrap" Foreground="{DynamicResource BrushMuted}" Margin="0,0,0,6"/>
             <TextBlock x:Name="Status" Text="Copy your current controls to create the first layout. Existing game controls stay active until you select a saved layout." TextWrapping="Wrap" Foreground="{DynamicResource BrushAmber}"/>
             <TextBlock x:Name="ConflictSummary" TextWrapping="Wrap" Foreground="{DynamicResource BrushMuted}" MaxHeight="55" Margin="0,6,0,0"/>
         </StackPanel>
-        <DockPanel Grid.Row="5">
+        <DockPanel Grid.Row="5" Margin="0,6,0,0">
             <Button Content="Headlight controls…" Click="OpenHeadlightBindings"/>
             <Button Content="Controller setup…" Click="OpenControllerSetup"/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">

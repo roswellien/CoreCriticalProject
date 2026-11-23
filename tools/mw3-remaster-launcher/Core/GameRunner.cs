@@ -79,15 +79,23 @@ namespace MW3RemasterLauncher.Core
 
         private Process LaunchGameCore(LauncherSettings settings, List<string> activeModDirs, string runDir, Action<string>? logCallback)
         {
-            // MSIX AppData redirection can expose a different pack to a child
-            // outside this process's context. Pass physical manifest roots.
-            activeModDirs = activeModDirs.Select(PackStorage.CanonicalPackRoot).ToList();
             // Verify game path
             var validation = GameValidator.Validate(settings.GamePath);
             if (!validation.IsValid)
             {
                 throw new InvalidOperationException($"Cannot launch game: {validation.StatusMessage}");
             }
+
+            if (!string.IsNullOrWhiteSpace(settings.ModularContentProfile))
+                return ModProfiles.Launch(settings, validation.GameDirectory, _dataRoot, line =>
+                {
+                    File.AppendAllText(LastLogPath!, line + Environment.NewLine);
+                    logCallback?.Invoke(line);
+                });
+
+            // MSIX AppData redirection can expose a different pack to a child
+            // outside this process's context. Pass physical manifest roots.
+            activeModDirs = activeModDirs.Select(PackStorage.CanonicalPackRoot).ToList();
 
             // Check if game is already running
             var running = Process.GetProcessesByName("entry_commandline");
@@ -271,8 +279,7 @@ namespace MW3RemasterLauncher.Core
         public static JsonObject CreateLaunchProfile(string publishedJson, LauncherSettings settings,
             string? pipelineWarmupDirectory = null)
         {
-            var profile = JsonNode.Parse(publishedJson)?.AsObject()
-                ?? throw new InvalidOperationException("Native profile is empty.");
+            var profile = NativeRuntimeLayout.ParseLegacyProfile(publishedJson);
             var graphics = profile["graphics"]?.AsObject()
                 ?? throw new InvalidOperationException("Native profile has no graphics settings.");
             GraphicsPreferences.From(settings).Validate();
@@ -307,6 +314,8 @@ namespace MW3RemasterLauncher.Core
             // An explicit saved choice overrides both old profiles and inherited diagnostics.
             profile["native"]!["runtime_environment"] ??= new JsonObject();
             profile["native"]!["runtime_environment"]!["MW34_PERF_OVERLAY"] = settings.PerformanceMonitor ? "1" : "0";
+            // Older hosts ignore it; newer ones run graphics inline when it is "0".
+            profile["native"]!["runtime_environment"]!["MW34_RENDER_THREAD"] = settings.RenderThread ? "1" : "0";
             profile["native"]!["runtime_environment"]!["MW34_CORE_CRITICAL_VERSION"] = typeof(GameRunner).Assembly.GetName().Version!.ToString(3);
             // Emit the existing native register/return-chain diagnostics only
             // when a guest memory fault occurs, including on remote playtest PCs.

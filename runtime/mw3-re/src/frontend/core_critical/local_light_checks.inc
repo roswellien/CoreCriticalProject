@@ -1,0 +1,434 @@
+// adapter_checks.cpp includes this file inside its private namespace.
+}  // namespace
+#include "frontend/sdl/sdl_input.h"
+#include "renderer/mech_headlights.hpp"
+namespace {
+
+void check_local_light_core() {
+  using namespace mw34::effects;
+  using namespace std;
+
+  {
+    auto parse = [](const char *text) {
+      std::istringstream stream(text);
+      return platform::HeadlightBinding::read(stream, zin::kKeys);
+    };
+    const auto v1 = parse("CC_MW3_HEADLIGHTS_V1 286 25");
+    require(v1.key == 286 && v1.button == 25 && v1.mouse == 0,
+            "V1 headlights lost keyboard or controller metadata");
+    const auto v2 = parse("CC_MW3_HEADLIGHTS_V2 0 -1 6\n");
+    require(v2.key == 0 && v2.button == -1 && v2.mouse == 6,
+            "V2 headlights refused a mouse-only binding");
+    require(platform::HeadlightBinding::wheel_mask(6) == 1 &&
+                platform::HeadlightBinding::wheel_mask(7) == 2 &&
+                platform::HeadlightBinding::wheel_mask(5) == 0 &&
+                platform::HeadlightBinding::wheel_mask(v1.mouse) == 0,
+            "Headlight wheel mask did not isolate its bound direction");
+    for (const char *bad : {"CC_MW3_HEADLIGHTS_V3 0 -1 6",
+                           "CC_MW3_HEADLIGHTS_V2 0 -1 6 extra",
+                           "CC_MW3_HEADLIGHTS_V2 0 -1 8",
+                           "CC_MW3_HEADLIGHTS_V2 0 -1 -1",
+                           "CC_MW3_HEADLIGHTS_V1 0 -1 6",
+                           "CC_MW3_HEADLIGHTS_V2 0 -1",
+                           "CC_MW3_HEADLIGHTS_V1 67 -1",
+                           "CC_MW3_HEADLIGHTS_V1 68 -1",
+                           "CC_MW3_HEADLIGHTS_V2 343 -1 6",
+                           "CC_MW3_HEADLIGHTS_V2 256 -1 6",
+                           "CC_MW3_HEADLIGHTS_V1 2014 -1",
+                           "CC_MW3_HEADLIGHTS_V2 0 26 6",
+                           "CC_MW3_HEADLIGHTS_V1 0-1"}) {
+      bool rejected = false;
+      try {
+        parse(bad);
+      } catch (const std::runtime_error &) {
+        rejected = true;
+      }
+      require(rejected, bad);
+    }
+
+    sdlfe::SdlInput mouse;
+    mouse.set_headlight_wheel(platform::HeadlightBinding::wheel_mask(v2.mouse));
+    require(mouse.open(platform::Input::kMouse) && mouse.acquire(platform::Input::kMouse) == 0,
+            "Could not acquire the headlight mouse fixture");
+    mw34::headlights::PlayerState player;
+    bool mouse_latch = false, key_latch = false;
+    auto sample = [&](uint64_t tick, bool key_down = false, bool key_suppressed = false) {
+      mouse.begin_poll(false, true);
+      platform::MouseState raw{};
+      const bool mouse_ready = mouse.mouse_state(&raw) == 0;
+      require(raw.z == 0, "Headlight wheel leaked to the legacy mouse axis");
+      const bool mouse_down = platform::headlight_input_down(
+          mouse.mouse_input_down(v2.mouse), mouse.mouse_suppressed(v2.mouse), mouse_latch);
+      const bool keyboard_down = platform::headlight_input_down(key_down, key_suppressed, key_latch);
+      player.update(1, 1, tick, 0.016, false, mouse_down || keyboard_down, mouse_ready);
+      return player.owner.envelope.desired;
+    };
+    require(!sample(1), "Mouse-only headlights did not start released");
+    SDL_Event scroll{};
+    scroll.type = SDL_EVENT_MOUSE_WHEEL;
+    scroll.wheel.y = 2;
+    mouse.on_event(scroll);
+    require(sample(2) && sample(3) && !sample(4) && !sample(5),
+            "Two wheel detents did not toggle once each on successive player edges");
+    require(!sample(6, true, true) && !sample(7, true) && !sample(8, false) && sample(9, true),
+            "A chord release toggled headlights before the suppressed key was repressed");
+    require(!platform::headlight_input_down(true, true, mouse_latch) &&
+                !platform::headlight_input_down(true, false, mouse_latch) &&
+                !platform::headlight_input_down(false, false, mouse_latch) &&
+                platform::headlight_input_down(true, false, mouse_latch),
+            "A suppressed mouse button rearmed before release");
+
+    // Exercise the virtual mask through the same renderer factory as startup.
+    int window_count = 0;
+    auto **windows = SDL_GetWindows(&window_count);
+    auto *window = window_count ? windows[0] : nullptr;
+    SDL_free(windows);
+    require(window != nullptr, "Headlight adapter check needs the test window");
+    const auto backend = SDL_GetWindowFlags(window) & SDL_WINDOW_VULKAN
+        ? sdlfe::RendererBackend::core_critical_wsi
+        : sdlfe::RendererBackend::core_critical_dxgi;
+    const auto directory = std::filesystem::u8path(SDL_GetBasePath()) /
+        ("headlight-bindings-" + std::to_string(SDL_GetTicksNS()));
+    std::filesystem::create_directory(directory);
+    struct Cleanup {
+      std::filesystem::path path;
+      ~Cleanup() {
+        std::error_code ignored;
+        std::filesystem::remove_all(path, ignored);
+      }
+    } cleanup{directory};
+    auto write = [&](const char *name, std::string_view bytes) {
+      auto path = directory / name;
+      std::ofstream file(path, std::ios::binary);
+      file.write(bytes.data(), bytes.size());
+      require(bool(file), "Could not write headlight adapter fixture");
+      return path.string();
+    };
+    sdlfe::CoreCriticalAssets assets;
+    assets.lighting = "flat";
+    assets.effect_lights = assets.mech_headlights = true;
+    // One effect light with unit radius, intensity, lifetime and color.
+    assets.effect_light_catalog = write("effect.bin",
+        {"MWFX1\0\0\0\1\0\0\0\1\0\0\0\1\0\0\0\1\0\0\0\1\0\0\0"
+         "\1\0\0\0\0\0\0\0\0\0\x80\x3f\0\0\x80\x3f\0\0\x80\x3f"
+         "\0\0\x80\x3f\0\0\x80\x3f\0\0\x80\x3f", 60});
+    assets.stock_headlights = write("stock.bin", {"MWHDLT1\0\0\0\0\0", 12});
+    assets.headlight_bindings = write("input.txt", "CC_MW3_HEADLIGHTS_V2 0 -1 7");
+    const auto renderer = make_check_renderer(window, backend, {}, assets);
+    const platform::Render3D &render = *renderer;
+    require(render.headlight_wheel_mask() == 2, "Renderer did not expose the V2 wheel direction");
+  }
+
+  // Stock and selected-pack catalogs share exact material keys. Composition
+  // retains every definition or rejects the whole result on disagreement.
+  {
+    const Emitter emitter{2, 10.f, 1.f, .25f, {1.f, .5f, .25f}};
+    const mw34::materials::SurfaceKey base_key{1, 1, 1, 100};
+    const mw34::materials::SurfaceKey pack_key{1, 1, 1, 200};
+    const Catalog base{{base_key, emitter}}, pack{{pack_key, emitter}};
+    auto same_catalog = [](const Catalog &a, const Catalog &b) {
+      if (a.size() != b.size())
+        return false;
+      return std::equal(a.begin(), a.end(), b.begin(), [](const auto &left,
+                                                        const auto &right) {
+        const auto &x = left.second;
+        const auto &y = right.second;
+        return left.first == right.first && x.kind == y.kind &&
+               x.radius == y.radius && x.intensity == y.intensity &&
+               x.lifetime == y.lifetime && x.color == y.color;
+      });
+    };
+    unsigned passed = 0;
+    auto check_case = [&](bool condition, const char *message) {
+      require(condition, message);
+      ++passed;
+    };
+    auto rejects = [&](auto operation, const char *message) {
+      bool rejected = false;
+      try {
+        operation();
+      } catch (const std::runtime_error &) {
+        rejected = true;
+      }
+      check_case(rejected, message);
+    };
+    const auto merged = merge_catalogs(base, pack);
+    check_case(merged.size() == 2 && merged.count(base_key) == 1 &&
+                   merged.count(pack_key) == 1,
+               "Catalog composition lost a base or pack material");
+    check_case(same_catalog(merge_catalogs(merged, base), merged),
+               "Equal emitter definitions were not deduplicated");
+    check_case(same_catalog(merge_catalogs(pack, base), merged) &&
+                   same_catalog(merge_catalogs({}, merged), merged),
+               "Catalog composition depends on source ordering");
+    check_case(same_catalog(base, Catalog{{base_key, emitter}}) &&
+                   same_catalog(pack, Catalog{{pack_key, emitter}}) &&
+                   same_catalog(merge_catalogs(base, {}), base),
+               "Catalog composition mutated a source definition");
+    for (unsigned field = 0; field < 7; ++field) {
+      auto changed = emitter;
+      if (field == 0)
+        changed.kind = 3;
+      else if (field == 1)
+        changed.radius = std::nextafter(changed.radius, 11.f);
+      else if (field == 2)
+        changed.intensity = 2.f;
+      else if (field == 3)
+        changed.lifetime = .5f;
+      else
+        changed.color[field - 4] += .125f;
+      // The new key sorts before the conflict: failure must not leave that
+      // partial insertion in either caller-owned input.
+      const Catalog conflicting{{{1, 1, 1, 50}, emitter}, {base_key, changed}};
+      rejects([&] { merge_catalogs(base, conflicting); },
+              "Conflicting emitter field was accepted");
+      check_case(same_catalog(base, Catalog{{base_key, emitter}}) &&
+                     conflicting.size() == 2 &&
+                     conflicting.at(base_key).kind == changed.kind &&
+                     conflicting.at(base_key).radius == changed.radius &&
+                     conflicting.at(base_key).intensity == changed.intensity &&
+                     conflicting.at(base_key).lifetime == changed.lifetime &&
+                     conflicting.at(base_key).color == changed.color,
+                 "Rejected catalog composition mutated an input");
+    }
+    Catalog lower, upper;
+    for (std::uint64_t hash = 1; hash <= 8192; ++hash)
+      (hash <= 4096 ? lower : upper).emplace(
+          mw34::materials::SurfaceKey{1, 1, 1, hash}, emitter);
+    const auto full = merge_catalogs(lower, upper);
+    check_case(full.size() == 8192 && lower.size() == 4096 && upper.size() == 4096,
+               "Catalog composition rejected the exact combined limit");
+    check_case(same_catalog(merge_catalogs(full, lower), full),
+               "Equal definitions at the combined limit were rejected");
+    const Catalog overflow{{{1, 1, 1, 9000}, emitter}};
+    rejects([&] { merge_catalogs(full, overflow); },
+            "Catalog composition exceeded the combined limit");
+    auto oversized = full;
+    oversized.insert(*overflow.begin());
+    rejects([&] { merge_catalogs(oversized, {}); },
+            "Oversized base catalog was accepted");
+    check_case(full.size() == 8192 && overflow.size() == 1,
+               "Overflow rejection changed a source catalog");
+    std::fprintf(stderr, "[EFFECT_CATALOG_CHECKS] passed_cases=%u conflict_fields=7\n",
+                 passed);
+  }
+
+  // --- Part 1: rank_frame_lights ---
+  {
+    vector<Candidate> cands;
+    cands.reserve(128);
+    for (int i = 0; i < 128; ++i) {
+      Candidate c{};
+      c.light = Light{};
+      c.cone = {1.0f, 1.0f, 1.0f, 1.0f};
+      c.source = static_cast<uint64_t>(i + 1);
+      c.weapon = (i < 32);
+      c.light.start = {static_cast<float>(i), 0.0f, 0.0f, 10.0f};
+      c.light.end = {static_cast<float>(i), 0.0f, 0.0f, 0.0f};
+      c.light.color = {1.0f, 1.0f, 1.0f, 1.0f};
+      cands.push_back(c);
+    }
+
+    Point eye{0.0f, 0.0f, 0.0f};
+    Uniform u1 = rank_frame_lights(cands, eye, 64, 16);
+    require(u1.params[0] == 64, "rank total 64");
+    require(u1.params[1] == 32, "rank weapons 32");
+    require(u1.params[2] == 32, "rank fixtures 32");
+
+    vector<Candidate> rev = cands;
+    reverse(rev.begin(), rev.end());
+    Uniform u2 = rank_frame_lights(rev, eye, 64, 16);
+    require(memcmp(&u1, &u2, sizeof u1) == 0,
+            "rank byte-identical after reverse");
+
+    // Reserve sixteen slots for weapons even when all sources are fixtures.
+    for (auto &c : cands)
+      c.weapon = false;
+    Uniform u3 = rank_frame_lights(cands, eye, 64, 16);
+    require(u3.params[0] == 48, "rank total 48 all fixture");
+    require(u3.params[1] == 0, "rank weapons 0 all fixture");
+    require(u3.params[2] == 48, "rank fixtures 48 all fixture");
+  }
+
+  // --- Part 2: ObservedLights ---
+  {
+    ObservedLights obs;
+    Emitter e{};
+    e.kind = 2;
+    e.radius = 10.0f;
+    e.intensity = 2.0f;
+    e.lifetime = 1.0f;
+    e.color = {1.0f, 0.5f, 0.2f};
+
+    vector<Point> pts = {{1.0f, 2.0f, 3.0f}, {3.0f, 4.0f, 5.0f}};
+    obs.observe(e, pts, 0.0);
+    require(obs.size() == 1, "obs size 1");
+    auto cands = obs.candidates(0.0);
+    require(cands.size() == 1, "obs candidates 1");
+    // centroid = (2,3,4)
+    require(fabs(cands[0].light.start[0] - 2.0f) < 1e-5, "centroid x");
+    require(fabs(cands[0].light.start[1] - 3.0f) < 1e-5, "centroid y");
+    require(fabs(cands[0].light.start[2] - 4.0f) < 1e-5, "centroid z");
+
+    // Observe same emitter at t=0.1 -> same id, size stays 1
+    vector<Point> pts2 = {{2.1f, 3.0f, 4.0f}};
+    obs.observe(e, pts2, 0.1);
+    require(obs.size() == 1, "obs size still 1");
+    auto cands2 = obs.candidates(0.1);
+    require(cands2.size() == 1 && cands2[0].source == cands[0].source,
+            "obs dedup retains source");
+
+    // candidates at 1.2 -> empty (lifetime 1.0, expired)
+    auto cands3 = obs.candidates(1.2);
+    require(cands3.empty(), "obs candidates expired");
+
+    // Observe at time 2 then rewind to 1 -> empty
+    obs.clear();
+    obs.observe(e, pts, 2.0);
+    auto cands4 = obs.candidates(1.0);
+    require(cands4.empty(), "obs rewind empty");
+
+    obs.clear();
+    require(obs.size() == 0, "obs cleared");
+  }
+
+  // --- Part 3: Beam kind 1 ---
+  {
+    ObservedLights obs;
+    Emitter e{};
+    e.kind = 1;
+    e.radius = 10.0f;
+    e.intensity = 1.0f;
+    e.lifetime = 1.0f;
+    e.color = {1.0f, 1.0f, 1.0f};
+    vector<Point> pts = {{0.0f, 0.0f, 0.0f}, {10.0f, 0.0f, 0.0f}};
+    obs.observe(e, pts, 0.0);
+    auto cands = obs.candidates(0.0);
+    require(cands.size() == 1, "beam candidates 1");
+    require(fabs(cands[0].light.end[0] - 10.0f) < 1e-5 &&
+                cands[0].light.end[3] == 1,
+            "beam endpoint/capsule kind");
+  }
+
+  // --- Part 4: Invalid NaN time throws ---
+  {
+    bool threw = false;
+    try {
+      ObservedLights obs;
+      Emitter e{};
+      e.kind = 2;
+      e.radius = 1.0f;
+      e.intensity = 1.0f;
+      e.lifetime = 1.0f;
+      e.color = {1.0f, 1.0f, 1.0f};
+      vector<Point> pts = {{0.0f, 0.0f, 0.0f}};
+      obs.observe(e, pts, numeric_limits<double>::quiet_NaN());
+    } catch (...) {
+      threw = true;
+    }
+    require(threw, "NaN time throws");
+  }
+
+  // Native creation permits diffuse=0, ambient=1. Both contribute to
+  // projected-light intensity; validate them before combining in double.
+  {
+    zcls::Node node{};
+    zcls::Light data{};
+    node.put<int32_t>(0x34, 9);
+    node.data = &data;
+    data.put<uint32_t>(0xb0, 0x202);
+    data.put<float>(0xb8, 10);
+    data.put<float>(0xa0, 1);
+    data.put<float>(0xa4, 1);
+    zmod::LightList list{};
+    list.count = 1;
+    list.list[0].node = &node;
+    list.list[0].data = &data;
+    const auto before = data;
+    const auto lights = collect_native_lights(list);
+    require(lights.size() == 1 && lights[0].light.color[3] == 1,
+            "Ambient-only native light discarded");
+    require(!std::memcmp(before.raw, data.raw, sizeof data.raw),
+            "Ambient light collection mutated native data");
+    data.put<float>(0x9c, std::numeric_limits<float>::max());
+    data.put<float>(0xa0, std::numeric_limits<float>::max());
+    bool rejected = false;
+    try {
+      collect_native_lights(list);
+    } catch (const std::exception &) {
+      rejected = true;
+    }
+    require(rejected, "Overflowing diffuse+ambient accepted");
+  }
+  // Full parent hierarchy and mutation/depth controls.
+  {
+
+    zcls::Node root{}, grand{}, parent{}, leaf{};
+    zcls::Object3d gd{}, pd{};
+    zcls::Light ld{};
+    root.put<int32_t>(0x34, 2);
+    grand.put<int32_t>(0x34, 5);
+    parent.put<int32_t>(0x34, 5);
+    leaf.put<int32_t>(0x34, 9);
+    grand.data = &gd;
+    parent.data = &pd;
+    leaf.data = &ld;
+    zcls::Node *gp[]{&root};
+    zcls::Node *pp[]{&grand};
+    zcls::Node *lp[]{&parent};
+    grand.parents = gp;
+    parent.parents = pp;
+    leaf.parents = lp;
+    grand.put<int32_t>(0x54, 1);
+    parent.put<int32_t>(0x54, 1);
+    leaf.put<int32_t>(0x54, 1);
+    float g[]{0, 2, 0, -3, 0, 0, 0, 0, 4, 10, 20, 30},
+        p[]{1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 2, 3};
+    std::memcpy(gd.raw + 0x30, g, 48);
+    std::memcpy(pd.raw + 0x30, p, 48);
+    ld.put<float>(0xc, 4);
+    ld.put<float>(0x10, 5);
+    ld.put<float>(0x14, 6);
+    auto before = ld;
+    auto gb = gd;
+    auto pb = pd;
+    auto matrix = mw34::effects::light_world_transform(leaf);
+    if (std::abs(matrix[3] + 11) > 1e-5 || std::abs(matrix[7] - 30) > 1e-5 ||
+        std::abs(matrix[11] - 66) > 1e-5)
+      throw std::runtime_error("full parent hierarchy placement lost");
+    if (std::memcmp(before.raw, ld.raw, sizeof(ld.raw)) ||
+        std::memcmp(gb.raw, gd.raw, sizeof(gd.raw)) ||
+        std::memcmp(pb.raw, pd.raw, sizeof(pd.raw)))
+      throw std::runtime_error("native data mutated");
+    auto rejects = [](auto fn) {
+      try {
+        fn();
+      } catch (const std::exception &) {
+        return;
+      }
+      throw std::runtime_error("bad hierarchy accepted");
+    };
+    lp[0] = &leaf;
+    rejects([&] { mw34::effects::light_world_transform(leaf); });
+    lp[0] = &parent;
+    leaf.put<int32_t>(0x54, 2);
+    rejects([&] { mw34::effects::light_world_transform(leaf); });
+    leaf.put<int32_t>(0x54, 1);
+    std::vector<zcls::Node> chain(65);
+    std::vector<std::array<zcls::Node *, 1>> links(65);
+    for (size_t i = 0; i < 65; ++i) {
+      chain[i].put<int32_t>(0x34, 6);
+      if (i) {
+        links[i][0] = &chain[i - 1];
+        chain[i].parents = links[i].data();
+        chain[i].put<int32_t>(0x54, 1);
+      }
+    }
+    chain[0].put<int32_t>(0x34, 5);
+    chain[0].data = &gd;
+    auto at64 = mw34::effects::light_world_transform(chain[63]);
+    if (at64[3] != 10)
+      throw std::runtime_error("64-level root skipped");
+    rejects([&] { mw34::effects::light_world_transform(chain[64]); });
+  }
+}

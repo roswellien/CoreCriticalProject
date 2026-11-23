@@ -46,14 +46,16 @@ class MissionLightingTests(unittest.TestCase):
         self.assertGreater(AUTHORED['t1m3']['rain_intensity'], .5)
         self.assertEqual([AUTHORED[f't1m{mission}']['rain_intensity'] for mission in (1, 2, 4)], [0, 0, 0])
 
-    def test_priority_relocation_disable_and_capability(self):
+    def test_conflict_relocation_disable_and_capability(self):
         fixture=fixtures.EnvironmentPackTests()
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary); first=fixture.fixture(root/'first','operation1');second=fixture.fixture(root/'second','operation1')
             attach(first,'operation1',.31);attach(second,'operation1',.61)
             moved=root/'relocated pack';first.rename(moved)
             host=fixture.host();host['mission_environment_versions']=[1]
-            chosen=select([str(moved),str(second)],host)
+            with self.assertRaisesRegex(ValueError, 'Conflicting environment region ownership'):
+                select([str(moved),str(second)],host)
+            chosen=select([str(moved)],host)
             self.assertEqual(chosen['operation1']['lighting']['missions']['c1m1']['ambient_strength'],.31)
             bindings=prepare(chosen,host,root/'output')
             self.assertEqual(Path(bindings['MW34_MISSION_ENVIRONMENTS']).read_bytes(),encode(chosen['operation1']['lighting']['missions']))

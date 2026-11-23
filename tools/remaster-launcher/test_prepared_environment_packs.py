@@ -9,6 +9,252 @@ import prepared_environment_packs
 from prepared_environment_packs import select,prepare,detail_metadata,encode_normal_pages,PROFILE,REGISTRY,REGIONS,sha
 
 class EnvironmentPackTests(unittest.TestCase):
+    def target_fixture(self, root):
+        import surface_materials
+
+        manifest = json.loads((root / "pack.json").read_text())
+        registry = json.loads((root / REGISTRY).read_text())
+        # Independent authored raw polygon stream: one triangle, canonical
+        # corner xyz/normal/UV words, before any renderer sees the fixture.
+        vertices = (
+            -1.0,
+            -1.0,
+            2.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            2.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            1.0,
+            2.0,
+            0.0,
+            0.0,
+            1.0,
+            0.5,
+            1.0,
+        )
+        source = struct.pack("<II24f", 1, 3, *vertices)
+        uv_hash = pixel_hash(source)
+        sidecar = "environment/ground-height.bin"
+        pixels = b"\x20\x20\x20\xff\xe0\xe0\xe0\xff" * 2
+        data = surface_materials.pack_surface_materials(
+            asset_id="training:fixture",
+            mesh_uv_hash=uv_hash,
+            batch_materials=["ground"],
+            records=[
+                dict(
+                    asset_id="training:fixture",
+                    material_name="ground",
+                    height_image="ramp",
+                    height_reference=0.5,
+                    height_amplitude=0.05,
+                )
+            ],
+            images={"ramp": (surface_materials.ROLE_HEIGHT, 2, 2, pixels)},
+        )
+        (root / sidecar).write_bytes(data)
+        manifest["files"][sidecar] = dict(
+            bytes=len(data), sha256=sha(root / sidecar), format="BWSFM1"
+        )
+        document = dict(
+            schema_version=1,
+            targets=[
+                dict(
+                    surface_materials=sidecar,
+                    asset_id="training:fixture",
+                    source=dict(
+                        kind="gamez-zbd-v27",
+                        member="zbd/t1/gamez.zbd",
+                        sha256=hashlib.sha256(source).hexdigest(),
+                        bytes=len(source),
+                        model_slot=7,
+                    ),
+                    mesh_uv_hash=f"{uv_hash:016x}",
+                    polygon_materials=["ground"],
+                    surface_keys=[
+                        dict(width=1, height=1, format=1, hash=f"{pixel_hash(bytes(2)):016x}")
+                    ],
+                )
+            ],
+        )
+        registry["material_targets"] = "environment/material_targets.json"
+        manifest["native_payload"]["required_formats"].extend(
+            ["BWSFM1", prepared_environment_packs.MATERIAL_TARGET_FORMAT]
+        )
+        manifest["native_payload"]["required_capabilities"] = {"surface-materials": 1}
+        self.save_target_fixture(root, manifest, registry, document)
+        return manifest, registry, document
+
+    def save_target_fixture(self, root, manifest, registry, document):
+        for name, value, format_ in (
+            (REGISTRY, registry, None),
+            (
+                "environment/material_targets.json",
+                document,
+                prepared_environment_packs.MATERIAL_TARGET_FORMAT,
+            ),
+        ):
+            data = json.dumps(value).encode()
+            (root / name).write_bytes(data)
+            manifest["files"][name] = dict(bytes=len(data), sha256=sha(root / name))
+            if format_:
+                manifest["files"][name]["format"] = format_
+        (root / "pack.json").write_text(json.dumps(manifest))
+
+    def test_material_targets_keep_independent_source_and_image_keys(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = self.fixture(Path(folder) / "targets")
+            _, _, document = self.target_fixture(root)
+            host = self.host()
+            host["content_capabilities"]["surface-materials"] = [1]
+            chosen = select([str(root)], host)
+            target = chosen["training"]["material_targets"][0]
+            for key, value in document["targets"][0].items():
+                self.assertEqual(target[key], value)
+            self.assertEqual(target["sidecar_sha256"], sha(Path(target["path"])))
+            # Selection does not enable rendering or add a launch flag.
+            self.assertNotIn("MW34_POM", prepare(chosen, host, Path(folder) / "launch"))
+
+    def test_material_targets_reject_wrong_source_material_and_member(self):
+        import copy
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = self.fixture(Path(folder) / "targets")
+            manifest, registry, document = self.target_fixture(root)
+            host = self.host()
+            host["content_capabilities"]["surface-materials"] = [1]
+            mutations = [
+                lambda x: x["targets"].append(copy.deepcopy(x["targets"][0])),
+                lambda x: x["targets"][0]["source"].update(member="zbd/c1/gamez.zbd"),
+                lambda x: x["targets"][0]["source"].update(kind="first-seen"),
+                lambda x: x["targets"][0]["source"].update(model_slot=True),
+                lambda x: x["targets"][0]["source"].update(unknown=1),
+                lambda x: x["targets"][0].update(mesh_uv_hash="0000000000000000"),
+                lambda x: x["targets"][0].update(mesh_uv_hash="0000000000000001"),
+                lambda x: x["targets"][0].update(asset_id="wrong:asset"),
+                lambda x: x["targets"][0].update(polygon_materials=["wrong"]),
+                lambda x: x["targets"][0].update(surface_materials="../outside.bin"),
+                lambda x: x["targets"][0].update(surface_keys=[None]),
+                lambda x: x["targets"][0]["surface_keys"][0].update(width=0),
+                lambda x: x["targets"][0]["surface_keys"][0].update(hash="1"),
+                lambda x: x["targets"][0].update(unrecognized=True),
+                lambda x: x.update(schema_version=True),
+            ]
+            for mutation in mutations:
+                with self.subTest(mutation=mutations.index(mutation)):
+                    changed = copy.deepcopy(document)
+                    mutation(changed)
+                    self.save_target_fixture(root, manifest, registry, changed)
+                    with self.assertRaises(ValueError):
+                        select([str(root)], host)
+            self.save_target_fixture(root, manifest, registry, document)
+            extra = root / "environment/unused.bin"
+            extra.write_bytes(b"unused")
+            manifest["files"]["environment/unused.bin"] = dict(bytes=6, sha256=sha(extra))
+            (root / "pack.json").write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, "unused"):
+                select([str(root)], host)
+
+    def test_material_target_metadata_limits_and_duplicate_keys(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = self.fixture(Path(folder) / "targets")
+            manifest, registry, document = self.target_fixture(root)
+            host = self.host()
+            host["content_capabilities"]["surface-materials"] = [1]
+            path = root / registry["material_targets"]
+            for data in (
+                b'{"schema_version":1,"schema_version":1,"targets":[]}',
+                b" " * (prepared_environment_packs.MATERIAL_TARGET_BYTES + 1),
+            ):
+                path.write_bytes(data)
+                manifest["files"][registry["material_targets"]].update(
+                    bytes=len(data), sha256=sha(path)
+                )
+                (root / "pack.json").write_text(json.dumps(manifest))
+                with self.assertRaises(ValueError):
+                    select([str(root)], host)
+            document["targets"] *= 4097
+            self.save_target_fixture(root, manifest, registry, document)
+            with self.assertRaises(ValueError):
+                select([str(root)], host)
+
+    def test_material_target_budget_is_charged_before_unique_sidecar_read(self):
+        import copy
+        import surface_materials
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = self.fixture(Path(folder) / "targets")
+            manifest, registry, document = self.target_fixture(root)
+            first = document["targets"][0]["surface_materials"]
+            second = "environment/second-height.bin"
+            (root / second).write_bytes((root / first).read_bytes())
+            manifest["files"][second] = dict(manifest["files"][first])
+            document["targets"].append(copy.deepcopy(document["targets"][0]))
+            document["targets"][1]["source"]["model_slot"] = 8
+            files = manifest["files"]
+            paths = {name: str(root / name) for name in files}
+            original_reader = surface_materials.read_surface_materials_file
+            budget = dict(
+                owners=set(), bytes=surface_materials.MAX_SIDECAR_BYTES - files[first]["bytes"]
+            )
+            self.save_target_fixture(root, manifest, registry, document)
+            path = root / registry["material_targets"]
+            # Sharing one immutable owner does not consume the budget twice.
+            prepared_environment_packs.read_material_targets(path, "training", files, paths, budget)
+            self.assertEqual(budget["bytes"], surface_materials.MAX_SIDECAR_BYTES)
+            document["targets"][1]["surface_materials"] = second
+            self.save_target_fixture(root, manifest, registry, document)
+            budget = dict(
+                owners=set(), bytes=surface_materials.MAX_SIDECAR_BYTES - files[first]["bytes"]
+            )
+            with patch.object(
+                surface_materials, "read_surface_materials_file", wraps=original_reader
+            ) as reader:
+                with self.assertRaisesRegex(ValueError, "decoded budget"):
+                    prepared_environment_packs.read_material_targets(
+                        path, "training", files, paths, budget
+                    )
+                self.assertEqual(reader.call_count, 1)
+
+    def test_cache_admission_removal_and_duplicate_owner(self):
+        from startup_cache import VerificationCache, environment_resources
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);one=self.fixture(root/'one');host=self.host();cache_root=root/'cache'
+            cold=VerificationCache(cache_root)
+            selected=select([str(one)],host,cold)
+            environment_resources(selected,host,cache_root);cold.save()
+            warm=VerificationCache(cache_root)
+            select([str(one)],host,warm)
+            self.assertGreater(warm.reused,0)
+            two=self.fixture(root/'two')
+            with self.assertRaisesRegex(ValueError,'region ownership'):
+                select([str(one),str(two)],host,warm)
+            (one/'environment/bank.bin').write_bytes(b'corrupt')
+            with self.assertRaises(ValueError):
+                select([str(one)],host,warm)
+            stock=environment_resources({},host,cache_root)
+            self.assertNotIn('MW34_REMASTER_BANKS',stock)
+            self.assertNotIn('MW34_WORLD_NORMALS',stock)
+            self.assertNotIn('MW34_SURFACE_NORMALS',stock)
+
+    def test_duplicate_region_ownership_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            one=self.fixture(Path(folder)/'one')
+            two=self.fixture(Path(folder)/'two')
+            with self.assertRaisesRegex(ValueError, 'region ownership'):
+                select([str(one),str(two)],self.host())
+            with self.assertRaisesRegex(ValueError, 'region ownership'):
+                select([str(two),str(one)],self.host())
+
     def test_detail_pins_follow_selected_pack_revision(self):
         with tempfile.TemporaryDirectory() as t:
             root=self.fixture(Path(t)/'current')

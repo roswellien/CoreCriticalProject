@@ -79,7 +79,9 @@ def definition(document, original):
     return encode(tree)
 
 
-def select(metadata, host, verification=None):
+def select(metadata, host, verification=None, appearance_mode=None):
+    from chassis_appearances import CAPABILITY as APPEARANCES, mode, validate, choose
+    mode(appearance_mode)
     from prepared_mech_packs import read_json, resolve
     from content_capabilities import require
     from surface_materials import (
@@ -95,7 +97,13 @@ def select(metadata, host, verification=None):
         ['BWMESH4', 'BWTEX1', SURFACE_FORMAT],
         ['BWMESH4', 'BWTEX1', 'MW3ICON1', SURFACE_FORMAT],
         ['MW3LEGACY'],
+        ['MW3LEGACY', 'BWSNR2'],
+        ['MW3LEGACY', 'BWMESH4', 'BWTEX1'],
+        ['MW3LEGACY', 'BWMESH4', 'BWTEX1', 'BWSNR2'],
     )
+    allowed_format_lists = (*allowed_format_lists,
+                            *(formats + ['BWMEM1'] for formats in allowed_format_lists
+                              if 'BWMESH4' in formats and 'MW3LEGACY' in formats))
     result, ids = [], set()
     for root, manifest in metadata:
         payload = manifest.get('native_payload', {})
@@ -135,8 +143,10 @@ def select(metadata, host, verification=None):
                 raise ValueError('Chassis integrity failure: ' + name)
             fmt = pin.get('format')
             if fmt is not None:
-                if fmt not in ('BWMESH4', 'BWTEX1', 'MW3ICON1', SURFACE_FORMAT):
+                if fmt not in ('BWMESH4', 'BWTEX1', 'MW3ICON1', 'BWSNR2', 'BWMEM1', SURFACE_FORMAT):
                     raise ValueError('Unsupported chassis payload format')
+                if fmt == 'BWMEM1' and size > 1024 * 1024:
+                    raise ValueError('Owned emission size limit exceeded')
                 with path.open('rb') as stream:
                     if stream.read(8) != fmt.encode().ljust(8, b'\0'):
                         raise ValueError('Mislabeled chassis payload')
@@ -150,9 +160,9 @@ def select(metadata, host, verification=None):
             raise ValueError('Unsupported chassis registry')
         used = {REGISTRY}
         for row in records:
-            if payload.get('required_formats') == ['MW3LEGACY']:
+            if 'MW3LEGACY' in payload.get('required_formats', []):
                 from legacy_chassis_resources import load
-                if (not isinstance(row, dict) or set(row) - {'headlights'} != {'id', 'name', 'metadata_template', 'legacy'}
+                if (not isinstance(row, dict) or set(row) - {'appearances', 'headlights'} != {'id', 'name', 'metadata_template', 'legacy'}
                         or payload.get('required_capabilities', {}).get(CAPABILITY) != 3):
                     raise ValueError('Legacy chassis resources require version 3 and exact fields')
                 ident = row['id']
@@ -173,7 +183,60 @@ def select(metadata, host, verification=None):
                 if (document.get('schema_version') == 2
                         and payload.get('required_capabilities', {}).get(SKIN_CAPABILITY) != 1):
                     raise ValueError('Legacy skin descriptor requires legacy-mech-skins version 1')
-                result.append(dict(registration=record, legacy=load(document, legacy_read)))
+                legacy = load(document, legacy_read)
+                upgraded = None
+                owned = None
+                if 'appearances' in row:
+                    if payload.get('required_capabilities', {}).get(APPEARANCES) != 1:
+                        raise ValueError('Chassis appearances require version 1')
+                    def appearance_read(name, fmt):
+                        if name not in verified or files[name].get('format') != fmt:
+                            raise ValueError('Undeclared appearance resource')
+                        used.add(name)
+                        return Path(verified[name]).read_bytes()
+                    validated = validate(row['appearances'], legacy, appearance_read)
+                    upgraded = validated if 'upgraded' in row['appearances'] else None
+                    if 'new' in row['appearances']:
+                        from owned_chassis_visuals import validate as validate_owned
+                        owned = validate_owned(row['appearances']['new'], legacy, appearance_read)
+                        if not {'BWMESH4', 'BWTEX1'} <= set(payload['required_formats']):
+                            raise ValueError('Undeclared owned visual formats')
+                        if owned['normal_pages'] and 'BWSNR2' not in payload['required_formats']:
+                            raise ValueError('Undeclared owned normal format')
+                        if owned.get('emission_payloads') and 'BWMEM1' not in payload['required_formats']:
+                            raise ValueError('Undeclared owned emission format')
+                    if upgraded is not None and upgraded['normal_pages'] and 'BWSNR2' not in payload['required_formats']:
+                        raise ValueError('Undeclared appearance normal format')
+                selected = dict(registration=record, legacy=legacy)
+                if not (appearance_mode == 'new' and owned is not None) and (upgraded is not None or appearance_mode is not None):
+                    selected['legacy'], pages, coverage = choose(legacy, upgraded, appearance_mode)
+                    if pages and 2 not in host.get('normal_map_formats', []):
+                        raise ValueError('Selected appearance requires normal map format 2')
+                    if pages and 1 not in host.get('authored_normal_catalog_versions', []):
+                        raise ValueError('Selected appearance requires authored normal catalog version 1')
+                    selected.update(appearance_normal_pages=pages, appearance=coverage)
+                result.append(selected)
+                if appearance_mode == 'new' and owned is not None:
+                    from owned_chassis_visuals import CAPABILITY as OWNED_CAPABILITY
+                    from content_capabilities import advertised
+                    version = owned['capability_version']
+                    if version not in advertised(host).get(OWNED_CAPABILITY, []):
+                        raise ValueError(f'Selected new appearance requires owned-chassis-visuals version {version}')
+                    if owned.get('weapon_attachments'):
+                        from weapon_visual_attachments import CAPABILITY as WEAPON_VISUAL_CAPABILITY
+                        if 1 not in advertised(host).get(WEAPON_VISUAL_CAPABILITY, []):
+                            raise ValueError('Selected new appearance requires owned-chassis-weapon-visuals version 1')
+                    if owned.get('emission_payloads'):
+                        from owned_emission import CAPABILITY as EMISSION_CAPABILITY
+                        if 1 not in advertised(host).get(EMISSION_CAPABILITY, []):
+                            raise ValueError('Selected new appearance requires owned-chassis-emission version 1')
+                    if owned['normal_pages'] and (2 not in host.get('normal_map_formats', []) or 'BWSNR2' not in payload['required_formats']):
+                        raise ValueError('Selected owned normals require format 2')
+                    if owned['normal_pages'] and 1 not in host.get('authored_normal_catalog_versions', []):
+                        raise ValueError('Selected owned normals require authored normal catalog version 1')
+                    selected.update(owned_visuals=owned, appearance_normal_pages=owned['normal_pages'],
+                                    appearance=dict(requested='new', selected='new', reason=None))
+                    selected['legacy'] = legacy
                 ids.add(ident)
                 continue
             if (not isinstance(row, dict) or not FIELDS <= set(row)
@@ -299,7 +362,7 @@ def prepare(records, game_exe, output, environment):
     for item in records:
         if 'legacy' in item:
             legacy_records.append(item)
-            registrations.append(item['registration'])
+            registrations.append(dict(item['registration']))
             continue
         record, document = item['registration'], item['definition']
         controller, resource = document['template'], record['resource']
@@ -346,6 +409,32 @@ def prepare(records, game_exe, output, environment):
         source = Path(banks.get('zbd/rimage.zbd', Path(game_exe).resolve().parent / 'zbd/rimage.zbd'))
         path = output / 'rimage.zbd'; path.write_bytes(append_icons(source.read_bytes(), silhouettes))
         banks['zbd/rimage.zbd'] = str(path.resolve())
+    for item in records:
+        if 'owned_visuals' in item:
+            owned = item['owned_visuals']
+            visual = dict(rosters=owned['rosters'], cockpit=owned['cockpit'], meshes={}, textures={}, skin_textures={})
+            if 'weapon_attachments' in owned:
+                visual['weapon_attachments'] = owned['weapon_attachments']
+            if 'arm_damage' in owned:
+                visual['arm_damage'] = owned['arm_damage']
+            from legacy_chassis_skins import definition_skins, texture_names
+            legacy = item['legacy']
+            if 'skins' in legacy['definition'][0]:
+                rows, primary, _ = definition_skins(legacy['definition'])
+                names = texture_names(legacy, item['registration']['resource'])
+                for skin, row in enumerate(rows):
+                    for name in primary:
+                        visual['skin_textures'][names[name + row['suffix']]] = skin
+            folder = output / ('visual-' + hashlib.sha256(item['registration']['id'].encode()).hexdigest()[:16])
+            folder.mkdir()
+            for role in ('meshes', 'textures'):
+                for lod, data in owned['payloads'][role].items():
+                    path = folder / (role + '-' + lod + '.bin')
+                    path.write_bytes(data)
+                    visual[role][lod] = str(path.resolve())
+            # Registrations are private session copies, never installed manifest objects.
+            registration = next(r for r in registrations if r['id'] == item['registration']['id'])
+            registration['owned_visuals'] = visual
     catalog = output / 'chassis.bin'; catalog.write_bytes(encode_catalog(registrations))
     if len(banks) > 256:
         raise ValueError('Composed resource map exceeds native limit')
@@ -354,6 +443,18 @@ def prepare(records, game_exe, output, environment):
         a, b = key.encode(), value.encode(); data += struct.pack('<II', len(a), len(b)) + a + b
     mapping = output / 'banks.bin'; mapping.write_bytes(data)
     bindings = {CATALOG_KEY: str(catalog.resolve()), 'MW34_REMASTER_BANKS': str(mapping.resolve())}
+    from chassis_appearances import compose_normals
+    bindings.update(compose_normals(records, environment, output / 'appearance-normals'))
+    for item in records:
+        emissions = item.get('owned_visuals', {}).get('emission_payloads', {})
+        if not emissions:
+            continue
+        record = item['registration']
+        prefix = 'MW34_CHASSIS_' + record['resource'].upper()
+        for lod, suffix in (('close', '_EMISSION'), ('distance', '_LOD1_EMISSION')):
+            path = output / ('emission-' + record['resource'] + '-' + lod + '.bin')
+            path.write_bytes(emissions[lod])
+            bindings[prefix + suffix] = str(path.resolve())
     for item in records:
         if 'surface_materials' not in item:
             continue

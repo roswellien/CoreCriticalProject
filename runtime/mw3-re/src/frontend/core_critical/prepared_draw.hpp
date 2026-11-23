@@ -1,0 +1,329 @@
+#pragma once
+
+#include "gamez/zmodel/gmod_fog.h"
+#include "gamez/zmodel/gmod_fogcalc.h"
+#include "prepared_models.hpp"
+#include "renderer/donor_retarget.hpp"
+#include "renderer/geometry/resource.hpp"
+#include "renderer/vk_scene.hpp"
+
+#include <bit>
+#include <cmath>
+#include <cstring>
+
+namespace cc_mw3_re {
+
+inline void validate_damage_tint(const ::platform::ModelDrawContext &context) {
+  for (float channel : context.damage_tint_rgb)
+    if (!std::isfinite(channel) || channel < 0.f || channel > 1.f)
+      throw std::runtime_error("Model has an invalid native tint color");
+  const float weight = context.damage_tint_weight;
+  if (!std::isfinite(weight) || weight < 0.f || weight > 1.f)
+    throw std::runtime_error("Model has an invalid native tint weight");
+}
+
+inline std::uint32_t pack_damage_tint_rgb(const float (&rgb)[3]) {
+  const auto channel = [](float value) {
+    return static_cast<std::uint32_t>(std::lround(value * 255.f));
+  };
+  return channel(rgb[0]) | (channel(rgb[1]) << 8) | (channel(rgb[2]) << 16);
+}
+
+inline std::uint32_t prepared_opacity_bits(float opacity) {
+  std::uint32_t bits{};
+  static_assert(sizeof(bits) == sizeof(opacity));
+  std::memcpy(&bits, &opacity, sizeof(bits));
+  return bits;
+}
+
+inline std::array<float, 12>
+matrix_rows(const ::platform::prepared::Matrix &matrix) {
+  std::array<float, 12> result{};
+  for (unsigned i = 0; i < result.size(); ++i) {
+    result[i] = float(matrix[i]);
+    if (!std::isfinite(result[i]))
+      throw std::runtime_error("Prepared transform exceeds float range");
+  }
+  return result;
+}
+
+inline std::array<float, 4> native_height_eye(
+    const ::platform::prepared::Matrix &camera_to_world) {
+  for (double value : camera_to_world)
+    if (!std::isfinite(value))
+      throw std::runtime_error("POM native camera transform is nonfinite");
+  if (camera_to_world[12] != 0 || camera_to_world[13] != 0 ||
+      camera_to_world[14] != 0 || camera_to_world[15] != 1)
+    throw std::runtime_error("POM native camera transform is not affine");
+  // A finite origin alone cannot establish a real camera: a missing or
+  // singular basis must not become an implicit identity-camera fallback.
+  (void)mw34::donor::inverse(camera_to_world);
+  const auto eye = matrix_rows(camera_to_world);
+  return {eye[3], eye[7], eye[11], 1.f};
+}
+
+inline void apply_surface_material(mw34::vkscene::Draw &draw,
+                                   const PreparedBatchDraw &source,
+                                   bool enabled, bool height_enabled = false,
+                                   std::uint64_t epoch = 0, std::uint64_t texture_version = 0) {
+  draw.surface_parameters = {};
+  draw.surface_eye = {};
+  draw.height_binding.reset();
+  if (!enabled || !source.surface_material)
+    return;
+  const auto &material = *source.surface_material;
+  const auto eye = matrix_rows(
+      mw34::donor::product(source.world, mw34::donor::inverse(source.camera)));
+  draw.surface_parameters = {material.roughness, material.reflectivity,
+                             material.metallic, 1.f};
+  draw.surface_eye = {eye[3], eye[7], eye[11], 1.f};
+  if (height_enabled && material.height_image != mw34::materials::no_surface_image) {
+    if (!source.height_binding)
+      throw std::runtime_error("Prepared height material has no admitted normal/source binding");
+    auto binding = std::make_shared<mw34::materials::HeightBinding>(*source.height_binding);
+    binding->producer_epoch = epoch;
+    binding->texture_version = texture_version;
+    draw.height_binding = std::move(binding);
+  }
+}
+
+struct PreparedVertex {
+  std::array<float, 3> camera{}, normal{}, color{}, fog{};
+  float u{}, v{};
+};
+
+inline std::vector<PreparedVertex> clip_depth(std::vector<PreparedVertex> input,
+                                              float plane, bool near_plane) {
+  std::vector<PreparedVertex> result;
+  for (size_t i = 0; i < input.size(); ++i) {
+    const auto &a = input[i];
+    const auto &b = input[(i + 1) % input.size()];
+    const bool inside_a =
+        near_plane ? a.camera[2] >= plane : a.camera[2] <= plane;
+    const bool inside_b =
+        near_plane ? b.camera[2] >= plane : b.camera[2] <= plane;
+    if (inside_a)
+      result.push_back(a);
+    if (inside_a != inside_b) {
+      const float t = (plane - a.camera[2]) / (b.camera[2] - a.camera[2]);
+      PreparedVertex vertex;
+      for (unsigned axis = 0; axis < 3; ++axis) {
+        vertex.camera[axis] = std::lerp(a.camera[axis], b.camera[axis], t);
+        vertex.normal[axis] = std::lerp(a.normal[axis], b.normal[axis], t);
+        vertex.color[axis] = std::lerp(a.color[axis], b.color[axis], t);
+        vertex.fog[axis] = std::lerp(a.fog[axis], b.fog[axis], t);
+      }
+      vertex.camera[2] = plane;
+      vertex.u = std::lerp(a.u, b.u, t);
+      vertex.v = std::lerp(a.v, b.v, t);
+      result.push_back(vertex);
+    }
+  }
+  return result;
+}
+
+struct PreparedSubmission {
+  mw34::vkscene::Draw draw{};
+  std::vector<unsigned char> vertices;
+  uint64_t clipped_triangles{};
+};
+
+struct PreparedDrawCpuStatistics {
+  std::uint64_t vertices{}, stage_ticks{}, assembly_ticks{};
+};
+
+// Keeps clipping, native projection and fog identical for both material modes.
+// Lit CPU vertices carry smooth normals in a transient stream, not immutable
+// VBOs.
+inline PreparedSubmission
+prepare_draw(const PreparedBatchDraw &source,
+             const ::platform::ModelDrawContext &context,
+             const std::array<int, 4> &viewport, unsigned width,
+             unsigned height,
+             std::shared_ptr<const mw34::vkscene::ModelGeometry> geometry,
+             bool lighting, PreparedDrawCpuStatistics *statistics = nullptr) {
+  namespace vk = mw34::vkscene;
+  if (!(context.near_z > 0) || !(context.far_z > context.near_z))
+    throw std::runtime_error(
+        "Prepared model requires valid native clip planes");
+  validate_damage_tint(context);
+  const auto camera = matrix_rows(source.camera);
+  const auto normal_matrix =
+      lighting ? mw34::sun::normal_matrix(source.camera) : camera;
+  const auto &vertices =
+      source.deformed.empty() ? source.batch->vertices : source.deformed;
+  const float near_clip = std::max(context.near_z, context.clip_near);
+  const auto edge = zmod::render_fog_edge();
+  const bool scoped_fog = edge.inverse_range > 0.f;
+  const auto &mission_fog = zmod::render_fog();
+  cc::geometry::Fog fog;
+  fog.enabled = mission_fog.on != 0;
+  fog.near_range = mission_fog.near_range;
+  fog.inverse_range = mission_fog.inv_range;
+  fog.low_altitude = mission_fog.alt_low;
+  fog.inverse_altitude = mission_fog.inv_alt;
+  fog.edge_start = edge.start;
+  fog.edge_inverse_range = edge.inverse_range;
+  bool gpu = source.deformed.empty();
+  std::vector<PreparedVertex> staged;
+  staged.reserve(vertices.size());
+  if (statistics)
+    statistics->vertices += vertices.size();
+  {
+    sdlfe::CpuInterval interval(statistics ? &statistics->stage_ticks
+                                           : nullptr);
+    for (const auto &vertex : vertices) {
+      PreparedVertex output;
+      for (unsigned row = 0; row < 3; ++row) {
+        output.camera[row] =
+            ((camera[row * 4] * vertex[0] + camera[row * 4 + 1] * vertex[1]) +
+             camera[row * 4 + 2] * vertex[2]) +
+            camera[row * 4 + 3];
+        output.normal[row] = (normal_matrix[row * 4] * vertex[3] +
+                              normal_matrix[row * 4 + 1] * vertex[4]) +
+                             normal_matrix[row * 4 + 2] * vertex[5];
+        if (!std::isfinite(output.camera[row]) ||
+            !std::isfinite(output.normal[row]))
+          throw std::runtime_error("Prepared vertex transform is nonfinite");
+      }
+      const float length =
+          std::hypot(output.normal[0], output.normal[1], output.normal[2]);
+      if (!(length > 0) || !std::isfinite(length))
+        throw std::runtime_error(
+            "Prepared vertex has a degenerate transformed normal");
+      const float light =
+          .35f + .65f * std::max(0.f, (.3f * output.normal[0] +
+                                       .6f * output.normal[1] -
+                                       .74f * output.normal[2]) /
+                                          length);
+      for (unsigned channel = 0; channel < 3; ++channel)
+        output.color[channel] = std::floor(
+            float((source.batch->color >> (16 - channel * 8)) & 255) * light);
+      if (scoped_fog) {
+        const auto &transform = zmod::fog_calc().camera_to_world;
+        const float height_world = static_cast<float>(
+            double{transform[0][1]} * output.camera[0] +
+            double{transform[1][1]} * output.camera[1] +
+            double{transform[2][1]} * output.camera[2] + transform[3][1]);
+        output.fog = cc::geometry::fog_factors(
+            fog, std::hypot(output.camera[0], output.camera[2]), height_world);
+      }
+      output.u = vertex[6];
+      output.v = vertex[7];
+      gpu = gpu && output.camera[2] >= near_clip &&
+            output.camera[2] <= context.far_z;
+      staged.push_back(output);
+    }
+  }
+  sdlfe::CpuInterval assembly(statistics ? &statistics->assembly_ticks
+                                         : nullptr);
+  PreparedSubmission result;
+  auto &draw = result.draw;
+  draw.texture = -1;
+  draw.sampler = 3U | (1U << 4) | (1U << 8) | 0x10000U;
+  // Key order: blend, src, dst, zenable, zfunc, zwrite, cull, points. A fading
+  // node blends with SRCALPHA/INVSRCALPHA and skips depth writes, as the native
+  // flush_transparent pass does; cull stays D3DCULL_NONE either way.
+  draw.key = {context.opacity < 1.f, 5, 6, 1, 7, context.opacity >= 1.f, 1, 0};
+  // Prepared draws do not use alpha test in mode.w, so retain the native
+  // per-node opacity there for the prepared vertex shader to apply to alpha.
+  draw.push.mode[3] = prepared_opacity_bits(context.opacity);
+  draw.push.target[0] = float(width);
+  draw.push.target[1] = float(height);
+  std::copy_n(zmod::render_fog_color(), 3, draw.push.fog);
+  draw.push.mode[0] = 2U | 4U | (zmod::render_fog_active() ? 16U : 0U);
+  draw.push.mode[1] = 4U | (2U << 8);
+  draw.push.mode[2] = 2;
+  if (context.damage_tint_weight > 0.f) {
+    draw.push.mode[0] |= 128U;
+    draw.push.mode[1] = pack_damage_tint_rgb(context.damage_tint_rgb);
+    draw.push.mode[2] = std::bit_cast<std::uint32_t>(context.damage_tint_weight);
+  }
+  draw.scissor = {{0, 0}, {width, height}};
+  auto normals = std::make_shared<std::vector<std::array<float, 3>>>();
+  auto raw_fog = std::make_shared<std::vector<std::array<float, 4>>>();
+  const auto append = [&](const PreparedVertex &vertex, bool project) {
+    const auto opacity = std::clamp(context.opacity, 0.f, 1.f);
+    const auto alpha = std::uint32_t(std::lround(
+        float((source.batch->color >> 24) & 255U) * opacity));
+    uint32_t color = alpha << 24;
+    for (unsigned channel = 0; channel < 3; ++channel)
+      color |= uint32_t(std::clamp(vertex.color[channel], 0.f, 255.f))
+               << (16 - channel * 8);
+    // Unscoped callers retain fog_at's original approximation, sampled only after clipping.
+    float visibility = 1.f;
+    if (scoped_fog)
+      visibility -= cc::geometry::fog_amount(vertex.fog);
+    else if (zmod::render_fog_active())
+      visibility -= zmod::fog_at(vertex.camera.data());
+    const auto packed_visibility = uint32_t(std::clamp(visibility * 255.f, 0.f, 255.f));
+    ::platform::TLVertex tl{0, 0, 0, 1, color, packed_visibility << 24, vertex.u, vertex.v};
+    if (project) {
+      if (scoped_fog)
+        raw_fog->push_back({vertex.fog[0], vertex.fog[1], vertex.fog[2], 1.f});
+      else
+        raw_fog->push_back({visibility, 0.f, 0.f, 2.f});
+      tl.rhw = tl.sz = context.near_z / vertex.camera[2];
+      tl.sx = ((context.fx_near * vertex.camera[0]) * tl.rhw + context.cx -
+               viewport[0]) *
+              width / float(viewport[2]);
+      tl.sy = ((context.fy_near * vertex.camera[1]) * tl.rhw + context.cy -
+               viewport[1]) *
+              height / float(viewport[3]);
+      if (lighting)
+        normals->push_back(vertex.normal);
+    }
+    const auto *bytes = reinterpret_cast<const unsigned char *>(&tl);
+    result.vertices.insert(result.vertices.end(), bytes, bytes + sizeof tl);
+  };
+  const std::array<float, 6> projection{
+      context.near_z,
+      context.fx_near * width / viewport[2],
+      context.fy_near * height / viewport[3],
+      (context.cx - viewport[0]) * width / viewport[2] - .5f,
+      (context.cy - viewport[1]) * height / viewport[3] - .5f,
+      context.far_z};
+  if (gpu) {
+    result.vertices.reserve(staged.size() * sizeof(::platform::TLVertex));
+    for (const auto &vertex : staged)
+      append(vertex, false);
+    auto instance = std::make_shared<vk::ModelInstance>();
+    instance->geometry = std::move(geometry);
+    instance->camera = camera;
+    instance->projection = projection;
+    instance->sun_world = matrix_rows(source.world);
+    instance->sun_normal = mw34::sun::normal_matrix(source.world);
+    instance->world = instance->sun_eligible = true;
+    draw.model = std::move(instance);
+  } else {
+    for (size_t i = 0; i < staged.size(); i += 3) {
+      auto clipped = clip_depth({staged[i], staged[i + 1], staged[i + 2]},
+                                near_clip, true);
+      clipped = clip_depth(std::move(clipped), context.far_z, false);
+      for (size_t j = 1; j + 1 < clipped.size(); ++j) {
+        append(clipped[0], true);
+        append(clipped[j], true);
+        append(clipped[j + 1], true);
+        ++result.clipped_triangles;
+      }
+    }
+    // Every vertex above was appended with project == true, so raw_fog.size() equals the count.
+    draw.raw_fog = std::move(raw_fog);
+    if (lighting) {
+      auto view = std::make_shared<mw34::sun::Tl>();
+      view->camera_world = matrix_rows(mw34::donor::product(
+          source.world, mw34::donor::inverse(source.camera)));
+      view->projection = projection;
+      // TL coordinates already include D3D pixel centres, unlike the GPU
+      // model projection. Its camera reconstruction needs the exact centre.
+      view->projection[3] += .5f;
+      view->projection[4] += .5f;
+      draw.sun_tl = std::move(view);
+      draw.lit_normals = std::move(normals);
+    }
+  }
+  draw.count = unsigned(result.vertices.size() / sizeof(::platform::TLVertex));
+  return result;
+}
+
+} // namespace cc_mw3_re

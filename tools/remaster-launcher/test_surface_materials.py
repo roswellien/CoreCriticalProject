@@ -88,6 +88,10 @@ class SurfaceMaterialsTest(unittest.TestCase):
 
         mesh1 = _make_bwmesh1()
         mesh4 = _make_bwmesh4()
+        variant=bytearray(mesh4);struct.pack_into("<I",variant,20,3)
+        self.assertEqual(surface_materials.mesh_uv_identity(bytes(variant)),surface_materials.mesh_uv_identity(mesh4))
+        struct.pack_into("<I",variant,20,4)
+        with self.assertRaises(ValueError):surface_materials.mesh_uv_identity(bytes(variant))
         expected_hash = surface_materials.mesh_uv_identity(mesh1)
         self.assertEqual(expected_hash, 1335280070564434920)
         self.assertEqual(surface_materials.mesh_uv_identity(mesh4), expected_hash)

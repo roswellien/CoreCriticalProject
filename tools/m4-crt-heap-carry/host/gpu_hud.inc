@@ -14,7 +14,7 @@ bool hud_gpu_active{};unsigned hud_rt_mem{},hud_w{},hud_h{},hud_pitch{};
 mw34::vkscene::Scene hud_sc{};std::map<std::uint64_t,int>hud_tex_index;
 std::uint64_t hud_draws_total{},hud_fallbacks{},hud_noise_calls{},hud_jitter_calls{};unsigned hud_noise_slot{};bool hud_noise_reject_logged{},hud_jitter_reject_logged{},hud_jitter_line_reject_logged{};
 void hud_begin(VSurface&rt){hud_gpu_active=true;hud_rt_mem=rt.mem;hud_w=rt.width;hud_h=rt.height;hud_pitch=rt.pitch;
- hud_sc=mw34::vkscene::Scene{};hud_sc.hud=true;hud_sc.frontend_canvas=host.sren&&host.sren->frontend_canvas();hud_sc.width=rt.width;hud_sc.height=rt.height;hud_sc.has_depth=host.res_zb!=0;hud_tex_index.clear();hud_noise_slot=0;}
+ hud_sc=mw34::vkscene::Scene{};hud_sc.hud=true;hud_sc.frontend_canvas=host.sren&&host.sren->sent.frontend_canvas;hud_sc.width=rt.width;hud_sc.height=rt.height;hud_sc.has_depth=host.res_zb!=0;hud_tex_index.clear();hud_noise_slot=0;}
 static std::uint32_t hud_rgba(unsigned c,unsigned a){const std::uint32_t r=((c>>11)&31)*255/31,g=((c>>5)&63)*255/63,b=(c&31)*255/31;return r|g<<8|b<<16|std::uint32_t(a)<<24;}
 static std::uint32_t hud_argb(unsigned c){const std::uint32_t r=((c>>11)&31)*255/31,g=((c>>5)&63)*255/63,b=(c&31)*255/31;return 0xff000000u|r<<16|g<<8|b;}
 // One pre-transformed vertex (x, y, z, rhw, diffuse ARGB, specular, u, v), D3D pixel-centre convention.
@@ -98,11 +98,11 @@ std::vector<std::uint32_t> text_render(const TextImage&ti,float k,unsigned&tw,un
  const float a=std::min(m,ix0<tw?float(ix0):m),b=std::max(m+lw,float(ix1));u0=a/float(tw);u1=b/float(tw);return out;}
 // Draws a text image at output density; false when it is not a recorded text image or the scale is 1.
 bool text_blit(unsigned img,int w,int h,int x,int y,int sx0,int sy0,int sx1,int sy1){auto it=text_images.find(img);if(it==text_images.end()||it->second.w!=w||it->second.h!=h)return false;
- const float k=host.sren?host.sren->current_scale():1.f;if(k<=1.01f)return false;const auto&ti=it->second;namespace vs=mw34::vkscene;
+ const float k=host.sren?host.sren->sent.scale:1.f;if(k<=1.01f)return false;const auto&ti=it->second;namespace vs=mw34::vkscene;
  const std::uint64_t key=ti.hash^std::uint64_t(std::lround(k*256));auto c=text_cache.get(key,[&]{TextTex tt{};tt.px=text_render(ti,k,tt.w,tt.h,tt.u0,tt.u1);{static FILE*dbg=[]{const char*e=std::getenv("MW34_HUD_TEXT_LOG");return e&&*e?std::fopen(e,"w"):nullptr;}();if(dbg){std::fprintf(dbg,"img %ux%u k %.2f tex %ux%u u %.3f-%.3f\n",unsigned(ti.w),unsigned(ti.h),k,tt.w,tt.h,tt.u0,tt.u1);for(const auto&r:ti.recipes)std::fprintf(dbg,"  [%s] rect %ld,%ld,%ld,%ld flags %x font %s h%ld w%ld wt%ld\n",r.text.c_str(),r.rect.left,r.rect.top,r.rect.right,r.rect.bottom,r.flags,r.font.lfFaceName,r.font.lfHeight,r.font.lfWidth,r.font.lfWeight);std::fflush(dbg);}}return tt;});
  const unsigned tw=c->w,th=c->h;if(!tw||!th)return false;
  const std::uint64_t tkey=0x5445585400000000ULL^key;int ti2;auto hit=hud_tex_index.find(tkey);
- if(hit!=hud_tex_index.end())ti2=hit->second;else{vs::TextureRef r{};r.key=tkey;r.hash=key;r.width=tw;r.height=th;r.format=vs::TexFormat::rgba8888;if(!host.sren||!host.sren->current(tkey,key,tw,th))r.pixels32=c->px;
+ if(hit!=hud_tex_index.end())ti2=hit->second;else{vs::TextureRef r{};r.key=tkey;r.hash=key;r.width=tw;r.height=th;r.format=vs::TexFormat::rgba8888;if(!host.sren||!host.sren->sent_current(tkey,key,tw,th))r.pixels32=c->px;
   ti2=int(hud_sc.textures.size());hud_tex_index[tkey]=ti2;hud_sc.textures.push_back(std::move(r));}
  const float du=c->u1-c->u0,fh=float(h)*k/float(th);const float a0=c->u0+du*float(sx0)/float(w),a1=c->u0+du*float(sx1)/float(w),b0=fh*float(sy0)/float(h),b1=fh*float(sy1)/float(h);
  const unsigned first=unsigned(hud_sc.vertices.size()/32);const float x0=float(x)-0.5f,y0=float(y)-0.5f,x1=x0+float(sx1-sx0),y1=y0+float(sy1-sy0);
@@ -118,7 +118,7 @@ bool hud_blit(){const auto&g=state.gpr;const unsigned sp=g.rsp.dword,img=g.rcx.d
  if(!hires.empty()&&w>0&&h>0&&std::int64_t(w)*h<=65536){const std::uint64_t id=hud_identity(pix,mask,imode,key,w,h,pitch);auto hi=hires.find(id);
   if(hi!=hires.end()){const auto&ht=hi->second;const std::uint64_t tkey=0x4852455300000000ULL^id;int ti;auto it=hud_tex_index.find(tkey);
    if(it!=hud_tex_index.end())ti=it->second;else{vs::TextureRef r{};r.key=tkey;r.hash=id;r.width=ht.w;r.height=ht.h;r.format=vs::TexFormat::rgba8888;auto*ren=host.sren;
-    if(!ren||!ren->current(tkey,id,r.width,r.height))r.pixels32=ht.px;ti=int(hud_sc.textures.size());hud_tex_index[tkey]=ti;hud_sc.textures.push_back(std::move(r));}
+    if(!ren||!ren->sent_current(tkey,id,r.width,r.height))r.pixels32=ht.px;ti=int(hud_sc.textures.size());hud_tex_index[tkey]=ti;hud_sc.textures.push_back(std::move(r));}
    const float du=ht.u1-ht.u0,dv=ht.v1-ht.v0,a0=ht.u0+du*float(sx0)/float(w),a1=ht.u0+du*float(sx1)/float(w),b0=ht.v0+dv*float(sy0)/float(h),b1=ht.v0+dv*float(sy1)/float(h);
    const unsigned first=unsigned(hud_sc.vertices.size()/32);const float x0=float(x)-0.5f,y0=float(y)-0.5f,x1=x0+float(sw),y1=y0+float(sh);
    hud_vertex(x0,y0,0xffffffffu,a0,b0);hud_vertex(x1,y0,0xffffffffu,a1,b0);hud_vertex(x1,y1,0xffffffffu,a1,b1);hud_vertex(x0,y0,0xffffffffu,a0,b0);hud_vertex(x1,y1,0xffffffffu,a1,b1);hud_vertex(x0,y1,0xffffffffu,a0,b1);
@@ -131,7 +131,7 @@ bool hud_blit(){const auto&g=state.gpr;const unsigned sp=g.rsp.dword,img=g.rcx.d
  int ti;auto it=hud_tex_index.find(tkey);
  if(it!=hud_tex_index.end()&&hud_sc.textures[size_t(it->second)].hash==hash)ti=it->second;
  else{vs::TextureRef r{};r.key=tkey;r.hash=hash;r.width=unsigned(sw);r.height=unsigned(sh);r.format=vs::TexFormat::rgba8888;auto*ren=host.sren;
-  if(!ren||!ren->current(tkey,hash,r.width,r.height)){r.pixels32.resize(px.size());for(size_t i=0;i<px.size();++i){const unsigned c=px[i];unsigned a=255;
+  if(!ren||!ren->sent_current(tkey,hash,r.width,r.height)){r.pixels32.resize(px.size());for(size_t i=0;i<px.size();++i){const unsigned c=px[i];unsigned a=255;
     if(mode==2){const unsigned m=al[i];a=m<=3?0U:m>=0xfc?255U:m;}else if(mode==1&&c==key)a=0;r.pixels32[i]=hud_rgba(c,a);}}
   ti=int(hud_sc.textures.size());hud_tex_index[tkey]=ti;hud_sc.textures.push_back(std::move(r));}
  const unsigned first=unsigned(hud_sc.vertices.size()/32);const float x0=float(x)-0.5f,y0=float(y)-0.5f,x1=x0+float(sw),y1=y0+float(sh);
@@ -274,7 +274,7 @@ void*hud_overwrite_body(State*s,unsigned target,void*p,Body body,const HudNoise&
  // Everything below is display work after the guest returned. A failure must
  // propagate visibly: never rerun the body and consume its random calls twice.
  std::uint64_t hash=0xcbf29ce484222325ULL;for(const auto pixel:texture.pixels32)for(unsigned shift=0;shift<32;shift+=8){hash^=(pixel>>shift)&0xff;hash*=0x100000001b3ULL;}
- texture.key=keyspace|hud_noise_slot++;texture.hash=hash;if(host.sren->current(texture.key,hash,width,height))texture.pixels32.clear();
+ texture.key=keyspace|hud_noise_slot++;texture.hash=hash;if(host.sren&&host.sren->sent_current(texture.key,hash,width,height))texture.pixels32.clear();
  const int ti=int(hud_sc.textures.size());hud_sc.textures.push_back(std::move(texture));mw34::vkscene::HostFpEnvironment host_fp;
  const unsigned first=unsigned(hud_sc.vertices.size()/32);const float x0=float(n.left)-0.5f,y0=float(n.top)-0.5f,x1=float(n.right)-0.5f,y1=float(n.bottom)-0.5f;
  hud_vertex(x0,y0,0xffffffffu,0,0);hud_vertex(x1,y0,0xffffffffu,1,0);hud_vertex(x1,y1,0xffffffffu,1,1);hud_vertex(x0,y0,0xffffffffu,0,0);hud_vertex(x1,y1,0xffffffffu,1,1);hud_vertex(x0,y1,0xffffffffu,0,1);const float center=float(n.center_x);hud_draw(ti,false,first,n.role,nullptr,n.center_known?&center:nullptr);return result;}
@@ -336,7 +336,7 @@ void*hud_jitter_body(State*s,unsigned target,void*p,Body body,bool line=false){H
   hud_fallback();return body(s,target,p);}
  void*result=hud_overwrite_body(s,target,p,body,j.output,line?0x4a4c494e00000000ULL:0x4a49545400000000ULL);++hud_jitter_calls;return result;}
 void hud_flush(){if(hud_sc.draws.empty())return;if(photo_replay_hide_hud()){hud_begin(*vsurface(host.res_rt));return;}
- try{HostInternal hi(*this);host.sren->render(hud_sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}hud_begin(*vsurface(host.res_rt));}
+ submit_scene(hud_sc,false,false);hud_begin(*vsurface(host.res_rt));}
 // The lock reverts to the CPU: draws so far reach the target, guest memory is synchronized and unprotected.
 void hud_fallback(){mw34::surface::run_cpu_fallback([&]{if(auto*rt=vsurface(host.res_rt);rt&&rt->locks&&rt->lock_access.writable())camera_surface_written(host.res_rt);},[&]{hud_flush();},[&]{if(auto*rt=vsurface(host.res_rt);rt&&rt->locks)rt->lock_access.expose_cpu_access();hud_gpu_active=false;++hud_fallbacks;gpu_sync(host.res_rt);});}
 // Entry interception (enter()): true when the primitive was recorded and the call returned to its caller.
@@ -354,4 +354,4 @@ void overlay_gpu(unsigned w,unsigned h){auto&ov=host.presenter->overlay;ov.prepa
  std::uint64_t hash=0xcbf29ce484222325ULL;for(auto v:r.pixels32){hash^=v;hash*=0x100000001b3ULL;}r.hash=hash;hud_sc.textures.push_back(std::move(r));
  const float x=float(ov.box_x)-0.5f,y=float(ov.box_y)-0.5f;const unsigned first=0;hud_vertex(x,y,0xffffffffu,0,0);hud_vertex(x+bw,y,0xffffffffu,1,0);hud_vertex(x+bw,y+bh,0xffffffffu,1,1);
  hud_vertex(x,y,0xffffffffu,0,0);hud_vertex(x+bw,y+bh,0xffffffffu,1,1);hud_vertex(x,y+bh,0xffffffffu,0,1);hud_draw(0,false,first,WideLeft);
- /* GPU-resident overlay: no CPU color/depth upload or readback. */try{HostInternal hi(*this);host.sren->render(hud_sc,false,false);}catch(const std::exception&e){deny(std::string(e.what()),0);}hud_sc=vs::Scene{};}
+ /* GPU-resident overlay: no CPU color/depth upload or readback. */submit_scene(hud_sc,false,false);hud_sc=vs::Scene{};}

@@ -1,4 +1,5 @@
 #pragma once
+#include "visual_clip.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -29,19 +30,13 @@ inline CameraVertex transform(const Matrix &m, double x, double y, double z, dou
 }
 inline void triangle(std::vector<Vertex> &out, const std::array<CameraVertex, 3> &input,
                      const Projection &p) {
-    std::array<CameraVertex, 4> clipped{};
-    unsigned count = 0;
-    for (unsigned i = 0; i < 3; ++i) {
-        const auto &a = input[i], &b = input[(i + 1) % 3];
-        const bool inside = a.z >= p[5], next = b.z >= p[5];
-        if (inside)
-            clipped[count++] = a;
-        if (inside != next) {
-            const double t = (p[5] - a.z) / (b.z - a.z);
-            clipped[count++] = {a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), p[5],
-                                a.u + t * (b.u - a.u), a.v + t * (b.v - a.v)};
-        }
-    }
+    const auto clipped = visual_clip::near_triangle(input, p[5],
+        [](const CameraVertex& a, const CameraVertex& b, double t) {
+            return CameraVertex{a.x + t * (b.x - a.x), a.y + t * (b.y - a.y),
+                                a.z + t * (b.z - a.z), a.u + t * (b.u - a.u),
+                                a.v + t * (b.v - a.v)};
+        });
+    const auto count = clipped.size();
     auto add = [&](const CameraVertex &v) {
         const double depth = p[0] / v.z;
         out.push_back({float(v.x * p[1] * depth + p[3]), float(v.y * p[2] * depth + p[4]),

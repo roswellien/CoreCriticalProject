@@ -2,6 +2,8 @@ using System.IO;
 using MW3RemasterLauncher.Core;
 using System.Text.Json.Nodes;
 
+if (args.Length == 2 && args[0] == "--modular-content-only") { await ModProfilesChecks.Run(args[1]); return; }
+
 if(args.Length==3 && args[0]=="--check-update-notification") { UpdateNotificationUiChecks.Run(args[1],args[2]); return; }
 
 if(args.Length==1 && args[0]=="--steam-only") { SteamShortcutChecks.Run(); return; }
@@ -83,6 +85,17 @@ if (args.Length == 1 && args[0] == "--runtime-layout-only")
     NativeRuntimeLayoutChecks.Run();
     return;
 }
+if (args.Length == 1 && args[0] == "--mw3-re-contract-only")
+{
+    NativeRuntimeLayoutChecks.RunMw3ReStageA();
+    return;
+}
+if (args.Length > 0 && args[0] == "--mw3-re-stage-plan")
+{
+    if (args.Length != 5) throw new ArgumentException("Stage planning requires payload, game, data and profile inputs.");
+    NativeRuntimeLayoutChecks.RunMw3ReStagePlan(args[1], args[2], args[3], args[4]);
+    return;
+}
 if (args.Length == 1 && args[0] == "--content-only")
 {
     ChassisPackChecks.Run();
@@ -118,7 +131,12 @@ if (args.Length == 2 && args[0] == "--preview-controller")
 
 if (args.Length == 1 && args[0] == "--controls-only")
 {
-    ControlProfileChecks.Run(); return;
+    ControlProfileChecks.Run();
+    NativeControlChecks.Run();
+    var tempRoot = Directory.CreateTempSubdirectory("MW3ControlsUi-");
+    try { GraphicsSetupUiChecks.RunControlsUi(tempRoot.FullName); }
+    finally { tempRoot.Delete(recursive: true); }
+    return;
 }
 if (args.Length == 3 && args[0] == "--preview-controls")
 {
@@ -396,6 +414,15 @@ GameValidatorChecks.Run();
 OriginalSupportChecks.Run();
 PlayerRegistryChecks.Run();
 ControlProfileChecks.Run();
+NativeControlChecks.Run();
+var tempUi = Directory.CreateTempSubdirectory("MW3LauncherUi-");
+try
+{
+    var tempHeadlights = tempUi.CreateSubdirectory("headlights");
+    var tempControls = tempUi.CreateSubdirectory("controls");
+    GraphicsSetupUiChecks.RunControlsAndHeadlights(tempHeadlights.FullName, tempControls.FullName);
+}
+finally { tempUi.Delete(recursive: true); }
 ControllerChecks.Run();
 JoystickSelectionChecks.Run();
 SaveBackupChecks.Run();
@@ -440,6 +467,8 @@ if (JsonNode.Parse(serializedProfile)!["native"]!["prepared_pack_roots"]![0]!.Ge
     throw new Exception("Serialized installed-pack root changed");
 void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
 Check(profile["native"]!["runtime_environment"]!["MW34_PERF_OVERLAY"]!.GetValue<string>() == "0", "Monitor must default off");
+Check(!new LauncherSettings().RenderThread, "New installations must default to the render thread off");
+Check(profile["native"]!["runtime_environment"]!["MW34_RENDER_THREAD"]!.GetValue<string>() == "0", "Render thread must default off");
 Check(!new LauncherSettings().DynamicLighting, "New installations must default to stock lighting");
 Check(!profile["native"]!["presentation"]!["dynamic_lighting"]!.GetValue<bool>(), "Stock lighting choice missing");
 settings.DynamicLighting = true;
@@ -481,6 +510,11 @@ var monitorProfile = GameRunner.CreateLaunchProfile(monitorSource.ToJsonString()
 Check(monitorProfile["native"]!["runtime_environment"]!["MW34_PERF_OVERLAY"]!.GetValue<string>() == "1", "Monitor on choice lost");
 settings.PerformanceMonitor = false;
 Check(GameRunner.CreateLaunchProfile(monitorProfile.ToJsonString(), settings)["native"]!["runtime_environment"]!["MW34_PERF_OVERLAY"]!.GetValue<string>() == "0", "Stale profile re-enabled monitor");
+settings.RenderThread = false;
+var threadOffProfile = GameRunner.CreateLaunchProfile(serializedProfile, settings);
+Check(threadOffProfile["native"]!["runtime_environment"]!["MW34_RENDER_THREAD"]!.GetValue<string>() == "0", "Render thread off choice lost");
+settings.RenderThread = true;
+Check(GameRunner.CreateLaunchProfile(threadOffProfile.ToJsonString(), settings)["native"]!["runtime_environment"]!["MW34_RENDER_THREAD"]!.GetValue<string>() == "1", "Stale profile kept the render thread off");
 var monitorSettingsRoot = Path.Combine(Path.GetTempPath(), "MW3MonitorSettings-" + Guid.NewGuid().ToString("N"));
 try {
     var monitorSettings = new SettingsManager(monitorSettingsRoot, monitorSettingsRoot);
@@ -490,8 +524,10 @@ try {
     Check(new SettingsManager(monitorSettingsRoot, monitorSettingsRoot).Current.PerformanceMonitor, "Monitor setting did not persist");
     Check(new SettingsManager(monitorSettingsRoot, monitorSettingsRoot).Current.DynamicLighting, "Lighting setting did not persist");
     monitorSettings.Current.DynamicLighting = false;
+    monitorSettings.Current.RenderThread = false;
     monitorSettings.Save();
     Check(!new SettingsManager(monitorSettingsRoot, monitorSettingsRoot).Current.DynamicLighting, "Lighting off setting did not persist");
+    Check(!new SettingsManager(monitorSettingsRoot, monitorSettingsRoot).Current.RenderThread, "Render thread off setting did not persist");
 } finally { if (Directory.Exists(monitorSettingsRoot)) Directory.Delete(monitorSettingsRoot, true); }
 Check(profile["graphics"]!["width"]!.GetValue<int>() == 3440, "Lost requested width");
 Check(profile["graphics"]!["window_mode"]!.GetValue<string>() == "fullscreen_windowed", "Borderless choice was not preserved");

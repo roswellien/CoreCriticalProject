@@ -52,11 +52,11 @@ int main() {
     exhausted.top = exhausted.mapped = exhausted.region_end = 0x6ff00000;
     bool touched = false;
     check(exhausted.allocate(1, false, 9, [&](unsigned, unsigned) { touched = true; }, clear, find) == 0);
-    check(!touched && exhausted.live.empty() && exhausted.regions.empty() && exhausted.mapped == 0x6ff00000);
+    check(!touched && exhausted.live.empty() && exhausted.regions().empty() && exhausted.mapped == 0x6ff00000);
     GuestHeap failed;
     bool threw = false;
     try { failed.allocate(1, false, 1, [](unsigned, unsigned) { throw std::runtime_error("commit failure"); }, clear, find); }
     catch (const std::runtime_error&) { threw = true; }
-    check(threw && failed.live.empty() && failed.regions.empty() && failed.mapped == GuestHeap::lo);
+    check(threw && failed.live.empty() && failed.regions().empty() && failed.mapped == GuestHeap::lo);
     std::cout << "Real guest mapper and heap collision checks=" << checks << " failures=0\n";
 }

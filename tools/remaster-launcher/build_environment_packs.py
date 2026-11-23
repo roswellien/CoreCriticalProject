@@ -13,7 +13,10 @@ import struct
 import sys
 import zipfile
 
-from prepared_environment_packs import PROFILE,REGISTRY,REGIONS,sha,encode_normal_pages
+from prepared_environment_packs import (
+    PROFILE, REGISTRY, REGIONS, sha, encode_normal_pages, MATERIAL_TARGET_FORMAT,
+    MATERIAL_TARGET_BYTES, read_material_targets, resolve,
+)
 from prepare_effect_lights import banks
 from prepare_surface_normals import bank_entries
 from normal_materials import read_surface_bindings,pack_surface_bindings
@@ -51,6 +54,50 @@ def verify_archive(path):
         return manifest
 
 
+def add_material_targets(operation, host, stage, add):
+    """Package an explicitly selected, independently authored source manifest.
+
+    The trusted build profile selects metadata, never runtime commands. Sidecar
+    members stay relative to that metadata's source directory and are admitted
+    through the same strict reader as installed packs before packaging.
+    """
+    selected = host.get("material_targets", {})
+    if not isinstance(selected, dict) or set(selected) - (set(REGIONS) - {"shared-mechs"}):
+        raise ValueError("Invalid authored material target selection")
+    if operation not in selected:
+        return None
+    if not isinstance(selected[operation], str) or not selected[operation]:
+        raise ValueError("Invalid authored material target metadata path")
+    source = Path(selected[operation])
+    with source.open("rb") as stream:
+        raw = stream.read(MATERIAL_TARGET_BYTES + 1)
+    if len(raw) > MATERIAL_TARGET_BYTES:
+        raise ValueError("Material target metadata exceeds byte budget")
+    document = json.loads(raw)
+    entries = document.get("targets") if isinstance(document, dict) else None
+    if not isinstance(entries, list) or not 0 < len(entries) <= 4096:
+        raise ValueError("Invalid authored material targets")
+    files = {}
+    paths = {}
+    for entry in entries:
+        member = entry.get("surface_materials") if isinstance(entry, dict) else None
+        if not isinstance(member, str):
+            raise ValueError("Invalid authored material sidecar member")
+        path = resolve(source.parent, member)
+        if member not in paths:
+            files[member] = dict(bytes=path.stat().st_size, sha256=sha(path), format="BWSFM1")
+            paths[member] = str(path)
+    read_material_targets(source, operation, files, paths)
+    if sha(source) != hashlib.sha256(raw).hexdigest():
+        raise ValueError("Material target metadata changed during preparation")
+    for member, path in paths.items():
+        add(member, path, "BWSFM1")
+    frozen = stage / "environment/material_targets.json"
+    frozen.parent.mkdir(parents=True, exist_ok=True)
+    frozen.write_bytes(raw)
+    return add("environment/material_targets.json", frozen, MATERIAL_TARGET_FORMAT)
+
+
 def build(profile_path,output):
     import numpy as np
     if output.exists():raise ValueError('Choose a fresh pack output directory')
@@ -77,6 +124,10 @@ def build(profile_path,output):
         def add(relative,path,fmt=None):
             path=Path(path);pin=dict(bytes=path.stat().st_size,sha256=sha(path))
             if fmt:pin['format']=fmt
+            if relative in filetable:
+                if filetable[relative] != pin:
+                    raise ValueError('Conflicting environment resource member: ' + relative)
+                return relative
             sources[relative]=path;filetable[relative]=pin;provenance[str(path)]=pin['sha256'];return relative
         for bank,path in banklist:
             if bank.split('/')[1] not in regions:continue
@@ -119,10 +170,17 @@ def build(profile_path,output):
         registry['lighting']=add('environment/lighting.json',lighting_path,'MW34-lighting-v1')
         for role in ['water','surf','cloud']:
             registry['detail'][role]=add('environment/detail/'+role+'.bin',env['MW34_'+role.upper()+'_NORMALS'],'BWSNR2')
+        targets = add_material_targets(operation, host, stage, add)
+        if targets:
+            registry['material_targets'] = targets
         registry_path=stage/REGISTRY;write_json(registry_path,registry);add(REGISTRY,registry_path)
         title='Training' if operation=='training' else 'Operation '+operation[-1]
         version='1.1.1' if operation=='training' else '1.1.0'
         manifest=dict(schema_version=2, game_id="mw3",id='com.mw3remaster.textures.'+operation,name=title+' Textures and Lighting',version=version,author='MW3 Remaster Project',category='Textures',description='Prepared textures, normals, mission day/night, atmosphere and dynamic-light settings. Local playtest candidate.',provides=dict(textures=True,normal_maps=True),native_payload=dict(profile=PROFILE,registry=REGISTRY,path_base='pack-root',required_capabilities={'environment-resources':1}, reference_host_sha256=host['executable_sha256'],required_formats=['ZBD-texture-v1','BWSNR2','BWSNR3','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1']),files=filetable)
+        if targets:
+            manifest['native_payload']['required_formats'].extend(['BWSFM1', MATERIAL_TARGET_FORMAT])
+            manifest['native_payload']['required_capabilities']['surface-materials'] = 1
+            manifest['provides']['surface_materials'] = True
         if sum(p['bytes'] for p in filetable.values())>16*1024**3:raise ValueError('Pack exceeds installer budget')
         write_json(stage/'pack.json',manifest);prepared.append((operation,stage,sources,manifest))
     def package(item):

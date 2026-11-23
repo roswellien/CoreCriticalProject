@@ -1,0 +1,943 @@
+#include "frontend/sdl/gpu_hud.h"
+
+#include <algorithm>
+#include <cfenv>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <stdexcept>
+#include <utility>
+
+#include "frontend/sdl/sdl_render3d.h"
+#include "gamez/zimage/zimg_library.h"
+#include "gamez/ztwod/twod_host.h"
+
+namespace sdlfe {
+namespace {
+class FloatScope {
+ public:
+  FloatScope() {
+    std::feholdexcept(&saved_);
+    std::fesetround(FE_TONEAREST);
+  }
+  ~FloatScope() { std::fesetenv(&saved_); }
+
+ private:
+  std::fenv_t saved_{};
+};
+uint32_t rgba(uint16_t colour, unsigned alpha = 255) {
+  return (((colour >> 11) * 255 / 31) * alpha + 127) / 255 |
+         (((((colour >> 5) & 63) * 255 / 63) * alpha + 127) / 255) << 8 |
+         ((((colour & 31) * 255 / 31) * alpha + 127) / 255) << 16 | alpha << 24;
+}
+void fold(uint64_t& hash, uint32_t value) {
+  for (int i = 0; i < 4; ++i) {
+    hash ^= uint8_t(value >> (8 * i));
+    hash *= 0x100000001b3ULL;
+  }
+}
+const char* normalize_reason(const char* operation) {
+  return (operation && *operation) ? operation : "unknown write";
+}
+void bump_bounded_reason(std::map<std::string, uint64_t>& reasons, const char* key,
+                         uint64_t* count_out = nullptr) {
+  auto found = reasons.find(key);
+  if (found != reasons.end()) {
+    const uint64_t count = ++found->second;
+    if (count_out) *count_out = count;
+    return;
+  }
+  const auto other_it = reasons.find("other");
+  const size_t distinct_keys = reasons.size() - (other_it != reasons.end() ? 1 : 0);
+  const char* actual_key = distinct_keys < GpuHud::kMaxReasonKeys ? key : "other";
+  const uint64_t count = ++reasons[actual_key];
+  if (count_out) *count_out = count;
+}
+void log_first_use_reason(std::set<std::string>& logged, const char* key) {
+  if (logged.find(key) != logged.end()) return;
+  const auto other_it = logged.find("other");
+  const size_t distinct_keys = logged.size() - (other_it != logged.end() ? 1 : 0);
+  const char* actual_key = distinct_keys < GpuHud::kMaxReasonKeys ? key : "other";
+  if (logged.insert(actual_key).second) {
+    std::fprintf(stderr, "GPU HUD: using native shadow composition for %s\n", actual_key);
+  }
+}
+}  // namespace
+GpuHud::GpuHud(FrameRenderer& renderer, const HudOptions& options)
+    : renderer_(renderer), options_(options) {
+  if (options.mode != "core-critical")
+    throw std::runtime_error("GPU HUD requires core-critical mode");
+  for (const auto& directory : options.artwork) {
+    auto loaded = platform::load_hud_artwork(directory);
+    for (auto& [identity, image] : loaded) {
+      const auto existing = artwork_.find(identity);
+      if (existing == artwork_.end()) {
+        artwork_.emplace(identity, std::move(image));
+        artwork_roots_.emplace(identity, directory);
+        continue;
+      }
+      const auto& prior = *existing->second;
+      const auto& incoming = *image;
+      if (prior.width != incoming.width || prior.height != incoming.height ||
+          prior.u0 != incoming.u0 || prior.v0 != incoming.v0 || prior.u1 != incoming.u1 ||
+          prior.v1 != incoming.v1 || prior.pixels != incoming.pixels) {
+        std::fprintf(stderr, "GPU HUD: conflicting identity %016llx; keeping %s, skipping %s\n",
+                     static_cast<unsigned long long>(identity), artwork_roots_.at(identity).c_str(),
+                     directory.c_str());
+      }
+    }
+  }
+}
+GpuHud::~GpuHud() {
+  cancel();
+  for (const auto& item : resources_) renderer_.release_texture(item.second.texture);
+  std::fprintf(stderr,
+               "GPU HUD: %llu layers, %llu images, %llu artwork hits, %llu text hits, %llu points, "
+               "%llu spans; native CPU shadow retained\n",
+               static_cast<unsigned long long>(layers_), static_cast<unsigned long long>(images_),
+               static_cast<unsigned long long>(hits_), static_cast<unsigned long long>(text_hits_),
+               static_cast<unsigned long long>(points_), static_cast<unsigned long long>(spans_));
+  std::fprintf(stderr, "GPU HUD compatibility composition: %llu layers\n",
+               static_cast<unsigned long long>(shadow_layers_));
+  for (const auto& [reason, count] : shadow_reasons_)
+    std::fprintf(stderr, "GPU HUD compatibility: %s %llu\n", reason.c_str(),
+                 static_cast<unsigned long long>(count));
+}
+void GpuHud::begin(const uint16_t* target, int width, int height, int pitch, int output_height) {
+  begin_frame(target, width, height, pitch, output_height, false, false, false);
+}
+bool GpuHud::begin_observation(const uint16_t* target, int width, int height, int pitch,
+                               int output_height) {
+  // Observation is a diagnostic: it never throws and never competes for the draw observer.
+  // When another target already owns it, or the target is unusable, skip this frame.
+  if (zrndr::draw_observer() || !target || width <= 0 || height <= 0 || width > 8192 ||
+      height > 8192 || pitch < int64_t(width) * 2 || (pitch & 1) != 0)
+    return false;
+  begin_frame(target, width, height, pitch, output_height, true, false, false);
+  return true;
+}
+bool GpuHud::begin_menu(const uint16_t* target, int width, int height, int pitch, int output_height,
+                        bool skip_background_source) {
+  // Menu recording never throws out of frame clear and never competes for an active draw observer.
+  if (zrndr::draw_observer() || !target || width <= 0 || height <= 0 || width > 8192 ||
+      height > 8192 || pitch < int64_t(width) * 2 || (pitch & 1) != 0)
+    return false;
+  begin_frame(target, width, height, pitch, output_height, false, true, skip_background_source);
+  return true;
+}
+void GpuHud::set_resource_cache_limits(size_t max_resources, uint64_t max_bytes) {
+  max_cached_resources_ = std::max<size_t>(1, max_resources);
+  max_cached_resource_bytes_ = std::max<uint64_t>(4, max_bytes);
+  evict_old_resources();
+}
+void GpuHud::remove_resolved_cache_entry(const platform::HudImage* image) {
+  for (auto it = resolved_cache_.begin(); it != resolved_cache_.end();) {
+    auto& bucket = it->second;
+    bucket.erase(std::remove_if(bucket.begin(), bucket.end(),
+                                [image](const auto& entry) { return entry.get() == image; }),
+                 bucket.end());
+    if (bucket.empty())
+      it = resolved_cache_.erase(it);
+    else
+      ++it;
+  }
+}
+void GpuHud::evict_old_resources() {
+  while (resources_.size() > max_cached_resources_ ||
+         resource_bytes_ > max_cached_resource_bytes_) {
+    auto oldest = resources_.end();
+    for (auto it = resources_.begin(); it != resources_.end(); ++it) {
+      // Never evict textures referenced by the current frame.
+      if (it->second.used >= frame_) continue;
+      if (oldest == resources_.end() || it->second.used < oldest->second.used) {
+        oldest = it;
+      }
+    }
+    if (oldest == resources_.end()) break;
+    remove_resolved_cache_entry(oldest->first);
+    renderer_.release_texture(oldest->second.texture);
+    resource_bytes_ -= oldest->second.image->pixels.size() * sizeof(uint32_t);
+    resources_.erase(oldest);
+  }
+}
+void GpuHud::begin_frame(const uint16_t* target, int width, int height, int pitch,
+                         int output_height, bool observation_only, bool menu_mode,
+                         bool skip_background_source) {
+  FloatScope scope;
+  if (zrndr::draw_observer()) throw std::runtime_error("Nested GPU HUD target");
+  if (!target || width <= 0 || height <= 0 || width > 8192 || height > 8192 ||
+      pitch < int64_t(width) * 2)
+    throw std::runtime_error("Invalid GPU HUD target");
+  target_ = target;
+  width_ = width;
+  height_ = height;
+  pitch_ = pitch;
+  shadow_layer_ = false;
+  observation_only_ = observation_only;
+  menu_mode_ = menu_mode;
+  menu_sealed_ = false;
+  skip_menu_background_source_ = menu_mode && skip_background_source;
+  menu_foreground_seen_ = false;
+  menu_background_skipped_ = 0;
+  menu_presentation_ = {};  // HD menu stage D is opted into per frame
+  observed_draws_ = 0;
+  frame_resolved_bytes_ = 0;
+  frame_resolved_regions_ = 0;
+  frame_stats_ = {};
+  density_ = std::max(1.f, float(output_height) / height);
+  vertices_.clear();
+  commands_.clear();
+  menu_ripples_.clear();
+  ++frame_;
+  if (!observation_only_) {
+    evict_old_resources();
+    uint64_t source_bytes = 0;
+    for (const auto& source : sources_)
+      source_bytes += source.second.image->pixels.size() * sizeof(uint32_t);
+    if (sources_.size() > 512 || source_bytes > 128 * 1024 * 1024) sources_.clear();
+  }
+  zrndr::set_draw_observer(this);
+}
+void GpuHud::cancel() {
+  if (zrndr::draw_observer() == this) zrndr::set_draw_observer(nullptr);
+  target_ = nullptr;
+  vertices_.clear();
+  commands_.clear();
+  menu_ripples_.clear();
+  observation_only_ = false;
+  menu_mode_ = false;
+  menu_sealed_ = false;
+  skip_menu_background_source_ = false;
+  menu_foreground_seen_ = false;
+  menu_background_skipped_ = 0;
+  frame_resolved_bytes_ = 0;
+  frame_resolved_regions_ = 0;
+  frame_stats_ = {};
+}
+bool GpuHud::seal_menu() {
+  if (!target_ || !menu_mode_) return false;
+  FloatScope scope;
+  if (zrndr::draw_observer() == this) zrndr::set_draw_observer(nullptr);
+  target_ = nullptr;
+  if (shadow_layer_) {
+    ++shadow_layers_;
+    frame_stats_.fallback = true;
+    vertices_.clear();
+    commands_.clear();
+    menu_ripples_.clear();
+    menu_mode_ = false;
+    menu_sealed_ = false;
+    return false;
+  }
+  if (commands_.empty() && menu_background_skipped_ == 0) {
+    frame_stats_.fallback = false;
+    menu_mode_ = false;
+    menu_sealed_ = false;
+    return false;
+  }
+  frame_stats_.fallback = false;
+  menu_sealed_ = true;
+  return true;
+}
+void GpuHud::collect_menu_textures(std::vector<int32_t>* out) const {
+  if (!out || !menu_sealed_) return;
+  for (const auto& command : commands_) {
+    if (command.texture >= 0 &&
+        std::find(out->begin(), out->end(), command.texture) == out->end()) {
+      out->push_back(command.texture);
+    }
+  }
+}
+void GpuHud::record_menu_preflight_failure() {
+  record_shadow_reason("texture preflight failed");
+  ++shadow_layers_;
+  frame_stats_.fallback = true;
+  vertices_.clear();
+  commands_.clear();
+  menu_ripples_.clear();
+  menu_mode_ = false;
+  menu_sealed_ = false;
+}
+bool GpuHud::submit_menu(const platform::MenuBackgroundLayerRect* destination, bool manage_scene) {
+  if (!menu_sealed_) return false;
+  FloatScope scope;
+  menu_sealed_ = false;
+  menu_mode_ = false;
+  if (shadow_layer_) {
+    ++shadow_layers_;
+    frame_stats_.fallback = true;
+    vertices_.clear();
+    commands_.clear();
+    menu_ripples_.clear();
+    return false;
+  }
+  if (commands_.empty() && menu_background_skipped_ == 0) return false;
+  if (manage_scene) {
+    try {
+      std::vector<int32_t> preflight_textures;
+      for (const auto& command : commands_) {
+        if (command.texture >= 0 &&
+            std::find(preflight_textures.begin(), preflight_textures.end(), command.texture) ==
+                preflight_textures.end()) {
+          preflight_textures.push_back(command.texture);
+        }
+      }
+      if (!preflight_textures.empty()) {
+        renderer_.prepare_canvas_textures(preflight_textures);
+      }
+      if (has_menu_ripples())
+          renderer_.prepare_menu_ripple();
+    } catch (...) {
+      record_menu_preflight_failure();
+      return false;
+    }
+  }
+  if (destination && width_ > 0 && height_ > 0) {
+    const float scale_x = destination->width / float(width_);
+    const float scale_y = destination->height / float(height_);
+    for (auto& vertex : vertices_) {
+      vertex.sx = destination->x + vertex.sx * scale_x;
+      vertex.sy = destination->y + vertex.sy * scale_y;
+    }
+  }
+  int saved_x = 0, saved_y = 0, saved_width = 0, saved_height = 0;
+  if (manage_scene) {
+    renderer_.flush();
+    renderer_.viewport(&saved_x, &saved_y, &saved_width, &saved_height);
+    renderer_.set_viewport(0, 0, width_, height_);
+    renderer_.begin_canvas_scene();
+  }
+  const float origin_x = destination ? destination->x : 0.f;
+  const float origin_y = destination ? destination->y : 0.f;
+  const float scale_x = destination && width_ > 0 ? destination->width / float(width_) : 1.f;
+  const float scale_y = destination && height_ > 0 ? destination->height / float(height_) : 1.f;
+  for (const auto& command : commands_) {
+      if (command.ripple_index >= 0) {
+          const auto &r = menu_ripples_.at(command.ripple_index);
+          int32_t bound_left = 0;
+          int32_t bound_top = 0;
+          int32_t bound_right = width_;
+          int32_t bound_bottom = height_;
+          if (r.has_clip) {
+              bound_left = std::max(bound_left, r.clip[0]);
+              bound_top = std::max(bound_top, r.clip[1]);
+              bound_right = std::min(bound_right, r.clip[2]);
+              bound_bottom = std::min(bound_bottom, r.clip[3]);
+          }
+          if (bound_right <= bound_left || bound_bottom <= bound_top) {
+              continue;
+          }
+          MenuRipplePass pass;
+          pass.center_x = origin_x + (float(r.x) + 0.5f) * scale_x;
+          pass.center_y = origin_y + (float(r.y) + 0.5f) * scale_y;
+          pass.scale_x = scale_x;
+          pass.scale_y = scale_y;
+          pass.inner = float(r.inner);
+          pass.outer = float(r.outer);
+          pass.amplitude = float(r.amplitude);
+          pass.wavelength = r.wavelength;
+          pass.phase = r.phase;
+          pass.has_clip = true;
+          pass.clip_left = origin_x + float(bound_left) * scale_x;
+          pass.clip_top = origin_y + float(bound_top) * scale_y;
+          pass.clip_right = (destination && bound_right == width_)
+                                ? origin_x + destination->width
+                                : origin_x + float(bound_right) * scale_x;
+          pass.clip_bottom = (destination && bound_bottom == height_)
+                                 ? origin_y + destination->height
+                                 : origin_y + float(bound_bottom) * scale_y;
+          renderer_.apply_menu_ripple(pass);
+          continue;
+      }
+    platform::DrawState state;
+    state.texture = command.texture;
+    state.blend = true;
+    state.depth_always = true;
+    state.depth_write = false;
+    state.sharp = command.sharp;
+    state.filter = command.filter;
+    state.address_u = state.address_v = 3;
+    renderer_.draw(command.primitive, vertices_.data() + command.first,
+                   static_cast<int>(command.count), state);
+  }
+  if (manage_scene) {
+    renderer_.end_scene();
+    renderer_.set_viewport(saved_x, saved_y, saved_width, saved_height);
+  }
+  ++layers_;
+  vertices_.clear();
+  commands_.clear();
+  menu_ripples_.clear();
+  return true;
+}
+bool GpuHud::finish() {
+  if (!target_) return false;
+  FloatScope scope;
+  if (zrndr::draw_observer() == this) zrndr::set_draw_observer(nullptr);
+  target_ = nullptr;
+  menu_mode_ = false;
+  menu_sealed_ = false;
+  if (shadow_layer_) {
+    if (!observation_only_) ++shadow_layers_;
+    frame_stats_.fallback = true;
+    vertices_.clear();
+    commands_.clear();
+    menu_ripples_.clear();
+    observation_only_ = false;
+    return false;
+  }
+  if (observation_only_) {
+    // An empty frame (nothing drawn) is not a fallback: only a shadow reason is.
+    const bool observed = observed_draws_ != 0;
+    frame_stats_.fallback = false;
+    observation_only_ = false;
+    vertices_.clear();
+    commands_.clear();
+    menu_ripples_.clear();
+    return observed;
+  }
+  if (commands_.empty()) return false;
+  try {
+    std::vector<int32_t> preflight_textures;
+    for (const auto& command : commands_) {
+      if (command.texture >= 0 &&
+          std::find(preflight_textures.begin(), preflight_textures.end(), command.texture) ==
+              preflight_textures.end()) {
+        preflight_textures.push_back(command.texture);
+      }
+    }
+    if (!preflight_textures.empty()) {
+      renderer_.prepare_canvas_textures(preflight_textures);
+    }
+  } catch (...) {
+    record_shadow_reason("texture preflight failed");
+    ++shadow_layers_;
+    frame_stats_.fallback = true;
+    return false;
+  }
+  int x, y, width, height;
+  renderer_.flush();
+  renderer_.viewport(&x, &y, &width, &height);
+  renderer_.set_viewport(0, 0, width_, height_);
+  renderer_.begin_canvas_scene();
+  for (const auto& command : commands_) {
+    platform::DrawState state;
+    state.texture = command.texture;
+    state.blend = true;
+    state.depth_always = true;
+    state.depth_write = false;
+    state.sharp = command.sharp;
+    state.filter = command.filter;
+    state.address_u = state.address_v = 3;
+    renderer_.draw(command.primitive, vertices_.data() + command.first,
+                   static_cast<int>(command.count), state);
+  }
+  renderer_.end_scene();
+  renderer_.set_viewport(x, y, width, height);
+  ++layers_;
+  vertices_.clear();
+  commands_.clear();
+  menu_ripples_.clear();
+  return true;
+}
+void GpuHud::record_shadow_reason(const char* operation) {
+  const char* reason = normalize_reason(operation);
+  if (observation_only_) {
+    // Observation keeps counting every reason after the first, logs once per distinct reason
+    // across frames, and stays out of the in-mission lifetime counters.
+    shadow_layer_ = true;
+    bump_bounded_reason(frame_stats_.shadow_reasons, reason);
+    log_first_use_reason(logged_shadow_reasons_, reason);
+    return;
+  }
+  if (shadow_layer_) return;
+  shadow_layer_ = true;
+  bump_bounded_reason(frame_stats_.shadow_reasons, reason);
+  bump_bounded_reason(shadow_reasons_, reason);
+  log_first_use_reason(logged_shadow_reasons_, reason);
+  vertices_.clear();
+  commands_.clear();
+  menu_ripples_.clear();
+}
+void GpuHud::framebuffer_write(const void* target, const char* operation) {
+  int x, y;
+  if (!position(static_cast<const uint16_t*>(target), x, y)) return;
+  record_shadow_reason(operation);
+}
+bool GpuHud::ripple(const void *target, int32_t x, int32_t y, int32_t inner, int32_t outer,
+                    int32_t amplitude, float wavelength, float phase, const int32_t *clip_rect) {
+    if (!menu_mode_ || observation_only_ || !renderer_.supports_gpu_menu_ripple())
+        return false;
+    if (shadow_layer_ || !target_)
+        return true;
+    if (target != target_ || zrndr::target2d().base != reinterpret_cast<const uint8_t *>(target_))
+        return false;
+    if (zrndr::target2d().format != 6) {
+        record_shadow_reason("RGB555 target");
+        return true;
+    }
+    if (zrndr::layer_cover().alpha != nullptr) {
+        record_shadow_reason("ripple");
+        return true;
+    }
+    if (outer < 1)
+        outer = 0;
+    if (inner > outer)
+        inner = outer;
+    else if (inner < 0)
+        inner = 0;
+    menu_foreground_seen_ = true;
+    ++observed_draws_;
+    if (inner == outer)
+        return true;
+    if (!std::isfinite(wavelength) || wavelength <= 0.f || !std::isfinite(phase)) {
+        record_shadow_reason("ripple");
+        return true;
+    }
+    int32_t clip_left = 0;
+    int32_t clip_top = 0;
+    int32_t clip_right = width_;
+    int32_t clip_bottom = height_;
+    if (clip_rect) {
+        clip_left = std::max(clip_left, clip_rect[0]);
+        clip_top = std::max(clip_top, clip_rect[1]);
+        clip_right = std::min(clip_right, clip_rect[2]);
+        clip_bottom = std::min(clip_bottom, clip_rect[3]);
+    }
+    if (clip_right <= clip_left || clip_bottom <= clip_top)
+        return true;
+    MenuRippleCommand ripple{x, y, inner, outer, amplitude, wavelength, phase};
+    ripple.has_clip = true;
+    ripple.clip[0] = clip_left;
+    ripple.clip[1] = clip_top;
+    ripple.clip[2] = clip_right;
+    ripple.clip[3] = clip_bottom;
+    menu_ripples_.push_back(ripple);
+    commands_.push_back({-1, 0, 0, platform::Primitive::kFan, false,
+                         platform::TextureFilter::kDefault, int(menu_ripples_.size() - 1)});
+    return true;
+}
+void GpuHud::resolved_region(const uint16_t* destination, uint32_t width, uint32_t height,
+                             uint32_t pitch_bytes, const char* operation) {
+  if ((shadow_layer_ && !observation_only_) || !target_) return;
+  FloatScope scope;
+  int x = 0, y = 0;
+  if (!destination || !position(destination, x, y) ||
+      zrndr::target2d().base != reinterpret_cast<const uint8_t*>(target_)) {
+    record_shadow_reason(operation);
+    return;
+  }
+  if (zrndr::target2d().format != 6) {
+    record_shadow_reason("RGB555 target");
+    return;
+  }
+  if (zrndr::layer_cover().alpha != nullptr) {
+    record_shadow_reason(operation);
+    return;
+  }
+  // position() already refuses row padding, but the start must be checked here too: the
+  // unsigned subtractions below would wrap to a huge limit if x or y ever reached the edge.
+  const bool start_inside_surface = x >= 0 && y >= 0 && x < width_ && y < height_;
+  if (!start_inside_surface || width == 0 || height == 0 ||
+      pitch_bytes != static_cast<uint32_t>(pitch_) ||
+      width > static_cast<uint32_t>(width_ - x) || height > static_cast<uint32_t>(height_ - y)) {
+    record_shadow_reason(operation);
+    return;
+  }
+  if (menu_mode_ && skip_menu_background_source_ && !menu_foreground_seen_ &&
+      menu_background_skipped_ == 0 && operation &&
+      std::strcmp(operation, "cursor restore") == 0) {
+    // The live presenter only admits frames after fresh complete opaque background coverage,
+    // which overwrites this restore; incomplete frames always use full current CPU shadow,
+    // preserving cursor erase pixels. Only this exact cursor-restore prefix can be omitted.
+    return;
+  }
+  const uint64_t bytes = uint64_t(width) * uint64_t(height) * sizeof(uint32_t);
+  if (frame_resolved_regions_ >= kMaxFrameResolvedRegions || bytes > kMaxFrameResolvedBytes ||
+      frame_resolved_bytes_ > kMaxFrameResolvedBytes - bytes) {
+    record_shadow_reason("resolved region budget exceeded");
+    return;
+  }
+  ++frame_resolved_regions_;
+  frame_resolved_bytes_ += bytes;
+  ++observed_draws_;
+  ++frame_stats_.resolved_regions;
+  menu_foreground_seen_ = true;
+  if (observation_only_) return;
+  try {
+    const auto* base_bytes = reinterpret_cast<const uint8_t*>(destination);
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    fold(hash, width);
+    fold(hash, height);
+    for (uint32_t row = 0; row < height; ++row) {
+      const auto* src_row =
+          reinterpret_cast<const uint16_t*>(base_bytes + size_t(row) * pitch_bytes);
+      for (uint32_t col = 0; col < width; ++col) {
+        const uint16_t px = src_row[col];
+        hash ^= uint8_t(px & 0xffu);
+        hash *= 0x100000001b3ULL;
+        hash ^= uint8_t(px >> 8);
+        hash *= 0x100000001b3ULL;
+      }
+    }
+    std::shared_ptr<const platform::HudImage> resolved;
+    auto bucket_it = resolved_cache_.find(hash);
+    if (bucket_it != resolved_cache_.end()) {
+      for (const auto& candidate : bucket_it->second) {
+        if (candidate->width != width || candidate->height != height) continue;
+        bool match = true;
+        for (uint32_t row = 0; row < height && match; ++row) {
+          const auto* src_row =
+              reinterpret_cast<const uint16_t*>(base_bytes + size_t(row) * pitch_bytes);
+          const uint32_t* dst_row = candidate->pixels.data() + size_t(row) * width;
+          for (uint32_t col = 0; col < width; ++col) {
+            if (dst_row[col] != rgba(src_row[col], 255)) {
+              match = false;
+              break;
+            }
+          }
+        }
+        if (match) {
+          resolved = candidate;
+          break;
+        }
+      }
+    }
+    int handle = -1;
+    if (resolved) {
+      handle = texture(resolved);
+    } else {
+      auto created = std::make_shared<platform::HudImage>();
+      created->width = width;
+      created->height = height;
+      created->pixels.resize(size_t(width) * height);
+      for (uint32_t row = 0; row < height; ++row) {
+        const auto* src_row =
+            reinterpret_cast<const uint16_t*>(base_bytes + size_t(row) * pitch_bytes);
+        uint32_t* dst_row = created->pixels.data() + size_t(row) * width;
+        for (uint32_t col = 0; col < width; ++col) {
+          dst_row[col] = rgba(src_row[col], 255);
+        }
+      }
+      resolved = std::move(created);
+      handle = texture(resolved);
+      resolved_cache_[hash].push_back(resolved);
+    }
+    rectangle(float(x), float(y), float(x + int(width)), float(y + int(height)), 0xffffffffu,
+              handle, 0.f, 0.f, 1.f, 1.f, platform::TextureFilter::kNearest);
+    ++resolved_regions_;
+  } catch (...) {
+    record_shadow_reason("texture allocation failed");
+  }
+}
+int GpuHud::texture(const std::shared_ptr<const platform::HudImage>& image) {
+  auto found = resources_.find(image.get());
+  if (found != resources_.end()) {
+    found->second.used = frame_;
+    return found->second.texture;
+  }
+  const int handle =
+      renderer_.create_texture(static_cast<int>(image->width), static_cast<int>(image->height),
+                               reinterpret_cast<const uint8_t*>(image->pixels.data()), 1);
+  if (handle < 0) throw std::runtime_error("GPU HUD texture allocation failed");
+  try {
+    resources_.emplace(image.get(), Resource{image, handle, frame_});
+  } catch (...) {
+    renderer_.release_texture(handle);
+    throw;
+  }
+  resource_bytes_ += image->pixels.size() * sizeof(uint32_t);
+  evict_old_resources();
+  return handle;
+}
+void GpuHud::append(platform::TLVertex vertex, int image, platform::Primitive primitive,
+                    bool sharp, platform::TextureFilter filter) {
+  commands_.push_back({image, static_cast<unsigned>(vertices_.size()), 0, primitive, sharp, filter});
+  vertices_.push_back(vertex);
+  ++commands_.back().count;
+}
+void GpuHud::rectangle(float x0, float y0, float x1, float y1, uint32_t colour, int image, float u0,
+                       float v0, float u1, float v1, platform::TextureFilter filter) {
+  append({x0, y0, 0, 1, colour, 0, u0, v0}, image, platform::Primitive::kFan, image >= 0, filter);
+  // One fan must retain its four vertices; subsequent rectangles are separate.
+  vertices_.push_back({x1, y0, 0, 1, colour, 0, u1, v0});
+  vertices_.push_back({x1, y1, 0, 1, colour, 0, u1, v1});
+  vertices_.push_back({x0, y1, 0, 1, colour, 0, u0, v1});
+  commands_.back().count = 4;
+}
+bool GpuHud::position(const uint16_t* pointer, int& x, int& y) const {
+  if (!target_) return false;
+  const auto address = reinterpret_cast<uintptr_t>(pointer),
+             base = reinterpret_cast<uintptr_t>(target_);
+  if (address < base || address - base >= uint64_t(pitch_) * height_ || ((address - base) & 1))
+    return false;
+  const auto offset = address - base;
+  y = int(offset / pitch_);
+  x = int((offset % pitch_) / 2);
+  return x < width_;
+}
+void GpuHud::pixel(const uint16_t* destination, uint16_t colour) {
+  int x, y;
+  if ((shadow_layer_ && !observation_only_) || !position(destination, x, y)) return;
+  if (zrndr::target2d().format != 6) {
+    framebuffer_write(target_, "RGB555 target");
+    return;
+  }
+  if (!menu_mode_ && colour == 0xf81f) {
+    framebuffer_write(target_, "layer erase");
+    return;
+  }
+  menu_foreground_seen_ = true;
+  ++observed_draws_;
+  if (observation_only_) return;
+  FloatScope scope;
+  const uint32_t packed = rgba(colour);
+  const uint32_t argb = (packed & 0xff00ff00) | (packed & 255) << 16 | (packed >> 16 & 255);
+  // Each native pixel covers one logical pixel, including after noninteger
+  // scaling. Hardware points cover one physical pixel and leave dotted lines.
+  const platform::TLVertex upper_left{float(x), float(y), 0, 1, argb, 0, 0, 0};
+  if (!commands_.empty() && commands_.back().primitive == platform::Primitive::kStrip) {
+    const auto last = vertices_.back();
+    vertices_.push_back(last);
+    vertices_.push_back(upper_left);
+    vertices_.push_back(upper_left);
+    commands_.back().count += 3;
+  } else {
+    append(upper_left, -1, platform::Primitive::kStrip, false);
+  }
+  vertices_.push_back({float(x + 1), float(y), 0, 1, argb, 0, 0, 0});
+  vertices_.push_back({float(x), float(y + 1), 0, 1, argb, 0, 0, 0});
+  vertices_.push_back({float(x + 1), float(y + 1), 0, 1, argb, 0, 0, 0});
+  commands_.back().count += 3;
+  ++points_;
+}
+void GpuHud::span(const uint16_t* destination, uint32_t count, uint16_t colour) {
+  int x, y;
+  if ((shadow_layer_ && !observation_only_) || !position(destination, x, y) || !count) return;
+  if (zrndr::target2d().format != 6) {
+    framebuffer_write(target_, "RGB555 target");
+    return;
+  }
+  if (count > unsigned(width_ - x)) {
+    if (observation_only_ || menu_mode_) {
+      framebuffer_write(target_, "span crosses target bounds");
+      return;
+    }
+    throw std::runtime_error("GPU HUD span crosses target bounds");
+  }
+  if (!menu_mode_ && colour == 0xf81f) {
+    framebuffer_write(target_, "layer erase");
+    return;
+  }
+  menu_foreground_seen_ = true;
+  ++observed_draws_;
+  if (observation_only_) return;
+  FloatScope scope;
+  const uint32_t packed = rgba(colour);
+  const uint32_t argb = (packed & 0xff00ff00) | (packed & 255) << 16 | (packed >> 16 & 255);
+  rectangle(float(x), float(y), float(x) + count, float(y + 1), argb);
+  ++spans_;
+}
+void GpuHud::image(const zimg::Texture* source, int32_t x, int32_t y, uint16_t key,
+                   const zrndr::BlitRect* crop) {
+  if ((shadow_layer_ && !observation_only_) || !target_ ||
+      zrndr::target2d().base != reinterpret_cast<const uint8_t*>(target_))
+    return;
+  if (zrndr::target2d().format != 6) {
+    framebuffer_write(target_, "RGB555 target");
+    return;
+  }
+  if (!source || !source->pixels || source->width <= 0 || source->height <= 0 ||
+      source->width > 2048 || source->height > 2048 || source->width_again < source->width ||
+      (source->palette && source->palette_count <= 0)) {
+    if (observation_only_ || menu_mode_ || menu_presentation_.active) {
+      framebuffer_write(target_, "unsupported image");
+      return;
+    }
+    throw std::runtime_error("Unsupported native GPU HUD image");
+  }
+  int64_t left = crop ? crop->left : 0, top = crop ? crop->top : 0;
+  int64_t right = crop ? crop->right : source->width, bottom = crop ? crop->bottom : source->height;
+  int64_t destination_x = x, destination_y = y;
+  destination_x += std::max<int64_t>(0, -left);
+  destination_y += std::max<int64_t>(0, -top);
+  left = std::max<int64_t>(0, left);
+  top = std::max<int64_t>(0, top);
+  right = std::min<int64_t>(source->width, right);
+  bottom = std::min<int64_t>(source->height, bottom);
+  if (destination_x < 0) left -= destination_x, destination_x = 0;
+  if (destination_y < 0) top -= destination_y, destination_y = 0;
+  right = std::min(right, left + width_ - destination_x);
+  bottom = std::min(bottom, top + height_ - destination_y);
+  if (right <= left || bottom <= top) return;
+  if (menu_mode_) {
+    const zimg::Texture* bg_source = zrndr::menu_background_source();
+    if (bg_source && source == bg_source) {
+      if (menu_foreground_seen_) {
+        record_shadow_reason("late menu background");
+        return;
+      }
+      if (skip_menu_background_source_) {
+        if (source->palette || source->alpha || (source->flags & zimg::kAlpha)) {
+          record_shadow_reason("invalid menu background source");
+          return;
+        }
+        ++menu_background_skipped_;
+        ++observed_draws_;
+        ++frame_stats_.images;
+        return;
+      }
+    } else {
+      menu_foreground_seen_ = true;
+    }
+  }
+  // HD menu stage D (gpu_hud_menu_sprites.cpp): menu text and sprites from
+  // output-resolution sources. Returns false for images it leaves to this path.
+  if (menu_presentation_.active && !observation_only_ &&
+      draw_menu_sprite(source, key, destination_x, destination_y, left, top, right, bottom))
+    return;
+  if (observation_only_) {
+    // Only the visible crop is checked, and no text is rasterised or cached: observation
+    // must stay cheap because it runs for every menu blit.
+    FloatScope observation_scope;
+    for (int64_t row = top; row < bottom; ++row)
+      for (int64_t column = left; column < right; ++column) {
+        const size_t at = size_t(row) * source->width_again + size_t(column);
+        unsigned index = source->palette ? static_cast<const uint8_t*>(source->pixels)[at] : 0;
+        if (source->palette && index >= unsigned(source->palette_count)) {
+          framebuffer_write(target_, "invalid image palette");
+          return;
+        }
+        const uint16_t pixel = source->palette ? source->palette[index]
+                                               : static_cast<const uint16_t*>(source->pixels)[at];
+        unsigned alpha = source->alpha ? source->alpha[at] : 255;
+        if (!source->alpha && (source->flags & zimg::kAlpha) &&
+            (source->palette ? index : pixel) == key)
+          alpha = 0;
+        if (alpha <= 3)
+          alpha = 0;
+        else if (alpha >= 252)
+          alpha = 255;
+        if (pixel == 0xf81f && alpha == 255) {
+          framebuffer_write(target_, "unkeyed layer erase");
+          return;
+        }
+      }
+    ++observed_draws_;
+    ++frame_stats_.images;
+    return;
+  }
+  FloatScope scope;
+  const bool check_artwork = !menu_mode_ && !artwork_.empty();
+  std::vector<uint16_t> normalized;
+  if (check_artwork) normalized.resize(size_t(source->width) * source->height);
+  uint64_t hash = 0xcbf29ce484222325ULL;
+  fold(hash, source->width);
+  fold(hash, source->height);
+  auto cached = sources_.find(source);
+  const platform::HudImage* cached_img =
+      (cached != sources_.end() &&
+       cached->second.image->width == static_cast<uint32_t>(source->width) &&
+       cached->second.image->height == static_cast<uint32_t>(source->height))
+          ? cached->second.image.get()
+          : nullptr;
+  bool cached_pixels_match = (cached_img != nullptr);
+  std::shared_ptr<platform::HudImage> image;
+  if (!cached_pixels_match) {
+    image = std::make_shared<platform::HudImage>();
+    image->width = source->width;
+    image->height = source->height;
+    image->pixels.resize(size_t(source->width) * source->height);
+  }
+  for (int row = 0; row < source->height; ++row)
+    for (int column = 0; column < source->width; ++column) {
+      const size_t at = size_t(row) * source->width_again + column,
+                   into = size_t(row) * source->width + column;
+      unsigned index = 0;
+      if (source->palette) index = static_cast<const uint8_t*>(source->pixels)[at];
+      if (source->palette && index >= unsigned(source->palette_count)) {
+        if (menu_mode_) {
+          framebuffer_write(target_, "invalid image palette");
+          return;
+        }
+        throw std::runtime_error("GPU HUD palette index is invalid");
+      }
+      const uint16_t pixel = source->palette ? source->palette[index]
+                                             : static_cast<const uint16_t*>(source->pixels)[at];
+      unsigned alpha = source->alpha ? source->alpha[at] : 255;
+      if (!source->alpha && (source->flags & zimg::kAlpha) &&
+          (source->palette ? index : pixel) == key)
+        alpha = 0;
+      if (check_artwork) normalized[into] = alpha ? pixel : 0;
+      fold(hash, uint32_t(pixel) | alpha << 16);
+      if (alpha <= 3)
+        alpha = 0;
+      else if (alpha >= 252)
+        alpha = 255;
+      if (!menu_mode_ && pixel == 0xf81f && alpha == 255) {
+        framebuffer_write(target_, "unkeyed layer erase");
+        return;
+      }
+      const uint32_t converted = rgba(pixel, alpha);
+      if (cached_pixels_match) {
+        if (cached_img->pixels[into] != converted) {
+          cached_pixels_match = false;
+          image = std::make_shared<platform::HudImage>();
+          image->width = source->width;
+          image->height = source->height;
+          image->pixels.resize(size_t(source->width) * source->height);
+          std::copy_n(cached_img->pixels.data(), into, image->pixels.data());
+          image->pixels[into] = converted;
+        }
+      } else {
+        image->pixels[into] = converted;
+      }
+    }
+  std::shared_ptr<const platform::HudImage> selected;
+  const auto enhanced = (!menu_mode_ && options_.text)
+                            ? ztwod::host().hud_text_image(source, density_, key)
+                            : nullptr;
+  if (enhanced) {
+    selected = std::move(enhanced);
+    ++text_hits_;
+    ++frame_stats_.text_hits;
+  } else if (check_artwork) {
+    if (auto found =
+            artwork_.find(platform::hud_identity(source->width, source->height, normalized));
+        found != artwork_.end()) {
+      selected = found->second;
+      ++hits_;
+    }
+  }
+  if (!selected) {
+    if (cached_pixels_match && cached->second.hash == hash) {
+      selected = cached->second.image;
+    } else {
+      if (!image) {
+        image = std::make_shared<platform::HudImage>(*cached_img);
+      }
+      selected = std::move(image);
+      sources_[source] = {hash, selected};
+    }
+  }
+  int handle = -1;
+  if (menu_mode_) {
+    try {
+      handle = texture(selected);
+    } catch (...) {
+      record_shadow_reason("texture allocation failed");
+      return;
+    }
+  } else {
+    handle = texture(selected);
+  }
+  const float du = (selected->u1 - selected->u0) / source->width,
+              dv = (selected->v1 - selected->v0) / source->height;
+  rectangle(float(destination_x), float(destination_y), float(destination_x + right - left),
+            float(destination_y + bottom - top), 0xffffffffu, handle,
+            selected->u0 + left * du, selected->v0 + top * dv, selected->u0 + right * du,
+            selected->v0 + bottom * dv);
+  ++images_;
+  ++frame_stats_.images;
+}
+}  // namespace sdlfe

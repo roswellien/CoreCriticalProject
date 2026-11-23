@@ -9,10 +9,75 @@ from pathlib import Path
 
 from normal_materials import pack_surface_bindings, read_surface_bindings
 
+MAX_WORKING_BYTES = 512 * 1024**2
+MAX_NATIVE_PAGE_BYTES = 256 * 1024**2
+MAX_BINDINGS_PER_PAGE = 256
+MAX_IMAGES_PER_PAGE = 64
+MAX_IMAGE_BYTES_PER_PAGE = 256 * 1024**2
+
 
 def sha(path):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _decoded_page(path, retained_decoded_bytes):
+    entries = read_surface_bindings(
+        path.read_bytes(),
+        max_working_bytes=MAX_WORKING_BYTES,
+        retained_decoded_bytes=retained_decoded_bytes,
+        cache_hashes=False,
+    )
+    retained_images = {id(normal): normal for _, normal in entries if normal is not None}
+    decoded_bytes = sum(len(normal[2]) for normal in retained_images.values())
+    return entries, decoded_bytes
+
+
+def _packed_pages(entries):
+    pages = []
+    current = []
+    images = set()
+    image_bytes = 0
+
+    def page_size(binding_count, image_count, total_image_bytes):
+        return 28 + 56 * binding_count + 48 * image_count + total_image_bytes
+
+    def exceeds_page_budget(normal):
+        is_new_image = normal is not None and normal not in images
+        added_image_bytes = len(normal[2]) if is_new_image else 0
+        exceeds = (
+            len(current) >= MAX_BINDINGS_PER_PAGE
+            or (is_new_image and len(images) >= MAX_IMAGES_PER_PAGE)
+            or image_bytes + added_image_bytes > MAX_IMAGE_BYTES_PER_PAGE
+            or page_size(
+                len(current) + 1,
+                len(images) + int(is_new_image),
+                image_bytes + added_image_bytes,
+            )
+            > MAX_NATIVE_PAGE_BYTES
+        )
+        return exceeds, is_new_image, added_image_bytes
+
+    def finish_page():
+        nonlocal current, images, image_bytes
+        if current:
+            pages.append(current)
+            current, images, image_bytes = [], set(), 0
+
+    for entry in entries:
+        _key, normal = entry
+        exceeds_limits, is_new_image, added_image_bytes = exceeds_page_budget(normal)
+        if current and exceeds_limits:
+            finish_page()
+            exceeds_limits, is_new_image, added_image_bytes = exceeds_page_budget(normal)
+        if exceeds_limits:
+            raise ValueError("One surface binding exceeds the native page budget")
+        current.append(entry)
+        if is_new_image:
+            images.add(normal)
+            image_bytes += added_image_bytes
+    finish_page()
+    return pages
 
 
 def compose(paths, output, *, overrides=None):
@@ -24,7 +89,12 @@ def compose(paths, output, *, overrides=None):
     if output.exists():
         raise ValueError("Use a fresh composition directory")
     pins = {path: sha(path) for path in paths}
-    pages = [read_surface_bindings(path.read_bytes()) for path in paths]
+    pages = []
+    retained_decoded_bytes = 0
+    for path in paths:
+        entries, decoded_bytes = _decoded_page(path, retained_decoded_bytes)
+        pages.append(entries)
+        retained_decoded_bytes += decoded_bytes
     candidates = {}
     duplicate_count = 0
     conflicts = set()
@@ -48,13 +118,16 @@ def compose(paths, output, *, overrides=None):
         raise ValueError("Source choices must name exactly the conflicting full-content keys")
     output.mkdir(parents=True)
     catalogs = []
-    for index, (path, entries) in enumerate(zip(paths, pages)):
-        kept = [(key, image) for key, image in entries if selected[key][0] == path]
-        if not kept:
-            continue
-        encoded = pack_surface_bindings(kept)
+    selected_entries = [(key, image) for key, (_source, image) in selected.items()]
+    for index, page in enumerate(_packed_pages(selected_entries)):
+        encoded = pack_surface_bindings(page, cache_hashes=False)
         # Round-trip checks the existing binary format and exact selected images.
-        if read_surface_bindings(encoded) != kept:
+        if read_surface_bindings(
+            encoded,
+            max_working_bytes=MAX_WORKING_BYTES,
+            retained_decoded_bytes=retained_decoded_bytes,
+            cache_hashes=False,
+        ) != page:
             raise ValueError("Composed surface catalog changed selected image data")
         target = output / f"page-{index:03}.bin"
         target.write_bytes(encoded)

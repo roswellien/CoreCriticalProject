@@ -1,6 +1,24 @@
 // Match complete, source-defined arm-loss alternatives. Unknown additions,
 // partial deletions and changed surviving mesh signatures still decline.
 // Stump geometry remains on the original drawing path.
+// Owned plans are derived from the pinned original hierarchy by the coordinator.
+// The runtime still authenticates the shared GameZ stump bytes and live parents.
+std::vector<OverrideArmDamagePlan> override_model_arm_damage_plans(const OverrideModel&model){
+ std::vector<OverrideArmDamagePlan> result;
+ const std::string identity=model.source_chassis?model.source_chassis:model.id;
+ for(const auto&plan:override_arm_damage_plans)if(identity==plan.model&&model.lod==plan.lod)result.push_back(plan);
+ if(model.resource)for(const auto&record:mw34::chassis::configured_catalog())if(record.owned_visuals&&record.resource==model.resource){
+  for(const auto&arm:record.arm_damage.at(model.lod)){
+   const char*stub=arm.arm=="larm"?"larm_stub01":"rarm_stub01";
+   const auto shared=std::find_if(override_arm_damage_plans.begin(),override_arm_damage_plans.end(),[&](const auto&p){return std::strcmp(p.stub,stub)==0;});
+   if(shared==override_arm_damage_plans.end())throw std::runtime_error("Replacement models: missing shared arm stump");
+   OverrideArmDamagePlan plan{model.source_chassis,model.lod,stub,shared->vertices,shared->vertex_hash,arm.parent.c_str(),{},unsigned(arm.removed.size())};
+   for(size_t i=0;i<arm.removed.size();++i)plan.removed.at(i)=arm.removed[i].c_str();
+   result.push_back(plan);
+  }
+ }
+ return result;
+}
 bool override_arm_damage_match(const OverrideModel&model,
  const std::map<std::string,unsigned>&meshes,
  const std::map<std::string,unsigned>&mesh_nodes,unsigned&damage_mask){
@@ -8,7 +26,7 @@ bool override_arm_damage_match(const OverrideModel&model,
  std::map<std::string,unsigned>expected;
  for(size_t i=0;i<model.count;++i)expected.emplace(model.roster[i].name,model.roster[i].vertices);
  damage_mask=0;
- for(const auto&plan:override_arm_damage_plans){
+ for(const auto&plan:override_model_arm_damage_plans(model)){
   if(std::string(model.source_chassis?model.source_chassis:model.id)!=plan.model||model.lod!=plan.lod)continue;
   const auto stub=meshes.find(plan.stub);if(stub==meshes.end())continue;
   if(stub->second!=plan.vertices)return false;

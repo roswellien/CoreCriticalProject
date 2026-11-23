@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "repository": "roswellien/MW3Recomp-Private",
+  "board_id": "PVT_kwHODf7y6M4BpC8L",
+  "base_sha": "1111111111111111111111111111111111111111",
+  "captured_at": "2026-11-07T12:00:00Z",
+  "complete": true,
+  "implementation_issues": [9002],
+  "issues": [
+    {
+      "number": 9001,
+      "item_id": "PVTI_synthetic_9001",
+      "title": "Synthetic fixture: document an example command",
+      "body": "Authored test data only. No original game input.",
+      "open": true,
+      "labels": ["enhancement", "area: ci", "needs-info"],
+      "assignees": [],
+      "status": "Ready",
+      "priority": "P1",
+      "next_action": "Check the authored example.",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "number": 9002,
+      "item_id": "PVTI_synthetic_9002",
+      "title": "Synthetic fixture: already has implementation work",
+      "body": "Do not start this issue again.",
+      "open": true,
+      "labels": ["documentation", "area: ci"],
+      "assignees": ["example-maintainer"],
+      "status": "Ready",
+      "priority": "P2",
+      "next_action": "Wait for the existing draft PR.",
+      "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}

@@ -36,7 +36,7 @@ bool can_reconstruct_world(const Scene &scene, bool upload, bool readback) const
 void render_reconstructed_world(Scene &scene) {
     // Sky routing can use a later draw's camera. Prepare the complete original
     // scene once before splitting, then share that prepared state in both passes.
-    apply_atmosphere(scene, mw34::sun::current_settings(scene.detail_time));
+    apply_atmosphere(scene, scene.environment);
     struct PreparedScene {
         Renderer &renderer;
         explicit PreparedScene(Renderer &owner, const Scene &source) : renderer(owner) {
@@ -58,6 +58,11 @@ void render_reconstructed_world(Scene &scene) {
     } prepared(*this, scene);
     Scene batch{};
     batch.detail_time = scene.detail_time;
+    // The game computes the campaign lighting and checks shadow proofs once per scene;
+    // every batch must shade with the parent scene's results.
+    batch.environment = scene.environment;
+    batch.valid_shadow_sources = scene.valid_shadow_sources;
+    batch.shadow_sequence = scene.shadow_sequence;
     batch.world_frame = scene.world_frame;
     batch.world_generation = scene.world_generation;
     batch.world_context = scene.world_context;

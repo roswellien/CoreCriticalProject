@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Native content · Core Critical Mod Studio</title>
+        <link rel="stylesheet" href="static/css/studio.css" />
+        <style>
+            body {
+                overflow: auto;
+                padding: 24px;
+                max-width: 1200px;
+                margin: auto;
+            }
+            h1 {
+                font-size: 24px;
+                margin-bottom: 8px;
+            }
+            p {
+                color: #aaa;
+                line-height: 1.5;
+            }
+            label {
+                display: block;
+                margin: 12px 0 5px;
+            }
+            input,
+            textarea,
+            select {
+                box-sizing: border-box;
+                width: 100%;
+                background: #15191e;
+                color: #eee;
+                border: 1px solid #48515b;
+                padding: 9px;
+            }
+            textarea {
+                min-height: 260px;
+                font-family: monospace;
+                resize: vertical;
+            }
+            button {
+                margin: 6px 5px 6px 0;
+            }
+            details {
+                border: 1px solid #48515b;
+                padding: 14px;
+                margin: 18px 0;
+            }
+            .columns {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+                gap: 24px;
+            }
+            pre {
+                white-space: pre-wrap;
+                overflow-wrap: anywhere;
+                background: #15191e;
+                border-left: 3px solid #e4a253;
+                padding: 14px;
+            }
+            a {
+                color: #e4a253;
+            }
+        </style>
+    </head>
+    <body>
+        <a href="/">← Map Studio</a>
+        <h1>Native content</h1>
+        <p>
+            Create a package, compile it with the selected runtime’s content tool, then playtest a
+            pinned profile. Sources and exports stay in your workspace. Your original installation
+            is read only.
+        </p>
+        <details>
+            <summary>Configure native tools and workspace</summary>
+            <label for="tool">mw3content executable</label><input id="tool" />
+            <label for="runtime">MW3-RE runtime executable</label><input id="runtime" />
+            <label for="workspace">Writable content workspace</label><input id="workspace" />
+            <button class="btn" data-action="configure">Save tool locations</button>
+            <button class="btn" data-action="capabilities">Show supported content</button>
+        </details>
+        <div class="columns">
+            <section>
+                <h2>1. Author and compile</h2>
+                <label for="project">Project folder name</label
+                ><input id="project" value="my-mod" />
+                <label for="template">Add a starter definition</label
+                ><select id="template"></select>
+                <button class="btn" id="add-template">Add definition</button>
+                <label for="source">Package source</label
+                ><textarea id="source" spellcheck="false"></textarea>
+                <button class="btn" data-action="save">Save source</button>
+                <button class="btn btn-primary" data-action="compile">Save and compile</button>
+                <button class="btn" data-action="install">Install compiled version</button>
+                <button class="btn" data-action="package">Export .mw3pack</button>
+                <details>
+                    <summary>Optional package-owned HUD artwork</summary>
+                    <p>
+                        Add this object as a HUD definition's <code>data.artwork</code>. Replace the
+                        example identity with the native sprite identity and place the authored
+                        MW3H-v1 file in the package source directory before compiling. Require
+                        capability <code>hud-artwork-mw3h-v1</code> version 1.
+                    </p>
+                    <pre>
+{"format":"mw3h-v1","sprites":{"0123456789abcdef":"artwork/reticle.rgba"}}</pre>
+                    <p>
+                        The selected HUD binds these explicit package resources. Unlisted files and
+                        unsupported runtime backends fail native validation.
+                    </p>
+                </details>
+            </section>
+            <section>
+                <h2>2. Resolve and playtest</h2>
+                <label for="profile-path">Profile path in workspace</label
+                ><input id="profile-path" value="profiles/playtest.json" />
+                <label for="profile">Pinned profile</label
+                ><textarea id="profile" spellcheck="false"></textarea>
+                <label for="mission">Mission ID (optional)</label
+                ><input id="mission" placeholder="my-mod:first-mission" />
+                <label for="network-mode">Playtest role</label>
+                <select id="network-mode">
+                    <option value="single">Single player</option>
+                    <option value="host">Host arena</option>
+                    <option value="join">Join arena</option>
+                </select>
+                <label for="network-address">Join address</label
+                ><input id="network-address" value="127.0.0.1:27888" />
+                <label for="network-port">Host port</label
+                ><input id="network-port" type="number" min="1" max="65535" value="27888" />
+                <label for="network-players">Arena players to wait for</label
+                ><input id="network-players" type="number" min="2" max="8" value="2" />
+                <button class="btn" data-action="profile">Validate and save profile</button>
+                <button class="btn" data-action="inspect">Inspect resolved content</button>
+                <button class="btn btn-primary" data-action="playtest">Native playtest</button>
+                <button class="btn" data-action="list">List installed versions</button>
+            </section>
+        </div>
+        <pre id="result" role="status" aria-live="polite">Loading authored templates…</pre>
+        <script src="static/js/native-content.js"></script>
+    </body>
+</html>

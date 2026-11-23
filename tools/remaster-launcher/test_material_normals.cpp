@@ -8,6 +8,16 @@
 #include <sstream>
 
 using namespace mw34::materials;
+namespace mw34::detail {
+struct FixtureSettings {
+    bool water{}, clouds{};
+};
+inline const FixtureSettings &settings() {
+    static FixtureSettings value;
+    return value;
+}
+inline bool enabled(unsigned) { return false; }
+} // namespace mw34::detail
 namespace mw34::sun {
 struct FixtureSettings {
     bool enabled{true};
@@ -21,9 +31,15 @@ inline const FixtureSettings &settings() {
 struct SurfaceFixture {
     struct VSurfaceRec {
         unsigned guest{77}, width{5}, height{1}, pitch{10}, mem{8}, bpp{16};
+        unsigned bytes{10}, locks{}, caps{1};
         std::uint64_t version{1};
         std::array<unsigned, 4> tex_masks{0xf800, 0, 0, 0};
     };
+    static constexpr unsigned DDSCAPS_TEXTURE = 1;
+    struct Host {
+        std::vector<VSurfaceRec> vsurfaces;
+        bool com_object(unsigned) { return true; }
+    } host;
     struct OverrideTexture {
         std::string name;
         unsigned width{}, height{};
@@ -48,7 +64,7 @@ struct SurfaceFixture {
             throw std::runtime_error("Fixture surface offset out of bounds");
         get_bytes(surface.mem + offset, out, size);
     }
-#include "native-overrides/surface_normals_stage.inc"
+#include "../m4-crt-heap-carry/host/surface_normals_stage.inc"
 };
 
 static void environment(const char *name, const char *value) {
@@ -511,6 +527,16 @@ int main(int argc, char **argv) {
         SurfaceFixture::VSurfaceRec surface;
         require(fixture.surface_normal_index(surface) == 0 && fixture.synchronizations == 1,
                 "Initial surface identity not bound");
+        const std::vector<unsigned short> replacement(5, 0);
+        require(fixture.replacement_surface_normal_index(0, 5, 1, replacement) == 0,
+                "Replacement RGB565 pixels did not bind authored normal");
+        require(fixture.synchronizations == 1, "Replacement pixels read a guest surface");
+        auto changed = replacement;
+        changed.back() = 1;
+        require(fixture.replacement_surface_normal_index(1, 5, 1, changed) == -1,
+                "Replacement same-prefix pixels bound a foreign normal");
+        require(fixture.replacement_surface_normal_index(2, 1, 5, replacement) == -1,
+                "Replacement dimensions ignored in full-content key");
         require(fixture.surface_normal_index(surface) == 0 && fixture.synchronizations == 1,
                 "Unchanged texture rehashed per draw");
         fixture.memory[17] = 1;
