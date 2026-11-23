@@ -168,9 +168,13 @@ namespace MW3RemasterLauncher
                 BtnLaunchGame.IsEnabled = true;
                 try
                 {
-                    if (string.IsNullOrEmpty(_settingsMgr.Current.ModularContentProfile) &&
-                        (NativeRuntimeLayout.IsInstalledApplication(_basePath) || RuntimeUpdates.SelectedRoot(_basePath) != null))
-                        NativeRuntimeLayout.FindInstalled(_basePath);
+                    if (string.IsNullOrEmpty(_settingsMgr.Current.ModularContentProfile))
+                    {
+                        if (NativeGameRunner.UsesBundledMw3Re(_basePath))
+                            _nativeGameRunner.RequireBundledMw3Re();
+                        else if (NativeRuntimeLayout.IsInstalledApplication(_basePath) || RuntimeUpdates.SelectedRoot(_basePath) != null)
+                            NativeRuntimeLayout.FindInstalled(_basePath);
+                    }
                 }
                 catch (Exception error)
                 {

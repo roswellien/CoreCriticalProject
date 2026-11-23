@@ -7,6 +7,7 @@ param(
     [string]$PreparationBundle = '',
     # MW3-RE Native preview runtime staged by tools/remaster-launcher/stage_mw3_re_runtime.py.
     [string]$NativePreviewDirectory = '',
+    [string]$PlannerPythonArchive = '',
     [string]$WindowsSignTool = '',
     [string]$SigningDlib = '',
     [string]$SigningMetadata = '',
@@ -45,7 +46,7 @@ foreach ($name in @('Core Critical Launcher.exe','hostfxr.dll','SDL3.dll','SDL3-
     if (!(Test-Path -LiteralPath (Join-Path $PublishDirectory $name) -PathType Leaf)) { throw "Incomplete launcher publication: $name" }
 }
 # A fresh publication only: the MW3-RE runtime and planner are copied in below, never reused.
-foreach ($name in @('Runtime','user','native-inputs','NativePreview','Planner')) {
+foreach ($name in @('Runtime','user','native-inputs','NativePreview','Planner','Tools/PlannerPython')) {
     if (Test-Path -LiteralPath (Join-Path $PublishDirectory $name)) { throw "Use a fresh launcher publication; it must not already contain: $name" }
 }
 if ($NativePreviewDirectory) {
@@ -59,6 +60,22 @@ if ($NativePreviewDirectory) {
         'content_capabilities.py', 'native_assets.py', 'legacy_content_capabilities.json')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../remaster-launcher/$plannerFile") -Destination (Join-Path $PublishDirectory "Planner/$plannerFile")
     }
+}
+$pythonRoot = Join-Path $PublishDirectory 'Tools/PlannerPython'
+if ($NativePreviewDirectory -or $PlannerPythonArchive) {
+    # Windows x64 embeddable package from the official Python 3.14.10 release.
+    $archivePin = '90905e64a840557d8c1bc4f5b74db3d7ee85e3ffb217611cac1c7813acea4159'
+    if (!$PlannerPythonArchive) {
+        $PlannerPythonArchive = Join-Path $OutputDirectory 'python-3.14.10-embed-amd64.zip'
+        Invoke-WebRequest 'https://www.python.org/ftp/python/3.14.10/python-3.14.10-embed-amd64.zip' -OutFile $PlannerPythonArchive
+    }
+    if ((Get-FileHash -LiteralPath $PlannerPythonArchive -Algorithm SHA256).Hash -ine $archivePin) {
+        throw 'Bundled planner Python archive differs from its published SHA-256'
+    }
+    Expand-Archive -LiteralPath $PlannerPythonArchive -DestinationPath $pythonRoot
+    $python = Join-Path $pythonRoot 'python.exe'
+    & $python -I -c 'import sys, json, hashlib; assert sys.version_info[:3] == (3, 14, 10)'
+    if ($LASTEXITCODE) { throw 'The bundled planner Python could not load its standard library' }
 }
 function Test-NativePreviewPins([string]$Root) {
     # runtime.json pins every file by size and SHA-256; the launcher refuses a runtime whose bytes differ.
@@ -89,9 +106,14 @@ if ($WindowsSignTool -or $SigningDlib -or $SigningMetadata) {
     foreach ($signingPath in @($WindowsSignTool,$SigningDlib,$SigningMetadata)) {
         if (!$signingPath -or !(Test-Path -LiteralPath $signingPath -PathType Leaf)) { throw 'Provide all three Windows signing inputs' }
     }
-    # Native preview binaries stay as staged: signing would change bytes pinned by its runtime.json.
-    $previewRoot = Join-Path $PublishDirectory 'NativePreview'
-    $peFiles=@(Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File | Where-Object { $_.Extension -in @('.exe','.dll','.pyd') -and !$_.FullName.StartsWith($previewRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) } | Select-Object -ExpandProperty FullName)
+    # Preserve the staged native runtime pins and the verified upstream Python package bytes.
+    $previewPrefix = (Join-Path $PublishDirectory 'NativePreview') + [IO.Path]::DirectorySeparatorChar
+    $pythonPrefix = $pythonRoot + [IO.Path]::DirectorySeparatorChar
+    $peFiles = @(Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File | Where-Object {
+        $_.Extension -in @('.exe','.dll','.pyd') -and
+        !$_.FullName.StartsWith($previewPrefix, [StringComparison]::OrdinalIgnoreCase) -and
+        !$_.FullName.StartsWith($pythonPrefix, [StringComparison]::OrdinalIgnoreCase)
+    } | Select-Object -ExpandProperty FullName)
     & (Join-Path $PSScriptRoot 'sign_windows.ps1') -File $peFiles -SignTool $WindowsSignTool -Dlib $SigningDlib -Metadata $SigningMetadata -ReceiptPath (Join-Path $OutputDirectory 'application-signatures.json')
 }
 & dotnet run --project (Join-Path $PSScriptRoot '../mw3-remaster-launcher-tests/LauncherChecks.csproj') -c Release "--property:BaseOutputPath=$checksOutput" -- --verify-media-tools (Join-Path $PublishDirectory 'Tools/Unshield')
