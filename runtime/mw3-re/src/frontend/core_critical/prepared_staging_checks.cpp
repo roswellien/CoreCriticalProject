@@ -823,6 +823,15 @@ void check_prepared_models_surface_materials() {
             require(!off.height_binding && off.surface_parameters == baseline.surface_parameters &&
                         off.surface_eye == baseline.surface_eye,
                     "Height-Off changed the original normal-only material output");
+            auto without_normal = source;
+            without_normal.normal = nullptr;
+            without_normal.height_binding.reset();
+            mw34::vkscene::Draw without_parallax{};
+            cc_mw3_re::apply_surface_material(without_parallax, without_normal, true, true, 7, 11);
+            require(!without_parallax.height_binding &&
+                        without_parallax.surface_parameters == baseline.surface_parameters &&
+                        without_parallax.surface_eye == baseline.surface_eye,
+                    "Height data without a normal map changed ordinary material shading");
             cc_mw3_re::apply_surface_material(on, source, true, true, 7, 11);
             retained = on.height_binding;
             require(retained && retained->image == source.height_binding->image &&
