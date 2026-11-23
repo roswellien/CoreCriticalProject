@@ -10,17 +10,39 @@ const ARCHIVE_FAILED_NOTE =
 const GENERIC_FAILURES = [
     "The launch or game ended unexpectedly. Open Logs for details.",
     "No launch details were recorded.",
+    "No specific failure was recorded.",
 ];
+
+const MIN_INT32 = -2_147_483_648;
+const MAX_INT32 = 2_147_483_647;
+const LOG_ORDER = ["native_crash", "native_run", "native_stderr", "launcher", "native_stdout"];
+
+// Only the legacy host fault record may retain a module basename and numeric suffix.
+const NATIVE_MODULE_SUFFIX_LINE =
+    /^(HOST EXCEPTION (?:0x)?[0-9a-f]{1,8} at )((?:[A-Z]:[\\/]|\\\\)[^\r\n\t"<>|:]{1,1024}?)(\.(?:exe|dll)[ \t]*\+0x[0-9a-f]{1,16}(?: \(access [0-9]+ address (?:0x)?[0-9a-f]{1,16}\))?)(?=\r?$)/gim;
 
 function redactPaths(value) {
     return value
-        .replace(/\b[A-Za-z]:[\\/][^\r\n\t"<>|]*/g, "<local-path>")
+        .replace(NATIVE_MODULE_SUFFIX_LINE, (_full, prefix, pathPart, suffix) => {
+            const token = pathPart.startsWith("\\\\") ? "<network-path>" : "<local-path>";
+            const lastSep = Math.max(pathPart.lastIndexOf("\\"), pathPart.lastIndexOf("/"));
+            const stem = lastSep >= 0 ? pathPart.slice(lastSep + 1) : pathPart;
+            if (/^[A-Za-z0-9._-]{1,64}$/.test(stem)) {
+                return `${prefix}${token}/${stem}${suffix}`;
+            }
+            return `${prefix}${token}${suffix}`;
+        })
+        .replace(/(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n\t"<>|]*/g, "<local-path>")
         .replace(/\\\\[^\r\n\t"<>|]+/g, "<network-path>");
 }
 
-function hardwareField(source, name) {
+function field(source, name) {
     const camelName = name[0].toLowerCase() + name.slice(1);
     return source?.[camelName] ?? source?.[name];
+}
+
+function hardwareField(source, name) {
+    return field(source, name);
 }
 
 function json(body, status = 200) {
@@ -150,8 +172,8 @@ function validateReport(report) {
         report.mode.length > 80 ||
         !Number.isInteger(report.exit_code) ||
         report.exit_code === 0 ||
-        report.exit_code < -255 ||
-        report.exit_code > 255 ||
+        report.exit_code < MIN_INT32 ||
+        report.exit_code > MAX_INT32 ||
         !report.logs ||
         typeof report.logs !== "object" ||
         Array.isArray(report.logs)
@@ -168,60 +190,99 @@ function validateReport(report) {
         "D7VkAntiAliasing",
         "D7VkAnisotropicFiltering",
     ]) {
-        if (typeof report.settings?.[key] === "string")
-            settings[key] = report.settings[key].slice(0, 80);
+        const value = field(report.settings, key);
+        if (typeof value === "string") settings[key] = redactPaths(value.slice(0, 80));
     }
     for (const key of ["Width", "Height", "AnisotropicFiltering", "DrawDistance", "FogDistance"]) {
-        if (Number.isInteger(report.settings?.[key])) settings[key] = report.settings[key];
+        const value = field(report.settings, key);
+        if (Number.isInteger(value)) settings[key] = value;
     }
-    for (const key of ["LocalCdAudio", "InstantReplay", "PerformanceMonitor", "D7VkAiTextures"]) {
-        if (typeof report.settings?.[key] === "boolean") settings[key] = report.settings[key];
+    for (const key of [
+        "LocalCdAudio",
+        "InstantReplay",
+        "PerformanceMonitor",
+        "RenderThread",
+        "D7VkAiTextures",
+    ]) {
+        const value = field(report.settings, key);
+        if (typeof value === "boolean") settings[key] = value;
     }
 
     const logs = {};
-    for (const name of ["launcher", "native_stderr", "native_stdout"]) {
+    for (const name of LOG_ORDER) {
         const value = report.logs[name];
         if (value !== undefined && typeof value !== "string")
             throw new Error("The crash report logs are invalid.");
         if (value) logs[name] = redactPaths(value.slice(-64 * 1024));
     }
     const packs = Array.isArray(report.packs)
-        ? report.packs.slice(0, 64).map((pack) => ({
-              id: typeof pack?.Id === "string" ? redactPaths(pack.Id.slice(0, 120)) : "",
-              version: typeof pack?.Version === "string" ? pack.Version.slice(0, 80) : "",
-              schema_version: Number.isInteger(pack?.SchemaVersion) ? pack.SchemaVersion : 0,
-              enabled: pack?.IsEnabled === true,
-              priority: Number.isInteger(pack?.Priority) ? pack.Priority : 0,
-          }))
+        ? report.packs.slice(0, 64).map((pack) => {
+              const rawId = field(pack, "Id");
+              const rawVersion = field(pack, "Version");
+              const rawSchema = field(pack, "SchemaVersion") ?? pack?.schema_version;
+              const rawEnabled = field(pack, "IsEnabled") ?? pack?.enabled;
+              const rawPriority = field(pack, "Priority");
+              return {
+                  id: typeof rawId === "string" ? redactPaths(rawId.slice(0, 120)) : "",
+                  version:
+                      typeof rawVersion === "string" ? redactPaths(rawVersion.slice(0, 80)) : "",
+                  schema_version: Number.isInteger(rawSchema) ? rawSchema : 0,
+                  enabled: rawEnabled === true,
+                  priority: Number.isInteger(rawPriority) ? rawPriority : 0,
+              };
+          })
         : [];
     const reportId =
         typeof report.report_id === "string" && /^[a-zA-Z0-9-]{1,64}$/.test(report.report_id)
             ? report.report_id
             : crypto.randomUUID();
-    return {
+    const rawSourceCommit = report.runtime_source_commit ?? report.runtimeSourceCommit;
+    const runtimeSourceCommit =
+        typeof rawSourceCommit === "string" && rawSourceCommit.trim().length > 0
+            ? redactPaths(rawSourceCommit.trim().slice(0, 40))
+            : undefined;
+    const validated = {
         format_version: 1,
         report_id: reportId,
         created_utc: typeof report.created_utc === "string" ? report.created_utc.slice(0, 40) : "",
         launcher_version:
-            typeof report.launcher_version === "string" ? report.launcher_version.slice(0, 80) : "",
+            typeof report.launcher_version === "string"
+                ? redactPaths(report.launcher_version.slice(0, 80))
+                : "",
         runtime_version:
-            typeof report.runtime_version === "string" ? report.runtime_version.slice(0, 80) : "",
+            typeof report.runtime_version === "string"
+                ? redactPaths(report.runtime_version.slice(0, 80))
+                : "",
+        ...(runtimeSourceCommit ? { runtime_source_commit: runtimeSourceCommit } : {}),
         mode: redactPaths(report.mode.slice(0, 80)),
         exit_code: report.exit_code,
-        os: typeof report.os === "string" ? report.os.slice(0, 200) : "",
+        os: typeof report.os === "string" ? redactPaths(report.os.slice(0, 200)) : "",
         architecture:
-            typeof report.architecture === "string" ? report.architecture.slice(0, 80) : "",
+            typeof report.architecture === "string"
+                ? redactPaths(report.architecture.slice(0, 80))
+                : "",
         dotnet_runtime:
-            typeof report.dotnet_runtime === "string" ? report.dotnet_runtime.slice(0, 120) : "",
+            typeof report.dotnet_runtime === "string"
+                ? redactPaths(report.dotnet_runtime.slice(0, 120))
+                : "",
         hardware: validateHardware(report.hardware),
         failure_summary: redactPaths(report.failure_summary.slice(0, 2000)),
         settings,
         packs,
         logs,
     };
+    return validated;
 }
 
 function normalizeReason(reason) {
+    // The native runtime logs raw fault and module-base addresses for debugging. Ignore those
+    // when the crashing instruction has a stable address relative to the executable.
+    const nativeFault =
+        /^(mw3(?:launcher|pm)?: crashed: exception 0x[0-9a-f]{1,8}) at (?:0x)?[0-9a-f]{1,16} module base (?:0x)?[0-9a-f]{1,16} (RVA 0x[0-9a-f]{1,16})(?: \(access violation: ([a-z]+) \([0-9]+\) target (?:0x)?[0-9a-f]{1,16}\))?$/i.exec(
+            reason.trim(),
+        );
+    if (nativeFault) return nativeFault.slice(1).filter(Boolean).join(" ").toLowerCase();
+
     return reason
         .toLowerCase()
         .replace(/0x[0-9a-f]+/gi, "<address>")
@@ -313,13 +374,19 @@ function issueBody(
         );
 
     const logNames = {
-        launcher: "Launcher log",
+        native_crash: "Native crash details (crash.txt)",
+        native_run: "Native run log (mw3.log)",
         native_stderr: "Native standard error",
+        launcher: "Launcher log",
         native_stdout: "Native standard output",
     };
-    const entries = Object.entries(reportLogs).filter(
-        ([, content]) => typeof content === "string" && content.length > 0,
-    );
+    const orderedKeys = [
+        ...LOG_ORDER.filter((key) => key in reportLogs),
+        ...Object.keys(reportLogs).filter((key) => !LOG_ORDER.includes(key)),
+    ];
+    const entries = orderedKeys
+        .map((key) => [key, reportLogs[key]])
+        .filter(([, content]) => typeof content === "string" && content.length > 0);
     if (entries.length === 0)
         return boundIssueBody(
             `${header}\n\n### Recent log excerpts\n\nNo log files were available in this report.`,
@@ -336,8 +403,17 @@ function issueBody(
         const fence = "`".repeat(Math.max(3, maxFenceRun + 1));
         const remaining =
             MAX_ISSUE_BODY_CHARS - body.length - heading.length - fence.length * 2 - 10;
-        const perLogBudget = Math.floor(remaining / remainingEntries);
-        if (perLogBudget < 128) {
+        const perLogBudget =
+            name === "native_crash"
+                ? Math.min(
+                      content.length + 128,
+                      Math.max(
+                          Math.floor(remaining / remainingEntries),
+                          Math.min(remaining, 16_384),
+                      ),
+                  )
+                : Math.floor(remaining / remainingEntries);
+        if (perLogBudget < 128 || remaining < 128) {
             body += "Additional log excerpts omitted to fit GitHub's issue size limit.\n";
             break;
         }
