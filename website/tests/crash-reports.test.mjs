@@ -765,7 +765,69 @@ test("keeps the report archive inaccessible without a valid admin Access token",
         env: adminEnvironment,
     });
     assert.equal(tampered.status, 403);
-    assert.ok(!(await tampered.text()).includes("abcdef1234567890"));
+    const invalidTokenPage = await tampered.text();
+    assert.ok(!invalidTokenPage.includes("abcdef1234567890"));
+
+    const tamperedAgain = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": tamperedToken },
+        }),
+        env: { ...adminEnvironment, CRASH_REPORT_ADMIN_EMAIL: "other@example.com" },
+    });
+    assert.equal(tamperedAgain.status, tampered.status);
+    assert.equal(await tamperedAgain.text(), invalidTokenPage);
+});
+
+test("allows both configured archive admins and rejects a partial match", async () => {
+    const { privateKey, token } = await createAdminAccess();
+    const env = {
+        ...adminEnvironment,
+        CRASH_REPORT_ADMIN_EMAIL: " admin@example.com, SECOND@example.com, ",
+        CRASH_REPORT_DB: { prepare: () => ({ all: async () => ({ results: [] }) }) },
+    };
+
+    const response = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": token },
+        }),
+        env,
+    });
+    assert.equal(response.status, 200);
+
+    const secondToken = await makeAccessToken(privateKey, { email: "second@example.com" });
+    const secondResponse = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": secondToken },
+        }),
+        env,
+    });
+    assert.equal(secondResponse.status, 200);
+
+    const thirdToken = await makeAccessToken(privateKey, { email: "cond@example.com" });
+    const thirdResponse = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": thirdToken },
+        }),
+        env,
+    });
+    assert.equal(thirdResponse.status, 403);
+});
+
+test("rejects an archive admin allowlist containing only separators and whitespace", async () => {
+    const { token } = await createAdminAccess();
+    const env = {
+        ...adminEnvironment,
+        CRASH_REPORT_ADMIN_EMAIL: " , , ",
+        CRASH_REPORT_DB: { prepare: () => ({ all: async () => ({ results: [] }) }) },
+    };
+
+    const response = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": token },
+        }),
+        env,
+    });
+    assert.equal(response.status, 503);
 });
 
 test("renders archived reports and log lines only for the configured admin", async () => {

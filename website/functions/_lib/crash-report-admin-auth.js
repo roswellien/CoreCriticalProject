@@ -62,7 +62,11 @@ async function getAccessKey(issuer, keyId, now) {
 }
 
 export async function authorizeCrashReportAdmin(request, env) {
-    if (!isConfigured(env))
+    const allowedEmails = (env.CRASH_REPORT_ADMIN_EMAIL ?? "")
+        .split(",")
+        .map((email) => email.trim().toLowerCase())
+        .filter((email) => email.length > 0);
+    if (!isConfigured(env) || allowedEmails.length === 0)
         return { ok: false, status: 503, message: "Admin report access is not configured." };
 
     const token = request.headers.get("cf-access-jwt-assertion");
@@ -102,17 +106,6 @@ export async function authorizeCrashReportAdmin(request, env) {
                 message: "Cloudflare Access authentication has expired or is not yet valid.",
             };
         }
-        if (
-            typeof payload.email !== "string" ||
-            payload.email.toLowerCase() !== env.CRASH_REPORT_ADMIN_EMAIL.trim().toLowerCase()
-        ) {
-            return {
-                ok: false,
-                status: 403,
-                message: "This account is not allowed to view crash reports.",
-            };
-        }
-
         const jwk = await getAccessKey(env.CRASH_REPORT_ACCESS_ISSUER, header.kid, Date.now());
         if (!jwk)
             return {
@@ -138,6 +131,16 @@ export async function authorizeCrashReportAdmin(request, env) {
                 ok: false,
                 status: 403,
                 message: "Cloudflare Access authentication is invalid.",
+            };
+
+        if (
+            typeof payload.email !== "string" ||
+            !allowedEmails.includes(payload.email.toLowerCase())
+        )
+            return {
+                ok: false,
+                status: 403,
+                message: "This account is not allowed to view crash reports.",
             };
         return { ok: true, email: payload.email };
     } catch {
