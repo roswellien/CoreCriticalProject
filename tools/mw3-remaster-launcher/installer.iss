@@ -90,12 +90,19 @@ Source: "launcher-installation.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
 Source: "Assets\*"; Excludes: "Installer\*"; DestDir: "{app}\Assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 #ifdef NativePreviewIncluded
-; MW3-RE native runtime and planner
+; MW3-RE native runtime
 Source: "{#PublishDirectory}\NativePreview\*"; DestDir: "{app}\NativePreview"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PublishDirectory}\NativePreview\runtime.json"; DestDir: "{app}\NativePreview"; Flags: ignoreversion
-Source: "{#PublishDirectory}\Planner\mw3_re_launch.py"; DestDir: "{app}\Planner"; Flags: ignoreversion
 Source: "launcher-mw3re-installation.json"; DestDir: "{app}"; DestName: "launcher-installation.json"; Flags: ignoreversion
 #endif
+
+; The launcher update also repairs the existing installation's planner.
+Source: "{#PublishDirectory}\Planner\mw3_re_launch.py"; DestDir: "{app}\Planner"; Flags: ignoreversion
+Source: "{#PublishDirectory}\Planner\prepared_skin_packs.py"; DestDir: "{app}\Planner"; Flags: ignoreversion
+Source: "{#PublishDirectory}\Planner\prepared_mech_packs.py"; DestDir: "{app}\Planner"; Flags: ignoreversion
+Source: "{#PublishDirectory}\Planner\content_capabilities.py"; DestDir: "{app}\Planner"; Flags: ignoreversion
+Source: "{#PublishDirectory}\Planner\native_assets.py"; DestDir: "{app}\Planner"; Flags: ignoreversion
+Source: "{#PublishDirectory}\Planner\legacy_content_capabilities.json"; DestDir: "{app}\Planner"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

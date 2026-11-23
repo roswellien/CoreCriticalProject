@@ -50,7 +50,11 @@ $common = @{
 }
 $launcherSetup = Join-Path $OutputDirectory 'LauncherSetup'
 $setupFilename = "corecriticalinstaller-$Version.exe"
-& (Join-Path $PSScriptRoot 'build_installer.ps1') @common -OutputDirectory $launcherSetup
+$launcherPublish = Join-Path $OutputDirectory 'LauncherPublish'
+Copy-Item -LiteralPath $PublishDirectory -Destination $launcherPublish -Recurse
+$launcherArguments = $common.Clone()
+$launcherArguments.PublishDirectory = $launcherPublish
+& (Join-Path $PSScriptRoot 'build_installer.ps1') @launcherArguments -OutputDirectory $launcherSetup
 $updateDirectory = Join-Path $OutputDirectory 'LauncherUpdate'
 & (Join-Path $PSScriptRoot 'build_ccupdate.ps1') -Installer (Join-Path $launcherSetup $setupFilename) `
     -InstallerReceipt (Join-Path $launcherSetup 'installer-build.json') -Version $numericVersion -Sequence $Sequence `
