@@ -54,12 +54,12 @@ if ($NativePreviewDirectory) {
     $previewManifest = Get-Content -LiteralPath (Join-Path $NativePreviewDirectory 'runtime.json') -Raw | ConvertFrom-Json
     if ($previewManifest.schema_version -ne 2 -or $previewManifest.engine -ne 'mw3-re') { throw 'The Native preview needs an MW3-RE schema 2 runtime.json' }
     Copy-Item -LiteralPath $NativePreviewDirectory -Destination (Join-Path $PublishDirectory 'NativePreview') -Recurse
-    # The launcher runs this planner; it is the only producer of MW3-RE arguments.
-    New-Item -ItemType Directory -Path (Join-Path $PublishDirectory 'Planner') | Out-Null
-    foreach ($plannerFile in @('mw3_re_launch.py', 'prepared_skin_packs.py', 'prepared_mech_packs.py',
-        'content_capabilities.py', 'native_assets.py', 'legacy_content_capabilities.json')) {
-        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../remaster-launcher/$plannerFile") -Destination (Join-Path $PublishDirectory "Planner/$plannerFile")
-    }
+}
+# The launcher runs this planner; it is the only producer of MW3-RE arguments.
+New-Item -ItemType Directory -Path (Join-Path $PublishDirectory 'Planner') | Out-Null
+foreach ($plannerFile in @('mw3_re_launch.py', 'prepared_skin_packs.py', 'prepared_mech_packs.py',
+    'content_capabilities.py', 'native_assets.py', 'legacy_content_capabilities.json')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../remaster-launcher/$plannerFile") -Destination (Join-Path $PublishDirectory "Planner/$plannerFile")
 }
 $pythonRoot = Join-Path $PublishDirectory 'Tools/PlannerPython'
 if ($NativePreviewDirectory -or $PlannerPythonArchive) {
