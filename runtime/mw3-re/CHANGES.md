@@ -194,6 +194,7 @@ unusual happens.
 - The rain's and snow's very first frame no longer draws its streaks from unset sizes (it used the screen's size from the second frame on anyway).
 - A picture the menus or the HUD let go of twice is no longer freed twice (which could crash); the rebuild reports it instead.
 - Keypad 0 (the zoom lock) no longer crashes when the mech you are looking at has no HUD; it does nothing then.
+- Opening or closing the zoom view at the edge of the screen no longer ends the game on the Core Critical renderer with dynamic lighting on; for that one frame the zoom view simply draws nothing.
 - A script that cycles the textures of a model with no material, or turns a scroll off, no longer crashes (neither happens with the shipped scripts).
 - A mission script command that changes an object's model (its colour, priority, facade, back faces, morph or world textures) after the object was not found now does nothing. The original went on with the last object's model, which after a second mission could be one already freed.
 - An edited debriefing dialog missing its buttons' help, its title's, its lance cards' or its rank's lines no longer crashes.
