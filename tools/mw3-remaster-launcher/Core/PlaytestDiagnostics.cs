@@ -28,6 +28,12 @@ public static class PlaytestDiagnostics
     public const int MaxAggregateLogBytes = 160 * 1024;
     public const int MaxRequestBytes = 256 * 1024;
     public const string GenericFailureSummary = "No specific failure was recorded.";
+
+    // Windows ends a program with STATUS_APPLICATION_HANG (0xCFFFFFFF) when its window
+    // stops answering messages and the player chooses to close it, so the logs often
+    // hold no error line at all.
+    public const int ApplicationHangExitCode = unchecked((int)0xCFFFFFFF);
+    public const string ApplicationHangSummary = "The game stopped responding and Windows closed it.";
     public const string NativeCrashFileName = "crash.txt";
     public const string NativeRunFileName = "mw3.log";
 
@@ -106,23 +112,26 @@ public static class PlaytestDiagnostics
     public static string FormatExitCode(int exitCode) =>
         $"{exitCode} (0x{unchecked((uint)exitCode):X8})";
 
-    public static string FormatRuntimeVersion(Mw3ReRuntimeContract contract)
+    public static string FormatRuntimeVersion(Mw3ReRuntimeContract contract) =>
+        FormatRuntimeVersion(contract.BuildId, contract.SourceCommit);
+
+    /// <summary>
+    /// The build id plus the first 12 characters of the source commit, at most 80 characters
+    /// (the crash-report service keeps no more). Shipped build ids are "mw3-re-" plus a
+    /// 64-character hash, too long to fit beside the commit, so the build id is cut rather
+    /// than the commit: the commit is what finds the source.
+    /// </summary>
+    public static string FormatRuntimeVersion(string? buildId, string? sourceCommit)
     {
-        var buildId = string.IsNullOrWhiteSpace(contract.BuildId) ? "mw3-re" : contract.BuildId.Trim();
-        var commit = contract.SourceCommit?.Trim() ?? "";
-        if (commit.Length >= 12)
-        {
-            var shortCommit = commit[..12];
-            var combined = $"{buildId} ({shortCommit})";
-            if (combined.Length <= 80) return combined;
-        }
-        if (commit.Length >= 7)
-        {
-            var shortCommit = commit[..7];
-            var combined = $"{buildId} ({shortCommit})";
-            if (combined.Length <= 80) return combined;
-        }
-        return buildId.Length <= 80 ? buildId : buildId[..80];
+        const int maxLength = 80;
+        var id = string.IsNullOrWhiteSpace(buildId) ? "mw3-re" : buildId.Trim();
+        var commit = sourceCommit?.Trim() ?? "";
+        if (commit.Length < 12) return id.Length <= maxLength ? id : id[..maxLength];
+
+        var commitPart = $" ({commit[..12]})";
+        var idRoom = maxLength - commitPart.Length;
+        var shownId = id.Length <= idRoom ? id : id[..idRoom];
+        return shownId + commitPart;
     }
 
     public static NativeSessionDiagnosticsBaseline CaptureNativeBaseline(string writeDirectory)
@@ -283,17 +292,11 @@ public static class PlaytestDiagnostics
         var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
         var logs = ReadSessionLogs(launchLog, roots);
-        var failureSummary = Redact(FailureSummary(launchLog), roots);
+        var failureSummary = Redact(FailureSummary(launchLog, exitCode), roots);
         if (failureSummary.Length > 2000) failureSummary = failureSummary[..2000];
 
         var packArray = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray();
-        var settingsObject = settings.EngineMode == "d7vk"
-            ? (object)new { settings.D7VkResolution, settings.D7VkAntiAliasing,
-                settings.D7VkAnisotropicFiltering, settings.D7VkAiTextures }
-            : new { settings.Width, settings.Height, settings.WindowMode, settings.AntiAliasing,
-                settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
-                settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor,
-                settings.RenderThread };
+        var settingsObject = ReportSettings(settings);
         var hardware = hardwareInventory ?? HardwareInventory.Capture();
         var reportId = Guid.NewGuid().ToString("N");
         var createdUtc = DateTimeOffset.UtcNow;
@@ -436,13 +439,25 @@ public static class PlaytestDiagnostics
         return text;
     }
 
-    public static string FailureSummary(string? launchLog)
+    /// <summary>
+    /// The most specific failure line in the session's logs. With none, a hang exit code
+    /// still gets a plain explanation; anything else gets the generic text.
+    /// </summary>
+    public static string FailureSummary(string? launchLog, int? exitCode = null)
     {
-        if (launchLog == null) return GenericFailureSummary;
+        var specificFailure = FindSpecificFailure(launchLog);
+        if (specificFailure != null) return specificFailure;
+        var windowsClosedHungGame = exitCode == ApplicationHangExitCode;
+        return windowsClosedHungGame ? ApplicationHangSummary : GenericFailureSummary;
+    }
+
+    private static string? FindSpecificFailure(string? launchLog)
+    {
+        if (launchLog == null) return null;
         string? directory;
         try { directory = Path.GetDirectoryName(launchLog); }
-        catch { return GenericFailureSummary; }
-        if (string.IsNullOrEmpty(directory)) return GenericFailureSummary;
+        catch { return null; }
+        if (string.IsNullOrEmpty(directory)) return null;
 
         // 1. Check native/crash.txt first for direct crash_report.cpp fault lines.
         var crashFile = Path.Combine(directory, "native", NativeCrashFileName);
@@ -467,8 +482,17 @@ public static class PlaytestDiagnostics
             var error = lines.LastOrDefault(IsSpecificErrorLine);
             if (error != null) return CleanSummaryLine(error);
         }
-        return GenericFailureSummary;
+        return null;
     }
+
+    /// <summary>The graphics settings that apply to the session's engine.</summary>
+    private static object ReportSettings(LauncherSettings settings) => settings.EngineMode == "d7vk"
+        ? new { settings.D7VkResolution, settings.D7VkAntiAliasing,
+            settings.D7VkAnisotropicFiltering, settings.D7VkAiTextures }
+        : new { settings.Width, settings.Height, settings.WindowMode, settings.AntiAliasing,
+            settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
+            settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor,
+            settings.RenderThread };
 
     private static string[] SafeReadLines(string path)
     {
@@ -901,7 +925,7 @@ public static class PlaytestDiagnostics
         // No profiles, settings files, saves, archives, media, dumps or recursive directory walks.
         var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
-        var failureSummary = Redact(FailureSummary(launchLog), roots);
+        var failureSummary = Redact(FailureSummary(launchLog, exitCode), roots);
         if (failureSummary.Length > 2000) failureSummary = failureSummary[..2000];
         var report = new
         {
@@ -916,10 +940,7 @@ public static class PlaytestDiagnostics
             dotnet_runtime = RuntimeInformation.FrameworkDescription,
             hardware = hardwareInventory ?? HardwareInventory.Capture(),
             failure_summary = failureSummary,
-            settings = new { settings.EngineMode, settings.Width, settings.Height, settings.WindowMode,
-                settings.AntiAliasing, settings.AnisotropicFiltering, settings.DrawDistance, settings.FogDistance,
-                settings.LocalCdAudio, settings.InstantReplay, settings.PerformanceMonitor,
-                settings.RenderThread },
+            settings = ReportSettings(settings),
             packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
             note = "Review this local report before sharing. It includes selected settings, pack metadata, a limited hardware inventory and redacted log tails."
         };
