@@ -13,7 +13,7 @@
   "concurrency": {"group": "openai-automation-publisher", "cancel-in-progress": false},
   "jobs": {
     "controller": {
-      "if": "${{ github.repository == 'roswellien/MW3Recomp-Private' && github.ref == 'refs/heads/develop' && vars.OPENAI_AUTOMATION_ENABLED == 'true' && vars.OPENAI_AUTOMATION_ROLLOUT_COMPLETE == 'true' && vars.OPENAI_AUTOMATION_CONTROLLER_SHA != '' }}",
+      "if": "${{ github.repository == 'roswellien/CoreCriticalProject' && github.ref == 'refs/heads/develop' && vars.OPENAI_AUTOMATION_ENABLED == 'true' && vars.OPENAI_AUTOMATION_ROLLOUT_COMPLETE == 'true' && vars.OPENAI_AUTOMATION_CONTROLLER_SHA != '' }}",
       "runs-on": "ubuntu-24.04",
       "timeout-minutes": 5,
       "environment": "openai-automation",
