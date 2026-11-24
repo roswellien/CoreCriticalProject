@@ -841,6 +841,23 @@ void check_world_normals_lru_and_precedence() {
                     "Normal record identity needed its evicted page");
         }
 
+        // G) Issue 461: chunked normal_hash keeps the FNV-1a result, including
+        // across its 4 MiB checkpoint boundary.
+        {
+            std::vector<unsigned char> buffer((4u << 20) + 3);
+            for (std::size_t i = 0; i < buffer.size(); ++i)
+                buffer[i] = static_cast<unsigned char>(i * 31u + 7u);
+            std::uint64_t expected = 0xcbf29ce484222325ULL;
+            for (const auto byte : buffer) {
+                expected ^= byte;
+                expected *= 0x100000001b3ULL;
+            }
+            require(normal_hash(buffer.data(), buffer.size()) == expected,
+                    "Chunked normal_hash changed the FNV-1a result");
+            require(normal_hash(buffer.data(), 0) == 0xcbf29ce484222325ULL,
+                    "normal_hash of no bytes changed");
+        }
+
         // F) Issue 461: grouped preload reads each page once even when keys
         // alternate between pages under a one-page budget, and every key's
         // pixels are resident when its callback runs.

@@ -37,9 +37,17 @@ inline constexpr std::size_t max_normal_images = 64;
 inline std::uint64_t normal_hash(const void *data, std::size_t size) {
     auto *bytes = static_cast<const unsigned char *>(data);
     std::uint64_t hash = 0xcbf29ce484222325ULL;
-    for (std::size_t i = 0; i < size; ++i) {
-        hash ^= bytes[i];
-        hash *= 0x100000001b3ULL;
+    // A world page image can be tens of MiB, so let the loading display pump
+    // between chunks; outside a load checkpoint() returns at once. The hash
+    // itself is the same byte-by-byte FNV-1a as before.
+    constexpr std::size_t checkpoint_bytes = 4u << 20;
+    for (std::size_t start = 0; start < size; start += checkpoint_bytes) {
+        const std::size_t end = size - start < checkpoint_bytes ? size : start + checkpoint_bytes;
+        for (std::size_t i = start; i < end; ++i) {
+            hash ^= bytes[i];
+            hash *= 0x100000001b3ULL;
+        }
+        platform::loading::checkpoint();
     }
     return hash;
 }
