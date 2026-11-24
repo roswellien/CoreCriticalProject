@@ -572,6 +572,16 @@ TEST(resolution_hud_zoom_window_keeps_size_at_edges) {
     // Every edge collapses as in the exe with the fixes off.
     if (!fixes_on) EXPECT(collapsed_edges == 4);
   }
+  // A window wider than the space inside the border, wholly past its left
+  // edge, is cut to that space instead of overhanging the right border.
+  zfix::options().fixed = true;
+  {
+    mech3::HudZoomWindow zoom(10, 0x172, 0x5a, 0x5a);
+    int32_t x = -6000, y = 100, width = 5000, height = 10;
+    zoom.set_view_rect(&x, &y, &width, &height);
+    EXPECT(zoom.rect.left == 2 && zoom.rect.right == 1145);
+    EXPECT(x == 2 && width == 1143);
+  }
   for (auto it = hooks.nodes.rbegin(); it != hooks.nodes.rend(); ++it)
     EXPECT(zcls::node_delete(*it) == 0);
 }

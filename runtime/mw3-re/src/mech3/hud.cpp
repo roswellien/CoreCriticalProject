@@ -1548,9 +1548,11 @@ void HudZoomWindow::set_rect(int32_t px, int32_t py, int32_t w, int32_t h) {
 static void keep_axis_size(int32_t* start, int32_t* end, int32_t size, int32_t lowest,
                            int32_t highest) {
   const bool axis_left_empty = *end - *start < 1;
-  if (!axis_left_empty) return;
-  *start = std::max(lowest, std::min(*start, highest - size));
-  *end = *start + size;
+  // A window wider than the border's span is cut to the span, so it never overhangs.
+  const int32_t fitted = std::min(size, highest - lowest);
+  if (!axis_left_empty || fitted < 1) return;
+  *start = std::max(lowest, std::min(*start, highest - fitted));
+  *end = *start + fitted;
 }
 
 // Mech3.exe 1.2 @ 0x0043fa40: an edge past the display's inner border moved
