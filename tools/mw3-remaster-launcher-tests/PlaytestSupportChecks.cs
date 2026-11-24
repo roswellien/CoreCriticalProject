@@ -59,6 +59,87 @@ static class PlaytestSupportChecks
                 !quotedUncError.Contains("nas01", StringComparison.OrdinalIgnoreCase) &&
                 !quotedUncError.Contains("Jane Doe", StringComparison.OrdinalIgnoreCase),
                 "Single-quoted UNC path truncated trailing details or leaked host/user: " + quotedUncError);
+
+            var redactionCases = new (string Name, string Input, string[] Roots, string Expected)[]
+            {
+                (
+                    "Multi-line single-quoted local and UNC paths at line starts",
+                    "Launcher log:\n'C:\\Games\\Core Critical\\mw3.exe' was blocked.\r\n'\\\\nas01\\share\\Jane Doe\\mw3.exe' was blocked.",
+                    new[] { @"C:\Games\Core Critical", @"\\nas01\share\Jane Doe" },
+                    "Launcher log:\n'<local-path>' was blocked.\r\n'<network-path>' was blocked."
+                ),
+                (
+                    "Apostrophe followed by space in path and directory with matching privateRoot",
+                    "ERROR: Failed to start 'C:\\Users\\James' Folder\\mw3.exe' with working directory 'C:\\Users\\James' Folder'. Access is denied.",
+                    new[] { @"C:\Users\James' Folder" },
+                    "ERROR: Failed to start '<local-path>' with working directory '<local-path>'. Access is denied."
+                ),
+                (
+                    "Apostrophe followed by space in path without privateRoots",
+                    "ERROR: Failed to start 'D:\\Games\\Players' Choice\\Bob's Mods\\mw3.exe' with working directory 'D:\\Games\\Players' Choice'. Access is denied.",
+                    Array.Empty<string>(),
+                    "ERROR: Failed to start '<local-path>' with working directory '<local-path>'. Access is denied."
+                ),
+                (
+                    "Apostrophe followed by punctuation inside filename",
+                    "ERROR: Failed to open 'C:\\Users\\v1'.txt' because locked.",
+                    Array.Empty<string>(),
+                    "ERROR: Failed to open '<local-path>' because locked."
+                ),
+                (
+                    "Single-quoted UNC path with apostrophe and space",
+                    "'\\\\nas01\\users\\Players' Choice\\mw3.exe' in '\\\\nas01\\users\\Players' Choice' was blocked.",
+                    Array.Empty<string>(),
+                    "'<network-path>' in '<network-path>' was blocked."
+                ),
+                (
+                    "Single-quoted path followed by contractions, slashes in prose, and other single-quoted strings",
+                    "ERROR: 'C:\\Games\\a.exe' can't start; 'C:\\Games\\b.exe' failed/errored because users' policy ('reason') blocked it.",
+                    Array.Empty<string>(),
+                    "ERROR: '<local-path>' can't start; '<local-path>' failed/errored because users' policy ('reason') blocked it."
+                ),
+                (
+                    "Single-quoted path followed by colon and possessive name",
+                    "ERROR: 'C:\\Games\\a.exe' failed: James' policy blocked it.",
+                    Array.Empty<string>(),
+                    "ERROR: '<local-path>' failed: James' policy blocked it."
+                ),
+                (
+                    "Delimiters around single-quoted paths",
+                    "('C:\\a\\1.exe') ['C:\\b\\2.exe','C:\\c\\3.exe'] path='C:\\d\\4.exe',dir='\\\\nas01\\s'; {\"exe\":\"'C:\\e\\5.exe'\"} \"'C:\\f\\6.exe' blocked\" `'C:\\g\\7.exe'`",
+                    Array.Empty<string>(),
+                    "('<local-path>') ['<local-path>','<local-path>'] path='<local-path>',dir='<network-path>'; {\"exe\":\"'<local-path>'\"} \"'<local-path>' blocked\" `'<local-path>'`"
+                ),
+                (
+                    "Unclosed single-quoted paths do not leak",
+                    "ERROR: Could not open 'C:\\Users\\Alice\\secret.txt\nUnclosed 'C:\\Users\\Alice\\secret and \"quoted\" 'C:\\Users\\Bob\\other.exe' failed.",
+                    new[] { @"C:\Users\Alice" },
+                    "ERROR: Could not open '<local-path>\nUnclosed '<local-path>\"quoted\" '<local-path>' failed."
+                ),
+                (
+                    "Double-quoted path containing apostrophe and space",
+                    "\"C:\\Users\\James' Folder\\mw3.exe\" was blocked.",
+                    new[] { @"C:\Users\James' Folder" },
+                    "\"<local-path>\" was blocked."
+                ),
+                (
+                    "Overlapping privateRoots with multi-word apostrophe root and forward slashes",
+                    "Starting 'C:/Users/James' New Folder/Sub/mw3.exe' in 'C:\\Users\\James' New Folder'.",
+                    new[] { @"C:\Users\James", @"C:\Users\James' New Folder" },
+                    "Starting '<local-path>' in '<local-path>'."
+                ),
+                (
+                    "HOST EXCEPTION line combined with single-quoted Process.Start error",
+                    "HOST EXCEPTION c0000005 at C:\\Games\\Core Critical\\mw3.exe +0x45678 (access 0 address 0000000000000018)\nERROR: Process 'C:\\Games\\Core Critical\\mw3.exe' blocked.",
+                    new[] { @"C:\Games\Core Critical" },
+                    "HOST EXCEPTION c0000005 at <local-path>/mw3.exe +0x45678 (access 0 address 0000000000000018)\nERROR: Process '<local-path>' blocked."
+                )
+            };
+            foreach (var (name, input, roots, expected) in redactionCases)
+            {
+                var actual = PlaytestDiagnostics.Redact(input, roots);
+                Check(actual == expected, $"Redaction case '{name}' failed.\nExpected: {expected}\nActual:   {actual}");
+            }
             var crashReport = PlaytestDiagnostics.CreateCrashReport(
                 new LauncherSettings { EngineMode = "d7vk", Width = 3840, D7VkResolution = "1920x1080" },
                 Array.Empty<PackManifest>(), null, app, "1.2.3", 7,

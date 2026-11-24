@@ -553,19 +553,250 @@ public static class PlaytestDiagnostics
             return $"{prefix}{token}{suffix}";
         });
 
+        var orderedRoots = privateRoots
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .OrderByDescending(root => root.Length)
+            .ToArray();
+
         // Replace complete path tokens before substituting known roots, or a
         // replaced root prefix could leave the remainder of a path visible.
         // Scrub single-quoted paths first so trailing text (such as .NET Process.Start errors) is preserved.
-        text = Regex.Replace(text, @"(?<=[ \t(=\[,;:]|^)'[A-Za-z]:[\\/][^\r\n\t""<>|]{0,1024}?'(?=\s|[.,;:!?\)\]]|$)", "'<local-path>'");
-        text = Regex.Replace(text, @"(?<=[ \t(=\[,;:]|^)'\\\\[^\r\n\t""<>|]{1,1024}?'(?=\s|[.,;:!?\)\]]|$)", "'<network-path>'");
+        text = ScrubSingleQuotedPaths(text, orderedRoots);
         text = Regex.Replace(text, @"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n\t\""<>|]*", "<local-path>");
         text = Regex.Replace(text, @"\\\\[^\r\n\t""<>|]+", "<network-path>");
-        foreach (var root in privateRoots.Where(root => !string.IsNullOrWhiteSpace(root)).OrderByDescending(root => root.Length))
+        foreach (var root in orderedRoots)
         {
             text = text.Replace(root, "<local-path>", StringComparison.OrdinalIgnoreCase);
             text = text.Replace(root.Replace('\\', '/'), "<local-path>", StringComparison.OrdinalIgnoreCase);
         }
         return text;
+    }
+
+    private static string ScrubSingleQuotedPaths(string text, string[] orderedRoots)
+    {
+        StringBuilder? rewritten = null;
+        var copyFrom = 0;
+        var index = 0;
+        while (index < text.Length)
+        {
+            if (text[index] != '\'' || !IsQuotedPathOpeningBoundary(text, index))
+            {
+                index++;
+                continue;
+            }
+
+            var pathStart = index + 1;
+            string? replacement = null;
+            var expectedSeparator = '\\';
+            if (IsDrivePathStart(text, pathStart))
+            {
+                replacement = "'<local-path>'";
+                expectedSeparator = text[pathStart + 2] == '/' ? '/' : '\\';
+            }
+            else if (IsUncPathStart(text, pathStart))
+            {
+                replacement = "'<network-path>'";
+            }
+
+            if (replacement == null)
+            {
+                index++;
+                continue;
+            }
+
+            var closeQuote = FindSingleQuotedPathClose(text, pathStart, pathStart + 3, expectedSeparator, orderedRoots);
+            if (closeQuote < 0)
+            {
+                index++;
+                continue;
+            }
+
+            rewritten ??= new StringBuilder(text.Length);
+            rewritten.Append(text, copyFrom, index - copyFrom);
+            rewritten.Append(replacement);
+            copyFrom = closeQuote + 1;
+            index = copyFrom;
+        }
+
+        if (rewritten == null) return text;
+        rewritten.Append(text, copyFrom, text.Length - copyFrom);
+        return rewritten.ToString();
+    }
+
+    private static bool IsDrivePathStart(string text, int start) =>
+        start + 2 < text.Length &&
+        char.IsAsciiLetter(text[start]) &&
+        text[start + 1] == ':' &&
+        text[start + 2] is '\\' or '/';
+
+    private static bool IsUncPathStart(string text, int start) =>
+        start + 2 < text.Length &&
+        text[start] == '\\' &&
+        text[start + 1] == '\\' &&
+        !IsDisallowedPathChar(text[start + 2]) &&
+        text[start + 2] != '\'';
+
+    private static bool IsQuotedPathOpeningBoundary(string text, int quoteIndex) =>
+        quoteIndex == 0 ||
+        IsOpeningQuoteDelimiter(text[quoteIndex - 1]);
+
+    private static bool IsOpeningQuoteDelimiter(char c) =>
+        char.IsWhiteSpace(c) || c is '(' or '[' or '{' or '=' or ',' or ';' or ':' or '"' or '`' or '<';
+
+    private static bool IsQuotedPathClosingBoundary(string text, int quoteIndex) =>
+        quoteIndex + 1 >= text.Length ||
+        IsClosingQuoteDelimiter(text[quoteIndex + 1]);
+
+    private static bool IsClosingQuoteDelimiter(char c) =>
+        char.IsWhiteSpace(c) || c is '.' or ',' or ';' or ':' or '!' or '?' or ')' or ']' or '}' or '"' or '`' or '>';
+
+    private static bool IsDisallowedPathChar(char c) =>
+        c is '\r' or '\n' or '\t' or '"' or '<' or '>' or '|';
+
+    private static int FindSingleQuotedPathClose(
+        string text,
+        int pathStart,
+        int initialScanIndex,
+        char expectedSeparator,
+        string[] orderedRoots)
+    {
+        var index = Math.Max(initialScanIndex, AdvancePastKnownRoot(text, pathStart, orderedRoots));
+        while (index < text.Length)
+        {
+            var c = text[index];
+            if (IsDisallowedPathChar(c)) return -1;
+            if (c != '\'')
+            {
+                index++;
+                continue;
+            }
+
+            if (!IsQuotedPathClosingBoundary(text, index))
+            {
+                index++;
+                continue;
+            }
+
+            var continuedQuote = ContinuePastInternalApostrophe(text, index, expectedSeparator);
+            if (continuedQuote >= 0)
+            {
+                index = continuedQuote;
+                continue;
+            }
+
+            return index;
+        }
+
+        return -1;
+    }
+
+    private static int AdvancePastKnownRoot(string text, int pathStart, string[] orderedRoots)
+    {
+        foreach (var root in orderedRoots)
+        {
+            if (MatchesRootAt(text, pathStart, root))
+                return pathStart + root.Length;
+        }
+        return pathStart;
+    }
+
+    private static bool MatchesRootAt(string text, int pathStart, string root)
+    {
+        if (pathStart + root.Length > text.Length) return false;
+        for (var i = 0; i < root.Length; i++)
+        {
+            var actual = text[pathStart + i];
+            var expected = root[i];
+            if (actual == expected) continue;
+            if ((actual is '\\' or '/') && (expected is '\\' or '/')) continue;
+            if (char.ToUpperInvariant(actual) == char.ToUpperInvariant(expected)) continue;
+            return false;
+        }
+        if (root.EndsWith('\\') || root.EndsWith('/')) return true;
+        var after = pathStart + root.Length;
+        return after < text.Length && text[after] is '\\' or '/' or '\'';
+    }
+
+    // Keep scanning past apostrophes followed by whitespace or punctuation inside a path
+    // (such as "Players' Choice\mw3.exe" or "v1'.txt") without crossing into another quoted token.
+    private static int ContinuePastInternalApostrophe(string text, int quoteIndex, char expectedSeparator)
+    {
+        if (quoteIndex + 1 >= text.Length) return -1;
+
+        var after = text[quoteIndex + 1];
+        if (after is ' ' or '\t' or '.' or ',' or ';' or '!' or '?' or ')' or ']')
+        {
+            var candidate = FindContinuationClosingQuote(
+                text, quoteIndex + 1, expectedSeparator, requirePathSeparator: true, allowWhitespace: true);
+            if (candidate >= 0) return candidate;
+        }
+
+        if (after is '.' or ',' &&
+            quoteIndex + 2 < text.Length &&
+            !char.IsWhiteSpace(text[quoteIndex + 2]) &&
+            text[quoteIndex + 2] is not ('\'' or '=' or ':' or ')' or ']' or '}' or '"' or '`' or '>'))
+        {
+            var candidate = FindContinuationClosingQuote(
+                text, quoteIndex + 2, expectedSeparator, requirePathSeparator: false, allowWhitespace: false);
+            if (candidate >= 0) return candidate;
+        }
+
+        if (after == ' ')
+        {
+            var componentEnd = ScanSingleTrailingWordQuote(text, quoteIndex + 2);
+            if (componentEnd >= 0) return componentEnd;
+        }
+
+        return -1;
+    }
+
+    private static int FindContinuationClosingQuote(
+        string text,
+        int start,
+        char expectedSeparator,
+        bool requirePathSeparator,
+        bool allowWhitespace)
+    {
+        var sawSeparator = false;
+        for (var i = start; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (IsDisallowedPathChar(c) || c == ':') return -1;
+            if (!allowWhitespace && char.IsWhiteSpace(c)) return -1;
+            if (c == expectedSeparator) sawSeparator = true;
+            if (c != '\'') continue;
+
+            if (IsQuotedPathClosingBoundary(text, i))
+                return !requirePathSeparator || sawSeparator ? i : -1;
+
+            // An opening quote after a delimiter starts a separate quoted token, not a continuation.
+            if (IsQuotedPathOpeningBoundary(text, i))
+                return -1;
+        }
+        return -1;
+    }
+
+    private static int ScanSingleTrailingWordQuote(string text, int start)
+    {
+        if (start >= text.Length) return -1;
+        var length = 0;
+        for (var i = start; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (IsDisallowedPathChar(c) || char.IsWhiteSpace(c)) return -1;
+            if (c is ':' or '=' or '(' or '[' or '{' or ',' or ';' or '!' or '?' or '"' or '`') return -1;
+            if (c == '\'')
+            {
+                if (!IsQuotedPathClosingBoundary(text, i))
+                {
+                    length++;
+                    continue;
+                }
+                return length > 0 ? i : -1;
+            }
+            length++;
+        }
+        return -1;
     }
 
     public static void Export(string destination, LauncherSettings settings, IEnumerable<PackManifest> packs,
