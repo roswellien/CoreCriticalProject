@@ -660,11 +660,12 @@ void GameEngine::delete_screens() {
   delete quit_box_;
   quit_box_ = nullptr;
   quit_box_at_ = 0;
-  // The app may be gone: the screens go below, not through the states' destructors.
+  // The app may be gone. PilotState releases its adopted screen through this engine;
+  // other states relinquish their screens here before the remaining screens go below.
   while (!menu_states_.empty()) {
     MenuState* st = menu_states_.begin()->second;
     menu_states_.erase(menu_states_.begin());
-    st->screen_ = 0;
+    if (!dynamic_cast<PilotState*>(st)) st->screen_ = 0;
     if (auto* g = dynamic_cast<GameMenuState*>(st))  // (its destructor deletes its own three: 0x0049ca00)
       for (Handle& s : g->screens) s = 0;
     delete st;
