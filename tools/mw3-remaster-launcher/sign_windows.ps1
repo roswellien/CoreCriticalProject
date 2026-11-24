@@ -10,18 +10,18 @@ foreach ($path in @($SignTool,$Dlib,$Metadata)) {
     if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing signing input: $path" }
 }
 if (Test-Path -LiteralPath $ReceiptPath) { throw 'Use a fresh signing receipt path' }
-$configuration=Get-Content -LiteralPath $Metadata -Raw | ConvertFrom-Json
+$configuration=[IO.File]::ReadAllText($Metadata) | ConvertFrom-Json
 if ($configuration.Endpoint -notmatch '^https://[a-z0-9]+\.codesigning\.azure\.net/?$' -or
     !$configuration.CodeSigningAccountName -or !$configuration.CertificateProfileName) { throw 'Invalid Artifact Signing metadata' }
 $results=@()
 foreach ($name in $File) {
     $path=[IO.Path]::GetFullPath($name)
-    if (!(Test-Path -LiteralPath $path -PathType Leaf) -or (Get-Item -LiteralPath $path).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+    if (!(Test-Path -LiteralPath $path -PathType Leaf) -or (Get-Item -LiteralPath $path -Force).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
         throw "Signing target missing or linked: $path"
     }
     $before=(Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant()
     $signature=Get-AuthenticodeSignature -LiteralPath $path
-    $existing=$signature.Status -eq 'Valid'
+    $existing=$signature.Status -eq 'Valid' -and [bool]$signature.TimeStamperCertificate
     if (!$existing) {
         & $SignTool sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $Dlib /dmdf $Metadata $path
         if ($LASTEXITCODE) { throw "Windows signing failed: $path" }

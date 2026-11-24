@@ -810,9 +810,20 @@ namespace MW3RemasterLauncher
             LauncherSettings Settings,
             PackManifest[] Packs,
             string? LaunchLog,
-            string RuntimeVersion);
+            string RuntimeVersion,
+            int? ExitCode = null);
 
         private CrashReportSessionContext? _lastReportSession;
+
+        /// <summary>
+        /// Keeps the session's exit code for Export Report. Skipped when a newer launch has
+        /// already replaced the session, so its report isn't given an old exit code.
+        /// </summary>
+        private void RecordSessionExit(CrashReportSessionContext context, int exitCode)
+        {
+            if (ReferenceEquals(_lastReportSession, context))
+                _lastReportSession = context with { ExitCode = exitCode };
+        }
 
         private static string ResolveD7VkRuntimeVersion(LauncherSettings settings)
         {
@@ -955,6 +966,7 @@ namespace MW3RemasterLauncher
                 var exit = sessionCompletion != null
                     ? await sessionCompletion
                     : await GameRunner.WaitForCompletionAsync(process);
+                RecordSessionExit(context, exit);
                 ResetNativeLaunchControls();
                 TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "\u26A0 MW3-RE ENDED WITH AN ERROR";
                 if (exit != 0)
@@ -984,6 +996,7 @@ namespace MW3RemasterLauncher
             try
             {
                 var exit = await GameRunner.WaitForCompletionAsync(process);
+                RecordSessionExit(context, exit);
                 BtnLaunchGame.IsEnabled = true;
                 BtnLaunchGame.Content = "▶  LAUNCH ORIGINAL (D7VK)";
                 TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "⚠ ORIGINAL GAME OR WRAPPER FAILED";
@@ -1005,7 +1018,7 @@ namespace MW3RemasterLauncher
             var packsSnapshot = context.Packs;
             var launchLog = context.LaunchLog;
             var runtimeVersion = context.RuntimeVersion;
-            var summary = PlaytestDiagnostics.FailureSummary(launchLog);
+            var summary = PlaytestDiagnostics.FailureSummary(launchLog, exitCode);
             var engineTitle = settingsSnapshot.EngineMode == "d7vk" ? "Original Game (D7VK)" : "MW3-RE";
             var exitStatus = PlaytestDiagnostics.FormatExitCode(exitCode);
             var statusLabel = $"{engineTitle} stopped (exit {exitStatus})";
@@ -1111,7 +1124,8 @@ namespace MW3RemasterLauncher
             {
                 var hardwareInventory = await System.Threading.Tasks.Task.Run(HardwareInventory.Capture);
                 PlaytestDiagnostics.Export(dialog.FileName, settingsSnapshot, packsSnapshot,
-                    launchLog, _basePath, hardwareInventory, runtimeVersion);
+                    launchLog, _basePath, hardwareInventory, runtimeVersion,
+                    exitCode: matchingSession?.ExitCode);
                 MessageBox.Show("Report saved. It contains build/system details, selected settings, pack metadata and redacted recent log tails. Review it before sharing.",
                     "Playtest report saved", MessageBoxButton.OK, MessageBoxImage.Information);
             }

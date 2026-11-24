@@ -1132,3 +1132,213 @@ test("renders structured semantic admin detail sections for rich and sparse repo
     assert.ok(!html.includes("<img src=x"));
     assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt;"));
 });
+
+test("preserves trailing error text after single-quoted Process.Start paths and groups duplicates", async () => {
+    const calls = githubResponder();
+    const sentBodies = recordSentBodies();
+    const firstSummary =
+        "ERROR: An error occurred trying to start process 'C:\\Games\\Core Critical\\Launcher\\NativePreview\\bin\\mw3.exe' with working directory 'C:\\Games\\Core Critical\\Launcher\\NativePreview\\bin'. An Application Control policy has blocked this file.";
+    const firstResponse = await onRequestPost({
+        request: crashRequest({
+            report_id: "smartapp0001",
+            failure_summary: firstSummary,
+            logs: {
+                launcher: `${firstSummary}\n'\\\\nas01\\users\\Jane Doe\\mw3.exe' was blocked by policy.`,
+                native_crash:
+                    "HOST EXCEPTION c0000005 at C:\\Games\\Core Critical\\mw3.exe +0x45678 (access 0 address 0000000000000018)\nERROR: Process 'C:\\Games\\Core Critical\\mw3.exe' blocked.",
+            },
+        }),
+        env: environment,
+    });
+    assert.equal(firstResponse.status, 200);
+    assert.equal(archivedReports.length, 1);
+    const archived = JSON.parse(archivedReports[0][7]);
+    const expectedSummary =
+        "ERROR: An error occurred trying to start process '<local-path>' with working directory '<local-path>'. An Application Control policy has blocked this file.";
+    assert.equal(archived.failure_summary, expectedSummary);
+    assert.equal(
+        archived.logs.launcher,
+        `${expectedSummary}\n'<network-path>' was blocked by policy.`,
+    );
+    assert.equal(
+        archived.logs.native_crash,
+        "HOST EXCEPTION c0000005 at <local-path>/mw3.exe +0x45678 (access 0 address 0000000000000018)\nERROR: Process '<local-path>' blocked.",
+    );
+    assert.ok(!JSON.stringify(archived).includes("Core Critical"));
+    assert.ok(!JSON.stringify(archived).includes("Jane Doe"));
+    assert.ok(sentBodies[0].includes(expectedSummary));
+
+    const firstFingerprint = archivedReports[0][6];
+    assert.ok(firstFingerprint);
+    const duplicateCalls = githubResponder({
+        matches: [
+            {
+                id: "I_existing",
+                state: "OPEN",
+                body: `<!-- crash-fingerprint:${firstFingerprint} -->`,
+                comments: { totalCount: 0 },
+            },
+        ],
+    });
+    const secondResponse = await onRequestPost({
+        request: crashRequest({
+            report_id: "smartapp0002",
+            failure_summary:
+                "ERROR: An error occurred trying to start process 'D:\\Other Games\\MW3\\NativePreview\\bin\\mw3.exe' with working directory 'D:\\Other Games\\MW3\\NativePreview\\bin'. An Application Control policy has blocked this file.",
+            logs: { launcher: "retry" },
+        }),
+        env: environment,
+    });
+    assert.equal(secondResponse.status, 200);
+    assert.deepEqual(await secondResponse.json(), {
+        report_id: "smartapp",
+        duplicate: true,
+        overflow: false,
+    });
+    assert.equal(archivedReports[1][6], firstFingerprint);
+    assert.ok(calls.some((query) => query.includes("createIssue")));
+    assert.ok(duplicateCalls.some((query) => query.includes("addComment")));
+    assert.ok(!duplicateCalls.some((query) => query.includes("createIssue")));
+});
+
+test("preserves internal apostrophes, mixed separators, delimiters, and prose boundaries in single-quoted paths", async () => {
+    const cases = [
+        [
+            "Apostrophe followed by letter or space",
+            "ERROR: Failed to start 'C:\\Users\\O'Connor\\Players' Choice\\Bob's Mods\\mw3.exe' in 'D:\\Games\\Players' Choice'. Access is denied.",
+            "ERROR: Failed to start '<local-path>' in '<local-path>'. Access is denied.",
+        ],
+        [
+            "Apostrophe followed by punctuation inside filename",
+            "ERROR: Failed to open 'C:\\Users\\v1'.txt' because locked.",
+            "ERROR: Failed to open '<local-path>' because locked.",
+        ],
+        [
+            "Single-quoted UNC with apostrophe and space",
+            "'\\\\nas01\\users\\Players' Choice\\mw3.exe' in '\\\\nas01\\users\\Players' Choice' was blocked.",
+            "'<network-path>' in '<network-path>' was blocked.",
+        ],
+        [
+            "Mixed-separator single-quoted paths with apostrophe and space",
+            "Failed 'D:\\Users\\Players' Choice/mw3.exe' in 'D:\\Users\\Players' Choice/NativePreview/bin' and 'D:/Users/Players' Choice\\bin'.",
+            "Failed '<local-path>' in '<local-path>' and '<local-path>'.",
+        ],
+        [
+            "Contractions, prose slashes, and other single-quoted strings",
+            "ERROR: 'C:\\Games\\a.exe' can't start; 'C:\\Games\\b.exe' failed/errored because users' policy ('reason') blocked it.",
+            "ERROR: '<local-path>' can't start; '<local-path>' failed/errored because users' policy ('reason') blocked it.",
+        ],
+        [
+            "Prose slashes before possessive plurals",
+            "ERROR: 'C:\\Games\\b.exe' read/users' policy and 'C:\\Games\\c.exe' read/write/execute because users' policy blocked it.",
+            "ERROR: '<local-path>' read/users' policy and '<local-path>' read/write/execute because users' policy blocked it.",
+        ],
+        [
+            "Colon and possessive name after quoted path",
+            "ERROR: 'C:\\Games\\a.exe' failed: James' policy blocked it.",
+            "ERROR: '<local-path>' failed: James' policy blocked it.",
+        ],
+        [
+            "Common wrapping delimiters",
+            "('C:\\a\\1.exe') ['C:\\b\\2.exe','C:\\c\\3.exe'] path='C:\\d\\4.exe',dir='\\\\nas01\\s'; {\"exe\":\"'C:\\e\\5.exe'\"} \"'C:\\f\\6.exe' blocked\" `'C:\\g\\7.exe'`",
+            "('<local-path>') ['<local-path>','<local-path>'] path='<local-path>',dir='<network-path>'; {\"exe\":\"'<local-path>'\"} \"'<local-path>' blocked\" `'<local-path>'`",
+        ],
+        [
+            "Multi-line single-quoted paths",
+            "Launcher log:\n'C:\\Games\\Core Critical\\mw3.exe' was blocked.\r\n'\\\\nas01\\share\\Jane Doe\\mw3.exe' was blocked.",
+            "Launcher log:\n'<local-path>' was blocked.\r\n'<network-path>' was blocked.",
+        ],
+        [
+            "Unclosed single-quoted paths do not leak",
+            "ERROR: Could not open 'C:\\Users\\Alice\\secret.txt\nUnclosed 'C:\\Users\\Alice\\secret and \"quoted\" 'C:\\Users\\Bob\\other.exe' failed.",
+            "ERROR: Could not open '<local-path>\nUnclosed '<local-path>\"quoted\" '<local-path>' failed.",
+        ],
+        [
+            "Double-quoted path containing apostrophe and space",
+            '"C:\\Users\\James\' Folder\\mw3.exe" was blocked.',
+            '"<local-path>" was blocked.',
+        ],
+        [
+            "Extended Win32 single-quoted path containing drive colon",
+            "ERROR: Failed to open '\\\\?\\C:\\Users\\Alice\\mw3.exe' because access is denied.",
+            "ERROR: Failed to open '<network-path>' because access is denied.",
+        ],
+        [
+            "Unclosed single-quoted path before colon and closed path",
+            "ERROR: Unclosed 'C:\\Users\\Alice\\secret failed: 'D:\\Users\\Bob\\mw3.exe' done.",
+            "ERROR: Unclosed '<local-path>' done.",
+        ],
+        [
+            "Apostrophe continuation spanning past 4096-char limit of an earlier unclosed quote",
+            `ERROR: '\\\\nas01\\share ${"a".repeat(4070)} '\\\\nas02\\O' Connor\\mw3.exe' done.`,
+            "ERROR: '<network-path>' done.",
+        ],
+    ];
+
+    githubResponder();
+    for (let index = 0; index < cases.length; index++) {
+        const [name, input, expected] = cases[index];
+        const response = await onRequestPost({
+            request: crashRequest({
+                report_id: `redact-case-${index}`,
+                logs: { launcher: input },
+            }),
+            env: environment,
+        });
+        assert.equal(response.status, 200, name);
+        const archived = JSON.parse(archivedReports[index][7]);
+        assert.equal(archived.logs.launcher, expected, name);
+    }
+});
+
+test("bounds scanning time on adversarial repeated unclosed single-quoted paths while redacting later paths", async () => {
+    githubResponder();
+    const driveNoise = " 'C:\\Users\\Alice ".repeat(1500);
+    const uncNoise = " '\\\\nas01\\secret\\share ".repeat(1200);
+    const longSingleLine = `${driveNoise}\n${uncNoise}\n'C:\\Games\\mw3.exe' failed: James' policy 'D:\\Users\\O'Connor\\log.txt' done.`;
+    assert.ok(longSingleLine.length < 64 * 1024);
+
+    const started = performance.now();
+    const response = await onRequestPost({
+        request: crashRequest({
+            report_id: "adversarial-bounded-1",
+            logs: { launcher: longSingleLine },
+        }),
+        env: environment,
+    });
+    const elapsedMs = performance.now() - started;
+
+    assert.equal(response.status, 200);
+    assert.ok(elapsedMs < 1000, `Expected bounded redaction under 1000ms, got ${elapsedMs}ms`);
+    const archived = JSON.parse(archivedReports[0][7]);
+    assert.ok(!archived.logs.launcher.includes("Alice"));
+    assert.ok(!archived.logs.launcher.includes("nas01"));
+    assert.ok(!archived.logs.launcher.includes("O'Connor"));
+    assert.ok(
+        archived.logs.launcher.endsWith(
+            "'<local-path>' failed: James' policy '<local-path>' done.",
+        ),
+    );
+
+    const colonUncChunk = `${" '\\\\".repeat(1020)}:`;
+    const colonUncLog = `${colonUncChunk.repeat(16)}\n'\\\\nas01\\secret\\mw3.exe' failed.`;
+    assert.ok(colonUncLog.length <= 64 * 1024);
+    const colonStarted = performance.now();
+    const colonResponse = await onRequestPost({
+        request: crashRequest({
+            report_id: "adversarial-bounded-2",
+            logs: { launcher: colonUncLog, native_crash: colonUncLog },
+        }),
+        env: environment,
+    });
+    const colonElapsedMs = performance.now() - colonStarted;
+
+    assert.equal(colonResponse.status, 200);
+    assert.ok(
+        colonElapsedMs < 150,
+        `Expected colon-terminated UNC redaction under 150ms, got ${colonElapsedMs}ms`,
+    );
+    const colonArchived = JSON.parse(archivedReports[1][7]);
+    assert.ok(!colonArchived.logs.launcher.includes("nas01"));
+    assert.ok(colonArchived.logs.launcher.endsWith("'<network-path>' failed."));
+});
