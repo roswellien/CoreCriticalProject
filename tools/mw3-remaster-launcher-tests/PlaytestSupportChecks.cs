@@ -240,6 +240,8 @@ static class PlaytestSupportChecks
             File.WriteAllText(Path.Combine(session, "profile.json"), "DO_NOT_EXPORT_PRIVATE_PROFILE");
             Check(PlaytestDiagnostics.ReadTail(runner.LastLogPath!).Length <= PlaytestDiagnostics.MaxLogBytes, "Log tail is unbounded");
             Check(PlaytestDiagnostics.FailureSummary(runner.LastLogPath).Contains("authored fixture failure"), "Native error not preferred");
+            Check(PlaytestDiagnostics.FailureSummary(runner.LastLogPath, PlaytestDiagnostics.ApplicationHangExitCode)
+                .Contains("authored fixture failure"), "Hang text replaced a native error line");
             var report = Path.Combine(root, "report.zip");
             PlaytestDiagnostics.Export(report, settings.Current,
                 new[] { new PackManifest { Id = "test.mech", Version = "1.2.3", DirectoryPath = root } }, runner.LastLogPath, app);
