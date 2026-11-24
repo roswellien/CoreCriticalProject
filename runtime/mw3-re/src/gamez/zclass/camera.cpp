@@ -1500,6 +1500,9 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw) {
 // write a zero focal length into the shared projection before any scene opens.
 // The check runs before the draw changes any state, so nothing needs undoing.
 static bool skip_camera_with_empty_window(Node* camera_node) {
+  // Not a usable camera: leave it to the draw's own handling, as before this check.
+  const bool has_camera_data = camera_node && camera_node->data;
+  if (!has_camera_data) return false;
   int32_t width = 0, height = 0;
   if (window_has_area(cam_of(camera_node)->nodes[1], &width, &height)) return false;
   log_skipped_empty_window(width, height);
