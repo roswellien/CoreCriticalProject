@@ -146,14 +146,14 @@ struct HitRecord {
 };
 
 // What a query found: the exe's 0x504-byte buffer, a count byte then
-// 0x28-byte records (31 fit). The segment query 0x004eed90 and the sphere
+// 0x28-byte records (32 fit: the queries stop adding once 32 are in). The segment query 0x004eed90 and the sphere
 // query 0x004f0ac0 write the count in byte 0; the nearest-hit query 0x004eece0
 // moves it to byte 1 and puts the nearest record's index in byte 0, which is
 // what the hit pick 0x00583130 reads.
 struct HitList {
   uint8_t count = 0;           // +0  the count, or the nearest record's index
   uint8_t total = 0;           // +1  the count, after 0x004eece0
-  HitRecord rec[31];           // +4
+  HitRecord rec[32];           // +4
 };
 
 // A shot in flight, 0x5d8 bytes (docs/weapons.md, "Projectile"): the pool is
@@ -191,7 +191,7 @@ struct Projectile {
   float age = 0;               // +0x5b4
   float health = -1;           // +0x5b8  FLYOUT_HEALTH, -1 none
   float damage_scale = 1;      // +0x5bc  FireState::damage_scale at the shot
-  float track_scale[2] = {1, 1};  // +0x5c0  FireState::track_scale ([0] read by the homing behind bugs; [1] by nothing)
+  float track_scale[2] = {1, 1};  // +0x5c0  FireState::track_scale ([0] read by the homing behind artemis; [1] by nothing)
   int32_t terrain_follow = 0;  // +0x5c8  FireState::terrain_follow (FCS)
   int32_t net_id = 0;          // +0x5cc  spawn's fifth argument
   void (*tick)(Projectile* p) = nullptr;  // +0x5d0  run each frame (the radar's), ECX the shot

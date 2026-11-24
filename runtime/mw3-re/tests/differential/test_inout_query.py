@@ -11,7 +11,8 @@ Segments are drawn around each area's polygons: both ends anywhere in their
 box and past it, one end near a corner, short hops along a side, ends inside
 a polygon, ends on a corner. Each answer (which point: `to`, the near or far
 point, or a corner), its value, the area's whole state after it (pointers as
-ids), the flags and the normal must match bit for bit at 24-bit precision.
+ids), the flags and the normal must match bit for bit at the reference's 53 bits
+(docs/ai.md 17.4b).
 
     cmake --build build && .venv/bin/python tests/differential/test_inout_query.py [queries] [worlds...]
 """
@@ -39,7 +40,7 @@ class Query(Inout):
     def __init__(self, name):
         super().__init__(name)
         cpu = self.cpu
-        cpu.fpu_control(0x007f)
+        cpu.fpu_control(0x027f)  # the reference's 53 bits
         self.pts = self.alloc(0x40)
         # The vehicle 0x4c3000 is given: vt+0x2c an entity whose vt+0x40 is
         # the vehicle with its record (+0xd8); its place (0x5a85e0) the from point.

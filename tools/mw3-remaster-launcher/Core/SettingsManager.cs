@@ -15,8 +15,9 @@ namespace MW3RemasterLauncher.Core
         public bool Fullscreen { get; set; } = true;
         public string AntiAliasing { get; set; } = "fxaa"; // "off", "fxaa", "2", "4", "8"
         public int AnisotropicFiltering { get; set; } = 16; // 1, 2, 4, 8, 16
-        public int DrawDistance { get; set; } = 1600; // 800, 1200, 1600, 2400, 3200
-        public int FogDistance { get; set; } = 1100; // 0, 1100
+        public int DrawDistance { get; set; } = 800; // 800, 1200, 1600, 2400, 3200
+        public string FlareStyle { get; set; } = "modern"; // "modern" or "original"
+        public int FogDistance { get; set; } = 1100; // Retained for settings-file compatibility.
         public bool LocalCdAudio { get; set; } = true;
         public string MusicTrack2 { get; set; } = string.Empty;
         public string MusicTrack3 { get; set; } = string.Empty;
@@ -28,6 +29,13 @@ namespace MW3RemasterLauncher.Core
         public bool Headlights { get; set; } = false;
         public bool DynamicLighting { get; set; } = false;
         public bool Shadows { get; set; } = false;
+        // Enabled by default; MW3-RE only turns either feature on when an active
+        // environment pack provides its validated role catalog.
+        public bool WaterDetail { get; set; } = true;
+        public bool CloudDetail { get; set; } = true;
+        // Remembers full environment pack hashes under the profile's cache folder so the next
+        // launch skips re-hashing unchanged packs. Off (or MW3_DISK_CACHE=0) hashes every start.
+        public bool LoadCache { get; set; } = true;
         public string DirectInputJoystickInstanceGuid { get; set; } = string.Empty;
         public string DirectInputJoystickProductName { get; set; } = string.Empty;
         public bool DirectInputJoystickNone { get; set; }

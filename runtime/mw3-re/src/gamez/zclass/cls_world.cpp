@@ -13,6 +13,7 @@
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zclass/list.h"
 #include "gamez/zmodel/gmod_fog.h"
+#include "gamez/zmodel/gmod_light.h"
 #include "gamez/zrender/zrndr_fog.h"
 
 namespace zcls {
@@ -471,6 +472,7 @@ int world_delete(Node* world) {
   // nothing dangles) until its slot is freed.
   World* w = world_of(world);
   if (world->child_count() == 0 && world->parent_count() == 0 && !node_model_header(world)) {
+    zmod::retire_world_lights(w);
     delete[] w->lights, delete[] w->light_data, delete[] w->sounds, delete[] w->sound_data;
     delete[] w->area_pending;
     w->lights = nullptr, w->light_data = nullptr, w->sounds = nullptr, w->sound_data = nullptr;

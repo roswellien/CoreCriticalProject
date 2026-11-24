@@ -2,12 +2,15 @@ namespace MW3RemasterLauncher.Core;
 
 /// <summary>A validated graphics selection shared by setup and normal launch.</summary>
 public sealed record GraphicsPreferences(int Width, int Height, string WindowMode,
-    string AntiAliasing, int AnisotropicFiltering, int DrawDistance, int FogDistance,
-    bool DynamicLighting, bool Shadows, bool Headlights = false)
+    string AntiAliasing, int AnisotropicFiltering, int DrawDistance,
+    bool DynamicLighting, bool Shadows, bool Headlights = false,
+    bool WaterDetail = true, bool CloudDetail = true, string FlareStyle = "modern",
+    bool LoadCache = true)
 {
     public static GraphicsPreferences From(LauncherSettings s) => new(s.Width, s.Height,
-        s.WindowMode, s.AntiAliasing, s.AnisotropicFiltering, s.DrawDistance, s.FogDistance,
-        s.DynamicLighting, s.Shadows, s.Headlights);
+        s.WindowMode, s.AntiAliasing, s.AnisotropicFiltering, s.DrawDistance,
+        s.DynamicLighting, s.Shadows, s.Headlights, s.WaterDetail, s.CloudDetail, s.FlareStyle,
+        s.LoadCache);
 
     public void Validate()
     {
@@ -19,8 +22,10 @@ public sealed record GraphicsPreferences(int Width, int Height, string WindowMod
             throw new InvalidOperationException("Choose a supported AA setting.");
         if (AnisotropicFiltering is not (1 or 2 or 4 or 8 or 16))
             throw new InvalidOperationException("Choose a supported AF setting.");
-        if (DrawDistance is not (800 or 1200 or 1600 or 2400 or 3200) || FogDistance is not (0 or 1100))
-            throw new InvalidOperationException("Choose supported scenery and fog settings.");
+        if (DrawDistance is not (800 or 1200 or 1600 or 2400 or 3200))
+            throw new InvalidOperationException("Choose a supported scenery setting.");
+        if (FlareStyle is not ("modern" or "original"))
+            throw new InvalidOperationException("Choose a supported lens flare style.");
     }
 
     public void ApplyTo(LauncherSettings s)
@@ -29,7 +34,10 @@ public sealed record GraphicsPreferences(int Width, int Height, string WindowMod
         s.Width=Width; s.Height=Height; s.WindowMode=WindowMode;
         s.Fullscreen=WindowMode!="windowed";
         s.AntiAliasing=AntiAliasing; s.AnisotropicFiltering=AnisotropicFiltering;
-        s.DrawDistance=DrawDistance; s.FogDistance=FogDistance;
+        s.DrawDistance=DrawDistance;
         s.DynamicLighting=DynamicLighting; s.Shadows=Shadows; s.Headlights=Headlights;
+        s.WaterDetail=WaterDetail; s.CloudDetail=CloudDetail;
+        s.FlareStyle=FlareStyle;
+        s.LoadCache=LoadCache;
     }
 }

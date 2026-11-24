@@ -911,6 +911,20 @@ void HudRadar::set_dir(const float* d) {
   lines[1].set(get_x(), get_y(), x1, y1);
 }
 
+// Mech3.exe 1.2 @ 0x0043f2d0: the facing kept (null: the last); with the mission map shown, the red
+// line from the radar's centre a radius along it, the map's way up as set_dir's (0x005c007c).
+void HudRadar::set_heading(const float* d) {
+  if (d) heading[0] = d[0], heading[1] = d[1], heading[2] = d[2];
+  if (!active) return;
+  HudHooks& k = *g_hooks;
+  float v[3] = {heading[0], heading[1], heading[2]};
+  if (k.entry_flip(k.mission_entry()) > 0.0f) v[0] = -v[0], v[1] = -v[1], v[2] = -v[2];
+  const float rr = static_cast<float>(radius);
+  const int32_t y1 = get_y() + crt::msvc_ftol(rr * v[2]);
+  const int32_t x1 = get_x() + crt::msvc_ftol(rr * v[0]);
+  lines[2].set(get_x(), get_y(), x1, y1);
+}
+
 // Mech3.exe 1.2 @ 0x004b5440
 HudViewWindow::HudViewWindow(const char* name) {
   HudHooks& k = *g_hooks;
@@ -1210,6 +1224,7 @@ void HudTarget::set_target(void* t) {
 // (0.3 s) and the reticle reset.
 void HudTarget::set_shown(bool on) {
   shown = on && g_hooks->target_valid(target);
+  since_set = 0.0f;  // ours (the shots' log)
   if (shown) {
     x240c = 0.3f;  // 0x3e99999a
     static_cast<Hud*>(hud)->reticle.reset();
@@ -1263,7 +1278,7 @@ void HudTarget::data_text() {
   }
   if (dist > 1000.0f) {  // [0x005c00ec]
     // FIX (bug): " (1.23km)" as " (500m)" below; the exe runs "1.23km" straight on (fixes.md).
-    std::snprintf(buf, sizeof buf, zfix::options().bugs ? " (%.2fkm)" : "%.2fkm",  // [0x005e401c]
+    std::snprintf(buf, sizeof buf, zfix::options().fixed ? " (%.2fkm)" : "%.2fkm",  // [0x005e401c]
                   static_cast<double>(dist * 0.001f));  // [0x005c0120]
   } else {
     std::snprintf(buf, sizeof buf, " (%dm)", crt::msvc_ftol(std::ceil(static_cast<double>(dist))));  // [0x005e4014]
@@ -1609,8 +1624,10 @@ void HudReticle::aim() {
   // FIX (bug): the pick ended at the far clip (800 m), short of an ER large
   // laser's 1000 m: in range, the reticle stayed green (W33; fixes.md).
   float e[3] = {b[0], b[1], b[2]};
-  if (zfix::options().bugs) {
+  float reach = far_z;  // what a miss reads in the zoom window
+  if (zfix::options().small_fixes) {  // play: when a lock is had (the Small fixes list)
     const float range = k.group_range(k.mech_weapons(m));
+    if (range > reach) reach = range;  // as Pirate's Moon's 0x00445cf0 (weapon-ranges.md)
     const float d[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
     const float len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
     if (len > 0.0f && range > len)
@@ -1645,6 +1662,11 @@ void HudReticle::aim() {
     p = &h.point.x;
     const float d[3] = {a[0] - p[0], a[1] - p[1], a[2] - p[2]};
     set_hit(&h, std::sqrt((d[0] * d[0] + d[1] * d[1]) + d[2] * d[2]));
+  } else if (zfix::options().small_fixes) {
+    // FIX (bug), W33: at the sky the zoom window read 800 m whatever the
+    // group's range; the extended end and the farther of the two, as PM.
+    p = e;
+    set_miss(e, reach);
   } else {
     p = b;
     set_miss(b, far_z);
@@ -1818,6 +1840,26 @@ void Hud::add_static(float step, int32_t kind, float hold, float most) {
     s.level = step + s.level;
     if (most < s.level) s.level = most;
   }
+  if (s.hold < hold) s.hold = hold;
+  if (kind == 0) radar.set_fade(s.level);
+}
+
+// Mech3.exe 1.2 @ 0x0043be70: a hit by a weapon with ZAPS_HUD (the ER PPC: 0.5, 2.0). Kinds as
+// add_static's; the level grows by `level` with no top (the draw stops at 0.9), the hold to `hold`;
+// kind 0 sets the radar's fade from the new level.
+void Hud::zap_static(float level, int32_t kind, float hold) {
+  static constexpr int kChannel[4] = {3, 1, 0, 2};
+  if (kind == 4) {
+    for (int32_t k = 0; k < 4; ++k) zap_static(level, k, hold);
+    return;
+  }
+  if (kind == 5) {
+    zap_static(level, crt::msvc_rand() & 3, hold);
+    return;
+  }
+  if (kind < 0 || kind > 3) return;
+  Static& s = statics[kChannel[kind]];
+  s.level = level + s.level;
   if (s.hold < hold) s.hold = hold;
   if (kind == 0) radar.set_fade(s.level);
 }
@@ -2338,7 +2380,7 @@ Hud::~Hud() { --g_huds; }
 // Mech3.exe 1.2 @ 0x0043b190. The pieces are made in the members' order.
 Hud::Hud(Mech* m) {
   ++g_huds;
-  if (zfix::options().bugs) block = nullptr;
+  if (zfix::options().fixed) block = nullptr;
   load_damage_set();
   mech = nullptr;
   setup(m);
@@ -2631,7 +2673,7 @@ void HudRadar::update_contacts(float dt, float static_px) {
     // FIX (bug): a targets.zrd building's node sits at the world's origin, its
     // mesh in world co-ordinates, so the exe's place (0x005a85e0) put its
     // blip towards the origin; the record's centroid instead (fixes.md, W32).
-    if (zfix::options().bugs) h.object_radar_place(o, p);
+    if (zfix::options().fixed) h.object_radar_place(o, p);
     radar_jitter(p, static_px);
     float v[3] = {};
     if (!active) {
@@ -2902,6 +2944,7 @@ void HudReticle::update(float dt) {
   if (zoom.flags & ztwod::kHidden) Image::update(dt);
   lock_timer -= dt;
   if (lock_timer < 0.0f) lock_timer = 0.0f;  // [0x005c007c]
+  locked_for = lock == 3 ? locked_for + dt : 0.0f;  // ours (the shots' log)
 }
 
 void HudHooks::reticle_aim_state(void* r, bool over) { static_cast<HudReticle*>(r)->aim_state(over); }
@@ -3155,6 +3198,7 @@ void HudTarget::triangle(int32_t team, float dt, bool zoomed) {
 // jitters and turns yellow) and the triangle; off it, an arrow at the edge
 // in the team's colour. Then the MFD modes' tails for the target.
 void HudTarget::track(float dt) {
+  since_set += dt;  // ours (the shots' log)
   if (flags & ztwod::kHidden) return;
   HudHooks& h = *g_hooks;
   if (!h.target_valid(target)) return;
@@ -3371,7 +3415,9 @@ void Hud::data_update(float dt) {
       v[1] = 0.0f;
       h.normalize(v);
       radar.set_dir(v);
-      h.radar_heading(&radar, mech);
+      float fwd[3];
+      h.mech_forward(mech, fwd);  // the mech's +0x24
+      radar.set_heading(fwd);
     } else {
       h.mech_radar_dir(mech, v);
       radar.set_dir(v);
@@ -3398,7 +3444,7 @@ void Hud::data_update(float dt) {
   const float mins = std::floor(minutes - hours * 60.0f);  // [0x005c009c]
   // FIX (bug): the original's seconds are t less the minutes alone, so past
   // an hour they run on into the thousands ("01:01:3640"); the hours too here.
-  const float secs = zfix::options().bugs ? std::floor(t - mins * 60.0f - hours * 3600.0f) : std::floor(t - mins * 60.0f);
+  const float secs = zfix::options().fixed ? std::floor(t - mins * 60.0f - hours * 3600.0f) : std::floor(t - mins * 60.0f);
   if (negative) hours = -hours;
   timer.set_text("%02d:%02d:%02d", crt::msvc_ftol(hours), crt::msvc_ftol(mins), crt::msvc_ftol(secs));  // [0x005e3d88]
   objectives.data_update(dt);

@@ -56,6 +56,16 @@ one and is down; then, when `callbacks` is set and no text callback is,
 every listed key that is down runs its callback. Any result but 0 or
 DIERR_INPUTLOST (re-acquired) drops the read, DI_BUFFEROVERFLOW too.
 
+The original marks a key's state even while a text callback takes its
+character; commands are kept off only by the line's own command map (zTwoD's
+console pushes a copy with +0x3f58 0) and by the callbacks' check. A key let
+go after the Enter that closes the line (typing rolls over: L down, Enter
+down, L up) so reads as released once the map is back, and a key polled for
+its release runs: L is the hold-to-look key (Mech::update, 0x17, view 2 <->
+3), so "operation cwal" left the reticle in the free look. FIX (bug), behind
+the bug-fix switch: a key whose press goes to a text field is the field's,
+its release too (State::typed); `mission_c1m2_cheat_box_keys_stay_in_the_box_headless`.
+
 `read_key(wait)` 0x0051aa00 takes events one at a time and returns the last
 plain or modified key that went down. Quirk: the count it asks for is the
 last read's, so after an empty read it asks for none; with `wait` (unused,
@@ -450,6 +460,156 @@ exact descriptor, the slots, the cfg words), `sdl_input_t16000m_twist_reaches_rz
 name), `sdl_input_stick_taken_out_reads_centred`. Breaks: the packed map,
 no table entry, the unplugged stick not read, its turn held, always the
 first device, one usage an input item: each caught.
+
+## 10. The mouse's speed (Owen, 2026-11-09)
+
+Owen: ours far too fast, MW3 and PM, Mac and PC (3840x2160); the original
+at about the desktop's speed. The original's mouse is DirectInput's counts
+times MouseAccel (section 2) on a 640x480 screen. On the reference runtime,
+DDrawCompat 0.6 and later scale a fullscreen game's mouse to the desktop's
+speed by default (`MouseSensitivity=desktop(100)`, its wiki's
+Configuration page; `native` is the old raw counts), so a stroke that
+crosses the desktop crosses the game's screen. Ours took SDL's raw count
+(relative mode, no system speed) as a whole 640-wide pixel, about six
+screen pixels at 3840 across, in the fullscreen menus and in missions.
+
+FIX (A), platform only (`SdlInput::motion_scale`): a mickey is the system
+pointer's motion (SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE: its speed and
+acceleration) times the frame's width over its width on the screen
+(`sdlfe::mickey_scale`, the window's size read at each motion, so a
+fullscreen switch or a resize takes at once). Held or free alike; the menus
+in a window still put the cursor under the system's (section 8). zInput is
+untouched: MouseAccel and MOUSE SENSITIVITY apply on top, as the
+original's 1.3 did over DDrawCompat's counts. A 640x480 window is one to
+one, as before. Not measured against the original on Owen's PC (his hand
+on the mouse); the rule is DDrawCompat's.
+
+## 11. The focus is checked (playtest W4, 2026-11-11)
+
+Owen's report: on Windows, mostly Pirate's Moon, fullscreen and started from
+the launcher, the game sometimes came up with its cursor in the middle of the
+screen and not moving. Keys worked; the quit box or Alt+Tab usually cured it.
+
+**What the code says (read, not run: we have no Windows to run it on).**
+A held mouse is SDL's relative mode. In SDL 3.4.12's Windows code that is raw
+input on a thread of its own (`SDL_windowsrawinput.c`), and each raw motion
+is given to the window SDL holds as its keyboard focus and dropped when there
+is none (`SDL_windowsevents.c`, `WIN_HandleRawMouseInput`). SDL takes a
+window as its keyboard focus in `WIN_UpdateFocus`, which runs on the
+activation messages and does nothing unless the window is the system's
+foreground window at that moment (`GetForegroundWindow() == hwnd`); SDL's own
+comment there: "it's possible to get WM_ACTIVATE and WM_SETFOCUS without
+actually being the foreground window". Relative mode itself is switched on
+only for a window with the keyboard focus (`SDL_UpdateRelativeMouseMode`),
+while `SDL_GetWindowRelativeMouseMode` answers from the window's flag, on
+from the moment we ask. The launcher stays in front until the game's first
+frame (`--ready-file`) and did not allow the game the foreground, so the
+game's window could be activated while the launcher's was still the
+foreground one. Then SDL never noted the focus, sent no focus event, gave no
+motion, and said relative mode was on; our side (`focused_` true from the
+start, a re-ask only when SDL's flag disagreed) saw nothing wrong. Letting go
+and taking again, or a real activation, put it right, which is what the quit
+box and Alt+Tab did. Pirate's Moon reaches its menu at once, MechWarrior 3
+plays its movies first: a guess at why one shows it more.
+
+**What changed.**
+
+- The launcher allows the game it starts the foreground
+  (`allow_foreground`, `AllowSetForegroundWindow` on the child's process id,
+  as a start-again allows its child). The game's window already raises itself
+  when shown (`sdl_platform.cpp`).
+- `SdlInput::has_focus` (a shown window: `FocusWatch`, SDL's keyboard focus
+  ours and the foreground window ours) is asked at every refresh and acquire.
+  The mouse is taken only when it is true and when it becomes true, with or
+  without an event; a focus event that is not yet true is not believed.
+- A window in front that SDL has not noted gets an activation message posted
+  (`window_focus_nudge`), on which SDL looks again; asked again each second,
+  ten times running at most. Should that do nothing for two seconds the
+  system's word alone is taken for the keyboard, so it never waits on SDL;
+  the mouse is not cured by that (SDL gives motion only to its own focus
+  window), the log says "the keyboard taken on the system's word; the mouse
+  still waits on SDL", and the asking goes on. The posted message's side
+  effects in SDL and Windows (dev 4's review): `DefWindowProc` sets the
+  keyboard focus to our own window, SDL reads the lock keys again, and a
+  mouse button held at that moment is taken as the click that brought the
+  focus (`focus_click_pending`); it is posted only when the window is
+  already the foreground one, so none of them changes what the player sees.
+- The other way round (dev 4's reading of the same source, 2026-11-11): a
+  loss SDL missed leaves it holding raw input and a one-point cursor clip at
+  the window's centre while another program is in front, and raw input then
+  brings nothing: also "stuck in the middle". `has_focus` is false there (the
+  foreground is not ours), so the mouse is let go, which ends SDL's mode, and
+  a clip still at a point is released (`window_unclip_behind`); it is taken
+  again when the window is the foreground one.
+- Held with no motion seen since it was taken, a mouse button press lets the
+  mouse go and takes it again (`heal`): once a press, a second apart, eight a
+  capture at most, never after the first motion. A key press does the same
+  only after three seconds with no motion, so a player holding a key as a
+  mission starts, the mouse not yet touched, gets no flicker. The game still
+  gets the press.
+- The log names the state: "mouse: taken (...)" with SDL's keyboard and mouse
+  focus, the window's flags, the foreground window ours or not and the
+  cursor's clip; "first motion N ms after it was taken" or "no motion in 3 s
+  since it was taken (...)"; each wait, nudge and heal.
+
+**Run here:** `sdl_input_mouse_waits_for_the_real_focus_and_heals` (the rules
+on the input class), `sdl_program_mouse_waits_for_the_focus` (the real
+program, hidden, the focus given at the pump's 60th pass by `MW3_FOCUS_AT`),
+the Windows files compiled with mingw. **Not run:** anything on Windows; the
+cause above is from reading SDL's source, and the next stuck run's log lines
+will say whether it is the one.
+
+## Launcher controller profiles
+
+`--cc-controller FILE` reads the launcher's UTF-8 whitespace format
+`CC_MW3_CONTROLLER_V1`. It contains the 64-character uppercase SDL device key;
+six rows of `minimum center maximum deadzone response inverted` values (four
+stick axes, then two triggers); 26 command IDs for SDL gamepad buttons; two
+trigger command IDs; four physical stick-axis assignments in throttle,
+steering, torso-yaw, torso-pitch order (`-1` is unbound); four sensitivities;
+and the trigger threshold. Command ID zero is unbound. Numbers use the
+invariant decimal format. Extra fields, malformed numbers, unsupported command
+IDs, invalid calibration and incomplete ranges fail the launch visibly.
+
+Calibration normalizes stick values around `center`, using `maximum-center` on
+the positive side and `center-minimum` on the negative side; triggers use
+`(raw-center)/(maximum-center)` clamped to 0..1. Both clamp stick values to
+-1..1, remove and renormalize the deadzone, then apply `sign(value) *
+pow(abs(value), response)`. Inversion negates a stick or replaces a trigger
+value with `1-value`. The four axis assignments choose source indices 0..3 or
+-1, then each selected source is routed into throttle, steering, torso yaw or
+torso pitch and multiplied by its sensitivity.
+
+The legacy hook required a connected, focused device and armed only after all
+sticks and triggers were neutral and all buttons released. Losing focus or the
+device reset arming. Each mapped command exposed `1` on its press poll, `2`
+while held, `4` on release and `0` while up; duplicate bindings to one command
+were coalesced. Triggers used the calibrated value and `>= threshold`. The
+legacy hook also held its analog throttle at zero while command 27 was down,
+until the selected throttle source returned within 0.05 of neutral. MW3-RE sends
+command 27 through normal `zin` command state and leaves that command's effect
+to MW3's existing control code.
+
+The SDL key is SHA-256 over the uppercase hexadecimal SDL gamepad GUID, a
+colon, and its serial or device path. When neither serial nor path exists, the
+launcher's key also includes its SDL instance ID; duplicate identities include
+that ID as well.
+The runtime prefers an exact key match. If no device matches, it follows the
+existing `mw3.cfg` name selection and best-ranked-device fallback.
+
+While the option is active, SDL owns button and trigger command state through
+`zin::command`; launcher `.zrd` joystick button bindings are cleared. SDL
+applies each physical axis's calibrated center/range, deadzone, response curve
+and inversion before the `.zrd` source routing and sensitivity are applied.
+The generated `.zrd` contains only the selected axis routing and sensitivity,
+with its deadzone set to zero; it does not repeat calibration. Keyboard and
+mouse bindings remain in the normal `zin` map. If the option is absent, the
+existing joystick path and `.zrd` behavior remain in effect.
+
+The controller math, text parser, `zin::command` overlay and launcher file/argv
+projection have authored-fixture checks. A real controller run is still needed
+to confirm physical SDL identity stability, focus/reconnect behavior, trigger
+rest values and in-game feel.
 
 ## Open
 

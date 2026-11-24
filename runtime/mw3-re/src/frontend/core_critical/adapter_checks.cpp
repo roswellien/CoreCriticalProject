@@ -1,13 +1,27 @@
 #include "frame_renderer.hpp"
+#include "prepared_models.hpp"
 
 #include "frontend/sdl/sdl_child.h"
+#include "frontend/sdl/sdl_platform.h"
 #include "gamez/zclass/cls_data.h"
+#include "gamez/zclass/camera.h"
+#include "gamez/zclass/cls_world.h"
 #include "gamez/zclass/cls_util.h"
+#include "gamez/zclass/cls_zbd.h"
+#include "gamez/zclass/light.h"
+#include "gamez/zclass/list.h"
 #include "gamez/zclass/object3d.h"
+#include "mech3/mech.h"
+#include "gamez/zmodel/gmod_init.h"
+#include "gamez/zmodel/gmod_draw.h"
+#include "gamez/zmodel/gmod_geometry.h"
+#include "gamez/zmodel/gmod_light.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_fog.h"
+#include "gamez/zmodel/gmod_fogcalc.h"
+#include "gamez/zutil/ztimer.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "renderer/campaign_environment_policy.hpp"
 #include "renderer/campaign_lighting.hpp"
@@ -16,8 +30,15 @@
 #include "renderer/effect_lighting_stage.inc"
 #include "renderer/material_normals.hpp"
 #include "renderer/native_surface_identity.hpp"
+#include "renderer/native_fixture_geometry.hpp"
+#include "renderer/native_fixture_sources.hpp"
 #include "renderer/surface_detail.hpp"
+#include "renderer/surface_detail_bindings.hpp"
 #include "renderer/surface_materials.hpp"
+#include "renderer/vk_scene.hpp"
+#include "renderer/flare_alpha.hpp"
+#include "platform/sha256.hpp"
+#include <sstream>
 #include <limits>
 
 namespace mw34::materials {
@@ -30,22 +51,42 @@ bool get_active_surface_key(SurfaceKey *out);
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
+#include <optional>
+#include <random>
 #include <stdexcept>
 #include <string_view>
+
+namespace cc_mw3_re::checks {
+void check_scene_binding_slots();
+}
+// Win32 compatibility macros must not rewrite fixture variable names.
+#ifdef near
+#undef near
+#endif
+#ifdef far
+#undef far
+#endif
 
 namespace {
 bool threaded_checks = false;
 std::unique_ptr<cc_mw3_re::VulkanFrameRenderer>
 make_check_renderer(SDL_Window *window, sdlfe::RendererBackend backend,
                     const sdlfe::CoreCriticalQuality &quality = {},
-                    sdlfe::CoreCriticalAssets assets = {}) {
-  assets.render_thread = threaded_checks;
-  return cc_mw3_re::make_renderer(window, backend, quality, assets);
+                    sdlfe::CoreCriticalAssets assets = {},
+                    std::optional<std::size_t> local_staging_budget = std::nullopt) {
+    assets.render_thread = threaded_checks;
+    if (local_staging_budget)
+        return cc_mw3_re::testing::make_renderer_with_staging_budget(window, backend, quality,
+                                                                     assets, *local_staging_budget);
+    return cc_mw3_re::make_renderer(window, backend, quality, assets);
 }
 
 void require(bool condition, const char *message) {
@@ -55,6 +96,8 @@ void require(bool condition, const char *message) {
 }
 
 #include "local_light_checks.inc"
+#include "native_fixture_checks.inc"
+#include "owned_rigid_capture_checks.inc"
 
 void quad(platform::Render3D &renderer, float low, float high, float depth,
           uint32_t color, const platform::DrawState &state = {}) {
@@ -66,6 +109,327 @@ void quad(platform::Render3D &renderer, float low, float high, float depth,
 }
 
 #include "local_light_gpu_checks.inc"
+
+void check_menu_ripple_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
+    auto renderer = make_check_renderer(window, backend);
+    require(renderer->supports_gpu_menu_ripple(), "Vulkan menu ripple capability missing");
+    renderer->prepare_menu_ripple(); // preflight before the first resident target exists
+    std::uint64_t passes = 0;
+    for (const auto size : {std::array{96, 80}, std::array{124, 96}}) {
+        require(SDL_SetWindowSize(window, size[0], size[1]) && SDL_SyncWindow(window),
+                SDL_GetError());
+        const int width = size[0], height = size[1];
+        // Nonzero viewport origin and unequal scales exercise adapter conversion.
+        constexpr float origin_x = 7, origin_y = 11, scale_x = 2, scale_y = 1.5f;
+        renderer->set_viewport(7, 11, width, height);
+        auto rectangle = [&](float left, float top, float right, float bottom, uint32_t colour) {
+            platform::DrawState state;
+            state.depth_always = true;
+            state.depth_write = false;
+            const platform::TLVertex vertices[]{
+                {left + origin_x, top + origin_y, 0, 1, colour, 0, 0, 0},
+                {right + origin_x, top + origin_y, 0, 1, colour, 0, 0, 0},
+                {right + origin_x, bottom + origin_y, 0, 1, colour, 0, 0, 0},
+                {left + origin_x, bottom + origin_y, 0, 1, colour, 0, 0, 0}};
+            renderer->draw(platform::Primitive::kFan, vertices, 4, state);
+        };
+        for (int scenario = 0; scenario < 3; ++scenario) {
+            const bool clipped = scenario != 0;
+            const bool inset = scenario == 2;
+            const int clip_left = inset ? 20 : 0;
+            int clip_top = clipped ? 17 : 0;
+            int clip_right = clipped ? 30 : width;
+            int clip_bottom = clipped ? 58 : height;
+            if (inset) {
+                clip_top = 16;
+                clip_right = 68;
+                clip_bottom = 60;
+            }
+            const float center_x = inset ? 22.5f : 3.5f;
+            for (bool read_before : {false, true}) {
+                auto background = [&] {
+                    renderer->begin_canvas_scene();
+                    if (inset) {
+                        // Red can only enter the inset by sampling the surrounding sentinel.
+                        renderer->clear(true, 255, 0, 255);
+                        rectangle(float(clip_left), float(clip_top), float(clip_right),
+                                  float(clip_bottom), 0xffa05000);
+                        for (int x = clip_left; x < clip_right; x += 4)
+                            rectangle(float(x), float(clip_top), float(x + 2), float(clip_bottom),
+                                      0xff50dc00);
+                        rectangle(float(clip_left), 23, 39, 46, 0xff30a000);
+                    } else {
+                        renderer->clear(true, 40, 80, 160);
+                        for (int x = 0; x < width; x += 4)
+                            rectangle(float(x), 0, float(x + 2), float(height), 0xff50dcf0);
+                        rectangle(0, 23, 39, 46, 0xff30a050);
+                    }
+                };
+                background();
+                std::vector<uint32_t> baseline, result;
+                int actual_width = 0, actual_height = 0;
+                require(renderer->read_back(&baseline, &actual_width, &actual_height) &&
+                            actual_width == width && actual_height == height,
+                        "Ripple baseline dimensions changed");
+                if (!read_before)
+                    background(); // exercise attachment layout as well as readback layout
+                sdlfe::MenuRipplePass pass;
+                pass.center_x = origin_x + center_x;
+                pass.center_y = origin_y + 36.5f;
+                pass.scale_x = scale_x;
+                pass.scale_y = scale_y;
+                pass.inner = clipped ? 0.f : 4.f;
+                pass.outer = 25;
+                pass.amplitude = 5;
+                pass.wavelength = 3;
+                pass.phase = .7f;
+                pass.has_clip = clipped;
+                pass.clip_left = origin_x + clip_left;
+                pass.clip_top = origin_y + clip_top;
+                pass.clip_right = origin_x + clip_right;
+                pass.clip_bottom = origin_y + clip_bottom;
+                renderer->apply_menu_ripple(pass);
+                require(renderer->read_back(&result, &actual_width, &actual_height) &&
+                            result.size() == baseline.size(),
+                        "Ripple readback failed");
+                require(renderer->quality_statistics().menu_ripple_passes == ++passes,
+                        "Ripple pass count lost a draw or resize");
+                auto smooth = [](double a, double b, double value) {
+                    const double t = std::clamp((value - a) / (b - a), 0.0, 1.0);
+                    return t * t * (3 - 2 * t);
+                };
+                unsigned displaced = 0, edge_samples = 0;
+                for (int y = 0; y < height; ++y) {
+                    for (int x = 0; x < width; ++x) {
+                        const size_t at = size_t(y) * width + x;
+                        const double dx = (x + .5 - center_x) / scale_x;
+                        const double dy = (y + .5 - 36.5) / scale_y;
+                        const double radius = std::hypot(dx, dy);
+                        const bool in_clip =
+                            x >= clip_left && x < clip_right && y >= clip_top && y < clip_bottom;
+                        if (inset && in_clip)
+                            require((result[at] & 255) == 0,
+                                    "Inset ripple sampled the red sentinel outside its clip");
+                        if (!in_clip || radius <= pass.inner || radius >= pass.outer ||
+                            radius <= 1e-4) {
+                            require(result[at] == baseline[at],
+                                    "Ripple changed a pixel outside its circular ring or clip");
+                            continue;
+                        }
+                        const double t = (radius - pass.inner) / (pass.outer - pass.inner);
+                        const double envelope = smooth(0, .25, t) * (1 - smooth(.75, 1, t));
+                        const double guard = pass.inner <= 0 ? smooth(0, 6, radius) : 1;
+                        const double wave = std::sin(radius / pass.wavelength + pass.phase) *
+                                            pass.amplitude * envelope * guard;
+                        const double sx = std::clamp(x + .5 + dx / radius * wave * scale_x,
+                                                     clip_left + .5, clip_right - .5) -
+                                          .5;
+                        const double sy = std::clamp(y + .5 + dy / radius * wave * scale_y,
+                                                     clip_top + .5, clip_bottom - .5) -
+                                          .5;
+                        const int x0 = int(std::floor(sx)), y0 = int(std::floor(sy));
+                        const int x1 = std::min(x0 + 1, width - 1),
+                                  y1 = std::min(y0 + 1, height - 1);
+                        const double fx = sx - x0, fy = sy - y0;
+                        for (unsigned shift : {0U, 8U, 16U}) {
+                            auto channel = [&](int px, int py) {
+                                return double((baseline[size_t(py) * width + px] >> shift) & 255);
+                            };
+                            const double expected =
+                                (channel(x0, y0) * (1 - fx) + channel(x1, y0) * fx) * (1 - fy) +
+                                (channel(x0, y1) * (1 - fx) + channel(x1, y1) * fx) * fy;
+                            require(std::abs(double((result[at] >> shift) & 255) - expected) <= 2,
+                                    "Ripple differed from smooth clamped bilinear displacement");
+                        }
+                        require((result[at] & 0x00ffffff) != 0,
+                                "Ripple sampled black border garbage");
+                        if (result[at] != baseline[at])
+                            ++displaced;
+                        if (x == clip_left)
+                            ++edge_samples;
+                    }
+                }
+                require(displaced > 20 && edge_samples > 0,
+                        "Ripple fixture did not exercise displacement and left edge");
+                // Later draws cover the rippled image, rather than becoming inputs to it.
+                const int draw_left = inset ? 21 : 1;
+                rectangle(float(draw_left), 30, float(draw_left + 6), 36, 0xffe03090);
+                require(renderer->read_back(&result, &actual_width, &actual_height) &&
+                            result[size_t(32) * width + draw_left + 2] == 0xffe03090,
+                        "Draw after ripple lost command order");
+            }
+        }
+    }
+    std::puts("GPU menu ripple: circular bounds, smooth displacement, left edge, clip, order and "
+              "resize passed");
+}
+
+void check_menu_background_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
+  platform::MenuBackgroundImage image;
+  image.width = image.height = 16;
+  image.source_width = image.source_height = 8;
+  image.rgb.resize(16 * 16 * 3);
+  std::vector<uint32_t> hd_rgba(256);
+  for (unsigned y = 0; y < 16; ++y) {
+    for (unsigned x = 0; x < 16; ++x) {
+      const size_t at = size_t(y) * 16 + x;
+      const uint8_t red = uint8_t(30 + (x * 7 + y * 3) % 160);
+      const uint8_t green = uint8_t(40 + (x * 3 + y * 9) % 150);
+      const uint8_t blue = uint8_t(20 + (x * 5 + y * 5) % 170);
+      image.rgb[at * 3] = red;
+      image.rgb[at * 3 + 1] = green;
+      image.rgb[at * 3 + 2] = blue;
+      hd_rgba[at] = 0xff000000u | uint32_t(red) | uint32_t(green) << 8 | uint32_t(blue) << 16;
+    }
+  }
+  // Integer and fractional output densities catch map filtering and half-texel
+  // mistakes independently. Padding must never be interpreted as frame pixels.
+  for (const auto size : {std::array<int, 2>{32, 32}, std::array<int, 2>{31, 27}}) {
+    require(SDL_SetWindowSize(window, size[0], size[1]) && SDL_SyncWindow(window), SDL_GetError());
+    auto renderer = make_check_renderer(window, backend);
+    renderer->set_viewport(0, 0, 8, 8);
+    const auto hd_texture = renderer->create_texture(16, 16,
+        reinterpret_cast<const uint8_t*>(hd_rgba.data()), 1);
+    require(hd_texture >= 0, "Could not upload synthetic HD menu background");
+    // The real menu art both dims and brightens the background, and its added light can lower
+    // red and blue. Each tint selects different map passes: 2/3 attenuation only, 3/2 one boost,
+    // 7/3 both boosts (gain above 2), each with the same scroll wraps and overlay.
+    struct Tint {
+      int numerator, denominator;
+      bool negative_added_light;
+    };
+    for (const Tint tint : {Tint{2, 3, false}, Tint{3, 2, true}, Tint{7, 3, true}}) {
+    for (bool rgb565 : {true, false}) {
+      for (int offset : {0, 7}) {
+        constexpr int stride = 10;
+        std::vector<uint16_t> source_pixels(8 * stride, 0xf81f);
+        std::vector<uint16_t> frame(8 * stride, 0xf81f);
+        const auto packed = [rgb565](int red, int green, int blue) {
+          return uint16_t((red << (rgb565 ? 11 : 10)) | (green << 5) | blue);
+        };
+        // Brightened tints start darker so the tinted codes stay inside 5 (or 6) bits.
+        const bool brighten = tint.numerator > tint.denominator;
+        const int base_red = brighten ? 6 : 12, base_blue = brighten ? 6 : 12;
+        const int base_green = brighten ? (rgb565 ? 12 : 6) : 20;
+        for (int y = 0; y < 8; ++y)
+          for (int x = 0; x < 8; ++x)
+            source_pixels[size_t(y) * stride + x] =
+                packed(base_red + x % 2, base_green + y % 3, base_blue + y % 2);
+        const int offset_y = offset ? 6 : 0;
+        for (int y = 0; y < 8; ++y) {
+          for (int x = 0; x < 8; ++x) {
+            const int sx = (x + offset) % 8, sy = (y + offset_y) % 8;
+            frame[size_t(y) * stride + x] =
+                packed((base_red + sx % 2) * tint.numerator / tint.denominator,
+                       (base_green + sy % 3) * tint.numerator / tint.denominator,
+                       (base_blue + sy % 2) * tint.numerator / tint.denominator);
+          }
+        }
+        frame[0] = source_pixels[size_t(offset_y) * stride + offset];
+        // A large green delta must be kind 2 rather than a uniformly tinted kind 1 pixel. This
+        // also exercises saturation. With negative added light red and blue drop one code
+        // (8.2 of 255, inside the classifier's -10 limit), which needs the subtract pass.
+        const int glow_x = (1 + offset) % 8, glow_y = (1 + offset_y) % 8;
+        const int glow_drop = tint.negative_added_light ? 1 : 0;
+        frame[stride + 1] = packed(base_red + glow_x % 2 - glow_drop,
+            base_green + glow_y % 3 + (rgb565 ? 24 : 10), base_blue + glow_y % 2 - glow_drop);
+        frame[7 * stride + 7] = packed(31, 0, 31);
+        zimg::Texture source{};
+        source.width = source.height = 8;
+        source.width_again = stride;
+        source.pixels = source_pixels.data();
+        std::vector<zrndr::MenuBackgroundBlit> blits;
+        if (offset == 0) {
+          blits = {{0, 0, 0, 0, 8, 8}};
+        } else {
+          blits = {{0, 0, 7, 6, 1, 2}, {1, 0, 0, 6, 7, 2},
+                   {0, 2, 7, 0, 1, 6}, {1, 2, 0, 0, 7, 6}};
+        }
+        platform::PreparedMenuBackgroundComposer composer;
+        platform::MenuBackgroundGpuLayers layers;
+        require(composer.prepare_gpu(image, &source, blits, frame.data(), 8, 8, stride * 2,
+                                     rgb565, &layers) &&
+                    layers.status == platform::MenuBackgroundGpuStatus::kReady,
+                "Synthetic GPU menu gain/glow/wrap fixture selected the fallback");
+        require(layers.used[platform::kMenuGpuBoost] == brighten &&
+                    layers.used[platform::kMenuGpuBoostHigh] == (tint.numerator > 2 * tint.denominator) &&
+                    layers.used[platform::kMenuGpuSubtract] == tint.negative_added_light,
+                "Synthetic GPU menu tint did not select the expected gain and added-light passes");
+        sdlfe::MenuBackgroundGpuTextures maps{-1, -1, -1, -1, -1, -1};
+        for (unsigned index = 0; index < platform::kMenuGpuMapCount; ++index) {
+          if (!layers.used[index]) continue;
+          maps[index] = renderer->create_texture(8, 8,
+              reinterpret_cast<const uint8_t*>(layers.maps[index].data()), 1);
+          require(maps[index] >= 0, "Could not upload synthetic menu maps");
+        }
+        renderer->clear(true, 0, 0, 0);
+        sdlfe::draw_menu_background_gpu(*renderer, hd_texture, maps, layers, {0, 0, 8, 8});
+        std::vector<uint32_t> gpu, cpu;
+        int width = 0, height = 0;
+        require(renderer->read_back(&gpu, &width, &height) && width == size[0] && height == size[1],
+                "GPU menu readback lost output dimensions");
+        require(platform::compose_menu_background(image, &source, blits, frame.data(), 8, 8,
+                    stride * 2, rgb565, unsigned(width), unsigned(height), &cpu) && cpu.size() == gpu.size(),
+                "CPU menu reference failed at the same output size");
+        // CPU rounds the bilinear sample before gain; hardware rounds after
+        // blending. Allow 4/255 per RGB channel for filtering precision, gain
+        // UNORM quantization, delta rounding and render-target rounding.
+        for (size_t at = 0; at < cpu.size(); ++at) {
+          const uint32_t expected = (cpu[at] & 0xff00ff00u) |
+              ((cpu[at] & 255u) << 16) | ((cpu[at] >> 16) & 255u);
+          require((gpu[at] >> 24) == 255, "GPU menu lost opaque output alpha");
+          for (unsigned shift : {0u, 8u, 16u})
+            require(std::abs(int((gpu[at] >> shift) & 255u) - int((expected >> shift) & 255u)) <= 4,
+                    "GPU/CPU menu pixel mismatch (gain, glow, native overlay or scroll wrap)");
+        }
+        if (size[0] == 31 && rgb565 && offset == 7 && !brighten) {
+          auto flat_image = image;
+          const std::vector<uint32_t> flat_rgba(256, 0xff208040u);
+          for (size_t at = 0; at < 256; ++at) {
+            flat_image.rgb[at * 3] = 64;
+            flat_image.rgb[at * 3 + 1] = 128;
+            flat_image.rgb[at * 3 + 2] = 32;
+          }
+          const int32_t flat_texture = renderer->create_texture(16, 16,
+              reinterpret_cast<const uint8_t*>(flat_rgba.data()), 1);
+          require(flat_texture >= 0, "Could not upload flat menu coverage fixture");
+          // Original 1:1 frame aspect fits into 31x27 as a 27x27 rectangle.
+          // Only the background extends into the two columns on either side.
+          const platform::MenuBackgroundLayerRect fitted{2.f * 8 / 31, 0, 27.f * 8 / 31, 8};
+          const platform::MenuBackgroundLayerRect covered{0, -2.f * 8 / 27, 8, 31.f * 8 / 27};
+          renderer->clear(true, 0, 0, 0);
+          sdlfe::draw_menu_background_gpu(*renderer, flat_texture, maps, layers, fitted, &covered);
+          require(renderer->read_back(&gpu, &width, &height) && width == 31 && height == 27,
+                  "Cover extension changed output dimensions");
+          require(platform::compose_menu_background(flat_image, &source, blits, frame.data(),
+                      8, 8, stride * 2, true, 27, 27, &cpu),
+                  "CPU menu reference failed at the fitted output size");
+          for (int y = 0; y < 27; ++y) {
+            for (int x = 0; x < 31; ++x) {
+              const uint32_t pixel = gpu[size_t(y) * 31 + x];
+              if (x < 2 || x >= 29) {
+                require(pixel == 0xff408020u, "Cover extension left a pillar or drew native artwork in it");
+              } else {
+                const uint32_t reference = cpu[size_t(y) * 27 + x - 2];
+                const uint32_t expected = (reference & 0xff00ff00u) |
+                    ((reference & 255u) << 16) | ((reference >> 16) & 255u);
+                for (unsigned shift : {0u, 8u, 16u})
+                  require(std::abs(int((pixel >> shift) & 255u) - int((expected >> shift) & 255u)) <= 4,
+                          "Menu cover moved native artwork, lighting or control pixel correspondence");
+              }
+            }
+          }
+          renderer->release_texture(flat_texture);
+        }
+        for (int32_t map : maps)
+          if (map >= 0) renderer->release_texture(map);
+      }
+    }
+    }
+    renderer->release_texture(hd_texture);
+  }
+  require(SDL_SetWindowSize(window, 32, 32) && SDL_SyncWindow(window), SDL_GetError());
+}
 
 void check_scene(SDL_Window *window, sdlfe::RendererBackend backend) {
   auto renderer = make_check_renderer(window, backend);
@@ -225,6 +589,59 @@ void check_scene(SDL_Window *window, sdlfe::RendererBackend backend) {
     require(pixel(8, 8) == 0xffc7c7c7,
             "Swapchain resizing changed the resident scene");
   }
+}
+
+void check_fullscreen_resize(SDL_Window *window,
+                             sdlfe::RendererBackend backend) {
+  auto renderer = make_check_renderer(window, backend);
+  require(SDL_ShowWindow(window) && SDL_SyncWindow(window), SDL_GetError());
+
+  // Draws a scene at the window's current size and waits until it is
+  // presented, so each stage rebuilds the frame targets for the new extent
+  // as well as the presentation target.
+  auto draw_and_present = [&](const char *stage) {
+    int width = 0, height = 0;
+    SDL_GetWindowSizeInPixels(window, &width, &height);
+    renderer->set_viewport(0, 0, width, height);
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    quad(*renderer, 0, 32, .5f, 0xff204080);
+    renderer->end_scene();
+    const auto before = renderer->presentation_count();
+    for (int attempt = 0;
+         attempt < 30 && renderer->presentation_count() == before; ++attempt) {
+      SDL_PumpEvents();
+      renderer->present();
+      SDL_Delay(10);
+    }
+    require(renderer->presentation_count() > before, stage);
+  };
+
+  // A windowed frame first, so the fullscreen switch resizes a presentation
+  // target that is already bound rather than creating the first one.
+  draw_and_present("The windowed Vulkan presentation target did not present");
+
+  // Match SdlWindow::switch_fullscreen: finish renderer work before SDL can
+  // synchronously resize the window and its Vulkan/DXGI presentation target.
+  renderer->drain();
+  require(SDL_SetWindowFullscreen(window, true) && SDL_SyncWindow(window),
+          SDL_GetError());
+  SDL_PumpEvents();
+  int fullscreen_width = 0, fullscreen_height = 0;
+  SDL_GetWindowSizeInPixels(window, &fullscreen_width, &fullscreen_height);
+  require((SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0 &&
+              fullscreen_width > 64 && fullscreen_height > 48,
+          "The fullscreen fixture did not reach a desktop-sized drawable");
+  draw_and_present("The fullscreen Vulkan presentation target did not present");
+
+  renderer->drain();
+  require(SDL_SetWindowFullscreen(window, false) &&
+              SDL_SetWindowSize(window, 64, 48) && SDL_SyncWindow(window),
+          SDL_GetError());
+  SDL_PumpEvents();
+  require((SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) == 0,
+          "The fullscreen fixture did not return to windowed mode");
+  draw_and_present("The restored window's Vulkan presentation target did not present");
 }
 
 } // namespace
@@ -579,6 +996,20 @@ void check_terrain_surface_normals(SDL_Window *window,
   const auto tex =
       renderer->create_named_texture("ggter1", 128, 128, green_data.data(), 1);
   mw34::materials::clear_active_surface_key();
+  require(renderer->asset_statistics().world_normal_decoded_bytes == 4 &&
+              renderer->asset_statistics().world_normal_peak_decoded_bytes == 4 &&
+              renderer->asset_statistics().world_normal_loaded_pages == 1,
+          "Authenticated texture admission did not preload its matching world normal page");
+
+  // Preload matching GPU normal textures at the post-load mission callback
+  // boundary (empty MissionIdentity covers Instant Action as well) before the
+  // first draw without altering decoded bytes, normal binding, or output pixels.
+  renderer->mission_changed(platform::MissionIdentity{});
+  require(renderer->asset_statistics().world_normal_decoded_bytes == 4 &&
+              renderer->asset_statistics().world_normal_peak_decoded_bytes == 4 &&
+              renderer->asset_statistics().world_normal_loaded_pages == 1,
+          "Mission normal GPU preload altered world normal cache accounting");
+  renderer->clear(true, 0, 0, 0);
 
   platform::DrawState state{};
   state.texture = tex;
@@ -659,8 +1090,11 @@ void check_terrain_surface_normals(SDL_Window *window,
   state.texture =
       renderer->create_named_texture("ggter1", 128, 128, green_data.data(), 1);
   mw34::materials::clear_active_surface_key();
+  renderer->mission_changed(platform::MissionIdentity{});
+  renderer->clear(true, 0, 0, 0);
   quad(*renderer, 0, 64, .5f, 0xffffffff, state);
   require(renderer->read_back(&pixels, &width, &height) &&
+              pixels == normal_pixels &&
               renderer->asset_statistics().normal_draws > stats.normal_draws &&
               renderer->asset_statistics().world_normal_decoded_bytes == 4,
           "New-epoch texture did not reload its world normal page");
@@ -686,7 +1120,9 @@ void check_terrain_surface_normals(SDL_Window *window,
   }
 
   std::vector<uint32_t> flat_pixels;
-  // Flat lighting control: normal_draws == 0
+  std::vector<uint32_t> flat_blended_pixels;
+  std::vector<uint32_t> flat_additive_pixels;
+  // Flat sun lighting control: normal maps are disabled, but the sun is on.
   {
     auto flat_options = options;
     flat_options.lighting = "flat";
@@ -709,6 +1145,27 @@ void check_terrain_surface_normals(SDL_Window *window,
             "Flat lighting produced non-zero normal draws");
     require(flat_renderer->asset_statistics().world_normal_decoded_bytes == 0,
             "Flat lighting decoded a world normal page");
+
+    auto blended_state = flat_state;
+    blended_state.blend = true;
+    flat_renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*flat_renderer, 0, 64, .5f, 0xffffffff, blended_state);
+    require(flat_renderer->read_back(&flat_blended_pixels, &width, &height),
+            "Could not read back blended effect fixture");
+    require(flat_blended_pixels[32 * width + 32] == 0xff228b22,
+            "Blended effect did not preserve its bright texture colour");
+
+    auto additive_state = flat_state;
+    additive_state.blend = true;
+    additive_state.additive = true;
+    flat_renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*flat_renderer, 0, 64, .5f, 0xffffffff, additive_state);
+    require(flat_renderer->read_back(&flat_additive_pixels, &width, &height),
+            "Could not read back additive effect fixture");
+    require(flat_additive_pixels != flat_blended_pixels,
+            "Additive effect blend did not preserve ONE/ONE output");
+    require(flat_additive_pixels[32 * width + 32] == 0xff42cb82,
+            "Additive effect did not retain its bright ONE/ONE colour");
   }
 
   // Off lighting control: normal_draws == 0
@@ -731,6 +1188,59 @@ void check_terrain_surface_normals(SDL_Window *window,
             "Off lighting produced non-zero normal draws");
     require(off_renderer->asset_statistics().world_normal_decoded_bytes == 0,
             "Off lighting decoded a world normal page");
+
+    auto blended_state = off_state;
+    blended_state.blend = true;
+    off_renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*off_renderer, 0, 64, .5f, 0xffffffff, blended_state);
+    require(off_renderer->read_back(&pixels, &width, &height),
+            "Could not read back unlit blended effect fixture");
+    require(pixels == flat_blended_pixels,
+            "Flat sun lighting changed translucent effect colour");
+
+    auto additive_state = off_state;
+    additive_state.blend = true;
+    additive_state.additive = true;
+    off_renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*off_renderer, 0, 64, .5f, 0xffffffff, additive_state);
+    require(off_renderer->read_back(&pixels, &width, &height),
+            "Could not read back unlit additive effect fixture");
+    require(pixels == flat_additive_pixels,
+            "Flat sun lighting changed additive effect colour");
+  }
+
+  // Exercise the normal-enabled sun path too. The opaque control must be
+  // visibly lit so these comparisons cannot pass with lighting disabled.
+  {
+    const auto before_lit = renderer->asset_statistics();
+    renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*renderer, 0, 64, .5f, 0xffffffff, state);
+    require(renderer->read_back(&pixels, &width, &height),
+            "Could not read back sun-lit opaque control");
+    const auto lit_control = renderer->asset_statistics();
+    require(lit_control.lit_draws > before_lit.lit_draws &&
+                lit_control.normal_draws > before_lit.normal_draws &&
+                pixels != flat_blended_pixels,
+            "Opaque control did not exercise visible sun and normal lighting");
+
+    auto blended_state = state;
+    blended_state.blend = true;
+    renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*renderer, 0, 64, .5f, 0xffffffff, blended_state);
+    require(renderer->read_back(&pixels, &width, &height) &&
+                pixels == flat_blended_pixels,
+            "Normal-enabled sun lighting changed translucent effect colour");
+
+    blended_state.additive = true;
+    renderer->clear(true, 0x20, 0x40, 0x60);
+    quad(*renderer, 0, 64, .5f, 0xffffffff, blended_state);
+    require(renderer->read_back(&pixels, &width, &height) &&
+                pixels == flat_additive_pixels,
+            "Normal-enabled sun lighting changed additive effect colour");
+    const auto after_effects = renderer->asset_statistics();
+    require(after_effects.lit_draws == lit_control.lit_draws &&
+                after_effects.normal_draws == lit_control.normal_draws,
+            "Blended effects entered the sun lighting pipeline");
   }
   // Optional content absent: normal mode is neutral, not a synthetic pack.
 #if defined(_WIN32)
@@ -923,7 +1433,9 @@ void check_terrain_surface_normals(SDL_Window *window,
     require(checked_renderer->read_back(&pixels, &width, &height),
             "Transparent readback failed");
     const auto after_transparent = checked_renderer->asset_statistics();
-    require(after_transparent.normal_draws > before_deferred.normal_draws &&
+    require(after_transparent.deferred_material_admissions >
+                    before_deferred.deferred_material_admissions &&
+                after_transparent.normal_draws == before_deferred.normal_draws &&
                 after_transparent.binding_rejected_mismatch ==
                     before_deferred.binding_rejected_mismatch,
             "Transparent queue lost qualified material admission");
@@ -931,17 +1443,31 @@ void check_terrain_surface_normals(SDL_Window *window,
     require(checked_renderer->read_back(&pixels, &width, &height),
             "Overlay readback failed");
     const auto after_deferred = checked_renderer->asset_statistics();
-    require(after_deferred.normal_draws > after_transparent.normal_draws &&
+    // Overlay draws are blended too, so (like the transparent queue above) they keep their
+    // receipt but are deliberately not sun-lit; admission is what normal_draws cannot show.
+    require(after_deferred.deferred_material_admissions >
+                    after_transparent.deferred_material_admissions &&
                 after_deferred.binding_rejected_mismatch ==
                     before_deferred.binding_rejected_mismatch,
             "Overlay queue lost qualified material admission");
+    platform::DrawState receipt_state;
+    receipt_state.texture = device_texture.handle;
+    checked_renderer->clear(true, 0, 0, 0);
+    checked_renderer->begin_deferred_material_draw(receipt);
+    checked_renderer->draw(platform::Primitive::kFan, deferred_vertices, 3,
+                           receipt_state);
+    checked_renderer->end_deferred_material_draw();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Opaque deferred admission readback failed");
+    const auto after_opaque = checked_renderer->asset_statistics();
+    require(after_opaque.deferred_material_admissions ==
+                after_deferred.deferred_material_admissions + 1,
+            "Opaque draw was excluded from deferred material admissions");
     // Same handle after an upload cannot reuse a previously admitted receipt.
     mw34::materials::set_active_surface_key(t1m1_terrain_key);
     checked_renderer->update_texture(device_texture.handle, 128, 128,
                                      green_data.data());
     mw34::materials::clear_active_surface_key();
-    platform::DrawState receipt_state;
-    receipt_state.texture = device_texture.handle;
     checked_renderer->begin_deferred_material_draw(receipt);
     checked_renderer->draw(platform::Primitive::kFan, deferred_vertices, 3,
                            receipt_state);
@@ -949,9 +1475,9 @@ void check_terrain_surface_normals(SDL_Window *window,
     require(checked_renderer->read_back(&pixels, &width, &height),
             "Stale admission readback failed");
     require(checked_renderer->asset_statistics().normal_draws ==
-                    after_deferred.normal_draws &&
+                    after_opaque.normal_draws &&
                 checked_renderer->asset_statistics().binding_rejected_mismatch >
-                    after_deferred.binding_rejected_mismatch,
+                    after_opaque.binding_rejected_mismatch,
             "Deferred admission survived a same-handle upload");
     // A source mutation inside a model scope explicitly invalidates its hash.
     checked_renderer->begin_model_draw(model_context);
@@ -1013,8 +1539,327 @@ void check_terrain_surface_normals(SDL_Window *window,
   }
 }
 
+// Authored TL geometry only: each planar face has an independent diagonal.
+// A real current-epoch keyed upload is essential: unkeyed sky never reached
+// the defective ordinary-surface branch and would give a false RED control.
+void check_native_sky_unlit(SDL_Window *window,
+                            sdlfe::RendererBackend backend) {
+  using Hook = cc_mw3_re::testing::RigidCaptureTestHook;
+  struct Restore {
+    zmth::Projection projection = zmth::projection();
+    zmth::View view = zmth::view();
+    mw34::materials::SurfaceKey key{};
+    bool had_key = mw34::materials::get_active_surface_key(&key);
+    std::fenv_t fp{};
+    SDL_Window *window;
+    int width{}, height{};
+    explicit Restore(SDL_Window *w) : window(w) {
+      std::fegetenv(&fp);
+      SDL_GetWindowSize(window, &width, &height);
+    }
+    ~Restore() {
+      zmth::projection() = projection;
+      zmth::view() = view;
+      if (had_key)
+        mw34::materials::set_active_surface_key(key);
+      else
+        mw34::materials::clear_active_surface_key();
+      SDL_SetWindowSize(window, width, height);
+      SDL_SyncWindow(window);
+      std::fesetenv(&fp);
+    }
+  } restore(window);
+  std::vector<uint32_t> checker(64);
+  for (int y = 0; y < 8; ++y)
+    for (int x = 0; x < 8; ++x)
+      checker[y * 8 + x] = ((x / 2 + y / 2) & 1) ? 0xffe0e0e0 : 0xff303030;
+  const mw34::materials::SurfaceKey key{
+      8, 8, 1, mw34::materials::normal_hash(checker.data(), checker.size() * 4)};
+  require(key.hash != 0, "Sky fixture has no surface identity");
+  unsigned cases = 0;
+  for (const auto extent : {std::array<int, 2>{64, 48},
+                            std::array<int, 2>{86, 36}}) {
+    const int width = extent[0], height = extent[1];
+    require(SDL_SetWindowSize(window, width, height) && SDL_SyncWindow(window),
+            SDL_GetError());
+    // Both view axes vary, including yaw/pitch; projection variant 2 differs
+    // ONLY in projection, to catch incomplete adjacent-draw compatibility.
+    auto set_view = [&](int variant) {
+      zmth::projection() = {};
+      auto &p = zmth::projection();
+      p.near_z = 1;
+      p.far_z = 100;
+      p.fx_near = float(width) * (variant == 2 ? .24f : .7f);
+      p.fy_near = float(height) * (variant == 2 ? 1.1f : .7f);
+      p.cx = float(width) * .5f;
+      p.cy = float(height) * (variant == 2 ? .2f : .5f);
+      zmth::view().camera = {{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}};
+      if (variant == 1)
+        zmth::view().camera = {{.8f, .36f, -.48f, 0, .8f, .6f,
+                               .6f, -.48f, .64f, 3, 4, 5}};
+    };
+    auto poison_view = [&] {
+      set_view(1);
+      zmth::projection().cx = -1000;
+      zmth::view().camera.m[9] = 900;
+    };
+    auto face = [&](int side, bool white) {
+      const float left = float(width) * (side ? .5f : .08f);
+      const float right = float(width) * (side ? .92f : .5f);
+      const float top = float(height) * .12f, bottom = float(height) * .88f;
+      const float a = side ? .25f : .125f, b = side ? .1f : .25f;
+      const uint32_t colors[] = {0xff80c060, 0xffc080a0,
+                                 0xff6080c0, 0xffc0a080};
+      auto color = [&](int vertex) {
+        return white ? 0xffffffffu : colors[(vertex + side) % 4];
+      };
+      return std::array<platform::TLVertex, 4>{{
+          {left, top, a, a, color(0), 0xff000000, 0, 0},
+          {right, top, b, b, color(1), 0xd0000000, 1, 0},
+          {right, bottom, b, b, color(2), 0xb0000000, 1, 1},
+          {left, bottom, a, a, color(3), 0xe0000000, 0, 1}}};
+    };
+    const uint32_t background = 0xff07111b;
+    std::vector<uint32_t> first_terrain_sun;
+    for (int sun = 0; sun != 2; ++sun) {
+      struct Mode {
+        std::unique_ptr<cc_mw3_re::VulkanFrameRenderer> renderer;
+        int texture;
+      } modes[3];
+      const char *names[] = {"off", "flat", "normal"};
+      for (int m = 0; m != 3; ++m) {
+        sdlfe::CoreCriticalAssets assets;
+        assets.lighting = names[m];
+        assets.sun_azimuth = sun ? "90" : "-90";
+        assets.sun_elevation = "35";
+        assets.sun_explicit = true;
+        modes[m].renderer = make_check_renderer(window, backend, {}, assets);
+        auto &r = *modes[m].renderer;
+        r.set_viewport(0, 0, width, height);
+        mw34::materials::set_active_surface_key(key);
+        modes[m].texture = r.create_named_texture(
+            "authored-unlit-sky", 8, 8,
+            reinterpret_cast<const uint8_t *>(checker.data()), 1);
+        mw34::materials::clear_active_surface_key();
+        // Actual normal-cache admission; the ordinary companion must use it.
+        mw34::materials::WorldNormalCache::TextureRecord normal{};
+        normal.name = "authored-sky-companion-normal";
+        normal.width = normal.height = 1;
+        normal.pixels32 = {0xffd980d9};
+        normal.hash = mw34::materials::normal_hash(normal.pixels32.data(), 4);
+        Hook::seed_authored_normal(r, key, std::move(normal));
+        require(Hook::group_epoch(r) != 0,
+                "Sky fixture has no current texture epoch");
+      }
+      // A negative face index omits that side. Separate submissions are also
+      // the independent reference for combined, differently viewed sky draws.
+      auto render = [&](int mode, bool sky, bool textured, int diagonal,
+                        int left_view, int right_view, bool white = false,
+                        bool profile = false, bool poison = true) {
+        auto &r = *modes[mode].renderer;
+        r.mission_changed(profile ? platform::MissionIdentity{5, 1}
+                                  : platform::MissionIdentity{});
+        set_view(0);
+        r.clear(true, 7, 17, 27);
+        r.begin_scene();
+        for (int side = 0; side != 2; ++side) {
+          const int view = side ? right_view : left_view;
+          if (view < 0)
+            continue;
+          set_view(view);
+          auto vertices = face(side, white);
+          platform::DrawState state;
+          state.texture = textured ? modes[mode].texture : -1;
+          state.native_sky = sky;
+          state.address_u = state.address_v = 3;
+          // Fog factor/alpha are deliberately present in the TL bytes; the
+          // identity comparisons cover the same fixed-function operations.
+          state.fog = true;
+          state.alpha_modulate = sky;
+          const int order[2][4] = {{0, 1, 2, 3}, {1, 2, 3, 0}};
+          platform::TLVertex ordered[4];
+          for (int i = 0; i != 4; ++i)
+            ordered[i] = vertices[order[diagonal][i]];
+          platform::TLVertex original[4];
+          std::memcpy(original, ordered, sizeof ordered);
+          r.draw(platform::Primitive::kFan, ordered, 4, state);
+          require(!std::memcmp(ordered, original, sizeof ordered),
+                  "Sky submission changed authored TL vertices");
+          if (poison)
+            poison_view();
+        }
+        if (profile && left_view >= 0 && right_view >= 0 &&
+            left_view != right_view) {
+          const auto observation = r.scene_binding_statistics();
+          require(observation.supported && observation.draws == 2,
+                  "Differently viewed adjacent sky draws merged");
+        }
+        r.end_scene();
+        std::vector<uint32_t> pixels;
+        int w{}, h{};
+        require(r.read_back(&pixels, &w, &h) && w == width && h == height &&
+                    pixels.size() == std::size_t(width * height),
+                "Native unlit sky readback failed");
+        ++cases;
+        return pixels;
+      };
+      for (int camera = 0; camera != 2; ++camera) {
+        for (int diagonal = 0; diagonal != 2; ++diagonal) {
+          const auto off = render(0, true, true, diagonal, camera, camera);
+          const auto flat = render(1, true, true, diagonal, camera, camera);
+          const auto normal = render(2, true, true, diagonal, camera, camera);
+          require(off == flat && off == normal,
+                  "Native unlit sky acquired ordinary surface sun/normal lighting");
+          require(modes[2].renderer->asset_statistics().normal_draws == 0,
+                  "Native sky bound an ordinary surface normal map");
+          const auto white =
+              render(0, true, true, diagonal, camera, camera, true);
+          require(off != white, "Sky off reference lost nonwhite vertex RGB");
+          // Analytic barycentric witnesses use the actual chosen diagonal,
+          // perspective rhw and UV, without reproducing a lighting shader.
+          unsigned bright_count = 0, dark_count = 0;
+          unsigned long bright_sum = 0, dark_sum = 0;
+          for (int side = 0; side != 2; ++side) {
+            const auto v = face(side, false);
+            const int triangles[2][6] = {{0, 1, 2, 0, 2, 3},
+                                         {1, 2, 3, 1, 3, 0}};
+            for (int y = 2; y < height - 2; ++y)
+              for (int x = 2; x < width - 2; ++x)
+                for (int t = 0; t != 2; ++t) {
+                  const auto &a = v[triangles[diagonal][t * 3]];
+                  const auto &b = v[triangles[diagonal][t * 3 + 1]];
+                  const auto &c = v[triangles[diagonal][t * 3 + 2]];
+                  // The native TL shader applies the D3D half-pixel offset:
+                  // framebuffer pixel (x,y) samples original TL (x,y).
+                  const float px = float(x), py = float(y);
+                  const float area = (b.sy - c.sy) * (a.sx - c.sx) +
+                                     (c.sx - b.sx) * (a.sy - c.sy);
+                  const float wa = ((b.sy - c.sy) * (px - c.sx) +
+                                    (c.sx - b.sx) * (py - c.sy)) / area;
+                  const float wb = ((c.sy - a.sy) * (px - c.sx) +
+                                    (a.sx - c.sx) * (py - c.sy)) / area;
+                  const float wc = 1 - wa - wb;
+                  if (std::min({wa, wb, wc}) < .08f)
+                    continue;
+                  const float q = wa * a.rhw + wb * b.rhw + wc * c.rhw;
+                  const float u = (wa * a.rhw * a.tu + wb * b.rhw * b.tu +
+                                   wc * c.rhw * c.tu) / q;
+                  const float z = (wa * a.rhw * a.tv + wb * b.rhw * b.tv +
+                                   wc * c.rhw * c.tv) / q;
+                  const float cell_u = u * 4, cell_v = z * 4;
+                  const float fu = cell_u - int(cell_u), fv = cell_v - int(cell_v);
+                  if (fu < .3f || fu > .7f || fv < .3f || fv > .7f)
+                    continue;
+                  const uint32_t pixel = off[y * width + x];
+                  require(pixel != background,
+                          "Sky analytic interior witness is blank");
+                  const unsigned sum = (pixel & 255) + ((pixel >> 8) & 255) +
+                                       ((pixel >> 16) & 255);
+                  if ((int(cell_u) + int(cell_v)) & 1) {
+                    ++bright_count;
+                    bright_sum += sum;
+                  } else {
+                    ++dark_count;
+                    dark_sum += sum;
+                  }
+                }
+          }
+          require(bright_count && dark_count &&
+                      bright_sum / bright_count > dark_sum / dark_count + 80,
+                  "Native sky checker UV/coverage witness failed");
+        }
+      }
+      const auto normal_draws_before =
+          modes[2].renderer->asset_statistics().normal_draws;
+      const auto terrain_flat = render(1, false, true, 0, 0, 0, true);
+      const auto terrain_normal = render(2, false, true, 0, 0, 0, true);
+      require(modes[2].renderer->asset_statistics().normal_draws >
+                  normal_draws_before,
+              "Ordinary companion lost its normal-map binding");
+      if (sun == 0)
+        require(terrain_flat != terrain_normal,
+                "Ordinary companion lost actual normal-map illumination");
+      if (sun == 0)
+        first_terrain_sun = terrain_flat;
+      else
+        require(first_terrain_sun != terrain_flat,
+                "Ordinary terrain became insensitive to sun direction");
+      if (sun == 0) {
+        for (int mode : {1, 2}) {
+          for (bool textured : {true, false}) {
+            const auto neutral = render(mode, true, textured, 0, 0, 0);
+            const auto profile = render(mode, true, textured, 0, 0, 0, false, true);
+            require(profile != neutral,
+                    "Intentional campaign sky-only profile no longer shades sky");
+            for (int second_view : {1, 2}) {
+              const auto left = render(mode, true, textured, 0, 0, -1, false, true);
+              const auto right =
+                  render(mode, true, textured, 0, -1, second_view, false, true);
+              const auto right_base =
+                  render(mode, true, textured, 0, -1, 0, false, true);
+              require(right != right_base,
+                      "Profile sky view/projection pixel witness is insensitive");
+              const auto combined =
+                  render(mode, true, textured, 0, 0, second_view, false, true);
+              const auto unpoisoned =
+                  render(mode, true, textured, 0, 0, second_view, false, true, false);
+              require(combined == unpoisoned,
+                      "Sky retained a borrowed producer view after submission");
+              for (int y = 0; y < height; ++y)
+                for (int x = 0; x < width; ++x)
+                  require(combined[y * width + x] ==
+                              (x < width / 2 ? left : right)[y * width + x],
+                          "Combined sky views differ from isolated profile "
+                          "references");
+            }
+          }
+        }
+      }
+    }
+  }
+  std::fprintf(stderr, "[NATIVE_SKY_UNLIT] pixel_cases=%u\n", cases);
+}
+
+// A briefing loads its mission before the Mech Lab opens. The Lab preview must use
+// the configured stock lighting, not the mission's campaign profile: Operation 3's
+// red sky tint (c3m3) turned every paint orange and hid the selected skin.
+void check_lab_preview_lighting(SDL_Window *window, sdlfe::RendererBackend backend) {
+  sdlfe::CoreCriticalAssets assets;
+  assets.lighting = "normal";
+  auto renderer = make_check_renderer(window, backend, {}, assets);
+  require(cc_mw3_re::testing::display_lighting_is_stock(*renderer),
+          "Renderer without a mission did not start on stock lighting");
+  const platform::MissionIdentity fuel_depot{2, 3};  // c3m3
+  renderer->mission_changed(fuel_depot);
+  require(!cc_mw3_re::testing::display_lighting_is_stock(*renderer),
+          "c3m3 campaign profile was not applied in the mission");
+  renderer->set_lab_preview_lighting(true);
+  require(cc_mw3_re::testing::display_lighting_is_stock(*renderer),
+          "Lab preview kept the mission's campaign lighting");
+  // A mission change while the Lab is up (not expected, but possible from a debug
+  // start) must not leak its profile into the preview either.
+  renderer->mission_changed({0, 1});
+  require(cc_mw3_re::testing::display_lighting_is_stock(*renderer),
+          "Mission change during the Lab preview restored campaign lighting");
+  renderer->mission_changed(fuel_depot);
+  renderer->set_lab_preview_lighting(false);
+  require(!cc_mw3_re::testing::display_lighting_is_stock(*renderer),
+          "Closing the Lab did not restore the mission's campaign lighting");
+  std::fprintf(stderr, "[LAB_PREVIEW_LIGHTING] stock in Lab, c3m3 profile restored after\n");
+}
+
 void check_sealed_environment(SDL_Window *window,
                               sdlfe::RendererBackend backend) {
+  struct RestoreView {
+    zmth::Projection projection = zmth::projection();
+    zmth::View view = zmth::view();
+    ~RestoreView() {
+      zmth::projection() = projection;
+      zmth::view() = view;
+    }
+  } restore_view;
+  zmth::projection() = {};
+  zmth::view().camera = {{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}};
   require(SDL_SetWindowSize(window, 32, 32) && SDL_SyncWindow(window),
           SDL_GetError());
   const uint8_t green[4] = {0, 255, 0, 255};
@@ -1077,10 +1922,17 @@ void check_sealed_environment(SDL_Window *window,
       auto px = read();
       require(px_at(px, 30, 2) == 0xFF25598F, "outdoor clear");
       renderer->begin_scene();
-      quad(*renderer, 0.0f, 32.0f, 0.0001f, 0xFFFF0000);
+      platform::DrawState sky_state;
+      sky_state.native_sky = true;
+      quad(*renderer, 0.0f, 32.0f, 0.0001f, 0xFFFF0000, sky_state);
       renderer->end_scene();
       auto px2 = read();
-      require(px_at(px2, 30, 2) == 0xFFFF0000, "outdoor sky");
+      // The exact profile pixel reflects native sky's captured producer view.
+      const uint32_t outdoor_sky_expected =
+          (mode[0] == 'f' && id.world_index == 5 && id.number == 1)
+              ? 0xFFBD8884
+              : 0xFFFF0000;
+      require(px_at(px2, 30, 2) == outdoor_sky_expected, "outdoor sky");
     }
     renderer->mission_changed({1, 2});
     renderer->reset_scene_resources();
@@ -1108,6 +1960,10 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       std::filesystem::remove(folder / "textures.bin", error);
       std::filesystem::remove(folder / "normals.bin", error);
       std::filesystem::remove(folder / "materials.bin", error);
+      std::filesystem::remove(folder / "other_textures.bin", error);
+      std::filesystem::remove(folder / "other_normals.bin", error);
+      std::filesystem::remove(folder / "absent_normals.bin", error);
+      std::filesystem::remove(folder / "mixed_mesh.bin", error);
       std::filesystem::remove(folder, error);
     }
   } files{folder};
@@ -1116,13 +1972,15 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       << prepared_fixture::mesh(2, 0xffff0000);
   std::ofstream(folder / "textures.bin", std::ios::binary)
       << prepared_fixture::textures();
+  // Resource-selection checks use normals even when the draw control leaves
+  // normal lighting disabled.
+  std::ofstream(folder / "normals.bin", std::ios::binary)
+      << prepared_fixture::normals(0xffd980d9);
   sdlfe::CoreCriticalAssets options;
   options.textures = (folder / "textures.bin").u8string();
   options.models.push_back(
       {"authored", "0", (folder / "mesh.bin").u8string(), options.textures});
   if (materials) {
-    std::ofstream(folder / "normals.bin", std::ios::binary)
-        << prepared_fixture::normals(0xffd980d9);
     options.normals.push_back(
         {"authored", "0", (folder / "normals.bin").u8string()});
     options.lighting = "normal";
@@ -1149,6 +2007,98 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     std::ofstream(path, std::ios::binary)
         .write(metadata.data(), metadata.size());
   }
+  {
+    std::ofstream(folder / "other_textures.bin", std::ios::binary)
+        << prepared_fixture::textures();
+    std::ofstream(folder / "other_normals.bin", std::ios::binary)
+        << prepared_fixture::normals(0xffd980d9);
+    std::ofstream(folder / "absent_normals.bin", std::ios::binary)
+        << prepared_fixture::normals(0, true);
+    std::ofstream(folder / "mixed_mesh.bin", std::ios::binary)
+        << prepared_fixture::build_valid_v4_mesh(
+               "ltoe01", "control", "panel", .5, .2, -.1, "", true);
+    sdlfe::CoreCriticalAssets selection_options;
+    selection_options.lighting = "normal";
+    selection_options.models.push_back(
+        {"authored", "0", (folder / "mesh.bin").u8string(),
+         (folder / "textures.bin").u8string()});
+    selection_options.models.push_back(
+        {"other", "1", (folder / "mesh.bin").u8string(),
+         (folder / "other_textures.bin").u8string()});
+    selection_options.models.push_back(
+        {"nonormal", "0", (folder / "mesh.bin").u8string(),
+         (folder / "textures.bin").u8string()});
+    selection_options.normals.push_back(
+        {"authored", "0", (folder / "normals.bin").u8string()});
+    selection_options.normals.push_back(
+        {"other", "1", (folder / "other_normals.bin").u8string()});
+    selection_options.normals.push_back(
+        {"nonormal", "0", (folder / "absent_normals.bin").u8string()});
+
+    selection_options.models.push_back(
+        {"mixed", "0", (folder / "mixed_mesh.bin").u8string(),
+         (folder / "textures.bin").u8string()});
+    selection_options.normals.push_back(
+        {"mixed", "0", (folder / "normals.bin").u8string()});
+
+    const cc_mw3_re::PreparedModels selection_models(selection_options);
+    const auto unmatched = selection_models.resources_for_assets(
+        {"", "mech_unmatched.flt", "building_tower.flt"});
+    require(unmatched.matched_source_assets == 0 &&
+                unmatched.textures.empty() && unmatched.normals.empty() &&
+                unmatched.rigid_batches.empty(),
+            "Unmatched source assets selected prepared texture resources");
+
+    const auto authored_exact =
+        selection_models.resources_for_assets({"mech_authored.flt"});
+    require(authored_exact.matched_source_assets == 1 &&
+                authored_exact.textures.size() == 1 &&
+                authored_exact.normals.size() == 1 &&
+                authored_exact.textures[0] != nullptr &&
+                authored_exact.normals[0] != nullptr &&
+                authored_exact.rigid_batches.size() == 1,
+            "Exact prepared source asset did not select expected texture and "
+            "normal pointers");
+
+    // Repeated source asset names and cross-LOD fallback to the same selected
+    // model must deduplicate both model identity and image pointers.
+    const auto authored_deduped = selection_models.resources_for_assets(
+        {"mech_authored.flt", "mech_authored.flt", "mech_authored_1.flt",
+         "mech_unmatched.flt"});
+    require(authored_deduped.matched_source_assets == 2 &&
+                authored_deduped.textures == authored_exact.textures &&
+                authored_deduped.normals == authored_exact.normals &&
+                authored_deduped.rigid_batches == authored_exact.rigid_batches,
+            "Repeated or cross-LOD fallback source assets duplicated prepared "
+            "resource pointers");
+
+    // Mixed-bone geometry stays dynamic while authored images remain selectable.
+    const auto mixed_resources =
+        selection_models.resources_for_assets({"mech_mixed.flt"});
+    require(mixed_resources.matched_source_assets == 1 &&
+                mixed_resources.rigid_batches.empty() &&
+                mixed_resources.textures.size() == 1 &&
+                mixed_resources.normals.size() == 1,
+            "Mixed-bone geometry warmup changed authored image selection");
+
+    const auto other_fallback =
+        selection_models.resources_for_assets({"mech_other.flt"});
+    require(other_fallback.matched_source_assets == 1 &&
+                other_fallback.textures.size() == 1 &&
+                other_fallback.normals.size() == 1 &&
+                other_fallback.textures[0] != authored_exact.textures[0] &&
+                other_fallback.normals[0] != authored_exact.normals[0],
+            "Distance-to-close LOD fallback did not select the other model's "
+            "distinct resource pointers");
+
+    // Explicit no_normal bindings must not select a normal image pointer.
+    const auto absent_normal =
+        selection_models.resources_for_assets({"mech_nonormal.flt"});
+    require(absent_normal.matched_source_assets == 1 &&
+                absent_normal.textures.size() == 1 &&
+                absent_normal.normals.empty(),
+            "Explicit no_normal binding selected a prepared normal resource");
+  }
   require(SDL_SetWindowSize(window, 64, 64) && SDL_SyncWindow(window),
           SDL_GetError());
   std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> root(
@@ -1167,16 +2117,84 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   identity->nodes = {{"actor", 1}, {"control", 1}, {"panel", 1}};
   root->source_asset = control->source_asset = panel->source_asset = identity;
   root->source_asset_root = true;
+  // A valid native source makes accidental warming of the replaced mesh visible.
+  float source_positions[]{-1, -1, 2, 1, -1, 2, 0, 1, 2};
+  std::uint32_t source_indices[]{2, 1, 0};
+  zmod::Material source_material{};
+  source_material.alpha = 255;
+  zmod::Polygon source_polygon{};
+  source_polygon.flags = 3;
+  source_polygon.vertex_indices = source_indices;
+  source_polygon.material = &source_material;
   zmod::Model source_model{};
-  const uint32_t source_count = 3;
+  source_model.vertices = source_positions;
+  source_model.polygons = &source_polygon;
+  const uint32_t source_count = 3, source_polygon_count = 1;
   std::memcpy(source_model.header + 0x14, &source_count, sizeof source_count);
+  std::memcpy(source_model.header + 0x10, &source_polygon_count,
+              sizeof source_polygon_count);
   panel->model = &source_model;
   panel->source_model_vertices = source_count;
   struct ModelPointer {
     zcls::Node *node;
     ~ModelPointer() { node->model = nullptr; }
   } model_pointer{panel};
+  {
+    auto warmup_quality = quality;
+    warmup_quality.anisotropy = "16";
+    auto warmup_renderer =
+        make_check_renderer(window, backend, warmup_quality, options);
+    const auto mips_before = warmup_renderer->quality_statistics().mip_levels;
+    warmup_renderer->mission_changed(platform::MissionIdentity{});
+    require(warmup_renderer->quality_statistics().mip_levels > mips_before,
+            "Prepared albedo was not preloaded or mip-generated at mission boundary");
+
+    // Verify late native source admission after mission boundary: create a 2x2
+    // RGBA native texture while a nonzero unmatched SurfaceKey is active.
+    // Must remain CPU-cold until begin_scene triggers scene-boundary warmup.
+    const mw34::materials::SurfaceKey late_native_surface_key{2, 2, 1,
+                                                              0x11223344ULL};
+    mw34::materials::set_active_surface_key(late_native_surface_key);
+    const uint8_t late_native_rgba[16] = {
+        255, 0, 0, 255,   0, 255, 0, 255,
+        0, 0, 255, 255,   255, 255, 0, 255};
+    const auto late_native_handle =
+        warmup_renderer->create_texture(2, 2, late_native_rgba, 1);
+    mw34::materials::clear_active_surface_key();
+
+    const auto mip_levels_after_creation =
+        warmup_renderer->quality_statistics().mip_levels;
+    warmup_renderer->begin_scene();
+    require(warmup_renderer->quality_statistics().mip_levels ==
+                mip_levels_after_creation,
+            "Unreferenced late native albedo consumed preload VRAM");
+    warmup_renderer->end_scene();
+    const auto mip_levels_after_warmup =
+        warmup_renderer->quality_statistics().mip_levels;
+    mw34::materials::set_active_surface_key(late_native_surface_key);
+    warmup_renderer->update_texture(late_native_handle, 2, 2, late_native_rgba);
+    mw34::materials::clear_active_surface_key();
+    warmup_renderer->begin_scene();
+    require(warmup_renderer->quality_statistics().mip_levels ==
+                mip_levels_after_warmup,
+            "Runtime texture update repeated bulk mission preload");
+    platform::DrawState late_native_state{};
+    late_native_state.texture = late_native_handle;
+    quad(*warmup_renderer, 0, 64, .5f, 0xffffffff, late_native_state);
+    std::vector<uint32_t> late_native_pixels;
+    int late_native_width = 0, late_native_height = 0;
+    require(warmup_renderer->read_back(&late_native_pixels, &late_native_width,
+                                     &late_native_height) &&
+                warmup_renderer->quality_statistics().mip_levels >
+                    mip_levels_after_warmup,
+            "Runtime texture update did not upload through its normal draw");
+    warmup_renderer->end_scene();
+    warmup_renderer->release_texture(late_native_handle);
+  }
   auto renderer = make_check_renderer(window, backend, quality, options);
+  // Preload live-node prepared resources at the mission boundary before the
+  // first draw (covering both normal-disabled and normal-enabled runs).
+  renderer->mission_changed(platform::MissionIdentity{});
   struct RenderBinding {
     platform::Render3D *previous = zvid::render3d();
     ~RenderBinding() { zvid::set_render3d(previous); }
@@ -1236,7 +2254,540 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
             "Prepared model did not render at the output extent");
     return pixels;
   };
+  {
+    // Load-time upload must be reused by the first real prepared draw.
+    auto warmed_options = options;
+    warmed_options.geometry = "gpu";
+    auto warmed_renderer =
+        make_check_renderer(window, backend, quality, warmed_options);
+    warmed_renderer->set_viewport(0, 0, 64, 64);
+    // Leave a frame queued when the mission loads. With --render-thread its
+    // present packet is still on the worker, so the load-time upload has to wait
+    // for it instead of using the shared Vulkan objects at the same time. The
+    // scene stays empty because strict GPU geometry rejects CPU 3D draws.
+    warmed_renderer->begin_scene();
+    warmed_renderer->end_scene();
+    warmed_renderer->mission_changed({});
+    require(!source_model.render_geometry,
+            "Prepared-owned native geometry was warmed unnecessarily");
+    require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+            "First warmup should upload geometry");
+    warmed_renderer->begin_scene();
+    warmed_renderer->end_scene();
+    require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+            "Late warmup should not upload geometry again");
+    const auto warmed_pixels = frame(warmed_renderer.get(), true, true);
+    require(!warmed_pixels.empty(), "Warmed frame should produce pixels");
+    require(warmed_renderer->asset_statistics().gpu_model_draws > 0,
+            "Warmed frame should have GPU model draws");
+    require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+            "First real draw should reuse warm upload");
+    // Tearing the scene down clears the first-world warmup. If it stayed armed,
+    // the next scene would upload the old mission's geometry again right after
+    // its buffers were retired.
+    warmed_renderer->reset_scene_resources();
+    warmed_renderer->begin_scene();
+    warmed_renderer->end_scene();
+    require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+            "Scene reset left the first-world preload armed");
+  }
+  {
+    // A selected skin replaces the primary albedos at draw time. Its textures are
+    // warmed at mission load as well, so the first skinned draw uploads nothing.
+    // Index 0 is the control: it stages only the primary set. The fixture
+    // images are too small for mip counts to show a missed upload, so the
+    // staged-byte comparison is what detects an unwarmed skin.
+    std::uint64_t primary_staged_bytes = 0;
+    auto skin_options = options;
+    skin_options.geometry = "gpu";
+    skin_options.skins.push_back({"authored", "0", options.textures, 1});
+    struct SkinIndex {
+      zcls::Node *node;
+      ~SkinIndex() { node->prepared_skin_index = 0; }
+    } skin_index{panel};
+    for (const int32_t index : {0, 1}) {
+      panel->prepared_skin_index = index;
+      auto skinned = make_check_renderer(window, backend, quality, skin_options);
+      skinned->set_viewport(0, 0, 64, 64);
+      skinned->mission_changed({});
+      const auto staged_bytes =
+          cc_mw3_re::testing::preload_test_state(*skinned).prepared_staged_bytes;
+      if (index == 0)
+        primary_staged_bytes = staged_bytes;
+      else
+        require(staged_bytes > primary_staged_bytes,
+                "Selected skin textures were not staged at mission load");
+      const auto loaded_mips = skinned->quality_statistics().mip_levels;
+      require(!frame(skinned.get(), true, true).empty(), "Skinned frame produced no pixels");
+      require(skinned->quality_statistics().mip_levels == loaded_mips,
+              index ? "First skinned draw uploaded textures again"
+                    : "First primary draw uploaded textures again");
+    }
+  }
   const auto first = frame();
+  {
+    using namespace cc_mw3_re::testing;
+    using mw34::vkscene::PreloadStopReason;
+    constexpr std::uint64_t gib = 1024ULL * 1024ULL * 1024ULL;
+    const auto exact = mw34::vkscene::evaluate_preload_budget(8 * gib, 6 * gib - 256, 256);
+    require(exact.admitted && exact.headroom_bytes == 2 * gib &&
+                !mw34::vkscene::evaluate_preload_budget(8 * gib, 6 * gib - 256, 257).admitted &&
+                !mw34::vkscene::evaluate_preload_budget(8 * gib, ~std::uint64_t{}, 1).admitted &&
+                !mw34::vkscene::evaluate_preload_budget(gib, 0, 1).admitted,
+            "Preload budget boundary, minimum reserve or overflow protection changed");
+
+    // Inspect the backend before and after the fence; completed frontend
+    // mission calls alone cannot expose prematurely published cache state.
+    {
+      using namespace mw34::vkscene;
+      ModelGeometry geometry;
+      geometry.key = 0x4241544348000001ULL;
+      geometry.hash = 1;
+      geometry.vertices.resize(3);
+      const auto texture = [](std::uint64_t key) {
+        return TextureRef{key, 1, 2, 2, TexFormat::rgba8888, {},
+                          {0xff0000ff, 0xff00ff00, 0xffff0000, 0xffffffff}};
+      };
+      Renderer mixed(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
+      mixed.set_preload_batch_cap_for_test(256);
+      mixed.begin_preload();
+      require(mixed.preload_model_geometry(geometry) &&
+                  mixed.preload_texture(texture(11)) && mixed.preload_texture(texture(12)) &&
+                  mixed.preload_texture(texture(13)) && mixed.preload_texture(texture(11)),
+              "Mixed preload batch rejected a small resource");
+      require(mixed.preload_pending_count() == 4 && mixed.preload_batch_submissions() == 0 &&
+                  mixed.uploads == 0 && mixed.model_uploads == 0 &&
+                  mixed.mip_levels_uploaded == 0 && !mixed.model_uploaded(geometry.key) &&
+                  !mixed.texture_resident(11) && !mixed.texture_resident(12),
+              "Queued preload work published completion before its batch fence");
+      mixed.finalize_preload();
+      mixed.end_preload();
+      const auto mixed_image_memory = mixed.texture_memory_for_test(11);
+      const auto mixed_model_memory = mixed.model_memory_for_test(geometry.key);
+      require(mixed_image_memory[3] == 64 * 1024 * 1024 &&
+                  mixed_model_memory[3] == 64 * 1024 * 1024 &&
+                  mixed_model_memory[0] % mixed_model_memory[2] == 0 &&
+                  mixed.model_texture_memory_separate_for_test(geometry.key, 11) &&
+                  mixed.preload_memory_block_count() == 2 &&
+                  mixed.preload_allocation_attempts() == 3,
+              "Mixed preload did not share staging and use separate image/linear memory blocks");
+      require(mixed.preload_batch_submissions() == 1 && mixed.preload_pending_count() == 0 &&
+                  mixed.preload_peak_pending() == 4 && mixed.preload_peak_bytes() == 144 &&
+                  mixed.uploads == 3 && mixed.model_uploads == 1 &&
+                  mixed.mip_levels_uploaded == 3 && mixed.model_uploaded(geometry.key) &&
+                  mixed.texture_resident(11) && mixed.texture_resident(12) &&
+                  mixed.texture_resident(13),
+              "Many geometry and texture uploads did not complete in one real submission");
+      mixed.begin_preload();
+      require(mixed.preload_model_geometry(geometry) && mixed.preload_texture(texture(11)),
+              "Completed immutable resources were not reusable");
+      mixed.finalize_preload();
+      mixed.end_preload();
+      require(mixed.preload_batch_submissions() == 1 && mixed.uploads == 3 &&
+                  mixed.model_uploads == 1,
+              "Resident preload resources repeated an upload or empty submission");
+
+      Renderer pooled;
+      pooled.set_preload_batch_cap_for_test(256);
+      pooled.begin_preload();
+      const auto initial_allocations = pooled.live_allocation_count();
+      require(pooled.preload_texture(texture(101)) && pooled.preload_texture(texture(102)) &&
+                  pooled.preload_texture(texture(103)),
+              "Could not queue pooled image fixtures");
+      const auto first_memory = pooled.texture_memory_for_test(101);
+      const auto second_memory = pooled.texture_memory_for_test(102);
+      const auto third_memory = pooled.texture_memory_for_test(103);
+      require(first_memory[3] == 64 * 1024 * 1024 &&
+                  pooled.texture_memory_shared_for_test(101, 102) &&
+                  pooled.texture_memory_shared_for_test(101, 103) &&
+                  first_memory[0] % first_memory[2] == 0 &&
+                  second_memory[0] % second_memory[2] == 0 &&
+                  third_memory[0] % third_memory[2] == 0 &&
+                  second_memory[0] >= first_memory[0] + first_memory[1] &&
+                  third_memory[0] >= second_memory[0] + second_memory[1] &&
+                  third_memory[0] + third_memory[1] <= third_memory[3] &&
+                  pooled.preload_allocation_attempts() == 2 &&
+                  // Shared staging replaces init's existing 8-byte allocation;
+                  // only the new image block increases the live allocation count.
+                  pooled.live_allocation_count() == initial_allocations + 1,
+              "Pooled images overlapped, lost alignment or repeated native allocations");
+      pooled.finalize_preload();
+      pooled.end_preload();
+      const auto bytes_with_block = pooled.tracked_device_local_bytes();
+      const auto allocations_with_block = pooled.live_allocation_count();
+      pooled.discard_texture_for_test(101);
+      require(pooled.tracked_device_local_bytes() == bytes_with_block &&
+                  pooled.live_allocation_count() == allocations_with_block &&
+                  pooled.preload_memory_block_count() == 1,
+              "Releasing a pooled slice freed memory still owned by other textures");
+      pooled.begin_preload();
+      require(pooled.preload_texture(texture(104)), "Could not reuse a live image block tail");
+      const auto fourth_memory = pooled.texture_memory_for_test(104);
+      require(fourth_memory[0] >= third_memory[0] + third_memory[1],
+              "A pooled allocation reused a released slice in a still-live block");
+      pooled.finalize_preload();
+      pooled.end_preload();
+      pooled.discard_texture_for_test(102);
+      pooled.discard_texture_for_test(103);
+      require(pooled.tracked_device_local_bytes() == bytes_with_block,
+              "A shared block was freed before its final texture release");
+      pooled.discard_texture_for_test(104);
+      require(pooled.preload_memory_block_count() == 0 &&
+                  pooled.tracked_device_local_bytes() + first_memory[3] == bytes_with_block &&
+                  pooled.live_allocation_count() + 1 == allocations_with_block,
+              "Final pooled texture release did not free and untrack the complete block");
+
+      // Size the test block from the actual driver requirements, rather than
+      // assuming an image has a fixed allocation size or alignment on all GPUs.
+      const auto stride = ((first_memory[1] + first_memory[2] - 1) / first_memory[2]) * first_memory[2];
+      require(stride && stride * 2 <= 64 * 1024 * 1024,
+              "Small image requirements exceed the authored pool fixture bound");
+      Renderer crossing;
+      crossing.set_preload_batch_cap_for_test(256);
+      crossing.set_preload_memory_block_cap_for_test(stride * 2);
+      crossing.begin_preload();
+      require(crossing.preload_texture(texture(111)) && crossing.preload_texture(texture(112)) &&
+                  crossing.preload_texture(texture(113)) &&
+                  crossing.texture_memory_shared_for_test(111, 112) &&
+                  !crossing.texture_memory_shared_for_test(111, 113) &&
+                  crossing.preload_memory_block_count() == 2 &&
+                  crossing.preload_allocation_attempts() == 3,
+              "Crossing a memory block bound did not allocate a separate bounded block");
+      crossing.finalize_preload();
+      crossing.end_preload();
+      for (const auto key : {111ULL, 112ULL, 113ULL})
+        crossing.discard_texture_for_test(key);
+      require(crossing.preload_memory_block_count() == 0,
+              "Cross-block texture teardown retained pooled device memory");
+
+      Renderer block_budget;
+      block_budget.set_preload_memory_block_cap_for_test(stride * 2);
+      block_budget.begin_preload();
+      const auto initial_block_budget_bytes = block_budget.tracked_device_local_bytes();
+      const auto initial_block_budget_allocations = block_budget.live_allocation_count();
+      PreloadFaultInjection block_cap{};
+      block_cap.override_budget = true;
+      block_cap.synthetic_heap_budget_bytes = kMinimumPreloadHeadroomBytes;
+      block_budget.set_preload_fault(block_cap);
+      const bool block_admitted = block_budget.preload_texture(texture(131));
+      // With no queued work, failed preload releases the initialization staging
+      // allocation. The denied image block must never enter the live ledger.
+      require(!block_admitted && block_budget.preload_stopped() &&
+                  block_budget.preload_stop_info().reason == PreloadStopReason::budget_denied &&
+                  block_budget.preload_stop_info().requested_bytes == stride * 2 &&
+                  block_budget.preload_memory_block_count() == 0 &&
+                  block_budget.live_allocation_count() + 1 == initial_block_budget_allocations &&
+                  block_budget.preload_allocation_attempts() == 1 &&
+                  block_budget.preload_allocation_successes() == 0 &&
+                  block_budget.tracked_device_local_bytes() == initial_block_budget_bytes &&
+                  !block_budget.partial_texture(131),
+              "Pool admission did not account for the complete block before allocating it");
+      block_budget.finalize_preload();
+      block_budget.end_preload();
+
+      for (const auto result : {VK_ERROR_OUT_OF_DEVICE_MEMORY, VK_ERROR_OUT_OF_HOST_MEMORY}) {
+        Renderer pool_oom;
+        pool_oom.set_preload_batch_cap_for_test(256);
+        pool_oom.set_preload_memory_block_cap_for_test(stride * 2);
+        pool_oom.begin_preload();
+        PreloadFaultInjection fault{};
+        fault.override_budget = true;
+        fault.synthetic_heap_budget_bytes = 16 * gib;
+        fault.fail_on_allocation_attempt = 3; // New block after two queued image slices.
+        fault.injected_result = result;
+        pool_oom.set_preload_fault(fault);
+        require(pool_oom.preload_texture(texture(121)) && pool_oom.preload_texture(texture(122)) &&
+                    !pool_oom.preload_texture(texture(123)) && pool_oom.preload_stopped() &&
+                    pool_oom.preload_memory_block_count() == 1 &&
+                    pool_oom.preload_pending_count() == 2 &&
+                    pool_oom.preload_allocation_attempts() == 3 &&
+                    pool_oom.preload_allocation_successes() == 2 &&
+                    !pool_oom.partial_texture(123) && !pool_oom.texture_resident(121),
+                "Pool-growth OOM damaged queued slices or published success before completion");
+        pool_oom.finalize_preload();
+        pool_oom.end_preload();
+        require(pool_oom.texture_resident(121) && pool_oom.texture_resident(122) &&
+                    !pool_oom.texture_resident(123) && pool_oom.uploads == 2 &&
+                    pool_oom.preload_batch_submissions() == 1,
+                "Pool-growth OOM did not safely complete earlier queued texture slices");
+        pool_oom.discard_texture_for_test(121);
+        pool_oom.discard_texture_for_test(122);
+        require(pool_oom.preload_memory_block_count() == 0,
+                "Pool-growth OOM left a shared memory block after final owner release");
+      }
+
+      Renderer limited;
+      limited.set_preload_batch_cap_for_test(32);
+      limited.set_preload_memory_block_cap_for_test(1);
+      limited.begin_preload();
+      require(limited.preload_texture(texture(21)) && limited.preload_texture(texture(22)) &&
+                  limited.preload_texture(texture(23)),
+              "Small batch cap rejected resources that fit individually");
+      require(limited.preload_batch_submissions() == 1 && limited.uploads == 2 &&
+                  limited.preload_pending_count() == 1 && limited.texture_resident(21) &&
+                  !limited.texture_resident(23),
+              "Crossing the batch byte cap did not flush only the earlier resources");
+      limited.finalize_preload();
+      limited.end_preload();
+      require(limited.preload_batch_submissions() == 2 && limited.uploads == 3 &&
+                  limited.preload_peak_bytes() <= 32 && limited.texture_staging_size() == 32 &&
+                  limited.preload_pending_count() == 0,
+              "Preload staging or queued payload exceeded the hard byte cap");
+      limited.begin_preload();
+      TextureRef oversized{24, 1, 4, 4, TexFormat::rgba8888, {},
+                           std::vector<std::uint32_t>(16, 0xffffffff)};
+      require(!limited.preload_texture(oversized) && limited.preload_stopped() &&
+                  !limited.partial_texture(24) && !limited.texture_resident(24) &&
+                  limited.preload_allocation_attempts() == 4,
+              "Oversized optional texture exceeded the cap or left a partial cache entry");
+      require(limited.preload_stop_info().reason == PreloadStopReason::oversized_upload &&
+                  limited.preload_stop_info().requested_bytes > 32,
+              "Oversized optional texture was not reported as an oversized upload");
+      limited.finalize_preload();
+      limited.end_preload();
+
+      for (const auto result : {VK_ERROR_OUT_OF_DEVICE_MEMORY, VK_ERROR_OUT_OF_HOST_MEMORY}) {
+        Renderer interrupted(Renderer::ColorTarget::rgba8, {}, {1, 1, 1, false}, true);
+        interrupted.set_preload_batch_cap_for_test(256);
+        // Force resource allocations to the dedicated path so this fixture
+        // injects native OOM after earlier resources were queued. Pool-growth
+        // OOM and shared-block lifetime are checked separately below.
+        interrupted.set_preload_memory_block_cap_for_test(1);
+        interrupted.begin_preload();
+        PreloadFaultInjection fault{};
+        fault.override_budget = true;
+        fault.synthetic_heap_budget_bytes = 16 * gib;
+        // Geometry local memory, shared staging and the first image succeed.
+        fault.fail_on_allocation_attempt = 4;
+        fault.injected_result = result;
+        interrupted.set_preload_fault(fault);
+        require(interrupted.preload_model_geometry(geometry) &&
+                    interrupted.preload_texture(texture(31)) &&
+                    interrupted.preload_pending_count() == 2 &&
+                    !interrupted.model_uploaded(geometry.key) && !interrupted.texture_resident(31),
+                "OOM fixture did not queue both resource kinds before failure");
+        require(!interrupted.preload_texture(texture(32)) && interrupted.preload_stopped() &&
+                    interrupted.preload_allocation_attempts() == 4 &&
+                    interrupted.preload_allocation_successes() == 3 &&
+                    interrupted.preload_pending_count() == 2 &&
+                    interrupted.preload_batch_submissions() == 0 &&
+                    interrupted.texture_staging_mapped() &&
+                    interrupted.texture_staging_size() == 256 &&
+                    !interrupted.partial_texture(32) && !interrupted.texture_resident(32) &&
+                    !interrupted.model_uploaded(geometry.key) && !interrupted.texture_resident(31),
+                "Midbatch OOM freed queued staging or published a failed upload");
+        interrupted.finalize_preload();
+        interrupted.end_preload();
+        require(interrupted.preload_batch_submissions() == 1 &&
+                    interrupted.preload_pending_count() == 0 && interrupted.uploads == 1 &&
+                    interrupted.model_uploads == 1 && interrupted.model_uploaded(geometry.key) &&
+                    interrupted.texture_resident(31) && !interrupted.texture_resident(32),
+                "Midbatch OOM did not safely complete earlier queued uploads");
+      }
+
+      Renderer abandoned;
+      abandoned.set_preload_batch_cap_for_test(32);
+      abandoned.begin_preload();
+      require(abandoned.preload_texture(texture(41)), "Could not queue abandonment fixture");
+      Scene empty_scene;
+      bool rejected_render = false;
+      try {
+        abandoned.render(empty_scene);
+      } catch (const std::runtime_error &) {
+        rejected_render = true;
+      }
+      require(rejected_render, "Rendering was allowed to reset an open preload command buffer");
+      abandoned.end_preload();
+      require(abandoned.preload_batch_submissions() == 0 &&
+                  abandoned.preload_pending_count() == 0 && !abandoned.partial_texture(41) &&
+                  !abandoned.texture_resident(41) && abandoned.uploads == 0,
+              "Noexcept cleanup submitted abandoned commands or leaked a success state");
+      abandoned.begin_preload();
+      require(abandoned.preload_texture(texture(41)), "Abandoned preload could not be retried");
+      abandoned.finalize_preload();
+      abandoned.end_preload();
+      require(abandoned.preload_batch_submissions() == 1 && abandoned.texture_resident(41),
+              "Retry did not reset abandoned preload recording state");
+    }
+
+    // Insert farther native resources before nearer ones, plus an unused CPU
+    // albedo. Selection must follow live player/proximity, not load/list order.
+    zmod::Model far_model = source_model, near_model = source_model;
+    zmod::Material far_material = source_material, near_material = source_material;
+    zmod::Polygon far_polygon = source_polygon, near_polygon = source_polygon;
+    far_polygon.material = &far_material;
+    near_polygon.material = &near_material;
+    far_model.polygons = &far_polygon;
+    near_model.polygons = &near_polygon;
+    std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> far_node(
+        zcls::object3d_create(), zcls::tree_destroy);
+    std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> near_node(
+        zcls::object3d_create(), zcls::tree_destroy);
+    require(far_node && near_node, "Could not create preload priority nodes");
+    struct ClearModels {
+      zcls::Node *far_node, *near_node;
+      ~ClearModels() { far_node->model = near_node->model = nullptr; }
+    } clear_models{far_node.get(), near_node.get()};
+    far_node->model = &far_model;
+    near_node->model = &near_model;
+    auto far_asset = std::make_shared<zcls::SourceAsset>();
+    auto near_asset = std::make_shared<zcls::SourceAsset>();
+    far_asset->name = "unmatched_far.flt";
+    near_asset->name = "unmatched_near.flt";
+    far_node->source_asset = far_asset;
+    near_node->source_asset = near_asset;
+    zcls::object3d_set_translation(far_node.get(), 100, 0, 0);
+    zcls::object3d_set_translation(near_node.get(), 10, 0, 0);
+    mech3::Mech player{};
+    player.target_node = root.get();
+    struct PlayerBinding {
+      mech3::Mech *previous_player = mech3::world().player;
+      mech3::Mech *previous_mission_player = mech3::world().mission_player;
+      ~PlayerBinding() {
+        mech3::world().player = previous_player;
+        mech3::world().mission_player = previous_mission_player;
+      }
+    } player_binding;
+    mech3::world().player = mech3::world().mission_player = &player;
+    const uint8_t native_pixels[16] = {0, 255, 0, 255, 0, 255, 0, 255,
+                                       0, 255, 0, 255, 0, 255, 0, 255};
+    zimg::TextureEntry far_texture{}, near_texture{};
+    zvid::D3DTexture far_surface{}, near_surface{};
+    far_texture.surface = &far_surface;
+    near_texture.surface = &near_surface;
+    far_material.flags = near_material.flags = 1;
+    far_material.texture = &far_texture;
+    near_material.texture = &near_texture;
+
+    // Match the recovery path's GPU submission and lighting. The fixture's
+    // earlier reference can use CPU geometry, and native albedos are lit.
+    auto recovery_options = options;
+    recovery_options.geometry = "partial";
+    auto recovery_control = make_check_renderer(window, backend, quality, recovery_options);
+    recovery_control->set_viewport(0, 0, 64, 64);
+    mw34::materials::set_active_surface_key({2, 2, 1, 0x11223344ULL});
+    const auto control_native_handle = recovery_control->create_texture(2, 2, native_pixels, 1);
+    mw34::materials::clear_active_surface_key();
+    recovery_control->mission_changed({});
+    const auto expected_recovered = frame(recovery_control.get(), true, true);
+    platform::DrawState control_native_state{};
+    control_native_state.texture = control_native_handle;
+    quad(*recovery_control, 0, 64, .1f, 0xffffffff, control_native_state);
+    std::vector<uint32_t> expected_native;
+    int control_width = 0, control_height = 0;
+    require(recovery_control->read_back(&expected_native, &control_width, &control_height) &&
+                control_width == 64 && control_height == 64 && !expected_native.empty(),
+            "Clean lazy draw control did not render at the fixture extent");
+
+    // Geometry local memory and shared staging are allocations 1 and 2.
+    // Image allocation 3 is prepared albedo; material runs also allocate its
+    // normal before native images. Failing the far native image retains the
+    // completed nearby image, regardless of that earlier allocation count.
+    for (const auto result : {VK_ERROR_OUT_OF_DEVICE_MEMORY, VK_ERROR_OUT_OF_HOST_MEMORY}) {
+      for (std::size_t attempt : {2U, 3U, 4U, 5U}) {
+        auto failure_options = options;
+        failure_options.geometry = "partial";
+        auto failure_renderer = make_check_renderer(window, backend, quality, failure_options);
+        set_preload_memory_block_cap(*failure_renderer, 1);
+        failure_renderer->set_viewport(0, 0, 64, 64);
+        mw34::materials::set_active_surface_key({2, 2, 1, 0x11223344ULL});
+        const auto unused = failure_renderer->create_texture(2, 2, native_pixels, 1);
+        far_surface.handle = failure_renderer->create_texture(2, 2, native_pixels, 1);
+        near_surface.handle = failure_renderer->create_texture(2, 2, native_pixels, 1);
+        mw34::materials::clear_active_surface_key();
+        mw34::vkscene::PreloadFaultInjection fault{};
+        fault.override_budget = true;
+        fault.synthetic_heap_budget_bytes = 16 * gib;
+        fault.fail_on_allocation_attempt = attempt;
+        fault.injected_result = result;
+        set_preload_fault_injection(*failure_renderer, fault);
+        failure_renderer->mission_changed({});
+        const auto stopped = preload_test_state(*failure_renderer);
+        const std::size_t nearby_native_attempt = materials ? 5U : 4U;
+        const bool nearby_native_completed = attempt > nearby_native_attempt;
+        const std::uint64_t expected_native_bytes =
+            nearby_native_completed ? sizeof(native_pixels) : 0;
+        require(stopped.last_preload_stopped && stopped.stop_log_lines == 1 &&
+                    stopped.preload_allocation_attempts == attempt &&
+                    stopped.preload_allocation_successes == attempt - 1 &&
+                    stopped.stop_info.reason == (result == VK_ERROR_OUT_OF_DEVICE_MEMORY
+                        ? PreloadStopReason::out_of_device_memory : PreloadStopReason::out_of_host_memory),
+                "Mid-preload allocation failure did not stop optional warming once");
+        require(!stopped.ordered_prepared_assets.empty() &&
+                    stopped.ordered_prepared_assets.front() == "mech_authored.flt" &&
+                    stopped.ordered_native_handles ==
+                        std::vector<int32_t>{near_surface.handle, far_surface.handle} &&
+                    stopped.native_staged_bytes == expected_native_bytes &&
+                    is_texture_gpu_resident(*failure_renderer, near_surface.handle) ==
+                        nearby_native_completed &&
+                    has_texture_receipt(*failure_renderer, near_surface.handle) ==
+                        nearby_native_completed &&
+                    !is_texture_gpu_resident(*failure_renderer, far_surface.handle) &&
+                    !has_texture_receipt(*failure_renderer, far_surface.handle) &&
+                    !is_texture_gpu_resident(*failure_renderer, unused) &&
+                    !has_texture_receipt(*failure_renderer, unused),
+                "Preload priority or exclusion of unreferenced native albedos changed");
+        require(!has_partial_model_buffer_entry(*failure_renderer, 0x4343000000000001ULL),
+                "Failed geometry allocation poisoned the immutable buffer cache");
+        if (stopped.failed_texture_handle >= 0) {
+          require(!has_partial_texture_cache_entry(*failure_renderer, stopped.failed_texture_handle) &&
+                      !is_texture_gpu_resident(*failure_renderer, stopped.failed_texture_handle) &&
+                      !has_texture_receipt(*failure_renderer, stopped.failed_texture_handle) &&
+                      shared_texture_staging_size(*failure_renderer) <= 64 * 1024 * 1024,
+                  "Failed texture/staging allocation leaked a cache entry or success receipt");
+        }
+        require(stopped.pending_count == 0 && stopped.peak_batch_bytes <= 64 * 1024 * 1024,
+                "Stopped preload left queued resources or exceeded its byte cap");
+        if (attempt >= 4) {
+          require(stopped.batch_submissions == 1 && stopped.peak_pending_count >= 2 &&
+                      stopped.pending_texture_receipt_observations > 0 &&
+                      stopped.premature_texture_receipts == 0 &&
+                      stopped.prepared_staged_bytes > 0 &&
+                      is_model_geometry_gpu_uploaded(*failure_renderer, 0x4343000000000001ULL),
+                  "Frontend OOM did not finalize earlier queued geometry and texture receipts");
+          require(!stopped.completed_texture_handles.empty(),
+                  "Earlier queued prepared texture lost its completed receipt");
+          for (const auto handle : stopped.completed_texture_handles)
+            require(has_texture_receipt(*failure_renderer, handle) &&
+                        is_texture_gpu_resident(*failure_renderer, handle),
+                    "Frontend published a receipt for an incomplete preload image");
+        }
+        failure_renderer->begin_scene();
+        failure_renderer->end_scene();
+        require(preload_test_state(*failure_renderer).preload_allocation_attempts == attempt &&
+                    preload_test_state(*failure_renderer).stop_log_lines == 1,
+                "First-world pass repeated a stopped mission preload");
+        const auto recovered = frame(failure_renderer.get(), true, true);
+        require(recovered == expected_recovered && failure_renderer->asset_statistics().geometry_uploads == 1,
+                "A real lazy draw failed after preload interruption or repeated warm geometry");
+        platform::DrawState native_state{};
+        native_state.texture = near_surface.handle;
+        quad(*failure_renderer, 0, 64, .1f, 0xffffffff, native_state);
+        std::vector<uint32_t> lazy_pixels;
+        int lazy_width = 0, lazy_height = 0;
+        require(failure_renderer->read_back(&lazy_pixels, &lazy_width, &lazy_height) &&
+                    is_texture_gpu_resident(*failure_renderer, near_surface.handle) &&
+                    lazy_width == control_width && lazy_height == control_height &&
+                    lazy_pixels == expected_native,
+                "Deferred native albedo did not upload lazily and draw after preload OOM");
+      }
+    }
+    auto capped = make_check_renderer(window, backend, quality, recovery_options);
+    capped->set_viewport(0, 0, 64, 64);
+    mw34::vkscene::PreloadFaultInjection cap{};
+    cap.override_budget = true;
+    cap.synthetic_heap_budget_bytes = mw34::vkscene::kMinimumPreloadHeadroomBytes;
+    set_preload_fault_injection(*capped, cap);
+    capped->mission_changed({});
+    const auto capped_state = preload_test_state(*capped);
+    require(capped_state.last_preload_stopped &&
+                capped_state.stop_info.reason == PreloadStopReason::budget_denied &&
+                capped_state.stop_info.heap_budget_bytes == capped_state.stop_info.headroom_bytes &&
+                capped_state.prepared_staged_bytes == 0 && capped_state.native_staged_bytes == 0,
+            "Actual preload allocations crossed the synthetic budget cap");
+    require(frame(capped.get(), true, true) == expected_recovered,
+            "Budget-denied resources did not render through the ordinary lazy path");
+  }
   require((first[20 * 64 + 23] & 0xff00) != 0 &&
               (first[20 * 64 + 23] & 255) == 0,
           "Prepared geometry/materials were not drawn or source geometry drew "
@@ -1361,6 +2912,71 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   renderer->release_texture(named.texture);
   require(renderer->asset_statistics().named_textures == 2,
           "Named texture replacement was not recorded");
+
+  constexpr unsigned flare_size = 64;
+  std::vector<uint8_t> flare_source(flare_size * flare_size * 4, 255);
+  for (unsigned y = 0; y < flare_size; ++y)
+    for (unsigned x = 0; x < flare_size; ++x)
+      flare_source[(std::size_t(y) * flare_size + x) * 4 + 3] =
+          uint8_t((x * 3 + y * 5) % 256);
+  const auto named_uploads_before_flare =
+      renderer->asset_statistics().named_textures;
+  const auto flare = renderer->create_named_texture(
+      "lflare2", flare_size, flare_size, flare_source.data(), 1);
+  auto flare_state = cc_mw3_re::testing::named_texture_state(*renderer, flare);
+  require(flare_state.generated_rgba && flare_state.width == flare_size &&
+              flare_state.height == flare_size &&
+              flare_state.source_width == flare_size &&
+              flare_state.source_height == flare_size,
+          "Generated flare did not retain its source dimensions");
+  const auto first_generation_pixels = flare_state.pixels;
+  renderer->update_texture(flare, flare_size, flare_size, flare_source.data());
+  flare_state = cc_mw3_re::testing::named_texture_state(*renderer, flare);
+  require(flare_state.generated_rgba && flare_state.width == flare_size &&
+              flare_state.height == flare_size &&
+              flare_state.source_width == flare_size &&
+              flare_state.source_height == flare_size &&
+              flare_state.pixels == first_generation_pixels,
+          "Generated flare reload changed dimensions or pixels");
+  bool rejected_changed_flare_source = false;
+  try {
+    renderer->update_texture(flare, flare_size + 1, flare_size,
+                             flare_source.data());
+  } catch (const std::runtime_error &error) {
+    rejected_changed_flare_source =
+        std::string_view(error.what()) ==
+        "Generated flare reload changed its source dimensions";
+  }
+  require(rejected_changed_flare_source,
+          "Generated flare reload did not reject changed source dimensions");
+  require(renderer->asset_statistics().named_textures ==
+              named_uploads_before_flare,
+          "Generated flare was counted as a prepared replacement upload");
+  renderer->release_texture(flare);
+
+  auto original_flare_assets = sdlfe::CoreCriticalAssets{};
+  original_flare_assets.flare_style = "original";
+  auto original_flare_renderer =
+      make_check_renderer(window, backend, {}, original_flare_assets);
+  const auto original_flare = original_flare_renderer->create_named_texture(
+      "lflare2", flare_size, flare_size, flare_source.data(), 1);
+  auto original_flare_state = cc_mw3_re::testing::named_texture_state(
+      *original_flare_renderer, original_flare);
+  std::vector<uint32_t> original_flare_pixels(flare_size * flare_size);
+  std::memcpy(original_flare_pixels.data(), flare_source.data(),
+              flare_source.size());
+  require(!original_flare_state.generated_rgba &&
+              original_flare_state.pixels == original_flare_pixels,
+          "Original flare style changed uploaded source bytes");
+  original_flare_renderer->update_texture(
+      original_flare, flare_size, flare_size, flare_source.data());
+  original_flare_state = cc_mw3_re::testing::named_texture_state(
+      *original_flare_renderer, original_flare);
+  require(!original_flare_state.generated_rgba &&
+              original_flare_state.pixels == original_flare_pixels,
+          "Original flare reload generated or changed source bytes");
+  original_flare_renderer->release_texture(original_flare);
+
   renderer->reset_scene_resources();
   matrix[2] = matrix[9] = matrix[11] = 0;
   require(zcls::object3d_set_matrix(control, matrix) == 0,
@@ -1610,11 +3226,15 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   zmod::fog() = saved_fog;
   if (materials) {
     check_terrain_surface_normals(window, backend);
+    check_native_sky_unlit(window, backend);
   }
 }
 } // namespace
 
 #include "geometry_checks.inc"
+#include "scene_binding_checks.inc"
+#include "producer_view_checks.inc"
+#include "parallax_checks.inc"
 #include "platform_checks.inc"
 #include "prepared_gpu_checks.inc"
 #include "ultrawide_checks.inc"
@@ -1991,6 +3611,67 @@ void check_campaign_lighting_and_policy() {
 }
 
 void check_renderer_bridge_config() {
+  mw34::materials::SurfaceNormals catalog;
+  const mw34::materials::SurfaceKey water_key{64, 64, 1, 0x1234};
+  catalog.bindings.emplace(water_key, 0);
+  catalog.pack.images.push_back({"water", 1, 1, 0x5678, {}});
+  mw34::detail::Bindings detail_bindings;
+  mw34::detail::register_catalog(detail_bindings, catalog, 1, 7);
+  const mw34::materials::SurfaceKey surf_key{32, 32, 1, 0x2345};
+  mw34::materials::SurfaceNormals surf_catalog;
+  surf_catalog.bindings.emplace(surf_key, 0);
+  surf_catalog.pack.images.push_back({"surf", 1, 1, 0x6789, {}});
+  mw34::detail::register_catalog(detail_bindings, surf_catalog, 2, 8);
+  const mw34::materials::SurfaceKey cloud_key{128, 64, 1, 0x3456};
+  mw34::materials::SurfaceNormals cloud_catalog;
+  cloud_catalog.bindings.emplace(cloud_key, 0);
+  cloud_catalog.pack.images.push_back({"cloud", 1, 1, 0x789a, {}});
+  mw34::detail::register_catalog(detail_bindings, cloud_catalog, 3, 9);
+  mw34::detail::Settings detail_settings;
+  detail_settings.water = true;
+  const auto *water_binding =
+      mw34::detail::find_binding(detail_bindings, water_key, detail_settings);
+  require(water_binding && water_binding->role == 1 &&
+              water_binding->normal_index == 7,
+          "exact water surface identity did not bind its detail role/image");
+  detail_settings.clouds = true;
+  const auto *surf_binding =
+      mw34::detail::find_binding(detail_bindings, surf_key, detail_settings);
+  const auto *cloud_binding =
+      mw34::detail::find_binding(detail_bindings, cloud_key, detail_settings);
+  require(surf_binding && surf_binding->role == 2 && cloud_binding &&
+              cloud_binding->role == 3,
+          "surf/cloud catalog identities did not bind their detail roles");
+  detail_settings.water = false;
+  require(!mw34::detail::find_binding(detail_bindings, water_key,
+                                      detail_settings),
+          "disabled water detail retained its role or image");
+  require(!mw34::detail::find_binding(
+              detail_bindings,
+              mw34::materials::SurfaceKey{64, 64, 1, 0x9999}, detail_settings),
+          "unmatched texture identity was not inferred as water");
+  detail_settings.water = true;
+  mw34::sun::Uniform detail_uniform{};
+  mw34::detail::uniform(detail_uniform, water_binding->role, detail_settings,
+                        2.0);
+  require(detail_uniform.detail[0] == 1.0f && detail_uniform.detail[1] > 0,
+          "enabled detail role did not reach the shader uniform path");
+  detail_settings.water = false;
+  mw34::sun::Uniform legacy_uniform{};
+  mw34::detail::uniform(legacy_uniform, 1, detail_settings, 2.0);
+  require(legacy_uniform.detail == std::array<float, 4>{} &&
+              legacy_uniform.detail_motion == std::array<float, 4>{},
+          "disabled surface detail changed the legacy shader uniform path");
+  // A zero-only check cannot distinguish an untouched block from a cleared one.
+  legacy_uniform.detail = {1.f, 2.f, 3.f, 4.f};
+  legacy_uniform.detail_motion = {5.f, 6.f, 7.f, 8.f};
+  const auto preserved_detail = legacy_uniform.detail;
+  const auto preserved_motion = legacy_uniform.detail_motion;
+  mw34::detail::uniform(legacy_uniform, 1, detail_settings, 2.0);
+  require(legacy_uniform.detail == preserved_detail &&
+              legacy_uniform.detail_motion == preserved_motion,
+          "disabled surface detail overwrote existing uniform fields");
+
   // 1. Zero function-static env cache test
   require(mw34::detail::presentation_time(1, 10.5) == 10.5,
           "detail_fixed_time 10.5 mismatch");
@@ -2010,18 +3691,43 @@ void check_renderer_bridge_config() {
   sdlfe::CoreCriticalQuality quality{};
   quality.antialiasing = "fxaa";
   quality.anisotropy = "16";
+  quality.draw_distance = 1600;
 
   sdlfe::CoreCriticalAssets assets{};
   assets.lighting = "normal";
   assets.geometry = "gpu";
   assets.sun_azimuth = "60";
   assets.sun_elevation = "40";
+  assets.water_detail_explicit = true;
+  assets.water_detail = true;
+  assets.cloud_detail_explicit = true;
+  assets.cloud_detail = true;
 
   auto cfg_dxgi = cc_mw3_re::configure_bridge(
       sdlfe::RendererBackend::core_critical_dxgi, quality, assets);
   require(cfg_dxgi.dxgi_present == true, "dxgi_present true mismatch");
   require(cfg_dxgi.fxaa == true, "fxaa propagation mismatch");
   require(cfg_dxgi.af_level == 16, "af_level propagation mismatch");
+  require(cfg_dxgi.draw_distance == 1600,
+          "draw-distance propagation mismatch");
+  for (const unsigned draw_distance : {2400u, 3200u}) {
+    auto extended_quality = quality;
+    extended_quality.draw_distance = draw_distance;
+    const auto extended_config = cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, extended_quality, assets);
+    require(extended_config.draw_distance == draw_distance,
+            "extended draw-distance propagation mismatch");
+  }
+  auto invalid_quality = quality;
+  invalid_quality.draw_distance = 1000;
+  bool invalid_distance_rejected = false;
+  try {
+    (void)cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, invalid_quality, assets);
+  } catch (const std::runtime_error &) {
+    invalid_distance_rejected = true;
+  }
+  require(invalid_distance_rejected, "unsupported draw distance was accepted");
   require(cfg_dxgi.normal_maps_enabled == true,
           "normal_maps_enabled propagation mismatch");
   require(cfg_dxgi.prepared_cache == true,
@@ -2038,6 +3744,146 @@ void check_renderer_bridge_config() {
           "temporal_inputs propagation mismatch");
   require(cfg_dxgi.fixture_lights == false,
           "fixture_lights propagation mismatch");
+  require(cfg_dxgi.water_detail && cfg_dxgi.cloud_detail,
+          "surface detail launch options did not reach renderer config");
+  sdlfe::CoreCriticalAssets local_light_assets{};
+  local_light_assets.lighting = "normal";
+  local_light_assets.geometry = "gpu";
+  local_light_assets.dynamic_lighting_explicit = true;
+  local_light_assets.dynamic_lighting = true;
+  local_light_assets.effect_lights = true;
+  local_light_assets.effect_light_catalog = "effects.bin";
+  local_light_assets.fixture_lights = true;
+  local_light_assets.mech_headlights = true;
+  local_light_assets.stock_headlights = "stock-headlights.bin";
+  local_light_assets.headlight_bindings = "headlights.txt";
+  auto local_light_config = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, local_light_assets);
+  require(local_light_config.sun && local_light_config.effect_lights &&
+              local_light_config.fixture_lights &&
+              local_light_config.mech_headlights &&
+              local_light_config.effect_light_catalog == "effects.bin" &&
+              local_light_config.stock_headlights == "stock-headlights.bin" &&
+              local_light_config.headlight_bindings == "headlights.txt",
+          "explicit local-light launch options did not reach renderer config");
+  const auto local_settings =
+      mw34::effects::settings(local_light_config, true);
+  require(local_settings.enabled && local_settings.fixtures,
+          "effect-light settings ignored the renderer launch config");
+  struct RestoreLightEnvironment {
+    struct Value {
+      const char *name;
+      std::optional<std::string> previous;
+    } values[9];
+
+    explicit RestoreLightEnvironment(const std::array<const char *, 9> &names) {
+      for (std::size_t i = 0; i < names.size(); ++i) {
+        values[i].name = names[i];
+        if (const char *value = std::getenv(names[i]))
+          values[i].previous = value;
+      }
+    }
+
+    ~RestoreLightEnvironment() {
+      for (const auto &value : values)
+        local_light_test_env(value.name,
+                             value.previous ? value.previous->c_str() : nullptr);
+    }
+  } restore_light_environment({"MW34_EFFECT_LIGHTS", "MW34_FIXTURE_LIGHTS",
+                               "MW34_MECH_HEADLIGHTS", "MW34_EFFECT_LIGHT_CATALOG",
+                               "MW34_STOCK_HEADLIGHTS", "MW34_HEADLIGHT_BINDINGS",
+                               "MW34_SURFACE_NORMALS", "MW34_WORLD_NORMALS",
+                               "MW34_SUN_SHADOWS"});
+  local_light_test_env("MW34_EFFECT_LIGHTS", "1");
+  local_light_test_env("MW34_FIXTURE_LIGHTS", "1");
+  local_light_test_env("MW34_MECH_HEADLIGHTS", "1");
+  local_light_test_env("MW34_EFFECT_LIGHT_CATALOG", "diagnostic-effects.bin");
+  local_light_test_env("MW34_STOCK_HEADLIGHTS", "diagnostic-headlights.bin");
+  local_light_test_env("MW34_HEADLIGHT_BINDINGS", "diagnostic-bindings.txt");
+  local_light_test_env("MW34_SURFACE_NORMALS", "diagnostic-surface.txt");
+  local_light_test_env("MW34_WORLD_NORMALS", "diagnostic-world.txt");
+  auto selected_environment_assets = local_light_assets;
+  selected_environment_assets.environment_packs_explicit = true;
+  const auto selected_environment_config = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, selected_environment_assets);
+  require(selected_environment_config.environment_packs_explicit &&
+              selected_environment_config.surface_normal_catalog.empty() &&
+              selected_environment_config.world_normal_manifest.empty(),
+          "explicit environment selection retained diagnostic normal catalogs");
+  local_light_test_env("MW34_SUN_SHADOWS", "1");
+  sdlfe::CoreCriticalAssets shadow_assets{};
+  shadow_assets.lighting = "normal";
+  shadow_assets.geometry = "gpu";
+  auto diagnostic_shadows = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, shadow_assets);
+  require(diagnostic_shadows.sun_shadows,
+          "MW34_SUN_SHADOWS diagnostic setting was not read");
+  shadow_assets.sun_shadows_explicit = true;
+  shadow_assets.sun_shadows = false;
+  const auto launcher_shadows_off = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, shadow_assets);
+  require(!launcher_shadows_off.sun_shadows,
+          "explicit launcher shadows off did not override MW34_SUN_SHADOWS=1");
+  local_light_test_env("MW34_SUN_SHADOWS", "0");
+  shadow_assets.sun_shadows = true;
+  const auto launcher_shadows_on = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, shadow_assets);
+  require(launcher_shadows_on.sun_shadows,
+          "explicit launcher shadows on did not override MW34_SUN_SHADOWS=0");
+  local_light_test_env("MW34_SUN_SHADOWS", "invalid");
+  shadow_assets.sun_shadows = false;
+  const auto explicit_shadows_invalid_env = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, shadow_assets);
+  require(!explicit_shadows_invalid_env.sun_shadows,
+          "explicit launcher shadows choice did not override an invalid diagnostic value");
+  shadow_assets.sun_shadows_explicit = false;
+  bool invalid_diagnostic_rejected = false;
+  try {
+    (void)cc_mw3_re::configure_bridge(sdlfe::RendererBackend::core_critical_wsi,
+                                      {}, shadow_assets);
+  } catch (const std::runtime_error &) {
+    invalid_diagnostic_rejected = true;
+  }
+  require(invalid_diagnostic_rejected,
+          "invalid MW34_SUN_SHADOWS diagnostic value was silently accepted");
+  local_light_test_env("MW34_SUN_SHADOWS", "1");
+  shadow_assets = {};
+  const auto shadows_without_sun = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, shadow_assets);
+  require(!shadows_without_sun.sun && !shadows_without_sun.sun_shadows,
+          "diagnostic sun shadows remained enabled without sun lighting");
+  local_light_assets.dynamic_lighting = false;
+  auto disabled_light_config = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, local_light_assets);
+  require(disabled_light_config.sun && !disabled_light_config.effect_lights &&
+              !disabled_light_config.fixture_lights &&
+              !disabled_light_config.mech_headlights &&
+              disabled_light_config.effect_light_catalog.empty() &&
+              disabled_light_config.stock_headlights.empty() &&
+              disabled_light_config.headlight_bindings.empty(),
+          "explicit disabled dynamic lighting changed sun or retained local lights");
+  sdlfe::CoreCriticalAssets no_sun_light_assets{};
+  no_sun_light_assets.dynamic_lighting_explicit = true;
+  no_sun_light_assets.dynamic_lighting = true;
+  no_sun_light_assets.effect_lights = true;
+  no_sun_light_assets.effect_light_catalog = "effects.bin";
+  no_sun_light_assets.fixture_lights = true;
+  no_sun_light_assets.mech_headlights = true;
+  no_sun_light_assets.stock_headlights = "stock-headlights.bin";
+  no_sun_light_assets.headlight_bindings = "headlights.txt";
+  const auto no_sun_light_config = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, no_sun_light_assets);
+  require(!no_sun_light_config.sun && !no_sun_light_config.effect_lights &&
+              !no_sun_light_config.fixture_lights &&
+              !no_sun_light_config.mech_headlights &&
+              no_sun_light_config.effect_light_catalog.empty() &&
+              no_sun_light_config.stock_headlights.empty() &&
+              no_sun_light_config.headlight_bindings.empty(),
+          "local lights remained enabled without the sun pipeline");
+  const auto no_sun_effect_settings =
+      mw34::effects::settings(no_sun_light_config, false);
+  require(!no_sun_effect_settings.enabled && !no_sun_effect_settings.fixtures,
+          "local-light settings enabled effects without the sun pipeline");
   require(cfg_dxgi.shadow_batch == false, "shadow_batch propagation mismatch");
 
   auto cfg_wsi = cc_mw3_re::configure_bridge(
@@ -2046,6 +3892,62 @@ void check_renderer_bridge_config() {
   require(cfg_wsi.normal_maps_enabled == false,
           "normal_maps_enabled false mismatch");
   require(cfg_wsi.sun == false, "sun false mismatch");
+  require(cfg_wsi.draw_distance == 800, "draw-distance default mismatch");
+
+  // POM is opt-in and must not disappear when it is the only explicit option.
+  sdlfe::CoreCriticalAssets pom_assets{};
+  require(!pom_assets.pom, "POM must default off");
+  require(pom_assets.empty(), "Default Core Critical assets must be empty");
+  require(!cfg_dxgi.parallax_materials && !cfg_wsi.parallax_materials,
+          "Default bridge configuration must leave POM off");
+  pom_assets.pom = true;
+  require(!pom_assets.empty(), "Explicit POM must make assets nonempty");
+  pom_assets.pom = false;
+  require(pom_assets.empty(), "POM off must preserve empty assets");
+  pom_assets.environment_packs_explicit = true;
+  require(!pom_assets.empty(),
+          "Explicit empty environment-pack selection must reach the renderer");
+  pom_assets.environment_packs_explicit = false;
+
+  struct PomCase {
+    sdlfe::RendererBackend backend;
+    const char *lighting;
+    bool pom;
+    bool accepted;
+  };
+  const PomCase pom_cases[] = {
+      {sdlfe::RendererBackend::core_critical_dxgi, "off", false, true},
+      {sdlfe::RendererBackend::core_critical_wsi, "flat", false, true},
+      {sdlfe::RendererBackend::sdl, "off", false, true},
+      {sdlfe::RendererBackend::core_critical_dxgi, "normal", true, true},
+      {sdlfe::RendererBackend::core_critical_wsi, "normal", true, true},
+      {sdlfe::RendererBackend::core_critical_dxgi, "off", true, false},
+      {sdlfe::RendererBackend::core_critical_wsi, "off", true, false},
+      {sdlfe::RendererBackend::core_critical_dxgi, "flat", true, false},
+      {sdlfe::RendererBackend::core_critical_wsi, "flat", true, false},
+      {sdlfe::RendererBackend::sdl, "normal", true, false},
+  };
+  for (const auto &test : pom_cases) {
+    pom_assets = {};
+    pom_assets.lighting = test.lighting;
+    pom_assets.pom = test.pom;
+    bool rejected = false;
+    try {
+      const auto config =
+          cc_mw3_re::configure_bridge(test.backend, {}, pom_assets);
+      require(test.accepted, "Unsupported POM configuration was accepted");
+      require(config.parallax_materials == test.pom,
+              "Typed POM option did not reach the renderer bridge");
+      require(config.normal_maps_enabled == (pom_assets.lighting == "normal"),
+              "POM changed normal-map permission");
+    } catch (const std::runtime_error &error) {
+      require(std::string_view(error.what()).find("--cc-pom 1 requires ") == 0,
+              "POM configuration failed for an unrelated reason");
+      rejected = true;
+    }
+    require(rejected != test.accepted,
+            "POM configuration acceptance mismatch");
+  }
 
   check_campaign_lighting_and_policy();
 
@@ -2054,19 +3956,28 @@ void check_renderer_bridge_config() {
 
 int main(int argc, char **argv) {
   bool geometry_check = false, ultrawide_check = false;
-  bool native_wsi = false, quality_check = false, prepared_check = false,
-       material_check = false;
+  bool native_wsi = false, quality_check = false, prepared_check = false, material_check = false,
+       scene_bindings_check = false, pom_check = false, producer_view_check = false,
+       menu_ripple_check = false;
   sdlfe::CoreCriticalQuality quality;
   for (int i = 1; i < argc; ++i) {
     const std::string_view option(argv[i]);
     if (option == "--render-thread")
       threaded_checks = true;
+    else if (option == "--menu-ripple")
+        menu_ripple_check = true;
     else if (option == "--wsi")
       native_wsi = true;
     else if (option == "--prepared")
       prepared_check = true;
     else if (option == "--geometry")
       geometry_check = true;
+    else if (option == "--scene-bindings")
+      scene_bindings_check = true;
+    else if (option == "--producer-view")
+      producer_view_check = true;
+    else if (option == "--pom")
+      pom_check = true;
     else if (option == "--ultrawide")
       ultrawide_check = true;
     else if (option == "--materials")
@@ -2076,9 +3987,11 @@ int main(int argc, char **argv) {
       quality.anisotropy = "16";
       quality_check = true;
     } else {
-      std::fprintf(stderr, "usage: mw3ccvulkan_checks [--wsi] "
-                           "[--prepared|--materials] [--quality MODE]\n");
-      return 1;
+        std::fprintf(
+            stderr, "usage: mw3ccvulkan_checks [--wsi] "
+                    "[--menu-ripple|--prepared|--materials|--scene-bindings|--producer-view|--pom] "
+                    "[--quality MODE]\n");
+        return 1;
     }
   }
   if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -2091,6 +4004,8 @@ int main(int argc, char **argv) {
   int result = 0;
   try {
     check_local_light_core();
+    check_native_fixture_core();
+    check_native_fixture_sources_core();
     check_renderer_bridge_config();
     cc_mw3_re::platform::run_platform_checks();
     require(window != nullptr, SDL_GetError());
@@ -2166,9 +4081,24 @@ int main(int argc, char **argv) {
     const auto backend = native_wsi
                              ? sdlfe::RendererBackend::core_critical_wsi
                              : sdlfe::RendererBackend::core_critical_dxgi;
-    if (ultrawide_check)
+    if (menu_ripple_check)
+        check_menu_ripple_gpu(window, backend);
+    else if (producer_view_check)
+        check_producer_views(window, backend);
+    else if (scene_bindings_check)
+      check_scene_bindings(window, backend);
+    else if (pom_check) {
+      check_owned_rigid_capture(window, backend);
+      check_parallax(window, backend);
+    }
+    else if (ultrawide_check)
       check_ultrawide(window, backend);
     else if (geometry_check) {
+      check_radial_world_visibility();
+      check_radial_model_views(window, backend);
+      check_campaign_fog_color();
+      check_distance_fog(window, backend);
+      check_owned_rigid_capture(window, backend);
       check_strict_geometry(window, backend);
       const auto gpu = check_native_geometry(window, backend);
       const auto reference = check_native_geometry(window, backend, true);
@@ -2186,16 +4116,28 @@ int main(int argc, char **argv) {
                     "mismatch");
       }
       check_gpu_prepared(window, backend);
+      check_gpu_prepared_skin_eviction(window, backend);
     } else if (prepared_check) {
-      if (material_check && threaded_checks)
+      if (material_check && threaded_checks) {
         check_sealed_environment(window, backend);
+        check_lab_preview_lighting(window, backend);
+      }
       check_prepared(window, backend, quality, material_check);
     } else if (quality_check)
       check_quality(window, backend, quality);
     else {
       check_local_light_gpu(window, backend);
+      check_native_fixture_gpu(window, backend);
       check_scene(window, backend);
+      check_menu_background_gpu(window, backend);
+      check_menu_ripple_gpu(window, backend);
     }
+    if (native_wsi || material_check)
+      check_fullscreen_resize(window, backend);
+    // The staging checks write a temp effect-light catalog and set effect-light environment
+    // variables (restored by their guards), so they run only in the --materials variants.
+    if (material_check)
+      check_local_light_staging(window, backend);
   } catch (const std::exception &error) {
     std::fprintf(stderr, "%s\n", error.what());
     result = 1;

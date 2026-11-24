@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <optional>
 #include <stdexcept>
 
 namespace mw34::tiled {
@@ -15,6 +17,31 @@ inline constexpr std::size_t max_width = 5120;
 inline constexpr std::size_t max_height = 2160;
 inline constexpr std::size_t capacity = 64;
 inline constexpr std::size_t words_per_tile = 65;
+inline constexpr std::size_t max_views = 64;
+
+// Admission and upload must use the same aligned aggregate storage budget.
+// Failed reservations leave both counters intact, including at integer limits.
+struct ViewBudget {
+  uint64_t range{};
+  uint64_t alignment{};
+  uint64_t used{};
+  std::size_t views{};
+
+  [[nodiscard]] std::optional<uint64_t> reserve(uint64_t length) {
+    if (!alignment || views >= max_views || used > range)
+      return std::nullopt;
+    const auto remainder = used % alignment;
+    const auto padding = remainder ? alignment - remainder : 0;
+    if (padding > range - used)
+      return std::nullopt;
+    const auto offset = used + padding;
+    if (length > range - offset)
+      return std::nullopt;
+    used = offset + length;
+    ++views;
+    return offset;
+  }
+};
 
 struct alignas(16) View {
   std::array<float, 12> camera{};
@@ -151,6 +178,32 @@ inline void validate_lights(const effects::Uniform &u) {
 
 using Mat34 = std::array<float, 12>;
 
+// A bad affine transform only disables tiled-light culling for its draw. Keep
+// the report state per renderer so repeated degenerate draws cannot flood logs.
+template <typename CameraBuilder, typename Reporter>
+[[nodiscard]] inline bool try_affine_camera_or_all_lights(
+    Mat34 &camera, unsigned &draw_view, unsigned all_effect_lights,
+    bool &fallback_reported, CameraBuilder &&build_camera, Reporter &&report) {
+  try {
+    camera = build_camera();
+    return true;
+  } catch (const std::exception &error) {
+    draw_view = all_effect_lights;
+    if (!fallback_reported) {
+      report(error.what());
+      fallback_reported = true;
+    }
+    return false;
+  } catch (...) {
+    draw_view = all_effect_lights;
+    if (!fallback_reported) {
+      report("non-standard affine exception");
+      fallback_reported = true;
+    }
+    return false;
+  }
+}
+
 // Row-major 3x4 affine: [ r00 r01 r02 tx ; r10 r11 r12 ty ; r20 r21 r22 tz ]
 // index = row*4 + col
 
@@ -269,6 +322,65 @@ constexpr float kMax = 1e6f;
     throw std::overflow_error("compose_affine: result out of bounds");
 
   return out;
+}
+
+// Admit only the original camera composition. Bound float32 dot-product rounding
+// by its absolute terms, so cancellation at large world coordinates is safe while
+// a billboard's altered orientation still uses its reconstructed camera.
+[[nodiscard]] inline bool matches_model_camera(const Mat34 &world_to_camera,
+                                               const Mat34 &model_to_world,
+                                               const Mat34 &model_to_camera) noexcept {
+  if (!detail::valid_result(world_to_camera) || !detail::finite_all(model_to_world) ||
+      !detail::finite_all(model_to_camera))
+    return false;
+  for (unsigned row = 0; row < 3; ++row) {
+    for (unsigned col = 0; col < 4; ++col) {
+      double expected = col == 3 ? world_to_camera[row * 4 + 3] : 0;
+      double magnitude = std::abs(expected);
+      for (unsigned k = 0; k < 3; ++k) {
+        const double term = double(world_to_camera[row * 4 + k]) * model_to_world[k * 4 + col];
+        expected += term;
+        magnitude += std::abs(term);
+      }
+      const double tolerance = 8.0 * 0x1p-23 * magnitude;
+      if (!std::isfinite(expected) || std::abs(expected) > 1e6 ||
+          std::abs(expected - model_to_camera[row * 4 + col]) > tolerance)
+        return false;
+    }
+  }
+  return true;
+}
+
+inline View draw_view(const Mat34 &camera, const std::array<float, 6> &p, unsigned width,
+                      unsigned height, unsigned raster_width, unsigned raster_height);
+
+// draw_view for one draw. Contract for a malformed per-draw projection (e.g. a zero
+// focal length): the draw is drawn without local effect lights (sun and ambient still
+// apply), with a bounded warning (once per renderer), and the game never ends over
+// it. This is deliberate: a malformed projection is broken input and no lighting can
+// be exact from it (every-light shading would still place lights through it).
+// Returns whether `view` was built; otherwise `draw_view_index` = `no_effect_lights`.
+inline bool try_draw_view_or_no_effect_lights(View &view, unsigned &draw_view_index,
+                                              unsigned no_effect_lights, bool &fallback_reported,
+                                              const Mat34 &camera, const std::array<float, 6> &p,
+                                              unsigned width, unsigned height,
+                                              unsigned raster_width, unsigned raster_height) {
+  try {
+    view = draw_view(camera, p, width, height, raster_width, raster_height);
+    return true;
+  } catch (const std::exception &error) {
+    // draw_view and make_view throw only std::invalid_argument today; any exception
+    // here still costs only this draw's effect lights, never the frame.
+    draw_view_index = no_effect_lights;
+    if (!fallback_reported) {
+      std::fprintf(stderr,
+                   "Tiled lights: warning: a draw's projection is unusable (%s; near %g ax %g "
+                   "ay %g); it gets no effect lights (logged once)\n",
+                   error.what(), double(p[0]), double(p[1]), double(p[2]));
+      fallback_reported = true;
+    }
+    return false;
+  }
 }
 
 inline View draw_view(const Mat34 &camera, const std::array<float, 6> &p, unsigned width,

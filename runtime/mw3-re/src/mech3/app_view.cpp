@@ -40,6 +40,7 @@ std::unique_ptr<PlayerView> g_view;
 // view is on the stealth object, the game editor's: editor.md S4).
 void* g_target = nullptr;
 Mech* g_target_mech = nullptr;
+Mech* g_view_mech = nullptr;  // the view's target when it is a mech (vt+0x104 is then 0x0041b980)
 
 zcls::Node* zn(void* p) { return static_cast<zcls::Node*>(p); }
 
@@ -49,7 +50,16 @@ struct ProgramViewHooks : ViewHooks {
     return g_wired && g_p.unported ? g_p.unported(g_p.ctx, key) : 0;
   }
   void camera_set_position(Node3 cam, float x, float y, float z) override { zcls::camera_set_position(zn(cam), x, y, z); }
+  // Ours (#287): a spectator's camera only watches an arena bot. The stock
+  // cameras drive the viewed mech as a player's: the outside camera's look
+  // ahead re-centers its torso (torso_465a00) and the cockpit sets its torso
+  // and controls modes, which fought the bot's own torso aim. With its HUD
+  // (mech_hud.cpp, viewed_hud) it cost the viewed side about 11 points of
+  // win rate in mirrored bot matches (36% to 47% of decided matches once
+  // both were fixed, 300 matches each). None of the calls below touch an
+  // arena bot.
   void torso_cockpit(Mech& m, int32_t on) override {  // 0x0041ce10 -> 0x00464580 on the torso
+    if (m.arena_bot) return;
     if (m.torso) m.torso->set_cockpit(on != 0);
   }
   void camera_set_rotation(Node3 cam, float x, float y, float z) override { zcls::camera_set_rotation(zn(cam), x, y, z); }
@@ -88,12 +98,12 @@ struct ProgramViewHooks : ViewHooks {
   }
   Node3 world_node() override { return g_view ? zcls::camera_world(zn(g_view->camera)) : nullptr; }
   void node_set_intersect(Node3 node, int32_t on) override { zcls::node_set_intersect(zn(node), on); }
-  void query_mode(int32_t on) override { unported("0x004ed9c0", {on}); }
-  // Not ported yet (cls_di.c): no cover over the camera, no ground under it.
-  int32_t segment_query(const float*, const float*, uint8_t* found) override {
-    unported("0x004eed90", {});
-    *found = 0;
-    return 1;
+  void query_mode(int32_t on) override { zcls::segment_options().first_hit = on; }
+  int32_t segment_query(const float* a, const float* b, uint8_t* found) override {  // 0x004eed90
+    zcls::LineHits hits;
+    const int32_t r = zcls::segment_list(zn(world_node()), a, b, &hits);
+    *found = hits.count;
+    return r;
   }
   const float* camera_position(Node3 cam) override {
     const zcls::Node* n = zn(cam);
@@ -125,7 +135,9 @@ struct ProgramViewHooks : ViewHooks {
     if (!c || !c->data || c->cls() != 1) return;
     const uint8_t* list = static_cast<zcls::Camera*>(c->data)->raw + 0x1e4;
     std::memcpy(zmod::zones().list, list, 4);
-    if (target) {
+    // Ours (#287): an arena spectator's camera leaves the watched bot's zones
+    // as the bot's own, like every other bot's.
+    if (target && !world().arena_spectating) {
       std::memcpy(&target->x64, list, 4);
       zcls::node_set_zone(zn(target->node), list[1]);
     }
@@ -140,8 +152,10 @@ struct ProgramViewHooks : ViewHooks {
   void world_fog_altitude(float a, float b) override {
     if (Node3 w = world_node()) zcls::world_set_fog_altitude(zn(w), a, b);
   }
-  bool has_weather() override { return false; }
-  uint32_t weather_flags() override { return 0; }
+  bool has_weather() override { return program_weather_flags() != nullptr; }
+  uint32_t weather_flags() override { return *program_weather_flags(); }
+  void weather_hide() override { program_weather_show(false); }
+  void weather_show() override { program_weather_show(true); }
   // The wall pull-in (0x0040b310) is the port's; its query, on the world.
   void world_segments(float* segs, int32_t points, zcls::SegmentHits* out) override {
     if (Node3 w = world_node()) zcls::segment_query(zn(w), segs, points, out);  // 0x004efcd0
@@ -160,11 +174,21 @@ struct ProgramViewHooks : ViewHooks {
     if (&t == g_target_mech) return mech_camera(*g_target_mech, id);
     return vehicle_camera(id);
   }
-  // A mech's vt+0x100 and vt+0x104 do nothing here (the HUD's set-up is
-  // program_view_attach's); the stealth's vt+0x100 is empty (0x005ac5c0),
-  // its vt+0x104 (0x004a50d0) turns its overlay off.
-  void target_attached(Vehicle&) override {}
-  void target_detached(Vehicle& t) override { program_vehicle_view_detached(t); }
+  // A mech's vt+0x100 / vt+0x104 (0x0041b930 / 0x0041b980): the mission's player suspended while the
+  // view is off it, its HUD on and off; the stealth's vt+0x100 is empty (0x005ac5c0), its vt+0x104
+  // (0x004a50d0) turns its overlay off.
+  // (Which vehicle is a mech: the attach is program_view_attach's, which sets g_target_mech first.)
+  void target_attached(Vehicle& t) override {
+    g_view_mech = &t == g_target_mech ? g_target_mech : nullptr;
+    if (g_view_mech) view_attached(*g_view_mech);
+  }
+  void target_detached(Vehicle& t) override {
+    if (&t == g_view_mech) {
+      g_view_mech = nullptr;
+      return view_detached(*static_cast<Mech*>(&t), g_view && g_view->target == &t);
+    }
+    program_vehicle_view_detached(t);
+  }
   uint32_t mech_dead(Mech& t) override { return t.anim_state == 10 ? 1u : 0u; }
   const float* torso_aim(Mech& t) override {
     static float q[4] = {1, 0, 0, 0};
@@ -184,20 +208,28 @@ struct ProgramViewHooks : ViewHooks {
     return s->pitch_in;
   }
   // The free look's and the cockpit's calls on the mech (playtest #14).
-  void mech_41ca30(Mech& t, int32_t on) override { mech_set_hud_fall(&t, on); }  // 0x0041ca30
-  void mech_41ca60(Mech& t, int32_t on) override {                              // 0x0041ca60
+  void mech_41ca30(Mech& t, int32_t on) override {  // 0x0041ca30
+    if (t.arena_bot) return;  // ours (#287): see torso_cockpit
+    mech_set_hud_fall(&t, on);
+  }
+  void mech_41ca60(Mech& t, int32_t on) override {  // 0x0041ca60
+    if (t.arena_bot) return;  // ours (#287): see torso_cockpit
     t.x634 = on ? t.x634 | 1u : t.x634 & ~1u;
   }
   void torso_464ac0(Mech& t, int32_t on) override {
+    if (t.arena_bot) return;  // ours (#287): see torso_cockpit
     if (t.torso) t.torso->set_pitch_lock(on != 0);
   }
   void torso_465a00(Mech& t, int32_t how) override {
+    if (t.arena_bot) return;  // ours (#287): see torso_cockpit
     if (t.torso) t.torso->centre(how);
   }
   void torso_466190(Mech& t, int32_t m) override {
+    if (t.arena_bot) return;  // ours (#287): see torso_cockpit
     if (t.torso) t.torso->set_mode(m);
   }
   void controls_426780(Mech& t, uint32_t v) override {
+    if (t.arena_bot) return;  // ours (#287): see torso_cockpit
     if (t.controls) t.controls->set_view(static_cast<int32_t>(v));
   }
   // 0x00502da0: [0x0073f75c], the animations' "in the cockpit" (anim block +0x3c).
@@ -304,7 +336,7 @@ void program_view_make(void* camera) {
 
 void program_view_free() {
   g_view.reset();
-  g_target = nullptr, g_target_mech = nullptr;
+  g_target = nullptr, g_target_mech = nullptr, g_view_mech = nullptr;
 }
 
 // Mech3.exe 1.2 @ 0x0041ce30: the view onto the mech in its data's current
@@ -336,6 +368,10 @@ void program_view_look(int32_t look) {
   g_view->mode->set_look(look);
   sync();
 }
+// Ours (#289): after the replay placed the camera, its zone (what the world
+// draws and runs effects in) and fog follow it, as each game frame's do.
+bool program_view_follow_ground() { return g_view && g_view->follow_ground(); }
+void* program_view_world() { return g_view ? zcls::camera_world(zn(g_view->camera)) : nullptr; }
 bool program_view_ground_probe(float x, float y, float z, float* y_after, bool* under) {
   if (!g_view) return false;
   zcls::camera_set_position(zn(g_view->camera), x, y, z);

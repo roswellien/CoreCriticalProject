@@ -116,7 +116,7 @@ MechData* mech_data_new(int32_t roster) {
   g_hooks->on_new(0x234, p);
   mech_data_init(*p);
   p->roster = roster;
-  p->name = mech_name(roster);
+  p->name = mech_model_name(roster);  // ours: a mod row's model (mech_names.h)
   mech_data_load(*p);
   g_hooks->on_new(0xc, nullptr);  // the list's node
   g_cache.push_back(p);
@@ -407,13 +407,13 @@ const char* action_name(int i) {
 
 // Mech3.exe 1.2 @ 0x00433030 (0x00433050 with its flag set)
 float engine_speed(int32_t engine, float mass) {
-  const float rating = static_cast<float>(engine_rating(Engine{engine, 0}));
+  const float rating = static_cast<float>(engine_rating(ConfigEngine{engine, 0}));
   return rating / mass * 1.5f * 10.8f * 0.2778f;  // 0x005bec10, 0x005bec04
 }
 
 // Mech3.exe 1.2 @ 0x00433050
 float engine_kph(int32_t engine, float mass, bool run) {
-  const float rating = static_cast<float>(engine_rating(Engine{engine, 0}));
+  const float rating = static_cast<float>(engine_rating(ConfigEngine{engine, 0}));
   return rating / mass * (run ? 1.5f : 1.0f) * 10.8f;  // 0x005bec10
 }
 

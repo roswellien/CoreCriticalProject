@@ -31,6 +31,158 @@ WORLD_PAGE_BYTES = 16 * 1024**2
 MERGED_NORMAL_DECODED_BYTES = 240 * 1024**2
 REGION_PRIORITY = {'operation1': 0, 'operation2': 1, 'operation3': 2,
                    'operation4': 3, 'training': 4, 'shared-mechs': 5}
+MATERIAL_TARGET_FORMAT = 'MW34-surface-targets-v1'
+MATERIAL_TARGET_BYTES = 4 * 1024**2
+MATERIAL_TARGET_COUNT = 4096
+
+
+def read_material_targets(path, region, files, paths, budget=None):
+    """Read independent source expectations; renderer observations are never inputs.
+
+    The source container remains in the user's game installation. Its logical
+    member, full digest and model slot identify the expected producer. Only the
+    authored sidecar and this metadata belong to the prepared pack closure.
+    """
+    from surface_materials import (
+        MAX_SIDECAR_BYTES,
+        read_surface_materials_file,
+        _validate_identifier,
+        _validate_material_name,
+    )
+
+    with Path(path).open("rb") as stream:
+        raw = stream.read(MATERIAL_TARGET_BYTES + 1)
+    if len(raw) > MATERIAL_TARGET_BYTES:
+        raise ValueError("Material target metadata exceeds byte budget")
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate material target JSON key")
+            result[key] = value
+        return result
+
+    try:
+        document = json.loads(raw, object_pairs_hook=unique)
+    except (RecursionError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Invalid material target JSON") from error
+    if (
+        not isinstance(document, dict)
+        or set(document) != {"schema_version", "targets"}
+        or type(document["schema_version"]) is not int
+        or document["schema_version"] != 1
+        or not isinstance(document["targets"], list)
+        or not 0 < len(document["targets"]) <= MATERIAL_TARGET_COUNT
+        or region == "shared-mechs"
+    ):
+        raise ValueError("Invalid material target document")
+    expected_fields = {
+        "surface_materials",
+        "asset_id",
+        "source",
+        "mesh_uv_hash",
+        "polygon_materials",
+        "surface_keys",
+    }
+    source_fields = {"kind", "member", "sha256", "bytes", "model_slot"}
+    result = []
+    sources = set()
+    if budget is None:
+        budget = dict(owners=set(), bytes=0)
+    for entry in document["targets"]:
+        if not isinstance(entry, dict) or set(entry) != expected_fields:
+            raise ValueError("Invalid material target fields")
+        source = entry["source"]
+        if not isinstance(source, dict) or set(source) != source_fields:
+            raise ValueError("Invalid material target source")
+        if (
+            source["kind"] != "gamez-zbd-v27"
+            or not isinstance(source["member"], str)
+            or source["member"] not in {f"zbd/{r}/gamez.zbd" for r in REGIONS[region]}
+            or not isinstance(source["sha256"], str)
+            or not re.fullmatch("[0-9a-f]{64}", source["sha256"])
+            or type(source["bytes"]) is not int
+            or not 0 < source["bytes"] <= MAX_BYTES
+            or type(source["model_slot"]) is not int
+            or not 0 <= source["model_slot"] < 1048576
+        ):
+            raise ValueError("Invalid or cross-region material source")
+        source_key = (source["member"], source["model_slot"])
+        if source_key in sources:
+            raise ValueError("Duplicate material source target")
+        sources.add(source_key)
+        _validate_identifier(entry["asset_id"], "asset_id")
+        uv_hash = entry["mesh_uv_hash"]
+        if (
+            not isinstance(uv_hash, str)
+            or not re.fullmatch("[0-9a-f]{16}", uv_hash)
+            or int(uv_hash, 16) == 0
+        ):
+            raise ValueError("Invalid independent mesh/UV identity")
+        materials = entry["polygon_materials"]
+        keys = entry["surface_keys"]
+        if (
+            not isinstance(materials, list)
+            or not 0 < len(materials) <= 4096
+            or not isinstance(keys, list)
+            or len(keys) != len(materials)
+        ):
+            raise ValueError("Invalid target polygon/material list")
+        for name, key in zip(materials, keys):
+            _validate_material_name(name)
+            if key is None:
+                if name != "untextured":
+                    raise ValueError("Missing target source image identity")
+                continue
+            if (
+                not isinstance(key, dict)
+                or set(key) != {"width", "height", "format", "hash"}
+                or any(type(key[k]) is not int for k in ("width", "height", "format"))
+                or not 0 < key["width"] <= 4096
+                or not 0 < key["height"] <= 4096
+                or key["format"] not in (1, 2, 3)
+                or not isinstance(key["hash"], str)
+                or not re.fullmatch("[0-9a-f]{16}", key["hash"])
+                or int(key["hash"], 16) == 0
+            ):
+                raise ValueError("Invalid target source image identity")
+        member = entry["surface_materials"]
+        if (
+            not isinstance(member, str)
+            or member not in paths
+            or files[member].get("format") != "BWSFM1"
+        ):
+            raise ValueError("Undeclared target surface-material member")
+        # BWSFM1 is uncompressed. Bounding each unique encoded owner before its
+        # reader runs conservatively bounds the combined decoded allocation.
+        owner = paths[member]
+        if owner not in budget["owners"]:
+            size = files[member]["bytes"]
+            if size > MAX_SIDECAR_BYTES - budget["bytes"]:
+                raise ValueError("Combined target sidecars exceed decoded budget")
+            budget["bytes"] += size
+            budget["owners"].add(owner)
+        parsed = read_surface_materials_file(
+            paths[member],
+            expected_asset_id=entry["asset_id"],
+            expected_mesh_uv_hash=int(uv_hash, 16),
+            expected_batch_materials=materials,
+        )
+        from surface_materials import NO_SURFACE_MATERIAL, NO_SURFACE_IMAGE
+
+        for key, binding in zip(keys, parsed["bindings"]):
+            if (
+                key is None
+                and binding != NO_SURFACE_MATERIAL
+                and parsed["records"][binding]["height_image"] != NO_SURFACE_IMAGE
+            ):
+                raise ValueError("Untextured polygon cannot bind height relief")
+        if sha(paths[member]) != files[member]["sha256"]:
+            raise ValueError("Target sidecar changed during admission")
+        result.append(dict(entry, path=paths[member], sidecar_sha256=files[member]["sha256"]))
+        del parsed
+    return result
 
 
 def sha(path):
@@ -207,6 +359,7 @@ def select(roots, host, verification=None):
     if not isinstance(roots, list) or len(roots) > 32 or any(not isinstance(x,str) for x in roots):
         raise ValueError('Invalid environment pack roots')
     selected = {}; ids = set()
+    target_budget = dict(owners=set(), bytes=0)
     for directory in roots:
         root = canonical_pack_root(directory); manifest = read_json(root/'pack.json')
         ident = manifest.get('id','')
@@ -220,7 +373,7 @@ def select(roots, host, verification=None):
             raise ValueError('Environment pack dependencies/conflicts are unsupported')
         from content_capabilities import require
         require(host, payload, ident)
-        formats = {'ZBD-texture-v1','BWSNR2','BWSNR3','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1'}
+        formats = {'ZBD-texture-v1','BWSNR2','BWSNR3','BWSFM1','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1', MATERIAL_TARGET_FORMAT}
         if not set(payload.get('required_formats',[])).issubset(formats):
             raise ValueError('Unsupported environment resource format')
         files = manifest.get('files',{}); total = 0; seen = {'pack.json'}
@@ -239,10 +392,15 @@ def select(roots, host, verification=None):
             fmt=pin.get('format')
             if fmt:
                 with path.open('rb') as stream: magic=stream.read(24)
-                expected={'BWSNR2':b'BWSNR2\0\0','BWSNR3':b'BWSNR3\0\0','MWFX1':b'MWFX1\0\0\0','MW34SNA1':b'MW34SNA1','MW34SNP1':b'MW34SNP1'}
+                expected={'BWSNR2':b'BWSNR2\0\0','BWSNR3':b'BWSNR3\0\0','BWSFM1':b'BWSFM1\0\0','MWFX1':b'MWFX1\0\0\0','MW34SNA1':b'MW34SNA1','MW34SNP1':b'MW34SNP1'}
                 if fmt=='ZBD-texture-v1':
                     if len(magic)!=24 or struct.unpack('<3I',magic[:12])!=(0,1,0): raise ValueError('Invalid texture bank')
-                elif fmt != 'MW34-lighting-v1' and (fmt not in expected or not magic.startswith(expected[fmt])): raise ValueError('Mislabeled environment payload')
+                elif fmt not in ('MW34-lighting-v1', MATERIAL_TARGET_FORMAT) and (fmt not in expected or not magic.startswith(expected[fmt])): raise ValueError('Mislabeled environment payload')
+                if fmt == 'BWSFM1' and (size > 256 * 1024**2 or
+                        payload.get('required_capabilities', {}).get('surface-materials') != 1):
+                    raise ValueError('Surface-materials capability/byte budget required')
+                if fmt == MATERIAL_TARGET_FORMAT and size > MATERIAL_TARGET_BYTES:
+                    raise ValueError('Material target metadata exceeds byte budget')
             paths[name]=str(path)
         if REGISTRY not in paths: raise ValueError('Undeclared environment registry')
         registry = read_json(Path(paths[REGISTRY])); region = registry.get('operation')
@@ -294,6 +452,31 @@ def select(roots, host, verification=None):
         detail=registry.get('detail',{})
         if set(detail)!={'water','surf','cloud'}: raise ValueError('Missing surface detail resources')
         references.update(detail.values())
+        for role in ('ground_surface_materials', 'surface_materials'):
+            if role in registry:
+                member = registry[role]
+                if not isinstance(member, str) or member not in paths or files[member].get('format') != 'BWSFM1':
+                    raise ValueError('Invalid optional surface-material role')
+                references.add(member)
+        targets = []
+        if 'material_targets' in registry:
+            allowed_registry = {'schema_version', 'payload_profile', 'operation', 'banks',
+                                'detail', 'authored', 'authored_manifest', 'world',
+                                'world_manifest', 'effects', 'lighting', 'ground_surface_materials',
+                                'surface_materials', 'material_targets'}
+            if set(registry) - allowed_registry:
+                raise ValueError('Unknown material-target environment registry field')
+            member = registry['material_targets']
+            if (not isinstance(member, str) or member not in paths
+                    or files[member].get('format') != MATERIAL_TARGET_FORMAT
+                    or MATERIAL_TARGET_FORMAT not in payload.get('required_formats', [])
+                    or 'BWSFM1' not in payload.get('required_formats', [])):
+                raise ValueError('Undeclared material target registry')
+            targets = read_material_targets(paths[member], region, files, paths, target_budget)
+            if sha(paths[member]) != files[member]['sha256']:
+                raise ValueError('Material target metadata changed during admission')
+            references.add(member)
+            references.update(target['surface_materials'] for target in targets)
         if references!=set(paths): raise ValueError('Undeclared or unused environment resources')
         expected_formats={**{p:'ZBD-texture-v1' for p in banks.values()},
                           **{p:'BWSNR2' for p in detail.values()},
@@ -308,7 +491,7 @@ def select(roots, host, verification=None):
                 raise ValueError('Normal manifest differs from declared pages')
             allowed_page_formats={'BWSNR2','BWSNR3'} if role=='world' else {'BWSNR2'}
             if any(files[p].get('format') not in allowed_page_formats for p in page_names): raise ValueError('Invalid normal page declaration')
-        selected[region]=dict(root=str(root),registry=registry,paths=paths,files=files,lighting=lighting)
+        selected[region]=dict(root=str(root),registry=registry,paths=paths,files=files,lighting=lighting,material_targets=targets)
     common={}
     for pack in selected.values():
         registry=pack['registry']

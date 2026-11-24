@@ -18,6 +18,14 @@ Image reconstructedColor;
 VkFramebuffer reconstructionFramebuffer{};
 VkShaderModule coverageFrag{};
 
+// Atmosphere roles 1 and 2 are the sky dome and horizon; 3 is world haze.
+static bool uses_world_range(const Scene &scene, const Draw &draw) {
+  using Purpose = ::platform::ProducerPurpose;
+  const auto &view = draw.producer_view;
+  return view.present && (view.purpose == Purpose::MainWorld || view.purpose == Purpose::WorldZoom) &&
+         !scene.hud && !scene.frontend_canvas && !draw.native_sky && draw.sky != 1 &&
+         draw.sky != 2 && !draw.depth_only && draw.key.zenable;
+}
 // Only opaque resident submissions can replace their shaded RGB during replay.
 // Blended draws and guest uploads keep the existing ordered full-resolution
 // path.
@@ -40,7 +48,7 @@ bool can_reconstruct_world(const Scene &scene, bool upload,
 void render_reconstructed_world(Scene &scene) {
   // Sky routing can use a later draw's camera. Prepare the complete original
   // scene once before splitting, then share that prepared state in both passes.
-  apply_atmosphere(scene, lighting_settings);
+
   struct PreparedScene {
     Renderer &renderer;
     explicit PreparedScene(Renderer &owner, const Scene &source)
@@ -119,9 +127,17 @@ void render_reconstructed_world(Scene &scene) {
       batch.clears.push_back(scene.clears.at(command.index));
     } else {
       const auto &draw = scene.draws.at(command.index);
-      const bool next_opaque = !draw.key.blend && !draw.key.points;
-      if (has_draw && opaque != next_opaque)
-        flush();
+      const bool next_opaque = !draw.key.blend && !draw.key.points && !draw.native_sky && draw.sky != 1 && draw.sky != 2;
+      if (has_draw) {
+        const auto &previous = batch.draws.back();
+        const bool ranged = uses_world_range(scene, draw);
+        // Reconstructed RGB must never include another view or an exempt sky
+        // draw behind a subsequently discarded pixel.
+        if (opaque != next_opaque ||
+            (opaque && (ranged != uses_world_range(scene, previous) ||
+                        (ranged && !::platform::same_producer_view_bits(draw.producer_view, previous.producer_view)))))
+          flush();
+      }
       opaque = next_opaque;
       has_draw = true;
       batch.order.push_back({false, unsigned(batch.draws.size())});
@@ -244,6 +260,7 @@ static unsigned leading_full_clear(const Scene &scene) {
   return scene.has_depth ? cleared : 0;
 }
 void destroy_world_target() {
+  destroy_range_backdrops();
   if (reconstructionFramebuffer)
     f.vkDestroyFramebuffer(device, reconstructionFramebuffer, nullptr);
   reconstructionFramebuffer = {};
@@ -252,7 +269,7 @@ void destroy_world_target() {
   if (reconstructedColor.image)
     f.vkDestroyImage(device, reconstructedColor.image, nullptr);
   if (reconstructedColor.memory)
-    f.vkFreeMemory(device, reconstructedColor.memory, nullptr);
+    release_memory(device, reconstructedColor.memory, nullptr);
   reconstructedColor = {};
   if (worldFramebuffer)
     f.vkDestroyFramebuffer(device, worldFramebuffer, nullptr);
@@ -263,7 +280,7 @@ void destroy_world_target() {
     if (image->image)
       f.vkDestroyImage(device, image->image, nullptr);
     if (image->memory)
-      f.vkFreeMemory(device, image->memory, nullptr);
+      release_memory(device, image->memory, nullptr);
     *image = {};
   }
   reduced_world_active = false;

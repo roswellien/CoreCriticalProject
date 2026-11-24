@@ -1,6 +1,8 @@
 #version 450
 // Development original-mesh bridge: immutable local positions from binding0,
 // original alpha/fog/UV from binding1. Experimental per-pixel world sun.
+layout(location=11) out vec4 radialEye;
+layout(location=12) out vec3 radialScreen;
 layout(location=0) in vec3 position;
 layout(location=1) in uint diffuse;
 layout(location=2) in uint specular;
@@ -10,6 +12,7 @@ layout(location=6) out vec3 worldNormal;
 layout(location=7) out vec3 worldPosition;
 layout(location=8) out vec3 shadowPosition;
 layout(location=9) noperspective out vec2 screenPos;
+layout(location=10) out vec4 fogFactors;
 layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 normal0; vec4 normal1; vec4 normal2;
  vec4 direction; vec4 sunColor; vec4 ambient;
@@ -19,6 +22,12 @@ layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 shadow0; vec4 shadow1; vec4 shadow2; vec4 shadowParams;
  vec4 skyEye; vec4 skyTint; vec4 skyGlow; vec4 skyGrade; vec4 skyBlend;
  vec4 detail; vec4 detailMotion;
+ vec4 weather; vec4 weatherFog;
+ vec4 emissionParams; vec4 emissionRegions[32];
+ vec4 geometryFog0; vec4 geometryFog1;
+ uvec4 tiledLights;
+ vec4 pomParams; vec4 pomUV; vec4 pomAtlas;
+ uvec4 pomPolicy;
 } sun;
 
 layout(location=0) out vec2 uvPerspective;
@@ -33,6 +42,7 @@ layout(push_constant) uniform WorldPush {
 } draw;
 vec4 unpack(uint c) { return vec4((c>>16)&255u,(c>>8)&255u,c&255u,c>>24)/255.0; }
 void main() {
+    fogFactors = vec4(0.0); // Original-mesh bridge retains its staged visibility.
     vec4 p=vec4(position,1.0);
     worldPosition=vec3(dot(sun.world0,p),dot(sun.world1,p),dot(sun.world2,p));
     shadowPosition=worldPosition;
@@ -42,6 +52,8 @@ void main() {
     float w=1.0/rhw;
     vec2 ndc=(screen+0.5)/draw.target.xy*2.0-1.0;
     gl_Position=vec4(ndc*w,rhw*w,w);
+    radialScreen = gl_Position.xyw;
+    radialEye = vec4(camera, float(draw.mode.x >> 16));
     screenPos=screen;
     gl_PointSize=1.0;
     uvPerspective=uvAffine=uv;

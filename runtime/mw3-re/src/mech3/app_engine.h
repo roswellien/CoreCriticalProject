@@ -88,6 +88,15 @@ uint32_t program_slot_count();  // the chosen pilot's campaign's slot count (0x0
 class GameEngine : public Engine {
  public:
   void nav_prebuild() override;  // ours (W58, app_mission.cpp)
+  void arena_start() override;   // ours (#287, app_mission.cpp -> mech3/arena)
+  void arena_tick() override;    // ours (#287, app_mission.cpp -> mech3/arena)
+  // Ours (#289): the 3D replay's frame, through replay_hooks() (replay_hooks.h).
+  bool replay_on() override;
+  void replay_start() override;
+  void replay_before_lists() override;
+  void replay_after_lists() override;
+  void replay_camera() override;
+  void replay_draw() override;
   // A mission started from the command line (our addition, docs/program.md):
   // the pilot's game answers these, and the load goes on to the Core state.
   struct Launch {
@@ -117,6 +126,9 @@ class GameEngine : public Engine {
     // A network debug start's game (type 3, ours: the lobby is not ported):
     // its rules and totals; the pilot's own when it has one.
     MultiplayerGame* multi = nullptr;
+    // Ours (#287): a network start with no player mech, the arena's
+    // spectator seat (mission_launch.h, set_launch_spectator).
+    bool spectator = false;
   };
   void set_launch(const Launch& l);
   // The launch's mech, loadout and skin read again from the chosen pilot's
@@ -155,6 +167,10 @@ class GameEngine : public Engine {
   // state's game from the pilot the pilot screen chose, the ported screen's
   // calls into the ported mission, launch, states and zSound.
   void load_state_enter() override;
+  const char* campaign_briefing() override;   // the line's briefing= (ours)
+  const char* campaign_end_movie() override;  // movie_end= (ours)
+  bool campaign_ends_at(int32_t op, int32_t mission) override;      // the list's last line (ours)
+  bool campaign_world_start(int32_t op, int32_t mission) override;  // ModCampaignGame::world_start (ours)
   const char* game_text(int32_t slot) override;  // the pilot's game's vt+0x04 .. +0x10
   Handle pilot_campaign(Handle p) override;      // 0x00479440: the launch's game
   void mission_results(uint8_t a, uint8_t b) override;  // 0x0047ae10
@@ -319,6 +335,9 @@ class GameEngine : public Engine {
   void push_state(Handle state, uint32_t arg) override;
   bool menu_vcall(Handle obj, uint32_t slot, std::initializer_list<Arg> args, uint32_t* out);
   MenuScreen* screen_of(Handle h, uint32_t* offset = nullptr) const;
+  // The checks': the screens and the heap menu objects made and not yet freed.
+  size_t open_screens() const { return screens_.size(); }
+  size_t menu_objects() const { return menu_states_.size(); }
   void delete_screens();  // the ones still open at exit, and the menu objects
   MenuState* menu_state_of(Handle h) const;
   MenuState* popup_state_of(Handle h) const;  // the controls screen's popups (+0x16760, +0x1677c)
@@ -329,6 +348,7 @@ class GameEngine : public Engine {
   uint32_t message_box3(int32_t a, int32_t caption, int32_t text, const char* s1, const char* s2,
                         const char* s3) override;
   uint32_t message_box_plain(int32_t a, int32_t caption, const std::string& text) override;
+  uint32_t message_box_words(int32_t a, const std::string& caption, const std::string& text) override;
   void credits_restart(Handle screen) override;
   void pilot_state_set_mode(Handle state, int32_t mode) override;
   void action_open(Handle screen) override;
@@ -389,6 +409,7 @@ class GameEngine : public Engine {
   static const char* known_unported(const std::string& key);
   void print_unported_summary() const;
   bool quiet = false;  // no log lines (tests)
+  bool may_ask = true;  // ours: a box may wait for the player (off for checks, shots and hidden runs)
   int lobby_entries() const { return lobby_entries_; }  // ours: the lobby's page entered this many times
 
   // The memory of modules not ported: what is poked reads back.
@@ -448,7 +469,7 @@ class GameEngine : public Engine {
   // own loop runs up to 100,000 frames).
   std::function<uint32_t(int32_t style, int32_t caption, int32_t text)> on_message_box;
   std::string last_box_text;  // the test hook's: message_box3's text as formatted
-  uint32_t game_message_box(int32_t style, int32_t caption, const std::string& text);  // 0x004ac150
+  uint32_t game_message_box(int32_t style, int32_t caption, const std::string& text, const char* caption_words = nullptr);  // 0x004ac150
   void pump_events();                // FIX (A): the window's events, inside the box's loop
   ztwod::MessageBox* message_box_open() const { return box_; }  // the box being answered, or null
 
@@ -500,6 +521,7 @@ class GameEngine : public Engine {
   void camera_set_hse_test(int32_t on) override;  // 0x004f3550
   void update_shadows() override;  // 0x004814e0 on the program's entities (app_mech)
   // zInput (gamez/zinput, docs/input.md).
+  const platform::Input* platform_input() const { return p_.input; }
   void input_init(int32_t commands, const char* map) override;
   void input_start(uint32_t window, uint32_t cmd_show) override;
   void input_devices_shutdown() override;
@@ -614,6 +636,8 @@ class GameEngine : public Engine {
   uint16_t* buffer16() { return buffer_.data(); }
   int buffer_width() const { return width_; }
   void widen_screen(class MenuScreen* s, uint32_t ctor);  // ours: a menu screen spread over a wide canvas (app_menus.cpp)
+  void widen_before_bake(class MenuScreen* s) override;   // ours: the same ahead of a FastMenu bake, by the screen being made
+  uint32_t making_ctor_ = 0;                              // the constructor construct() is in (0 none)
   int buffer_height() const { return height_; }
 
   // Sound: zsnd objects by handle.

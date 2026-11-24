@@ -17,11 +17,21 @@ namespace sdlfe {
 struct LauncherOptions {
   std::string write_dir;
   std::string cfg_install;                // mw3.cfg's install=
+  std::string cfg_pm_install;             // mw3.cfg's pm_install= (Pirate's Moon's folder)
+  std::string cfg_pm_notes;               // mw3.cfg's pm_notes=: the CRC of the PM notes last shown
+  std::string cfg_mw3_notes;              // mw3.cfg's mw3_notes=: the same for MechWarrior 3's start check
+  std::string pm_write_dir;               // Pirate's Moon's settings folder (MW3_PM_WRITE_DIR; else found at its start)
   std::string cfg_mw1_game;               // mw3.cfg's mw1_game= (MechWarrior 1989's folder)
   std::vector<std::string> more_installs;  // a development build's copy
   bool fullscreen = true;
   bool sound = true;  // the main menu's rollover and select sounds from the install (off with --nosound)
-  int win_w = 1280, win_h = 960;
+  int win_w = 1280, win_h = 720;  // 16:9, as the canvas
+  // The window's size from the program's --window, when one was given: else
+  // the 16:9 above (Owen, 2026-11-10: 16:9 everywhere by default), not the
+  // game's own 4:3 default, which letterboxed the canvas.
+  void window_from(bool given, int w, int h) {
+    if (given && w > 0 && h > 0) win_w = w, win_h = h;
+  }
   // For checking (--launcher-shot FILE [--launcher-screen main|setup|pick|work|notes|disc]):
   // the screen drawn once into FILE (a BMP of the 640x480 canvas), no window shown.
   std::string shot, screen = "main";
@@ -32,12 +42,19 @@ struct LauncherOptions {
   // mw3launcher (docs/launcher.md, The two programs): MECHWARRIOR 3 starts
   // this program as a child, `game_bin <install> game_args... --ready-file F`,
   // the launcher hidden from the game's first frame until it exits.
+  std::string program_dir;  // this program's own folder (a bundle's Contents/MacOS, not its Resources)
   std::string game_bin;
+  // mw3pm beside this program, empty when the package has none (PIRATE'S MOON
+  // then stays "Coming later"). Its arguments have nothing of MW3's: it keeps
+  // its own install, settings and saves (docs/launcher.md).
+  std::string pm_bin;
+  std::vector<std::string> pm_args;
   std::vector<std::string> game_args;
   bool hidden = false;  // --hidden: the window never shown (checks), passed on to the game
   bool no_import = false;  // --no-import: no movie conversion here (passed on to the game)
   bool play = false;  // --launcher-play: MECHWARRIOR 3 pressed once the window is up (checks)
   bool quit_after_game = false;  // with play: quit when the game exits (checks)
+  bool play_pm = false;  // --launcher-pm: PIRATE'S MOON pressed once, if it can start, then quit (checks)
   bool play_mw1 = false;  // --launcher-mw1: MECHWARRIOR (1989) pressed once, then quit when it returns (checks)
 };
 

@@ -91,12 +91,25 @@ void Mech::move(float dt, MechAnim* anim, float speed) {
     }
   }
   const Vec3 saved = vec_3c;
-  if (anim) {
-    anim->set_speed(speed);
-    anim->advance(dt);
-    anim->velocity(&vec_3c);
-  }
+  if (anim) anim->set_speed(speed);
+  advance_gait(dt, anim);
+  // The jets read and change the root motion advance_gait just wrote.
   const int jets = jump_jets(dt);
+  animate_gait(dt, anim, jets, saved);
+}
+
+// Ours (#289): the animation half of Move, split out so a replay puppet can
+// animate without simulating. The clip runs on and its root motion lands in
+// +0x44.
+void Mech::advance_gait(float dt, MechAnim* anim) {
+  if (!anim) return;
+  anim->advance(dt);
+  anim->velocity(&vec_3c);
+}
+
+// Ours (#289): the rest of Move's animation half: the ground fit, then the
+// gait pose (leg IK) with the root motion blended in.
+void Mech::animate_gait(float dt, MechAnim* anim, int jets, const Vec3& saved) {
   ground_step(dt);
   if (!anim || !(detail & 0x10)) {
     foot_ground(*legs[0]->foot);
@@ -136,6 +149,27 @@ void Mech::add_jump_jet(bool add) {
 float Mech::altitude() const {
   const Vec3* p = skis_calls().position ? skis_calls().position(const_cast<Mech&>(*this)) : nullptr;
   return (p ? p->y : 0.0f) - skis->ground[6];
+}
+
+// Ours (#289): JumpJets' sound, flame and force feedback, split out so a
+// replay puppet shows its jets with the game's own code.
+void Mech::jet_effects(bool firing) {
+  if (detail & 1) {
+    Sound& s = sounds[kJetSound];
+    if (firing && !s) s = g_calls.pilot_sound ? g_calls.pilot_sound(*this, kSoundJumpJet, 0.3f, 1.0f) : nullptr;
+    else if (!firing && s) s = g_calls.fade_sound ? g_calls.fade_sound(s) : nullptr;
+  }
+  const bool ff = this == world().mission_player && world().force_feedback;
+  if (firing) {
+    if (!jet_effect && jet_node) {
+      jet_effect = g_calls.pilot_effect ? g_calls.pilot_effect(*this, 1, jet_node) : nullptr;
+      if (ff && g_calls.ff_jets) g_calls.ff_jets(1);
+    }
+  } else if (jet_effect) {
+    if (g_calls.stop_effect) g_calls.stop_effect(jet_effect);
+    jet_effect = nullptr;
+    if (ff && g_calls.ff_jets) g_calls.ff_jets(0);
+  }
 }
 
 // Mech3.exe 1.2 @ 0x004173b0. Thrust goes to the skis as a climb impulse;
@@ -192,22 +226,7 @@ int Mech::jump_jets(float dt) {
   else if (jet_fuel < 0.0f) jet_fuel = 0.0f;
   if (infinite_fuel) jet_fuel = 1.0f;
 
-  if (detail & 1) {
-    Sound& s = sounds[kJetSound];
-    if (firing && !s) s = g_calls.pilot_sound ? g_calls.pilot_sound(*this, kSoundJumpJet, 0.3f, 1.0f) : nullptr;
-    else if (!firing && s) s = g_calls.fade_sound ? g_calls.fade_sound(s) : nullptr;
-  }
-  const bool ff = this == world().mission_player && world().force_feedback;
-  if (firing) {
-    if (!jet_effect && jet_node) {
-      jet_effect = g_calls.pilot_effect ? g_calls.pilot_effect(*this, 1, jet_node) : nullptr;
-      if (ff && g_calls.ff_jets) g_calls.ff_jets(1);
-    }
-  } else if (jet_effect) {
-    if (g_calls.stop_effect) g_calls.stop_effect(jet_effect);
-    jet_effect = nullptr;
-    if (ff && g_calls.ff_jets) g_calls.ff_jets(0);
-  }
+  jet_effects(firing != 0);
   if (!firing && jump_jets_firing && anims[kJumpPose]) anims[kJumpPose]->seek(-1);
   jump_jets_firing = firing;
   if (firing) {
@@ -330,6 +349,7 @@ void Mech::select_gait(float dt) {
   const int st = anim_state;
   const bool asks_walk = !(st == 1 || st == 2 || st == 3) && gait[kStep][kHi] <= std::fabs(target);
   blend_weight = 0.0f;
+  limp_playing = -1;
   if (st == 12 || st == 13) return;
   if (powered_down) return;
   const bool planted = foot(0)->ground_state == 3 && foot(1)->ground_state == 3;
@@ -350,7 +370,7 @@ void Mech::select_gait(float dt) {
   const float h = height;
   const bool ff = this == world().mission_player && world().force_feedback;
   if (d > h * kWadeStart) {
-    if (zfix::options().bugs) {
+    if (zfix::options().water) {
       // FIX (bug): from full speed at a tenth of the height down to 70% at
       // full depth, where the exe fell to a standstill and then jumped back
       // to 70% (movement.md, Speed and gait; fixes.md).
@@ -436,6 +456,7 @@ void Mech::select_gait(float dt) {
     prev_state = anim_state;
     anim_state = 0;
     anim_index = kStepWalk;  // not 11 (docs/movement.md)
+    limp_playing = limp;
     anims[kLimpBlend]->set_blend(0.5f);
     const float lim = gait[kTrot][kLo];
     if (thr > lim) thr = lim;
@@ -578,7 +599,7 @@ void Mech::update_action(float dt) {
           const float d = (1.0f - s) * 0.01f;  // 0x005e236c
           legs[0]->apply_damage(d, 0);
           legs[1]->apply_damage(d, 0);
-          if (controls && g_calls.controls_landed) g_calls.controls_landed(*this);
+          if (controls) controls->landed();  // vt +0xac: the AI's gets up now
           lie_time = 5.0f;
           vec_3c = vec_58 = velocity = impulse = push = Vec3{0, 0, 0};
         }
@@ -595,7 +616,7 @@ void Mech::update_action(float dt) {
         legs[0]->foot->show_shadow(true);
         legs[1]->foot->show_shadow(true);
         if (g_calls.restore_camera) g_calls.restore_camera(*this);
-        if (controls) controls->zero();  // vt +0xb0, 0x00428990
+        if (controls) controls->stood_up();  // vt +0xb0: zero, but the AI's keeps them
         break;
       default:
         break;
@@ -629,6 +650,17 @@ void Mech::update_action(float dt) {
     act->reset();
   }
   if (!act->started()) {
+    if (g_calls.action_started) g_calls.action_started(*this, kind);
+    begin_action(act, kind);
+  }
+  animate_action(dt, act, kind);
+}
+
+// Ours (#289): the start of an action, split out of ActionUpdate so a replay
+// puppet starts its logged actions the same way.
+void Mech::begin_action(MechAction* act, int kind) {
+  limp_playing = -1;
+  {
     const int next = state_for_action(kind);
     prev_state = anim_state;
     anim_state = next;
@@ -657,6 +689,11 @@ void Mech::update_action(float dt) {
     act->hip(&action_root.x, q);
     momentum = vec_3c;
   }
+}
+
+// Ours (#289): ActionUpdate's animation tail: momentum, the ground fit, the
+// clip and its hip root motion, then the action pose.
+void Mech::animate_action(float dt, MechAction* act, int) {
   // x0.6 a frame (0x005bcd50). FIX (B): 0.6 per 1/30 s (fixes.md, Frame rate).
   const float carry = zfix::options().per_second ? std::pow(0.6f, zfix::frame_steps(dt)) : 0.6f;
   momentum = {momentum.x * carry, momentum.y * carry, momentum.z * carry};

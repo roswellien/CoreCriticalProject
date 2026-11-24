@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include "gamez/zclass/visual_distance.h"
 
 #include "gamez/zclass/cls_node.h"
 
@@ -54,16 +55,21 @@ struct WalkColor {                 // 0x0060bc28, 0x10 bytes
   float rgb[3];
   float weight;
 };
-struct ScreenRing {                // 0x00736640 + ring * 0x2d4
-  struct Cell {                    // 0x18 bytes
+// Capacity scales with the largest view distance (3200) in kViewDistanceOptions.
+constexpr int32_t kTilerRingCapacity = 256;
+constexpr int32_t kTilerCellsPerRing = 128;
+struct ScreenRing {                // host-owned render storage; original was 50 rings x 30 cells
+  struct Cell {                    // preserves the 0x18-byte cell record
     int32_t x, z;                  // +0x00 / +0x04  the stored cell
     int32_t wrapped;               // +0x08  outside the grid: drawn by moving the camera
     float dx, dz;                  // +0x0c / +0x10  that move (only when wrapped)
     uint32_t mask;                 // +0x14  planes the cell's sphere crosses
-  } cell[30];
-  int32_t count;                   // +0x2d0
+  } cell[kTilerCellsPerRing];
+  int32_t count = 0;
 };
 struct SceneWalk {
+  void reset();
+
   Camera* camera = nullptr;        // 0x0060bb9c  the camera being drawn
   uint32_t zone = 0;               // 0x0060bb98  its zone list, as drawn
   int32_t lod_dynamic = 0;         // 0x005ea51c  CameraSetDynamicLOD
@@ -89,7 +95,7 @@ struct SceneWalk {
   void (*post)(Node* node) = nullptr;  // [0x005ea514]  node +0x2c bit 0x40
   uint32_t listener_frame = 0;     // 0x0060be28
   float listener_last[3] = {};     // 0x0060be30
-  ScreenRing rings[50] = {};       // 0x00736640
+  ScreenRing rings[kTilerRingCapacity] = {};  // host-owned render storage for extended view ranges
   float view_points[6][3] = {};    // 0x007365c0  the camera's footprint (the hull reuses one more)
   int32_t view_count = 0;          // 0x0073662c
 };
@@ -135,6 +141,8 @@ void horizon_follow();                             // 0x004f6d40
 // in a scene of its own (the cockpit and the arms over the world). The
 // Direct3D path; the software one (hw 0) is not ported and draws nothing.
 int render_subtree(Node* camera_node, Node* node, int32_t hw);
+int render_subtree(Node* camera_node, Node* node, int32_t hw,
+                   bool use_requested_producer_purpose);
 // Mech3.exe 1.2 @ 0x004f7350 (ECX the camera's data, EDX the frame's first
 // flare): the lens flares in sight, between a BeginScene and an EndScene.
 // Each picked flare (zrndr) is drawn unless the segment from the camera to

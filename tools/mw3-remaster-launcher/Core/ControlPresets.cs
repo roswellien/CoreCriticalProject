@@ -8,12 +8,44 @@ public static class ControlPresets
 
     public static ControlProfile Mw5()
     {
+        var profile = LegacyMw5(3);
+        profile.Description =
+            "MW5-style keyboard and mouse layout adapted for MW3. WASD movement; X stop; C/F center torso/legs; R/T target; V camera. " +
+            "1–5 select a weapon group; left mouse fires it. Middle mouse toggles zoom lock; wheel up/down cycles weapons. " +
+            "Right mouse uses freelook; L toggles headlights; M uses MASC; Z reverses throttle. " +
+            TorsoModeHint +
+            "Space jumps; W/A/S/D + Space fires directional jump jets with MW2 jump-jet behavior. " +
+            "Numpad 2–9 sets 20–90% throttle; Numpad 0 sets full. Mouse axes and sensitivity stay unchanged.";
+        profile.Bindings["CMD_ZOOM_LOCK"].Mouse = 3;
+        profile.Bindings["CMD_RETICULE_ZOOM"].Mouse = 0;
+        profile.Bindings["CMD_WEP_NEXT"].Mouse = 6;
+        profile.Bindings["CMD_WEP_PREV"].Mouse = 7;
+        foreach (var (action, scan) in new[]
+        {
+            ("CMD_JJ_FORWARD", 0x11), ("CMD_JJ_BACKWARD", 0x1f),
+            ("CMD_JJ_LEFT", 0x1e), ("CMD_JJ_RIGHT", 0x20)
+        })
+        {
+            profile.Bindings[action].Combos = [new ControlCombo
+            {
+                Inputs = [new(ControlComboInputKind.Key, scan), new(ControlComboInputKind.Key, 0x39)]
+            }];
+        }
+        profile.Mw2JumpJets = true;
+        return profile;
+    }
+
+    // Keep these factory layouts stable so migration never replaces a user's edits.
+    private static ControlProfile LegacyMw5(int version)
+    {
         var p = new ControlProfile {
             Id = Mw5Id, Name = "MW5-style (MW3)",
             Description = "MW5-style keyboard layout adapted for MW3. WASD movement; X stop; C/F center torso/legs; R/T target; V camera. " +
                 "1–5 select a weapon group; left mouse fires it. MW3 has no sixth group or direct multi-group firing. " +
-                "Middle mouse zooms; right mouse or L uses freelook; M uses MASC; Z reverses throttle. " +
-                TorsoModeHint +
+                "Middle mouse zooms; " +
+                (version < 3 ? "right mouse or L uses freelook; " : "right mouse uses freelook; L toggles headlights; ") +
+                "M uses MASC; Z reverses throttle. " +
+                (version > 1 ? TorsoModeHint : "") +
                 "Numpad 2–9 sets 20–90% throttle; Numpad 0 sets full. Numpad 1, side buttons and wheel are unsupported here. " +
                 "Other unmapped actions remain unassigned. Mouse axes and sensitivity stay unchanged.",
             Bindings = ControlProfiles.Actions.ToDictionary(a => a.Name, _ => new ControlBinding())
@@ -44,8 +76,9 @@ public static class ControlPresets
         Key("CMD_SHUTDOWN", 0x19); Key("CMD_SHUT_OVER", 0x18); // P / O.
         Key("CMD_MASC", 0x32); // M: standalone Alt cannot be encoded as a command key.
         Key("CMD_CYCLE_CAM", 0x2f); // V.
-        Key("CMD_FREELOOK", 0x26); p.Bindings["CMD_FREELOOK"].Mouse = 2; // L / right mouse.
-        Key("CMD_TOGGLE_TMODE", 0x252); // Ctrl + numpad 0: independent of held freelook.
+        p.Bindings["CMD_FREELOOK"].Mouse = 2;
+        if (version < 3) Key("CMD_FREELOOK", 0x26);
+        if (version > 1) Key("CMD_TOGGLE_TMODE", 0x252);
         p.Bindings["CMD_RETICULE_ZOOM"].Mouse = 3;
         Key("CMD_TARGET_CURSOR", 0x13); // R.
         Key("CMD_TARGET_NEXT_E", 0x14); Key("CMD_TARGET_PREV_E", 0x414); // T / Shift T.
@@ -60,13 +93,15 @@ public static class ControlPresets
 
     public static bool IsUnmodifiedLegacyMw5(ControlProfile profile)
     {
-        var legacy = Mw5();
-        legacy.Description = legacy.Description.Replace(TorsoModeHint, "", StringComparison.Ordinal);
-        legacy.Bindings["CMD_TOGGLE_TMODE"].Primary = 0;
-        return profile.Id == legacy.Id && profile.Name == legacy.Name &&
-            profile.Description == legacy.Description && profile.Bindings.Count == legacy.Bindings.Count &&
-            legacy.Bindings.All(pair => profile.Bindings.TryGetValue(pair.Key, out var binding) &&
-                binding.Primary == pair.Value.Primary && binding.Secondary == pair.Value.Secondary &&
-                binding.Mouse == pair.Value.Mouse && binding.Joystick == pair.Value.Joystick);
+        if (profile.Id != Mw5Id || profile.Mw2JumpJets.HasValue) return false;
+        return Matches(profile, LegacyMw5(1)) || Matches(profile, LegacyMw5(2)) || Matches(profile, LegacyMw5(3));
     }
+
+    private static bool Matches(ControlProfile profile, ControlProfile expected) =>
+        profile.Id == expected.Id && profile.Name == expected.Name &&
+        profile.Description == expected.Description && profile.Bindings.Count == expected.Bindings.Count &&
+        expected.Bindings.All(pair => profile.Bindings.TryGetValue(pair.Key, out var binding) &&
+            binding.Primary == pair.Value.Primary && binding.Secondary == pair.Value.Secondary &&
+            binding.Mouse == pair.Value.Mouse && binding.Joystick == pair.Value.Joystick &&
+            binding.Combos is null or { Count: 0 });
 }

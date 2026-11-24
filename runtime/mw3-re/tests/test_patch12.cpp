@@ -1,6 +1,7 @@
 // The 1.2 data layer (mech3/patch12, docs/patch12.md): 1.0's files, with the
 // layer, parse as 1.2's.
 #include <cstdio>
+#include <cerrno>
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -17,9 +18,16 @@
 #include "gamez/zutil/zutl_msgdll.h"
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zutil/zutl_zar.h"
+#include <fstream>
 #include "mech3/patch12.h"
+#include "mech3/mods.h"
+#include "upgrades/mods/entry_archives.h"
 #include "mech3/patch12_tree.h"
 #include "platform/silent_sound.h"
+#include "platform/sha256.hpp"
+#include <fstream>
+#include <iterator>
+#include <stdexcept>
 
 namespace {
 
@@ -66,6 +74,111 @@ struct SavedMounts {
 };
 
 }  // namespace
+
+namespace {
+std::vector<std::tuple<int, int, int, long, int>> source_hook_access;
+}
+
+TEST(patch12_world_proof_preserves_readonly_hook_access) {
+  const zcls::ZbdHeader header{0x02971222, 27, 0, 0x24, 0x24, 0x24, 0, -1, 0x24};
+  const auto path = std::filesystem::path(MW3_TEST_TMP) / "readonly-world.zbd";
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(&header), sizeof header); out.put('a');
+  }
+  platform::integrity::Sha256 hash;
+  hash.update(&header, sizeof header); const char tail = 'a'; hash.update(&tail, 1);
+  auto member = path.generic_string();
+  for (auto& c : member) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+  const zcls::ZbdSourceRequest request{member, hash.hex(), sizeof header + 1, {0}};
+  const auto previous = zcls::open_hook();
+  source_hook_access.clear();
+  zcls::set_open_hook([](const char*, std::FILE* input) -> std::FILE* {
+    const auto incoming_errno = errno;
+    const auto position = std::ftell(input);
+    EXPECT(position == 0 && !std::ferror(input) && !std::feof(input));
+    errno = 0;
+    const auto write = std::fputc('x', input);
+    const auto write_errno = errno;
+    const auto write_error = std::ferror(input);
+    source_hook_access.emplace_back(write, write_errno, write_error, std::ftell(input), incoming_errno);
+    EXPECT(write == EOF && write_error != 0);
+    std::clearerr(input);
+    EXPECT(std::fseek(input, position, SEEK_SET) == 0);
+    return input;
+  });
+  for (int observed = 0; observed < 2; ++observed) {
+    zcls::ZbdReadContext proof(zcls::ZbdReadMode::ObserveSelected); proof.expected = request;
+    zcls::ZbdHeader result{};
+    errno = E2BIG;
+    auto* file = zcls::open_zbd(path.generic_string().c_str(), &result, observed ? &proof : nullptr);
+    EXPECT(file && result.version == 27);
+    if (file) {
+      EXPECT(!std::ferror(file) && !std::feof(file) && std::fgetc(file) == 'a');
+      EXPECT(std::fputc('x', file) == EOF && std::ferror(file));
+      std::fclose(file);
+    }
+    if (observed) EXPECT(proof.snapshot_verified && !proof.failed && !proof.transformed);
+  }
+  EXPECT(source_hook_access.size() == 2 && source_hook_access[0] == source_hook_access[1]);
+  zcls::set_open_hook(previous);
+  std::ifstream unchanged(path, std::ios::binary);
+  const std::string original((std::istreambuf_iterator<char>(unchanged)), std::istreambuf_iterator<char>());
+  EXPECT(original.size() == sizeof header + 1 && original.back() == 'a');
+}
+
+TEST(patch12_world_proof_rejects_an_effective_stream_change_without_bypassing_hook) {
+  // A tiny authored header and trailing byte exercise the actual open hook
+  // boundary. No shipped C3 world or renderer observation supplies a pin.
+  zcls::ZbdHeader header{0x02971222, 27, 0, 0x24, 0x24, 0x24, 0, -1, 0x24};
+  const auto path = std::filesystem::path(MW3_TEST_TMP) / "transformed-world.zbd";
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(&header), sizeof header); out.put('a');
+  }
+  platform::integrity::Sha256 hash;
+  hash.update(&header, sizeof header); const char tail = 'a'; hash.update(&tail, 1);
+  auto member = path.generic_string();
+  for (auto& c : member) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+  const zcls::ZbdSourceRequest request{member, hash.hex(), sizeof header + 1, {0}};
+  const auto previous = zcls::open_hook();
+  zcls::set_open_hook([](const char*, std::FILE* input) -> std::FILE* {
+    // Like the actual patch12 hook, read the original, write a replacement,
+    // close the original and return a new stream positioned at its start.
+    unsigned char bytes[sizeof(zcls::ZbdHeader) + 1];
+    if (std::fread(bytes, sizeof bytes, 1, input) != 1) { EXPECT(false); return input; }
+    const auto output = std::filesystem::path(MW3_TEST_TMP) / "replacement-world.tmp";
+    auto* replacement = std::fopen(output.string().c_str(), "w+b");
+    if (!replacement) { EXPECT(false); return input; }
+    bytes[sizeof(zcls::ZbdHeader)] = 'b';
+    EXPECT(std::fwrite(bytes, sizeof bytes, 1, replacement) == 1 && std::fflush(replacement) == 0);
+    std::rewind(replacement); std::fclose(input);
+    return replacement;
+  });
+  zcls::ZbdHeader observed{};
+  {
+    auto* file = zcls::open_zbd(path.generic_string().c_str(), &observed);
+    EXPECT(file && observed.version == 27 && std::fgetc(file) == 'b');
+    if (file) std::fclose(file);
+  }
+  {
+    zcls::ZbdReadContext proof(zcls::ZbdReadMode::ObserveSelected); proof.expected = request;
+    auto* file = zcls::open_zbd(path.generic_string().c_str(), &observed, &proof);
+    EXPECT(file && observed.version == 27 && proof.failed && proof.transformed && !proof.snapshot_verified);
+    if (file) EXPECT(std::fgetc(file) == 'b');
+    if (file) std::fclose(file);
+  }
+  {
+    zcls::ZbdReadContext proof(zcls::ZbdReadMode::StrictExport); proof.expected = request;
+    bool refused = false;
+    try { auto* file = zcls::open_zbd(path.generic_string().c_str(), &observed, &proof); if (file) std::fclose(file); }
+    catch (const std::runtime_error&) { refused = true; }
+    EXPECT(refused && proof.failed && proof.transformed);
+  }
+  zcls::set_open_hook(previous);
+  std::ifstream unchanged(path, std::ios::binary);
+  unchanged.seekg(sizeof header); EXPECT(unchanged.get() == 'a');
+}
 
 // The message table: every key 1.2 has, with 1.2's text, except where the
 // wording is ours (listed); the version line 1.2 dropped is gone.
@@ -170,6 +283,78 @@ TEST(patch12_acts_on_10s_files_only) {
     mech3::patch12::uninstall();
   }
   mech3::patch12::forget_files();
+}
+
+// A mod kept as its changed entries (upgrades/mods/entry_archives.h) over a 1.0 install: the archive the game
+// reads is built from 1.0's reader.zbd, so the layer still makes 1.0's own entries 1.2's (as with no mod), and
+// an entry the mod itself changed is left as the mod made it (as in a mod's whole archive, which the layer
+// never touches).
+TEST(patch12_acts_on_10s_entries_under_a_mods_changed_entries) {
+  if (!have_both()) return;
+  SavedMounts keep;
+  const std::string install = kRoot + "/mw3-1.0", wd = std::string(MW3_TEST_TMP) + "/patch12_entries";
+  std::error_code ec;
+  std::filesystem::remove_all(wd, ec);
+  // The 1.2 game's own hud.zrd, as a mod's changed entry; and an entry the game does not have.
+  std::vector<mech3::ArchiveEntry> v12, v10;
+  EXPECT(mech3::archive_read_entries(kRoot + "/mw3-1.2/zbd/reader.zbd", &v12));
+  EXPECT(mech3::archive_read_entries(install + "/zbd/reader.zbd", &v10));
+  const auto mod = [&](const char* folder, const char* file, int with_hud) {
+    std::filesystem::create_directories(wd + "/mods/" + folder + "/zbd", ec);
+    std::ofstream(wd + "/mods/" + folder + "/mod.txt") << "name=" << folder << "\n";
+    zutl_zar::Archive a;
+    zutl_zar::init(a);
+    zutl_zar::create(a, (wd + "/mods/" + folder + "/zbd/" + file).c_str());
+    const uint32_t extra[] = {4, 2, 1, 7};  // a list of one whole number
+    zutl_zar::add(a, "zz_mod.zrd", extra, sizeof extra);
+    for (const mech3::ArchiveEntry& e : with_hud == 2 ? v10 : v12)
+      if (with_hud && e.name == "hud.zrd") zutl_zar::add(a, e.name.c_str(), e.data.data(), static_cast<uint32_t>(e.data.size()));
+    zutl_zar::close(a);
+    zutl_zar::destroy(a);
+  };
+  mod("adds", "reader.zbd.entries", 0);
+  mod("huds", "reader.zbd.entries", 1);
+  mod("olds", "reader.zbd.entries", 2);  // a mod whose hud.zrd is, byte for byte, 1.0's own
+  const auto loaded_hud = [&](const std::vector<std::string>& mods, bool* ten, bool* edited) {
+    zutl::mounts() = zutl::Mounts{};
+    zutl::set_write_dir(wd);
+    if (!mods.empty()) mech3::mods_mount(wd, mods, {install});
+    zutl::mount(install);
+    mech3::patch12::forget_files();
+    *ten = mech3::patch12::is_10("zbd\\reader.zbd");
+    zrdr::Node* raw = read_entry(zutl::find("zbd/reader.zbd"), "hud.zrd");
+    *edited = mech3::patch12::on_load("zbd\\reader.zbd", "HUD.ZRD", raw);
+    zrdr::free_node(raw);
+    mech3::patch12::install();
+    zrdr::init();
+    zrdr::close_archives(true);
+    std::string text;
+    if (zrdr::open_archive("zbd\\reader.zbd", true))
+      if (zrdr::Node* n = zrdr::load("hud.zrd")) text = mech3::patch12::tree::text(*n), zrdr::free_node(n);
+    zrdr::close_archives(true);
+    mech3::patch12::uninstall();
+    mech3::patch12::forget_files();
+    return text;
+  };
+  bool ten = false, edited = false;
+  const std::string plain = loaded_hud({}, &ten, &edited);
+  EXPECT(ten && edited && !plain.empty());
+  // The mod adds an entry: hud.zrd is still 1.0's own, made 1.2's as with no mod.
+  const std::string under = loaded_hud({"adds"}, &ten, &edited);
+  EXPECT(zutl::find("zbd/reader.zbd").find("mod-merged") != std::string::npos);
+  EXPECT(ten && edited && under == plain);
+  // The mod changes hud.zrd itself: left as the mod's (here 1.2's own bytes), not edited.
+  zrdr::Node* want = read_entry(kRoot + "/mw3-1.2/zbd/reader.zbd", "hud.zrd");
+  const std::string theirs = loaded_hud({"huds"}, &ten, &edited);
+  EXPECT(ten && !edited && want && theirs == mech3::patch12::tree::text(*want));
+  zrdr::free_node(want);
+  // A mod's hud.zrd that happens to be 1.0's bytes is still the mod's: not made 1.2's (the layer would change it).
+  zrdr::Node* old = read_entry(install + "/zbd/reader.zbd", "hud.zrd");
+  const std::string kept = loaded_hud({"olds"}, &ten, &edited);
+  EXPECT(ten && !edited && old && kept == mech3::patch12::tree::text(*old) && kept != plain);
+  zrdr::free_node(old);
+  std::printf("  hud.zrd: %zu letters with no mod, the same under a mod's entries: %d; the mod's own: %zu\n", plain.size(), under == plain, theirs.size());
+  std::filesystem::remove_all(wd, ec);
 }
 
 // force_eff.ifr: 1.0's with the layer has 1.2's effects, record for record

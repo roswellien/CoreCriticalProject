@@ -13,6 +13,23 @@ New or changed packs still require preparation; native builds are unaffected.
 
 ## Maintainer entry points
 
+Run stage_mw3_re_runtime.py --help for the required, explicit recipe-v1 inputs
+for an owned Windows x64 Release/Vulkan build. Use a clean tracked integration
+commit, pre-existing qualified dependencies and new build/payload directories
+outside the checkout. The command constructs a sanitized VS/SDK environment,
+qualifies selected tools, builds x64 mw3 with the explicitly selected SDL3_sound
+3.2.0 SDK, builds the x86 `mw3indeo.exe` helper with the selected Visual Studio
+toolset/Windows SDK, and stages both images with their checked dependency
+closure and pinned planning defaults. The observation records the x86 compiler
+and linker identities and hashes; the helper must pass PE32 and x86 dependency
+checks before it is pinned beside `mw3.exe` in `runtime.json`.
+SDL3_sound's Zlib license is included under `licenses/sdl3-sound/`; the recipe
+hashes its selected SDK files and pins the staged DLL in `runtime.json`. It stops
+on missing prerequisites; it never downloads dependencies or installs, activates
+or runs the payload.
+The pinned witness records local pre/post observations, not authenticated source
+binding, consumer readiness or release approval. Writable mw3.cfg stays untouched.
+
 Start with `play_remaster.plan`: it reads the selected profile/registry and checks
 required files, host pins and capabilities. `play_remaster.main` owns the later
 prepare/launch steps. `--check` returns before preparation; `--prepare-only`

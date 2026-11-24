@@ -8,6 +8,8 @@
 
 #include "gamez/zmodel/gmod_cull.h"
 #include "gamez/zutil/zfix.h"
+#include "mech3/replay_hooks.h"
+#include "mech3/spectator_seat.h"
 #include "mech3/zrdraiv.h"
 
 // The mission start's vehicles and the player's tick; docs/mission-start.md.
@@ -147,7 +149,7 @@ void player_setup(bool full) {
     uint8_t frame[0x14 + 0x1c + 0xd0];
     char* type = type_buf;
     char* full_name = name_buf;
-    const bool whole = zfix::options().bugs;
+    const bool whole = zfix::options().fixed;
     if (whole) {
       // FIX (bug): whole names. The exe's buffers are 20 and 28 bytes, then
       // this record (docs/mission-start.md, Quirks).
@@ -213,7 +215,7 @@ int32_t create_controlled_vehicle(Handle def, const char* type, const char* name
   Handle ctl = 0;
   if (net)
     ctl = make_vehicle_controls(net, rec);
-  else if (!zfix::options().bugs)
+  else if (!zfix::options().fixed)
     ctl = g_hooks->rec_handle(rec);
   Handle out = 0;
   const int32_t r = create_basic_vehicle(def, rec, type, name, ctl, &out);
@@ -555,15 +557,19 @@ void player_tick() {
   PlayerState& s = g_state;
   s.dt = h.frame_dt();
   s.inv_dt = !(s.dt < 0 || s.dt > 0) ? 10000.0f : 1.0f / s.dt;
-  h.vehicle_update(h.pilot_vehicle(), s.dt);
+  // Ours (#287): a spectator (the arena's seat) has no vehicle to update.
+  const bool has_vehicle = !launch_spectator();
+  if (has_vehicle) h.vehicle_update(h.pilot_vehicle(), s.dt);
   const Handle st = h.stealth();
-  if (h.view_target(h.view()) == st) h.stealth_update(st, s.dt);
+  // Ours (#289): in a 3D replay the stealth entity neither reads input nor
+  // moves; the replay's camera owns the view (replay_hooks.h).
+  if (!replay_hooks() && h.view_target(h.view()) == st) h.stealth_update(st, s.dt);
   h.clear_6099c0();
   h.entities_update(s.dt);
   h.tick_41e3f0(s.dt);
   const int32_t type = h.game_type();
   if (type == 2 || type == 3) h.tick_537f20(s.x5e8118);
-  h.vehicle_41aba0(h.pilot_vehicle(), s.dt);
+  if (has_vehicle) h.vehicle_41aba0(h.pilot_vehicle(), s.dt);
   h.view_tick(h.view(), s.dt);
 }
 

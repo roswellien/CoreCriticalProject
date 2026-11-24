@@ -73,8 +73,12 @@ movies need it: the 32-bit Indeo helper (`mw3indeo`) is Windows-only.
   prefix (Lutris), at `drive_c/Program Files (x86)/MicroProse/MechWarrior 3`
   and the usual hand-picked folders; and `~/Games/MechWarrior 3` and the
   like for a copied install.
-- The launcher's font: `assets/launcher/font.ttf`, else DejaVu Sans
-  Condensed Bold; the game's own fonts come from the install.
+- The launcher's font: `assets/launcher/font.ttf` (Saira Condensed Bold,
+  in the package), else a narrow system face at its known places, else a
+  walk of the font folders fontconfig reads (`font_search`: the user's,
+  `XDG_DATA_DIRS`', `/usr/share/fonts`), wanted names first, then any
+  upright text face. The log says which (`mw3: launcher: font`). The game's
+  own fonts come from the install.
 - The MechWarrior (1989) entry looks for `mechwarrior` (no `.exe`) beside
   `mw3` (docs/launcher.md).
 
@@ -133,6 +137,12 @@ source (Owen, 2026-10-31): `tools/deps/build_deps.sh linux` (docs/deps.md)
 builds it with SDL3, SDL3_ttf (FreeType inside) and SDL3_sound into
 `build-deps/linux/prefix`, which `make-appimage.sh` takes as PREFIX
 (pkg-config finds FFmpeg there; the licence files come from the sources).
+The script stops before building anything when PREFIX has no FFmpeg (its
+four `.pc` files): until 2026-11-11 it went on and made a package without
+`mw3import`, and v1.0.5's AppImage went out that way, built against a prefix
+that held only SDL (found by the 1.1.0 dry run; the published file has no
+`usr/bin/mw3import` and no FFmpeg library). `MW3_PKG_NO_IMPORT=1` builds
+without the importer on purpose, never for a release.
 Only what mw3import uses is in it: the AVI demuxer, the Indeo 5 decoder, the
 MPEG-1 video encoder and muxer, swscale, the file protocol. For WSL the
 script leaves out SDL's XTest (no libXtst headers) and, where nasm is

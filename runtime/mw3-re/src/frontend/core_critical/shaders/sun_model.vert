@@ -1,5 +1,7 @@
 #version 450
 // Optional replacement geometry only. Original TL vertices keep their shader.
+layout(location=11) out vec4 radialEye;
+layout(location=12) out vec3 radialScreen;
 layout(location=0) in vec3 position;
 layout(location=1) in vec3 normal;
 layout(location=2) in vec2 uv;
@@ -13,6 +15,7 @@ layout(location=6) out vec3 worldNormal;
 layout(location=7) out vec3 worldPosition;
 layout(location=8) out vec3 shadowPosition;
 layout(location=9) noperspective out vec2 screenPos;
+layout(location=10) out vec4 fogFactors;
 layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 normal0; vec4 normal1; vec4 normal2;
  vec4 direction; vec4 sunColor; vec4 ambient;
@@ -22,6 +25,12 @@ layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 shadow0; vec4 shadow1; vec4 shadow2; vec4 shadowParams;
  vec4 skyEye; vec4 skyTint; vec4 skyGlow; vec4 skyGrade; vec4 skyBlend;
  vec4 detail; vec4 detailMotion;
+ vec4 weather; vec4 weatherFog;
+ vec4 emissionParams; vec4 emissionRegions[32];
+ vec4 geometryFog0; vec4 geometryFog1;
+ uvec4 tiledLights;
+ vec4 pomParams; vec4 pomUV; vec4 pomAtlas;
+ uvec4 pomPolicy;
 } sun;
 
 
@@ -53,9 +62,18 @@ void main() {
     float w = 1.0 / rhw;
     vec2 ndc = (screen + 0.5) / draw.target.xy * 2.0 - 1.0;
     gl_Position = vec4(ndc * w, rhw * w, w);
+    radialScreen = gl_Position.xyw;
+    radialEye = vec4(camera, float(draw.mode.x >> 16));
     screenPos = screen;
     gl_PointSize = 1.0;
     uvPerspective = uvAffine = uv;
-    colorSmooth = colorFlat = vec4(rgb, 1.0);
+    colorSmooth = colorFlat = vec4(rgb, uintBitsToFloat(draw.mode.w));
+    fogFactors = vec4(0.0, 0.0, 0.0, 1.0);
+    if (sun.geometryFog1.z > 0.5) {
+        fogFactors.x = (length(camera.xz) - sun.geometryFog0.x) * sun.geometryFog0.y;
+        fogFactors.y = 1.0 - (worldPosition.y - sun.geometryFog0.z) * sun.geometryFog0.w;
+    }
+    // Same packed edge band as native_geometry.vert; no altitude dependence.
+    fogFactors.z = (length(camera.xz) - sun.geometryFog1.x) * sun.geometryFog1.y;
     specularSmooth = specularFlat = vec4(0.0, 0.0, 0.0, 1.0);
 }

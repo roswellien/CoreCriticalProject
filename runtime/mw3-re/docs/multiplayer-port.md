@@ -819,7 +819,8 @@ Ours, in three pieces:
   0x00495410), the bars' focus 0x00495310, the hand-over 0x00494920 (the
   pilot's name, "<name>'s Game", 2..8 players with 8). The engine: the
   network switch 0x0047fc40 (on: zNetwork on the platform's transport,
-  `Platform::network_open`, FIX (A); off: the game ended, zNetwork down),
+  `Platform::network_open`, FIX (A); off: the game ended, zNetwork down;
+  the rest of it, below, ported 2026-11-10),
   the page switch 0x0049cb20 and its request 0x0049cb00. Ours: the screen
   connects and searches the LAN as soon as it opens (Owen); Stop Search
   with another address searches there instead; a name in use is found
@@ -1280,6 +1281,38 @@ Ours, in three pieces:
   no change. Test: `net_lobby_mods_check_headless` (refused at join and at
   lock with both sides' names; equal hashes and two string-only mods pass).
   Breaks caught: the joiner's check off, LOCK's check off.
+- **The Upgrades switches** (Owen, 2026-11-10; ours, 1.1.0): after the
+  mods block, "UPGR" (0x52475055) and the Upgrades page's five as bits
+  (water, MFB regroup, improved AI, Artemis, small fixes; bit 0 water). A
+  joiner whose mods match takes the host's five for the game
+  (`upgrades::take_hosts`), its page greyed with a line saying so, and gets
+  its own back when the network game ends (`GameEngine::network_set(0)`). The
+  original's readers stop at the worlds, so they never see it.
+  Builds before 1.1.0 send no word, and nothing in the lobby gives a build's
+  version (the session's `user[1]` is `kGameVersion`, the game's own, the same
+  in every build). So the block's absence is all the lobby knows: a joiner whose
+  host sends none is told ("The host's game is older than 1.1.0 ...") and
+  plays on its own switches, which may differ from the host's. A 1.1.0 host
+  is not told about an older joiner, who plays on its own switches too (it
+  reads no word): a gap, left as the lead said (2026-11-10). Tests:
+  `net_lobby_mods_check_headless` (the host's word taken, given back; a host
+  with none: the box, own kept), `sdl_two_processes_from_the_lobby_into_a_game`
+  (the host's small fixes off: the joiner's game on 0xf).
+- **Mods in multiplayer** (Owen, 2026-11-11; ours, 1.1.0;
+  `upgrades/mods/mp_mods.h`, modding.md, Mods in multiplayer): after the
+  upgrades block, "MOD1" (0x31444f4d), a count (at most 16) and each named
+  mod's own number, low word then high, in the names' order. With it a
+  refusal names the mod that is missing, differs or is extra; a side that
+  sends none gets the older sentence with both lists. The mods block's
+  number and names are now over the mounted result (an imported mod and one
+  laid by hand match). The multiplayer screen (0x0049a110's dialog) gains a
+  MODS button (id 9, inserted into `MULTIPLAYER_DIALOG` by the 1.2 data
+  layer, as the main menu's MODS) and a line under it. A start given a pilot
+  (`--entry-pilot`) has the Multiplayer State take it as the pilot screen's
+  ACCEPT (its resume with 2, 0x0049cbb0), so the screen opens at once. A
+  refused joiner is back on the multiplayer screen. Tests:
+  `net_lobby_mods_named_headless`,
+  `sdl_two_processes_multiplayer_mods_match_or_turn_back`.
 - **Mod worlds' maps** (the lead, 2026-11-01): the add-on scan in enter
   (0x00497720, folders 0 to 5) goes on to `mission_dir_count()`, skipping
   6 to 8 as the exe's bound did, so a mod world's `readermp<n>.zbd` maps are
@@ -1297,3 +1330,28 @@ Ours, in three pieces:
 - network-messages.md's open items: the caller of 0x21, 0x18's +4 value,
   the 0xf flag bits, whether the lobby handlers stay registered in a
   mission, the name of the setting at [0x00608e28].
+
+## The network switch's other half (0x0047fc40, ported 2026-11-10)
+
+Found by the Upgrades sort's multiplayer check (upgrades-sort.md): the port's
+switch only brought zNetwork up and down. The exe also, on (after zNetwork):
+- clears the app's +0x1b2 ([0x00608e3a], `mov [0x608e3a], bl` at 0x0047fd72
+  with ebx 0): the mission load's two turret cases (0x00490c6e, 0x00490d06)
+  and `player_setup`'s argument (0x00490c01) read it, so a network game
+  reads no aiTurrets.zrd and makes no turret;
+- adds message 0xc's handler (0x00587aa0, type 0xc, 0x0047fde0, 2): a network
+  error's text into "Network Error:" (0xd78) handed to the message box
+  0x004ac050 with its first argument 0, which shows nothing (dropped in the
+  release; ported as that);
+- clears +0x1b8 ([0x00608e40]), the invincibility cheat (its reader 0x004782f0,
+  `cheat_invincible`).
+Off: +0x1b2 back to 1 (0x0047fd91) before the game's end 0x0046d100, the 0xc
+handler removed (0x00587b20), zNetwork down, then +0x19c (the lobby launch),
++0x1a4 and +0x1a8 cleared (+0x1a8 is not in the port: the DirectPlay lobby
+launch is not ported). Both flags are also the developer menu's (MFC
+message-map entries, unreachable in the release): command 0x9c67 toggles
++0x1b2 (0x00483310, its check mark 0x00483330), 0x004835a0 +0x1b8.
+`GameEngine::network_set`. Test: `net_game_has_no_turrets_c1m1_headless`
+(c1m1 loaded inside a network game makes no turret and the cheat is off; the
+flag back after it, and c1m1 then makes its 14 turrets). Breaks caught: the
+flag not cleared, not set back, the cheat kept.

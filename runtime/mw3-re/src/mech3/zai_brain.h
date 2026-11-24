@@ -268,7 +268,7 @@ class BrainHooks : public zgame::Unported {
   // see of the pilot (its vehicle's +0x04 name and vt+0x50's +0x3d8 jump jets).
   virtual Behaviour* path_next(Brain& b, Behaviour* at);
   virtual float speed_at(zgame::Handle v, float share);
-  virtual float stopping_distance(zgame::Handle v, float speed);
+  virtual double stopping_distance(zgame::Handle v, float speed);  // in the register, unrounded, as vt+0x120 returns it
   virtual float stop_share(zgame::Handle v, float d);  // vt+0x12c, the Mech's 0x0041d240
   // The station keeping's (zai_attack): a vehicle's vt+0xf4 (0 for the
   // mechs, 0x0040bae0) and its speed (vt+0x114; its velocity is velocity()).
@@ -297,7 +297,7 @@ class BrainHooks : public zgame::Unported {
   virtual void place(zgame::Handle v, const float p[3], float yaw) {
     unported("vehicle.vt+0xdc", {v, zgame::bits(p[0]), zgame::bits(p[1]), zgame::bits(p[2]), zgame::bits(yaw)});
   }
-  // Ours (W17, FIX (bug) behind bugs): a wall (a level-facing face of the
+  // Ours (W17, FIX (bug) behind improved_ai): a wall (a level-facing face of the
   // world, as the collision's segment query 0x004efcd0 finds them) between
   // the two points. Unset: none.
   virtual bool wall_between(const float from[3], const float to[3]) {
@@ -331,6 +331,18 @@ bool& ai_switch();
 inline void ai_switch_on() { ai_switch() = true; }    // 0x004ea740
 inline void ai_switch_off() { ai_switch() = false; }  // 0x004ea750
 void set_brain_hooks(BrainHooks* h);
+
+// Ours (#289): why a bot's order or target changed, for the arena match log
+// (arena_log.cpp). Null outside an arena match, so no other game runs
+// anything new; the note only records the reason, never changes the game.
+enum class Decision : uint8_t {
+  kEngage,        // the hunt gave way to the stock fight (Brain::update's push)
+  kTargetVolley,  // the firing plan took its best-scored contact (volley_plan_pick)
+  kTargetLost,    // the sensors replaced or dropped a target that left (sensors.cpp)
+};
+using DecisionNote = void (*)(zgame::Handle vehicle, Decision why);
+void set_decision_note(DecisionNote note);
+DecisionNote decision_note();
 
 // What a net builds in an order (its vt+0x5c, in place at the order's
 // +0x30; docs/ai.md 17.2). Slot 0 destroys it in place (no free).
@@ -490,15 +502,15 @@ struct Steer {
   bool near() const;                                   // 0x004ce6a0
   void carrot(float out[3]) const;                    // 0x004ce6f0
   void project(const float p[3], float out[2]) const;  // 0x004ceb00
-  void advance(float d) { along_at += d, along -= d; }  // 0x004ce800
-  void shift(float da, float ds) { along -= da, side -= ds, along_at += da, across += ds; }  // 0x004ce820
+  void advance(float d);              // 0x004ce800
+  void shift(float da, float ds);     // 0x004ce820
 
  private:
-  float distance_off() const;  // the measure 0x004ce6a0 and 0x004ceb50 compare with near_dist
+  double distance_off() const;  // the measure 0x004ce6a0 and 0x004ceb50 compare with near_dist (unrounded)
   void push_by_contacts(zgame::Handle owner, float dt);
 };
 
-// Ours, for the tests: each radio line said (a brain with a radio; the
+// Ours (the arena's match log, and the tests): each radio line said (a brain with a radio; the
 // event is Radio::kEvents'), before it plays. zSound is closed headless.
 struct RadioCalls {
   void (*line)(Brain& b, int32_t event) = nullptr;

@@ -279,8 +279,7 @@ namespace MW3RemasterLauncher.Core
         public static JsonObject CreateLaunchProfile(string publishedJson, LauncherSettings settings,
             string? pipelineWarmupDirectory = null)
         {
-            var profile = JsonNode.Parse(publishedJson)?.AsObject()
-                ?? throw new InvalidOperationException("Native profile is empty.");
+            var profile = NativeRuntimeLayout.ParseLegacyProfile(publishedJson);
             var graphics = profile["graphics"]?.AsObject()
                 ?? throw new InvalidOperationException("Native profile has no graphics settings.");
             GraphicsPreferences.From(settings).Validate();

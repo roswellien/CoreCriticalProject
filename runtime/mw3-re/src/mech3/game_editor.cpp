@@ -4,6 +4,15 @@
 
 #include "gamez/ztwod/twod_host.h"
 #include "gamez/zutil/ztimer.h"
+#include "mech3/game_editor_net.h"
+#include "mech3/game_editor_tree.h"
+#include "mech3/game_editor_vehicles.h"
+#include "upgrades/editor/aiv_save.h"
+#include "upgrades/editor/form.h"
+#include "upgrades/editor/help.h"
+#include "upgrades/editor/new_weapon.h"
+#include "upgrades/editor/mission_settings.h"
+#include "upgrades/editor/teleport.h"
 
 namespace mech3 {
 
@@ -12,16 +21,13 @@ EditorHooks g_default_hooks;
 EditorHooks* g_hooks = &g_default_hooks;
 EditorState g_state;
 
-void edit_ai_nets(int32_t) { g_hooks->not_ported("EDIT AI NETS (0x00402d60, the AI net editor)"); }
-void edit_vehicles(int32_t) { g_hooks->not_ported("EDIT VEHICLES (0x004040c0 -> 0x004b86e0, the vehicle editor)"); }
-void edit_weapons(int32_t) {}  // 0x004bf620: nothing in MW3
 void exit_game_edit(int32_t y) { editor_exit(y); }
 
 // 0x005e0d30.
 const EditorEntry kMainRows[8] = {
     {"PICK A COMMAND", nullptr},          {" EDIT AI NETS", edit_ai_nets}, {" EDIT VEHICLES", edit_vehicles},
-    {" EDIT WEAPONS", edit_weapons},       {"", nullptr},                   {"", nullptr},
-    {"", nullptr},                         {" EXIT GAME EDIT", exit_game_edit},
+    {" EDIT WEAPONS", new_weapon_open},    {" HELP", help_open},            {" MISSION SETTINGS", mission_settings_open},  // ours: New Weapon (upgrades/editor/new_weapon; 0x004bf620 empty), HELP, Mission settings (the blank row)
+    {" TELEPORT", teleport_open},          {" EXIT GAME EDIT", exit_game_edit},  // TELEPORT: ours (upgrades/editor/teleport)
 };
 const EditorMenu kMainMenu = {8, kMainRows};
 }  // namespace
@@ -67,6 +73,11 @@ EditorPanel& editor_panel() {
   return *g_state.panel;
 }
 void editor_reset() {
+  vehicle_editor_close();
+  aiv_notes_clear();  // ours: the vehicle editor's records waiting for a Save
+  tree_close();
+  net_window_free();
+  net_editor_free();
   delete g_state.panel;
   g_state = EditorState{};
 }
@@ -145,6 +156,7 @@ void editor_exit(int32_t) {
 void editor_frame() {
   EditorHooks& h = *g_hooks;
   if (g_state.active) {
+    form_run_posted();  // ours: the ImGui dialogs' presses (form.h)
     EditorPanel& p = editor_panel();
     const zin::MouseInfo m = h.mouse();
     int32_t r = (m.y - 0x5f) / 12;
@@ -172,7 +184,8 @@ void editor_frame() {
     p.layer.update(h.frame_dt());  // 0x0059fd20
     if (g_state.mode > 0 && g_state.mode < 4) h.net_step(0.1f);
     if (pressed && g_state.menu) {
-      const EditorEntry& e = g_state.menu->rows[shown ? r : 0];
+      // ours: a shown row past the menu's (the status line) is no row of it
+      const EditorEntry& e = g_state.menu->rows[shown && r < g_state.menu->count ? r : 0];
       if (e.handler) e.handler(m.y);
     }
     (void)(h.command(0x9c) & 3);  // the trace, 0x005ac5c0: empty

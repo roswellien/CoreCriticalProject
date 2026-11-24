@@ -11,6 +11,7 @@
 #include "gamez/zclass/lod.h"
 #include "gamez/zclass/object3d.h"
 #include "gamez/zerror/zerr.h"
+#include "gamez/zgeometry/zgeo_x87.h"
 #include "gamez/zmodel/gmod_const.h"
 
 #pragma STDC FP_CONTRACT OFF
@@ -37,10 +38,11 @@ void corners_sphere(const float corners[8][3], float centre[3], float* radius) {
       else if (hi[k] < v) hi[k] = v;
     }
   }
-  const float hx = (hi[0] - lo[0]) * 0.5f, hy = (hi[1] - lo[1]) * 0.5f, hz = (hi[2] - lo[2]) * 0.5f;
-  centre[0] = hx + lo[0], centre[1] = hy + lo[1], centre[2] = hz + lo[2];
-  const float xy = hx * hx + hy * hy;
-  const float sum = xy + hz * hz;
+  using zgeo::X;  // hx and hy stored, hz kept on the x87
+  const float hx = (hi[0] - lo[0]) * 0.5f, hy = (hi[1] - lo[1]) * 0.5f;
+  const X hz = (X(hi[2]) - lo[2]) * 0.5f;
+  centre[0] = hx + lo[0], centre[1] = hy + lo[1], centre[2] = (hz + lo[2]).f();
+  const float sum = ((X(hx) * hx + X(hy) * hy) + hz * hz).f();
   *radius = approx_sqrt(sum);
 }
 
@@ -81,10 +83,18 @@ int copy_node_model(Node* src, Node* dst) {
 
 // Mech3.exe 1.2 @ 0x004f9190. Name, flags, the bits of +0x2c, the model,
 // priority, action and zone; the user field (+0x40) is not copied.
+void tree_set_prepared_skin_index(Node* node, int32_t index) {
+  if (!node) return;
+  node->prepared_skin_index = index;
+  for (int32_t k = 0; k < node->child_count(); ++k) tree_set_prepared_skin_index(node->children[k], index);
+}
+
 int copy_node_base(Node* src, Node* dst) {
   dst->source_asset = src->source_asset;
   dst->source_asset_root = src->source_asset_root;
+  dst->source_asset_root_name = src->source_asset_root_name;
   dst->source_model_vertices = src->source_model_vertices;
+  dst->prepared_skin_index = src->prepared_skin_index;
   const uint32_t f = src->flags();
   auto bit = [f](int n) { return static_cast<int>((f >> n) & 1); };
   if (int r = node_set_name(dst, src->name())) return copy_error(0x400, 0x3fb, "description field.", r);

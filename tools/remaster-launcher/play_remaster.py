@@ -14,12 +14,54 @@ CONFIG = ROOT / "local/remaster/launcher.json"
 REGISTRY = ROOT / "local/remaster/models.json"
 
 
-def read_json(path):
+def _unique_properties(pairs):
+    result = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError("Duplicate JSON property")
+        result[name] = value
+    return result
+
+
+def _check_json_depth(value, depth=0):
+    if isinstance(value, (dict, list)):
+        if depth >= 64:
+            raise ValueError("Profile JSON exceeds depth limit")
+        for child in (value.values() if isinstance(value, dict) else value):
+            _check_json_depth(child, depth + 1)
+
+
+def read_json(path, *, reject_duplicates=False):
     """Read a UTF-8 manifest, accepting the BOM written by Windows tooling."""
     try:
+        if reject_duplicates:
+            with path.open("rb") as stream:
+                snapshot = stream.read(2 * 1024 * 1024 + 1)
+            if len(snapshot) > 2 * 1024 * 1024:
+                raise ValueError("Profile JSON is too large")
+            result = json.loads(snapshot.decode("utf-8-sig"), object_pairs_hook=_unique_properties)
+            _check_json_depth(result)
+            _validate_legacy_routing(result)
+            return result
         return json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise RuntimeError(f"Cannot read completed manifest {path}: {exc}") from exc
+
+
+def _validate_legacy_routing(config):
+    """Keep explicit engine identities out of the legacy coordinator."""
+    if not isinstance(config, dict):
+        raise RuntimeError("Legacy routing requires a JSON object")
+    for name, value in config.items():
+        if name.casefold() == "engine":
+            raise RuntimeError("Legacy routing does not accept an explicit engine")
+        if name.casefold() == "schema_version" and (
+            name != "schema_version" or type(value) is not int or value != 1
+        ):
+            raise RuntimeError("Unsupported legacy routing schema")
+        if name.casefold() == "native" and isinstance(value, dict):
+            if any(key.casefold() == "engine" for key in value):
+                raise RuntimeError("Legacy routing does not accept native.engine")
 
 
 def graphics_limitations(graphics, profile):
@@ -73,7 +115,8 @@ def plan(backend=None, original_models=False, *, config_path=None, registry_path
     replacement meshes, not the original game simulation or registered banks.
     """
     selected_config = (Path(config_path) if config_path is not None else CONFIG).resolve()
-    config = read_json(selected_config)
+    config = read_json(selected_config, reject_duplicates=True)
+    _validate_legacy_routing(config)
     backend = backend or config["backend"]
     profile_environment = config.get("native", {}).get("runtime_environment", {})
     from presentation_policy import choice, apply as apply_presentation
@@ -445,7 +488,7 @@ def main():
         if verification is not None:
             verification.save()
             startup_progress(f'Content checks complete: {verification.reused} unchanged, {verification.hashed} fully checked.')
-        lighting_profile = p.get('prepared_profile') or read_json(args.profile)
+        lighting_profile = p.get('prepared_profile') or read_json(args.profile, reject_duplicates=True)
         native_lighting = lighting_profile.get("native", {})
         lighting_config = native_lighting.get("sun_preset")
         presentation_off = native_lighting.get("presentation", {}).get("dynamic_lighting") is False
@@ -499,7 +542,7 @@ def main():
         )
         print(f"Renderer: {p['backend']}; current texture pack: {p['texture_banks']} banks")
         if p["backend"] == "native":
-            print("Native build: " + read_json(args.profile)["native"]["executable"])
+            print("Native build: " + read_json(args.profile, reject_duplicates=True)["native"]["executable"])
         if p["backend"] == "native":
             print("Scenery draw distance: " + str(g.get("draw_distance", 800)) + " units")
         if p["backend"] == "native" and g.get("fog_distance", 0):

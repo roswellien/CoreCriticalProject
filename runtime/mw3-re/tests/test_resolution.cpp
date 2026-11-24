@@ -13,8 +13,14 @@
 #include "gamez/zclass/camera.h"
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zclass/cls_node.h"
+#include "gamez/zclass/window.h"
+#include "gamez/zmath/zmth_matrix.h"
+#include "gamez/zmodel/gmod_init.h"
 #include "gamez/zreader/zreader.h"
+#include "gamez/zmodel/gmod_draw.h"
+#include "gamez/ztwod/twod_host.h"
 #include "gamez/zutil/zfix.h"
+#include "gamez/zvideo/zvid_ddd3d.h"
 #include "mech3/app_hooks.h"
 #include "mech3/hud.h"
 #include "mech3/options.h"
@@ -26,6 +32,33 @@ struct FixOn {
   bool was = zfix::options().any_resolution;
   explicit FixOn(bool on) { zfix::options().any_resolution = on; }
   ~FixOn() { zfix::options().any_resolution = was; }
+};
+
+// Restore options, hooks, host, projection, draw state, scene camera, and the
+// captured producer view with its canvas/camera metadata after each test.
+struct ResolutionStateGuard {
+  mech3::Options options = mech3::options();
+  zfix::Options fixes = zfix::options();
+  mech3::OptionsHooks* options_hooks = &mech3::options_hooks();
+  mech3::HudHooks* hud_hooks = &mech3::hud_hooks();
+  ztwod::Host* host = &ztwod::host();
+  zmth::Projection projection = zmth::projection();
+  zmod::DrawState draw_state = zmod::draw_state();
+  zcls::Camera* camera = zcls::scene_walk().camera;
+  zvid::ProducerViewStateForTest producer_view =
+      zvid::capture_producer_view_state_for_test();
+
+  ~ResolutionStateGuard() {
+    ztwod::set_host(host);
+    mech3::set_hud_hooks(hud_hooks);
+    mech3::set_options_hooks(options_hooks);
+    mech3::options() = options;
+    zfix::options() = fixes;
+    zmod::draw_state() = draw_state;
+    zmth::projection() = projection;
+    zcls::scene_walk().camera = camera;
+    zvid::restore_producer_view_for_test(producer_view);
+  }
 };
 
 // A camera with plain angles in place of the engine's: what 0x004f3ee0 reads
@@ -72,9 +105,82 @@ struct RangeEngine : mech3::Engine {
   uint32_t unported(const char*, std::initializer_list<zgame::Arg>) override { return 0; }
 };
 
+struct HudZoomProjectionHooks : mech3::HudHooks {
+  std::vector<zcls::Node*> nodes;
+
+  uint32_t keep(zcls::Node* node) {
+    nodes.push_back(node);
+    return static_cast<uint32_t>(nodes.size());
+  }
+  uint32_t world() override { return 1; }
+  uint32_t world_node(uint32_t) override { return 0; }
+  void player_camera_clip(float* near_z, float* far_z) override {
+    *near_z = 1.0f;
+    *far_z = 500.0f;
+  }
+  zcls::Node* node(uint32_t handle) const {
+    return handle > 0 && handle <= nodes.size() ? nodes[handle - 1] : nullptr;
+  }
+  uint32_t window_node_new() override { return keep(zcls::window_create()); }
+  uint32_t camera_node_new() override { return keep(zcls::camera_create()); }
+  void node_set_name(uint32_t, const char*) override {}
+  void node_set_active(uint32_t, bool) override {}
+  void camera_set_window(uint32_t camera, uint32_t window) override {
+    zcls::camera_set_window(node(camera), node(window));
+  }
+  void camera_set_world(uint32_t, uint32_t) override {}
+  void camera_set_zone(uint32_t, uint32_t) override {}
+  void camera_set_zoom(uint32_t camera, float zoom) override {
+    zcls::camera_set_lod_scale(node(camera), zoom);
+  }
+  void camera_set_fov(uint32_t camera, float horizontal, float vertical) override {
+    zcls::camera_set_fov_angles(node(camera), horizontal, vertical);
+  }
+  void camera_set_clip(uint32_t camera, float near_z, float far_z) override {
+    zcls::camera_set_clip(node(camera), near_z, far_z);
+  }
+  void window_set_size(uint32_t window, int32_t width, int32_t height) override {
+    zcls::window_set_size(node(window), width, height);
+  }
+  void window_set_pos(uint32_t window, int32_t x, int32_t y) override {
+    zcls::window_set_origin(node(window), x, y);
+  }
+  ztwod::Rect display_rect() override { return {0, 0, 1147, 480}; }
+  ztwod::Rect window_rect() override { return display_rect(); }
+  void camera_window_rect(uint32_t camera, int32_t* x, int32_t* y, int32_t* width,
+                          int32_t* height) override {
+    auto* data = static_cast<zcls::Camera*>(node(camera)->data);
+    zcls::window_origin(data->nodes[1], x, y);
+    zcls::window_size(data->nodes[1], width, height);
+  }
+};
+
+struct HudZoomProjectionHost : ztwod::Host {
+  zimg::Texture* image_get(const char*) override { return nullptr; }
+};
+
 }  // namespace
 
+TEST(resolution_guard_restores_idle_producer_viewport) {
+  ResolutionStateGuard original;
+  zvid::set_producer_canvas_rect(3, 5, 320, 180);
+  zvid::set_producer_camera_rect(11, 13, 160, 90);
+  {
+    ResolutionStateGuard changed;
+    zvid::set_producer_canvas_rect(0, 0, 64, 64);
+    zvid::set_producer_camera_rect(0, 0, 32, 32);
+  }
+  const auto state = zvid::capture_producer_view_state_for_test();
+  EXPECT(!state.view.present);
+  EXPECT(state.canvas_available && state.canvas.x == 3 && state.canvas.y == 5 &&
+         state.canvas.width == 320 && state.canvas.height == 180);
+  EXPECT(state.camera_rect_available && state.camera_rect.x == 11 &&
+         state.camera_rect.y == 13 && state.camera_rect.width == 160 &&
+         state.camera_rect.height == 90);
+}
+
 TEST(resolution_original_modes_keep_their_sizes) {
+  ResolutionStateGuard state;
   for (bool fix : {false, true}) {
     FixOn f(fix);
     const int32_t sizes[][3] = {{5, 640, 480},   {6, 800, 600},   {7, 1024, 768},
@@ -94,6 +200,7 @@ TEST(resolution_original_modes_keep_their_sizes) {
 }
 
 TEST(resolution_new_modes_only_with_the_fix) {
+  ResolutionStateGuard state;
   {
     FixOn f(false);
     mech3::set_vmode(5);
@@ -164,8 +271,8 @@ TEST(resolution_range_and_list) {
 }
 
 TEST(resolution_ultrawide_bounds_preserve_valid_aspects) {
+  ResolutionStateGuard state;
   FixOn enabled(true);
-  const auto saved = mech3::options();
   // Oversized 16:9, 32:9 and square requests fit uniformly. Extreme inputs
   // exercise bounded integer arithmetic rather than overflow or allocation.
   const int32_t cases[][4] = {{5120, 2880, 3840, 2160},
@@ -179,12 +286,11 @@ TEST(resolution_ultrawide_bounds_preserve_valid_aspects) {
     EXPECT(mech3::vmode_size(mech3::kCustomVMode, &width, &height));
     EXPECT(width == size[2] && height == size[3]);
   }
-  mech3::options() = saved;
 }
 
 TEST(resolution_ultrawide_hud_and_pointer_share_the_frame) {
+  ResolutionStateGuard state;
   FixOn enabled(true);
-  const auto saved = mech3::options();
   for (const auto& size : {std::array<int32_t, 2>{3440, 1440}, {5120, 1440}, {3840, 1080}}) {
     mech3::options().screen_w = size[0];
     mech3::options().screen_h = size[1];
@@ -216,10 +322,10 @@ TEST(resolution_ultrawide_hud_and_pointer_share_the_frame) {
     mech3::render_to_screen(cursor);
     EXPECT(std::fabs(cursor[0] - canvas.w * .5f) < .001f && cursor[1] == 240);
   }
-  mech3::options() = saved;
 }
 
 TEST(resolution_camera_4_3_is_the_original) {
+  ResolutionStateGuard state;
   for (bool fix : {false, true}) {
     FixOn f(fix);
     const int32_t shapes[][2] = {{640, 480}, {800, 600}, {1024, 768}, {1600, 1200}, {320, 240}};
@@ -229,6 +335,7 @@ TEST(resolution_camera_4_3_is_the_original) {
 }
 
 TEST(resolution_camera_wide_keeps_the_4_3_look) {
+  ResolutionStateGuard state;
   const float v = 1.0471976f;
   const double look = squeeze(linear(640, 480, v), v, 640, 480);  // about 0.9175
   EXPECT(std::fabs(look - 0.9175) < 1e-3);
@@ -245,7 +352,6 @@ TEST(resolution_camera_wide_keeps_the_4_3_look) {
     EXPECT(std::fabs(squeeze(hf, v, s[0], s[1]) - look) < 1e-5);
   }
   EXPECT(std::fabs(camera_h_at(1920, 1080) * 57.29578 - 96.4) < 0.1);  // degrees across
-  mech3::set_render_size(640, 480);
 }
 
 // The wired hooks' targets: 0x004f3ee0 reads what 0x004f3d90 set.
@@ -318,7 +424,7 @@ TEST(resolution_hud_anchors_make_the_original_blocks) {
 // window rects the frame, the points and rects between them; modes 3..10 and
 // the fix off as the original.
 TEST(resolution_canvas_past_mode_10) {
-  const mech3::Options keep = mech3::options();
+  ResolutionStateGuard state;
   {
     FixOn on(true);
     const int32_t sizes[][3] = {{5, 640, 480},   {10, 1600, 1200}, {11, 853, 480}, {12, 853, 480},
@@ -357,5 +463,70 @@ TEST(resolution_canvas_past_mode_10) {
     mech3::set_vmode(7);
     EXPECT(mech3::display().w == 1024 && mech3::render().w == 1024 && !mech3::canvas_scaled());
   }
-  mech3::options() = keep;
+}
+
+TEST(resolution_hud_zoom_window_maps_to_render_and_projection) {
+  ResolutionStateGuard state;
+  zfix::options().any_resolution = true;
+  mech3::options().screen_w = 3440;
+  mech3::options().screen_h = 1440;
+  mech3::set_vmode(mech3::kCustomVMode);
+  EXPECT(mech3::render().w == 3440 && mech3::render().h == 1440);
+  EXPECT(mech3::display().w == 1147 && mech3::display().h == 480);
+  EXPECT(mech3::canvas_scaled());
+
+  HudZoomProjectionHooks hooks;
+  HudZoomProjectionHost host;
+  mech3::set_hud_hooks(&hooks);
+  ztwod::set_host(&host);
+  auto* main_window = zcls::window_create();
+  zcls::window_set_size(main_window, 3440, 1440);
+  zcls::window_set_origin(main_window, 0, 0);
+  auto* main_camera_node = zcls::camera_create();
+  zcls::camera_set_window(main_camera_node, main_window);
+  auto* main_camera = static_cast<zcls::Camera*>(main_camera_node->data);
+  zcls::camera_set_fov_angles(main_camera_node, 1.0f, 1.0f);
+  zcls::camera_set_clip(main_camera_node, 1.0f, 1000.0f);
+  zmod::set_camera(main_camera);
+  {
+    mech3::HudZoomWindow zoom(10, 0x172, 0x5a, 0x5a);
+    zoom.zoom = 1.0f;
+    zoom.follow(10 + 0x5a / 2, 0x172 + 0x5a / 2);
+    EXPECT(zoom.rect.left == 10 && zoom.rect.top == 0x172 &&
+           zoom.rect.right == 10 + 0x5a && zoom.rect.bottom == 0x172 + 0x5a);
+
+    int32_t x = 0, y = 0, width = 0, height = 0;
+    hooks.camera_window_rect(zoom.view.camera, &x, &y, &width, &height);
+    int32_t expected_x = zoom.rect.left, expected_y = zoom.rect.top;
+    int32_t expected_width = zoom.rect.right - zoom.rect.left;
+    int32_t expected_height = zoom.rect.bottom - zoom.rect.top;
+    mech3::canvas_to_render(&expected_x, &expected_y, &expected_width, &expected_height);
+    EXPECT(x == expected_x && y == expected_y && width == expected_width &&
+           height == expected_height);
+    EXPECT(width >= 269 && width <= 271 && height >= 269 && height <= 271);
+    EXPECT(x >= 29 && x <= 31 && y >= 1109 && y <= 1111);
+    EXPECT(x + width / 2 >= 164 && x + width / 2 <= 166 &&
+           y + height / 2 >= 1244 && y + height / 2 <= 1246);
+
+    auto* zoom_camera = static_cast<zcls::Camera*>(hooks.node(zoom.view.camera)->data);
+    zmod::set_camera(zoom_camera);
+    const zmth::Projection& projection = zmth::projection();
+    EXPECT(projection.half_w == 135.0f && projection.half_h == 135.0f);
+    // set_camera stores the zoom window's centre in render pixels: its origin
+    // plus half its size. set_projection adds no pixel-centre offset here.
+    EXPECT(projection.cx == static_cast<float>(x) + width * 0.5f &&
+           projection.cy == static_cast<float>(y) + height * 0.5f);
+  }
+
+  zmod::set_camera(main_camera);
+  int32_t main_x = -1, main_y = -1, main_width = 0, main_height = 0;
+  zcls::window_origin(main_window, &main_x, &main_y);
+  zcls::window_size(main_window, &main_width, &main_height);
+  EXPECT(main_x == 0 && main_y == 0 && main_width == 3440 && main_height == 1440);
+  EXPECT(zmth::projection().half_w == 1720.0f && zmth::projection().half_h == 720.0f);
+
+  for (auto it = hooks.nodes.rbegin(); it != hooks.nodes.rend(); ++it)
+    EXPECT(zcls::node_delete(*it) == 0);
+  EXPECT(zcls::node_delete(main_camera_node) == 0);
+  EXPECT(zcls::node_delete(main_window) == 0);
 }

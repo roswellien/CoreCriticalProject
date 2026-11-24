@@ -5,6 +5,7 @@
 #pragma STDC FP_CONTRACT OFF
 
 #include "gamez/zclass/cls_data.h"
+#include "gamez/zclass/visual_distance.h"
 #include "gamez/zerror/zerr.h"
 #include "gamez/zclass/window.h"
 #include "gamez/zmath/zmth_matrix.h"
@@ -14,10 +15,13 @@
 #include "gamez/zmodel/gmod_light.h"
 #include "gamez/zutil/zutl_reg.h"
 #include "gamez/zrender/zrndr_fog.h"
+#include "gamez/zvideo/zvid_ddd3d.h"
+#include "mech3/options.h"
 
 namespace zmod {
 
 namespace {
+const char kFile[] = "C:\\zipper\\GameZMech3\\zModel\\gmod_init.c";
 WalkState g_walk{{}, 0, draw_model};
 
 void put_float(uint32_t& slot, float v) { std::memcpy(&slot, &v, 4); }
@@ -60,6 +64,7 @@ int model_set_scroll(Model* m, int on, float u, float v) {
   std::memcpy(m->header + 8, &f, 4);
   std::memcpy(m->header + 0x2c, &v, 4);
   std::memcpy(m->header + 0x28, &u, 4);
+  m->fixture_revision.reset();
   return 0;
 }
 
@@ -90,15 +95,23 @@ float fog_near() { return fog().near_range; }
 // (Direct3D +0.001; software adds 0.5 for pixel centres).
 void set_camera(zcls::Camera* camera) {
   WalkState& w = g_walk;
+  int32_t x = 0, y = 0, wd = 0, ht = 0;
+  if (zcls::window_origin(camera->nodes[1], &x, &y)) x = 0, y = 0;
+  if (zcls::window_size(camera->nodes[1], &wd, &ht)) {
+    const mech3::Rect& render = mech3::render();
+    if (render.w <= 0 || render.h <= 0) {
+      zerr::report(0x200, kFile, 0, "Cannot set camera without a valid render size.");
+      return;
+    }
+    wd = render.w;
+    ht = render.h;
+  }
   DrawState& ds = draw_state();
   w.camera = camera;
   ds.camera_data = reinterpret_cast<const float*>(camera->raw);
   ClipPlanes& c = ds.clip;
   c.near_z = camera->get<float>(0xb0);
-  c.far_z = camera->get<float>(0xb4);
-  int32_t x = 0, y = 0, wd = 0, ht = 0;
-  if (zcls::window_origin(camera->nodes[1], &x, &y)) x = 0, y = 0;
-  if (zcls::window_size(camera->nodes[1], &wd, &ht)) wd = w.screen_w, ht = w.screen_h;
+  c.far_z = zcls::visual_far_for_render(camera, camera->get<float>(0xb4));
   const float fx = static_cast<float>(x), fy = static_cast<float>(y);
   const float fr = static_cast<float>(wd + x), fb = static_cast<float>(ht + y);
   if (zrndr::device_fog().active) {
@@ -114,8 +127,9 @@ void set_camera(zcls::Camera* camera) {
   ds.point_rect[2] = fr - 0.001f, ds.point_rect[3] = fb - 0.001f;
   zmth::set_projection(fx, fy, static_cast<float>(wd) * 0.5f, static_cast<float>(ht) * 0.5f,
                        camera->get<float>(0x1d4), camera->get<float>(0x1d8), camera->get<float>(0xb0),
-                       camera->get<float>(0xb4));
+                       c.far_z);
   zmth::set_fov(camera->get<float>(0xe8), camera->get<float>(0xec));
+  zvid::set_producer_camera_rect(x, y, wd, ht);
 }
 
 // Mech3.exe 1.2 @ 0x005271a0. Sides: +x turned by half the horizontal fov

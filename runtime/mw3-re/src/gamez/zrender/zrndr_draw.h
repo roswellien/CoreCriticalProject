@@ -14,8 +14,10 @@ namespace zrndr {
 // through [0x72f3c0] with the work records' colours (coloured) or
 // [0x72f3bc] white. On Direct3D only: the software path (0x00566620) is not
 // ported (render.md section 9).
-void draw_sprite(const float screen[3], const zimg::TextureEntry* texture, float half_size, float alpha,
-                 int32_t colored);  // 0x00567720
+// Dispatched means the draw table was called; deferred queue admission can fail.
+enum class SpriteDrawResult { Clipped, Unavailable, Dispatched };
+SpriteDrawResult draw_sprite(const float screen[3], const zimg::TextureEntry* texture,
+                             float half_size, float alpha, int32_t colored);  // 0x00567720
 
 // zRender's GfxFlags ([0x008008d8] -> the settings entry "GfxFlags_HW" /
 // "_SW", else [0x008008d4]): read by the software renderer's set-up

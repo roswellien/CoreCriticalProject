@@ -91,6 +91,9 @@ enum GameOption : uint32_t {
 };
 
 Options& options();
+// Ours (#289): the 3D replay's mission plays at the screen's shape, whatever
+// mode is saved, and the saved mode is kept (load_options, save_options).
+void set_replay_screen(bool on);
 
 // The calls the setters make into code not ported yet.
 class OptionsHooks : public zgame::Unported {
@@ -157,6 +160,9 @@ class OptionsHooks : public zgame::Unported {
   virtual void input_set_screen(int32_t w, int32_t h) { unported("0x0051b590", {w, h}); }
   // Ours, FIX (B): the screen a first start plays at (the desktop's), or false.
   virtual bool first_start_screen(int32_t* w, int32_t* h) { (void)w, (void)h; return false; }
+  // Ours, FIX (B): the size the launcher chose for this run (--window WxH on a play run), or
+  // false. It wins over the saved size for this run only (resolution.md, the launcher's size).
+  virtual bool launch_screen(int32_t* w, int32_t* h) { (void)w, (void)h; return false; }
   virtual zrdr::Node* reader_load(const char* name);               // 0x00556740, ported: zrdr::load
   virtual void reader_free(zrdr::Node* n);                         // 0x00556820, ported: zrdr::free_node
   virtual const char* message(int32_t id) {                        // 0x00576040, Mech3Msg.dll
@@ -272,6 +278,13 @@ void apply_all();                           // 0x0040cb30  every setter with its
 // 1, or 0 when `path` is given and cannot be read.
 int32_t load_options(const char* path);     // 0x0040c420
 void save_options();                        // 0x0040cb20  the store saved, the controls freed
+// Ours, FIX (B): around zreg::write_all, the saved InGameVMode and size in place of the
+// launcher's per-run size (saved true), then the run's size back (saved false). A size the
+// player picks in the game during the run is saved as usual.
+void launch_screen_for_save(bool saved);
+// Ours, FIX (B): the player set InGameVMode in the game (the graphics screen's OK, Shift+V).
+// From then on the run's mode and size are saved as they stand, the launcher's size included.
+void note_player_screen_choice();
 // detail.zrd's value for `name` on this machine (0x0040c3b0): the first entry
 // whose condition holds, else `def` (also without a file).
 int32_t detail_value(zrdr::Node* root, const char* name, int32_t def);

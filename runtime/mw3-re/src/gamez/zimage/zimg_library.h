@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <vector>
 
+#include "upgrades/mods/mod_warning.h"
+
 // Texture libraries: rimage.zbd, rmechtex*.zbd (docs/textures.md). Original
 // file unknown: these sit between zimg_library.cpp and zimg_texture.cpp.
 namespace zimg {
@@ -63,7 +65,7 @@ struct Library {             // 0xac bytes
   bool needs_resolve;        // +0xa8
   bool r_prefix;             // +0xa9
   bool missing;              // +0xaa
-  long size = -1;            // ours (docs/modding.md, M3): the file's, bounding the table and textures
+  int64_t size = -1;         // ours (docs/modding.md, M3): the file's, bounding the table and textures
 };
 
 struct State {
@@ -89,10 +91,13 @@ Texture* find_in_list(int list, const char* name);  // 0x00518d60: the first lib
 void resolve_name(Library& lib);                                        // 0x00518a30
 bool open(Library& lib);                                                // 0x005187c0
 Texture* load(Library& lib, const char* name);                          // 0x00518db0
+// Ours: what the last load found wrong in a (mod's) library's entry and did about it, in the mods' one form
+// (upgrades/mods/mod_warning.h); empty for a well-formed one. For the mod check and the log.
+const std::vector<mech3::ModWarning>& load_notes();
 
 // 0x00517f80. Ours (docs/modding.md, M3): with `end`, a texture whose sizes
 // or buffers the bytes up to it cannot hold is refused (null), not read.
-Texture* read_texture(std::FILE* f, long end = -1);
+Texture* read_texture(std::FILE* f, int64_t end = -1);
 int read_info(std::FILE* f, Texture& t);                // 0x00517d80
 int read_data(std::FILE* f, Texture& t, int bytes);     // 0x00517df0
 int bytes_per_pixel(const Texture& t);                  // 0x00517c20

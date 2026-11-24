@@ -90,7 +90,8 @@ copy of the tree), 0x430ad0 (HUD model).
   2. Otherwise: zar find (0x576a80) + seek (0x576ae0, handle or -1), then
      0x4fcdc0(handle, parent 0) reads the tree, 0x4fcd40(root) resolves the
      materials, and if 0x553450 (flag 0x72be74, set by zvid_init.c at 0x579e79
-     in one video mode) is set, 0x4fc8b0(root) post-processes every model.
+     when the Direct3D flag [0x72f348] is set, so in hardware mode) is set,
+     0x4fc8b0(root) turns every model's triangles into strips (below).
   3. A non-null new root is appended to the list (`new(0xc)`, size +1).
   Returns the root (or 0).
 
@@ -170,11 +171,92 @@ material. Returns the world material, or 0 while unresolved. So all mechs share
 
 ### 0x4fc8b0 `post_process(node)`
 
-Recursive; for each model calls 0x552540(model ecx, 0x7fffffff edx, 4). That
-function (between `gmod_puff.cpp` and `zreader.cpp`, about 300 lines) walks
-polygons with normals (0x200) and either tri-strip (0x400) or at most 4 vertices
-and builds edge lists, likely an edge/adjacency pass for one renderer. Not
-traced; only on when 0x72be74 is set.
+Recursive; for each model calls 0x552540(model ecx, 0x7fffffff edx, 4), a
+triangle stripper (about 45 functions, 3,500 decompiled lines, much of it STL
+map and list code). It runs whenever 0x72be74 is set, which zvid_init sets in
+hardware (Direct3D) mode, so in the mode the port draws like. It takes the
+polygons with vertex normals (0x200) whose material's flag 1 is set and that
+are already strips (0x400) or have at most 4 vertices, maps each edge to its
+polygons, and joins two polygons along a shared edge (0x554150) when their
+material and priority (+0x04) match, neither is two-sided (0x100), the corners
+of the shared edge carry the same vertex, normal, UV and colour, and the joined
+strip stays within 64 vertices (and the edx limit). The joined polygon is a
+strip (flag 0x400, count = triangles + 2) in the model's polygon array, so the
+model has fewer polygons, in a new order. The counters 0x72be64..0x72be70
+(polygons seen, strips, triangles, longest strip) are written and never read.
+
+**Ported** (`zmod::strip_model`, `src/gamez/zmodel/gmod_strip.cpp`; read from
+the asm where the decompile loses the `this` of the small calls). How it goes:
+
+- An edge is its two vertex indices, smaller first; the map (a `std::map`, so
+  in that order) holds each edge's list of (polygon, way it walks the edge).
+  A polygon's edges for the map are its sides in order; whether a polygon has
+  an edge (0x553d60): a strip only at its first and last sides (a strip of 4
+  first its two long sides, 2-0 and 1-3), the last walked backwards when the
+  count is even.
+- Rounds until nothing joins: for each edge in key order, each pair in its
+  list (earlier, later) is tried (0x554150): they walk the edge opposite
+  ways, their ends meet so one strip can carry on into the other (0x5503c0),
+  the joined count stays within 64 and the limit, same material, priority and
+  zone, neither two-sided, and the two corners on the edge match in normal,
+  colour and UV up to a whole number of repeats (0.001), the same repeats at
+  both corners. The later polygon's UVs are then moved by those repeats.
+- The join (0x551190): a polygon that is not a strip is laid out as one from
+  the shared edge (k, k+1, k-1, k+2, ...); a strip of 4 met on a long side
+  has its middle two vertices swapped; then, by which ends meet (last to
+  first, first to last, last to last, first to first) and their counts, one
+  or both are reversed or pair-swapped, and the two are concatenated
+  (0x550160) into a new strip at the end of the array. The two are removed
+  (each freed, the last polygon moved into its place), every list loses
+  them and follows the polygon that moved into the later one's place, the
+  new strip's ends go into the lists of edges already in the map, and that
+  edge's list is tried again from its start.
+
+Checked (`tests/differential/test_mech_strips.py`): the whole polygon array
+against the exe's on all 770 models (302 change, longest strip 26) and on
+3,000 random small models of triangles, quads and strips (the library never
+reaches some of the join's branches; these do), byte for byte. Breaks caught:
+the strip limit one under the longest strip, and in the join test the ends'
+rules (last-to-first, last-to-last and first-to-first meetings, a strip of
+4's long side meeting a triangle), the edge's way on a strip of 4, the UV tolerance, the UV
+shift, and the join's concatenation order. Some of the join's branches are
+reached by neither (counted on 5,000 random models): the ones for two
+polygons walking the edge the same way outside an even strip's last edge or
+a strip of 4's 2-0 side. The join test refuses such a pair (the two must walk
+the edge opposite ways, and their ways are those of the ends the join
+compares), so the exe's join handles cases its caller never gives it; they
+are ported as read from the asm. One quirk is
+guarded (`fixes.md`): a polygon on a list twice keeps a copy that no join
+drops or renumbers, so the list can name a polygon past the array or one
+without the edge, which the exe reads anyway; the port does not join such a
+pair (one shipped model has such an entry; nothing changes).
+
+Who reads the result: every ported reader of model polygons already has a
+strip branch (0x400), which walks the strip as its triangles: the draw and
+the shadow fill (`gmod_cull.cpp:269`), the ground, point and segment tests
+(`gmod_hit.cpp`), and the strip expander 0x553160. So the triangles drawn and
+tested are the same either way, and the GPU path draws the same picture
+without it. What changes is the polygon order and count. The ground and
+segment tests stop at the first polygon that covers every probe and cache its
+index (+0x58), so where two faces of a mech lie under the same probe or along
+the same shot, the first one found, and the hits recorded before it, can
+differ. A strip also splits a quad along its other diagonal (a quad 0-1-2-3
+drawn as a fan splits on 0-2; the strip often on 1-3), which moves a
+non-planar quad's surface by millimetres, in the picture too.
+
+Measured (`tests/differential/explore/strip_hits.py`, 53-bit): the original
+stripper run in the emulator on all 770 models changes 302 (10,589 polygons
+become 9,046). The port's model_ground and model_segments (the exe's, bit for
+bit, strips included: `test_di.py`) on each model before and after, over a
+12 by 12 grid of single and seven-probe ground sets at two tops and five
+shots per point, each side keeping its own cache: of 434,880 queries 90,172
+differ in some bit (mostly rounding), 9,860 by more than 1 mm in a hit, and
+5,011 on 126 models in the answer a caller takes (the highest ground hit,
+the nearest crossing). The largest are a different face: on
+`mech_thor_1.flt` a probe from above stops at a face 1.5 m lower, and a
+level shot meets a face 0.9 m from the one the port finds. So without the
+stripper the port answered as the original's software mode; with it (on in
+hardware mode, which the port always is) it answers as the hardware mode.
 
 ## Closing
 
@@ -235,8 +317,9 @@ bytes (the texture by name through zImage's 0x518c60 / 0x518cc0, now
 `zimg::add_texture`) and asks the world table for an equal one or a new one
 (0x536ad0 with the compare 0x536f10, `zmod::material_add`): the 442
 library materials become world materials once, shared by every mech. The
-post-pass 0x4fc8b0 (0x552540) runs only when 0x553450 is set (one video
-mode) and is not ported (`mechlib_post_process()` stays false).
+post-pass 0x4fc8b0 (0x552540, the triangle stripper) runs when 0x553450 is
+set, which hardware mode does: ported, the flag `zmod::strips()` set by the
+port's video open as the exe's (0x553460).
 
 MW3's side (`mech3/mech_lib`): 0x484270 makes the library once and opens
 `zbd\mechlib.zbd`, then loads two voice tables (by equipment kind, 1 ams ..
@@ -362,5 +445,14 @@ differ:
    (0x536ad0, `gmod_matl.c`), so it waits for those.
 7. **Ported.** MW3 side: 0x484270, 0x484740, 0x484760, 0x4847e0, 0x4844b0, and the mech
    table at 0x5e6078.
-8. Last or never: 0x4fc8b0 / 0x552540 (only in one video mode) and the writer
+8. **Ported.** 0x4fc8b0 / 0x552540 (the stripper, in hardware mode). Never: the writer
    (0x4fc990, 0x4fcca0, 0x4fc4d0), which is dead.
+
+**A node's matrix from its angles (2026-11-09, mechlib JSON).** Where a
+mechlib node keeps its rotation, translation and scale, its 3x4 matrix is the
+y, x, z product mech3ax rebuilds (`object_matrix`), and the shipped bits are
+those of each sine and cosine rounded once from the true value: a float
+`cosf` can miss by one bit and differs between systems (the Blackhawk's
+`lcalf`: cos 0.855211 is 0x3f27f37b in the file, 0x3f27f37c from macOS's
+`cosf`, 0x3f27f37b from its `__sincosf` and from double). The port's JSON
+reader rounds from double (`cls_mechlib_json.cpp`); docs/modding.md.

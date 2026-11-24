@@ -1,8 +1,12 @@
 #include "mech3/mainmenu.h"
 
 #include "gamez/zimage/zimg_library.h"
+#include "gamez/zrender/zrndr_blit.h"
 #include "gamez/zreader/zreader.h"
 #include "mech3/app.h"
+#include "mech3/mods_menu.h"
+#include "upgrades/mods/entry_run.h"
+#include "upgrades/mods/ia_mods_menu.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -49,6 +53,13 @@ void MainMenuButton::on_left_up() {
     e_.confirm_quit();
     return;
   }
+  if (kind == kMods) {  // ours
+    Control::on_left_up();
+    if (const Handle s = mods_menu_state()) e_.push_state(s, 0);
+    return;
+  }
+  // Ours (Owen, 2026-11-11, playtest W9): INSTANT ACTION on a plain run opens unmodded, whatever ticks the
+  // last session left: mods are turned on by the player each time, on its MODS screen (ia_mods.h).
   if (enabled) {
     Control::on_left_up();
     notify(1, 0);
@@ -89,7 +100,8 @@ MainMenu::MainMenu(Engine& e, Handle s)
               {e, MainMenuButton::kMultiplayer},   {e, MainMenuButton::kTraining},
               {e, MainMenuButton::kOptions},       {e, MainMenuButton::kCredits},
               {e, MainMenuButton::kQuit}},
-      title(e) {
+      title(e),
+      mods(e, MainMenuButton::kMods) {
   if (!app().no_voices()) {
     e.voice_start("MENU");
     e.music_play(ztwod::host().cd_find("menu"), 2);
@@ -106,6 +118,7 @@ MainMenu::MainMenu(Engine& e, Handle s)
     definition = tree;
     bind_primitive(&background, "BACKGROUND");
     for (int i = 0; i < 7; ++i) bind_button(&buttons[i], kButtonNames[i]);
+    const bool has_mods = mods_menu_page() && bind_button(&mods, "MODS");  // ours
     version.set_font(ztwod::host().font_find("debug_font"));
     const char* number = e.version_number();
     const char* name = e.message(7);
@@ -125,6 +138,7 @@ MainMenu::MainMenu(Engine& e, Handle s)
       bake();
       remove(&background);
       for (MainMenuButton& b : buttons) b.set_baked(true);
+      if (has_mods) mods.set_baked(true);
     }
   } else {
     definition = nullptr;
@@ -138,6 +152,7 @@ MainMenu::MainMenu(Engine& e, Handle s)
 MainMenu::~MainMenu() {
   engine().voice_release("MENU");
   engine().cd_stop();
+  zrndr::set_menu_background_source(nullptr);
   g_main_menu = nullptr;
 }
 

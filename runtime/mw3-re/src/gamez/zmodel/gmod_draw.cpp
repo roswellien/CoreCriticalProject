@@ -2,6 +2,7 @@
 #include "platform/render3d.h"
 #include "gamez/zmodel/gmod_geometry.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -986,14 +987,21 @@ int32_t draw_model(zcls::Node* node, uint32_t mask) {
       context.node = node;
       context.model_to_world = stack.below().m;
       context.model_to_camera = stack.matrix().m;
+      context.world_to_camera = zmth::view().view.m;
       context.near_z = projection.near_z, context.far_z = projection.far_z;
       context.clip_near = s.clip.near_z;
       context.fx_near = projection.fx_near, context.fy_near = projection.fy_near;
       context.cx = projection.cx, context.cy = projection.cy;
       context.opacity = s.opacity;
+      const Lighting& tint = lighting();
+      if (tint.tint_on) {
+        std::copy_n(tint.tint, 3, context.damage_tint_rgb);
+        context.damage_tint_weight = tint.tint_weight;
+      }
       context.ordinary = type == 0;
       context.morphing = morphing(m);
       context.overlay = s.overlay != 0;
+      const zvid::ProducerBindingScope producer_view(renderer);
       scope.renderer = renderer;
       renderer->begin_model_draw(context);
     }

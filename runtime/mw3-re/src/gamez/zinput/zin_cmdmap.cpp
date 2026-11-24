@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "gamez/zinput/zinput.h"
+#include "gamez/zutil/zfix.h"
 #include "gamez/zutil/zutl_msg.h"
 
 namespace zin {
@@ -37,6 +38,7 @@ std::string message_or(const char* key, const char* fallback) {
 
 // 0x0051c340: what every bound key's callback is: the key's command run.
 void key_thunk(int32_t key) {
+  if (state().di && state().di->key_suppressed(key & 0xffu)) return;
   const int32_t cmd = key_command(key);
   if (CommandCallback cb = cur()->callbacks[cmd]) cb(cmd);
 }
@@ -225,6 +227,7 @@ void mouse_callbacks() {
   const uint32_t s[3] = {m->left, m->right, m->middle};
   for (int32_t b = 1; b <= 3; ++b) {
     if (s[b - 1] != kPressed) continue;
+    if (state().di && state().di->mouse_suppressed(b)) continue;
     if (CommandCallback cb = cur()->callbacks[mouse_command(b)]) cb(mouse_command(b));
   }
 }
@@ -239,11 +242,12 @@ void joy_callbacks() {
 }
 
 // Mech3.exe 1.2 @ 0x0051c2b0
-// Only a command with a key gets its callback; each key takes the first one
-// given (0x0051a9c0) and runs whichever command it is bound to now.
+// Each key takes its first thunk (0x0051a9c0). In fixed mode mouse and
+// extended commands can own callbacks independently of the keyboard.
 uint32_t set_callback(int32_t cmd, CommandCallback cb) {
+  if (!cur() || cmd < 0 || cmd >= cur()->count) return 0;
   const uint32_t k1 = key1_of(cmd), k2 = key2_of(cmd);
-  if (k1 == 0 && k2 == 0) return 0;
+  if (!zfix::options().fixed && k1 == 0 && k2 == 0) return 0;
   cur()->callbacks[cmd] = cb;
   if (k1) set_key_callback(static_cast<int32_t>(k1), key_thunk);
   if (k2) set_key_callback(static_cast<int32_t>(k2), key_thunk);
@@ -256,12 +260,16 @@ uint32_t command(int32_t cmd) {
   if (!cur()->enabled) return 0;
   uint32_t s = 0;
   const uint32_t k1 = key1_of(cmd), k2 = key2_of(cmd);
-  if (k1) s = key_state(static_cast<int32_t>(k1));
-  if (k2) s |= key_state(static_cast<int32_t>(k2));
+  auto* di = state().di;
+  if (k1 && !(di && di->key_suppressed(k1 & 0xffu))) s = key_state(static_cast<int32_t>(k1));
+  if (k2 && !(di && di->key_suppressed(k2 & 0xffu))) s |= key_state(static_cast<int32_t>(k2));
   const uint32_t j = joy_of(cmd);
   if (j != 0 && j < 0xb) s |= joy_button(static_cast<int32_t>(j));
+  if (di) s |= di->command_state(cmd);
+  const auto button = static_cast<int32_t>(mouse_of(cmd));
+  if (button && di && di->mouse_suppressed(button)) return s;
   const MouseInfo* m = mouse_info();
-  switch (mouse_of(cmd)) {
+  switch (button) {
     case 1: return s | m->left;
     case 2: return s | m->right;
     case 3: return s | m->middle;

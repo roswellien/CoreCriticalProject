@@ -1,7 +1,217 @@
+// adapter_checks.cpp includes this file inside its private namespace.
+}  // namespace
+#include "frontend/sdl/sdl_input.h"
+#include "renderer/mech_headlights.hpp"
+namespace {
 
 void check_local_light_core() {
   using namespace mw34::effects;
   using namespace std;
+
+  {
+    auto parse = [](const char *text) {
+      std::istringstream stream(text);
+      return platform::HeadlightBinding::read(stream, zin::kKeys);
+    };
+    const auto v1 = parse("CC_MW3_HEADLIGHTS_V1 286 25");
+    require(v1.key == 286 && v1.button == 25 && v1.mouse == 0,
+            "V1 headlights lost keyboard or controller metadata");
+    const auto v2 = parse("CC_MW3_HEADLIGHTS_V2 0 -1 6\n");
+    require(v2.key == 0 && v2.button == -1 && v2.mouse == 6,
+            "V2 headlights refused a mouse-only binding");
+    require(platform::HeadlightBinding::wheel_mask(6) == 1 &&
+                platform::HeadlightBinding::wheel_mask(7) == 2 &&
+                platform::HeadlightBinding::wheel_mask(5) == 0 &&
+                platform::HeadlightBinding::wheel_mask(v1.mouse) == 0,
+            "Headlight wheel mask did not isolate its bound direction");
+    for (const char *bad : {"CC_MW3_HEADLIGHTS_V3 0 -1 6",
+                           "CC_MW3_HEADLIGHTS_V2 0 -1 6 extra",
+                           "CC_MW3_HEADLIGHTS_V2 0 -1 8",
+                           "CC_MW3_HEADLIGHTS_V2 0 -1 -1",
+                           "CC_MW3_HEADLIGHTS_V1 0 -1 6",
+                           "CC_MW3_HEADLIGHTS_V2 0 -1",
+                           "CC_MW3_HEADLIGHTS_V1 67 -1",
+                           "CC_MW3_HEADLIGHTS_V1 68 -1",
+                           "CC_MW3_HEADLIGHTS_V2 343 -1 6",
+                           "CC_MW3_HEADLIGHTS_V2 256 -1 6",
+                           "CC_MW3_HEADLIGHTS_V1 2014 -1",
+                           "CC_MW3_HEADLIGHTS_V2 0 26 6",
+                           "CC_MW3_HEADLIGHTS_V1 0-1"}) {
+      bool rejected = false;
+      try {
+        parse(bad);
+      } catch (const std::runtime_error &) {
+        rejected = true;
+      }
+      require(rejected, bad);
+    }
+
+    sdlfe::SdlInput mouse;
+    mouse.set_headlight_wheel(platform::HeadlightBinding::wheel_mask(v2.mouse));
+    require(mouse.open(platform::Input::kMouse) && mouse.acquire(platform::Input::kMouse) == 0,
+            "Could not acquire the headlight mouse fixture");
+    mw34::headlights::PlayerState player;
+    bool mouse_latch = false, key_latch = false;
+    auto sample = [&](uint64_t tick, bool key_down = false, bool key_suppressed = false) {
+      mouse.begin_poll(false, true);
+      platform::MouseState raw{};
+      const bool mouse_ready = mouse.mouse_state(&raw) == 0;
+      require(raw.z == 0, "Headlight wheel leaked to the legacy mouse axis");
+      const bool mouse_down = platform::headlight_input_down(
+          mouse.mouse_input_down(v2.mouse), mouse.mouse_suppressed(v2.mouse), mouse_latch);
+      const bool keyboard_down = platform::headlight_input_down(key_down, key_suppressed, key_latch);
+      player.update(1, 1, tick, 0.016, false, mouse_down || keyboard_down, mouse_ready);
+      return player.owner.envelope.desired;
+    };
+    require(!sample(1), "Mouse-only headlights did not start released");
+    SDL_Event scroll{};
+    scroll.type = SDL_EVENT_MOUSE_WHEEL;
+    scroll.wheel.y = 2;
+    mouse.on_event(scroll);
+    require(sample(2) && sample(3) && !sample(4) && !sample(5),
+            "Two wheel detents did not toggle once each on successive player edges");
+    require(!sample(6, true, true) && !sample(7, true) && !sample(8, false) && sample(9, true),
+            "A chord release toggled headlights before the suppressed key was repressed");
+    require(!platform::headlight_input_down(true, true, mouse_latch) &&
+                !platform::headlight_input_down(true, false, mouse_latch) &&
+                !platform::headlight_input_down(false, false, mouse_latch) &&
+                platform::headlight_input_down(true, false, mouse_latch),
+            "A suppressed mouse button rearmed before release");
+
+    // Exercise the virtual mask through the same renderer factory as startup.
+    int window_count = 0;
+    auto **windows = SDL_GetWindows(&window_count);
+    auto *window = window_count ? windows[0] : nullptr;
+    SDL_free(windows);
+    require(window != nullptr, "Headlight adapter check needs the test window");
+    const auto backend = SDL_GetWindowFlags(window) & SDL_WINDOW_VULKAN
+        ? sdlfe::RendererBackend::core_critical_wsi
+        : sdlfe::RendererBackend::core_critical_dxgi;
+    const auto directory = std::filesystem::u8path(SDL_GetBasePath()) /
+        ("headlight-bindings-" + std::to_string(SDL_GetTicksNS()));
+    std::filesystem::create_directory(directory);
+    struct Cleanup {
+      std::filesystem::path path;
+      ~Cleanup() {
+        std::error_code ignored;
+        std::filesystem::remove_all(path, ignored);
+      }
+    } cleanup{directory};
+    auto write = [&](const char *name, std::string_view bytes) {
+      auto path = directory / name;
+      std::ofstream file(path, std::ios::binary);
+      file.write(bytes.data(), bytes.size());
+      require(bool(file), "Could not write headlight adapter fixture");
+      return path.string();
+    };
+    sdlfe::CoreCriticalAssets assets;
+    assets.lighting = "flat";
+    assets.effect_lights = assets.mech_headlights = true;
+    // One effect light with unit radius, intensity, lifetime and color.
+    assets.effect_light_catalog = write("effect.bin",
+        {"MWFX1\0\0\0\1\0\0\0\1\0\0\0\1\0\0\0\1\0\0\0\1\0\0\0"
+         "\1\0\0\0\0\0\0\0\0\0\x80\x3f\0\0\x80\x3f\0\0\x80\x3f"
+         "\0\0\x80\x3f\0\0\x80\x3f\0\0\x80\x3f", 60});
+    assets.stock_headlights = write("stock.bin", {"MWHDLT1\0\0\0\0\0", 12});
+    assets.headlight_bindings = write("input.txt", "CC_MW3_HEADLIGHTS_V2 0 -1 7");
+    const auto renderer = make_check_renderer(window, backend, {}, assets);
+    const platform::Render3D &render = *renderer;
+    require(render.headlight_wheel_mask() == 2, "Renderer did not expose the V2 wheel direction");
+  }
+
+  // Stock and selected-pack catalogs share exact material keys. Composition
+  // retains every definition or rejects the whole result on disagreement.
+  {
+    const Emitter emitter{2, 10.f, 1.f, .25f, {1.f, .5f, .25f}};
+    const mw34::materials::SurfaceKey base_key{1, 1, 1, 100};
+    const mw34::materials::SurfaceKey pack_key{1, 1, 1, 200};
+    const Catalog base{{base_key, emitter}}, pack{{pack_key, emitter}};
+    auto same_catalog = [](const Catalog &a, const Catalog &b) {
+      if (a.size() != b.size())
+        return false;
+      return std::equal(a.begin(), a.end(), b.begin(), [](const auto &left,
+                                                        const auto &right) {
+        const auto &x = left.second;
+        const auto &y = right.second;
+        return left.first == right.first && x.kind == y.kind &&
+               x.radius == y.radius && x.intensity == y.intensity &&
+               x.lifetime == y.lifetime && x.color == y.color;
+      });
+    };
+    unsigned passed = 0;
+    auto check_case = [&](bool condition, const char *message) {
+      require(condition, message);
+      ++passed;
+    };
+    auto rejects = [&](auto operation, const char *message) {
+      bool rejected = false;
+      try {
+        operation();
+      } catch (const std::runtime_error &) {
+        rejected = true;
+      }
+      check_case(rejected, message);
+    };
+    const auto merged = merge_catalogs(base, pack);
+    check_case(merged.size() == 2 && merged.count(base_key) == 1 &&
+                   merged.count(pack_key) == 1,
+               "Catalog composition lost a base or pack material");
+    check_case(same_catalog(merge_catalogs(merged, base), merged),
+               "Equal emitter definitions were not deduplicated");
+    check_case(same_catalog(merge_catalogs(pack, base), merged) &&
+                   same_catalog(merge_catalogs({}, merged), merged),
+               "Catalog composition depends on source ordering");
+    check_case(same_catalog(base, Catalog{{base_key, emitter}}) &&
+                   same_catalog(pack, Catalog{{pack_key, emitter}}) &&
+                   same_catalog(merge_catalogs(base, {}), base),
+               "Catalog composition mutated a source definition");
+    for (unsigned field = 0; field < 7; ++field) {
+      auto changed = emitter;
+      if (field == 0)
+        changed.kind = 3;
+      else if (field == 1)
+        changed.radius = std::nextafter(changed.radius, 11.f);
+      else if (field == 2)
+        changed.intensity = 2.f;
+      else if (field == 3)
+        changed.lifetime = .5f;
+      else
+        changed.color[field - 4] += .125f;
+      // The new key sorts before the conflict: failure must not leave that
+      // partial insertion in either caller-owned input.
+      const Catalog conflicting{{{1, 1, 1, 50}, emitter}, {base_key, changed}};
+      rejects([&] { merge_catalogs(base, conflicting); },
+              "Conflicting emitter field was accepted");
+      check_case(same_catalog(base, Catalog{{base_key, emitter}}) &&
+                     conflicting.size() == 2 &&
+                     conflicting.at(base_key).kind == changed.kind &&
+                     conflicting.at(base_key).radius == changed.radius &&
+                     conflicting.at(base_key).intensity == changed.intensity &&
+                     conflicting.at(base_key).lifetime == changed.lifetime &&
+                     conflicting.at(base_key).color == changed.color,
+                 "Rejected catalog composition mutated an input");
+    }
+    Catalog lower, upper;
+    for (std::uint64_t hash = 1; hash <= 8192; ++hash)
+      (hash <= 4096 ? lower : upper).emplace(
+          mw34::materials::SurfaceKey{1, 1, 1, hash}, emitter);
+    const auto full = merge_catalogs(lower, upper);
+    check_case(full.size() == 8192 && lower.size() == 4096 && upper.size() == 4096,
+               "Catalog composition rejected the exact combined limit");
+    check_case(same_catalog(merge_catalogs(full, lower), full),
+               "Equal definitions at the combined limit were rejected");
+    const Catalog overflow{{{1, 1, 1, 9000}, emitter}};
+    rejects([&] { merge_catalogs(full, overflow); },
+            "Catalog composition exceeded the combined limit");
+    auto oversized = full;
+    oversized.insert(*overflow.begin());
+    rejects([&] { merge_catalogs(oversized, {}); },
+            "Oversized base catalog was accepted");
+    check_case(full.size() == 8192 && overflow.size() == 1,
+               "Overflow rejection changed a source catalog");
+    std::fprintf(stderr, "[EFFECT_CATALOG_CHECKS] passed_cases=%u conflict_fields=7\n",
+                 passed);
+  }
 
   // --- Part 1: rank_frame_lights ---
   {

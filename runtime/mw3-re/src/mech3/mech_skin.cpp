@@ -156,6 +156,7 @@ bool SkinSet::add(Skin* skin) {
     damage = skin;
     return true;
   }
+  skin->prepared_skin_index = static_cast<int32_t>(skins.size());
   skins.push_back(skin);
   return true;
 }
@@ -169,15 +170,22 @@ SkinSet* read_skins(zrdr::Node* dfn) {
   const int32_t pairs = (list[0].i - 1) / 2;
   auto* set = new SkinSet(pairs);
   for (int32_t i = 0; i < pairs; ++i) {
-    const char* name = zutl::localize(list[1 + 2 * i].s);
     zrdr::Node* items = list[2 + 2 * i].list;
+    const char* key = list[1 + 2 * i].s;
+    // FIX (bug): the Firefly's fifth skin, the "_e" textures, is labelled
+    // VARIANTD as its fourth: two WASPs and no SLATE. Each other label's
+    // letter is its suffix's (fixes.md).
+    if (zfix::options().fixed && i != 0 && key && std::strcmp(key, "MSG_SKIN_VARIANTD") == 0 && items[0].i > 1 &&
+        items[1].type == zrdr::String && std::strcmp(items[1].s, "_e") == 0)
+      key = "MSG_SKIN_VARIANTE";
+    const char* name = zutl::localize(key);
     if (i == 0 || std::strcmp(name, "damage") == 0) {
       int32_t n = items[0].i - 1;
       int32_t first = 1;
       // FIX (bug): the Mad Cat's damage list has two zeros too many and the
       // Supernova's one, shifting every mask off its texture; leading empty
       // slots are dropped until the list is as long as the first skin's.
-      if (zfix::options().bugs && i != 0 && !set->skins.empty()) {
+      if (zfix::options().fixed && i != 0 && !set->skins.empty()) {
         const auto want = static_cast<int32_t>(set->skins[0]->entries.size());
         while (n > want && items[first].type == zrdr::Int) ++first, --n;
       }
@@ -316,6 +324,7 @@ int32_t Skin::index_of(const SkinEntry* e) const {
 Skin* Skin::clone(const Skin* d) const {
   if (entries.empty()) return nullptr;
   auto* out = new Skin(name, static_cast<uint32_t>(entries.size()));
+  out->prepared_skin_index = prepared_skin_index;
   for (size_t k = 0; k < entries.size(); ++k) {
     const SkinEntry* de = d && k < d->entries.size() ? d->entries[k] : nullptr;
     out->push(entries[k], g_skins.damage_mode && de && de->name);
@@ -327,6 +336,7 @@ Skin* Skin::clone(const Skin* d) const {
 bool Skin::apply_first(void* node) {
   zcls::Node* n = nd(node);
   if (!n) return false;
+  n->prepared_skin_index = prepared_skin_index;
   const bool holes = g_skins.damage_mode != 0;
   each_material(n, [&](zmod::Material& mat) {
     mat.soil = static_cast<uint32_t>(soil_of("mech"));  // 0x005e5840
@@ -336,12 +346,16 @@ bool Skin::apply_first(void* node) {
     if (!e->texture) {
       if (!holes && e->name != e->alt) {
         e->load(true, true);
+        mat.fixture_revision.reset();
         mat.texture = e->cached ? nullptr : static_cast<zimg::TextureEntry*>(e->texture);
       } else {
         e->texture = t;
       }
     }
-    if (holes && e->damage) mat.flags |= 2;
+    if (holes && e->damage) {
+      mat.fixture_revision.reset();
+      mat.flags |= 2;
+    }
   });
   for (int32_t k = 0; k < n->child_count(); ++k) apply_first(n->children[k]);
   return true;
@@ -350,7 +364,8 @@ bool Skin::apply_first(void* node) {
 // Mech3.exe 1.2 @ 0x004749e0
 void Skin::apply(void* node, Skin* to) const {
   zcls::Node* n = nd(node);
-  if (!n) return;
+  if (!n || !to) return;
+  n->prepared_skin_index = to->prepared_skin_index;
   const bool holes = g_skins.damage_mode != 0;
   each_material(n, [&](zmod::Material& mat) {
     if (!(mat.flags & 1) || !mat.texture) return;
@@ -361,6 +376,7 @@ void Skin::apply(void* node, Skin* to) const {
     SkinEntry* target = k >= 0 && k < static_cast<int32_t>(to->entries.size()) ? to->entries[k] : nullptr;
     if (!target) return;
     if (!(target->cached ? nullptr : target->texture)) target->load(true, !holes);
+    mat.fixture_revision.reset();
     mat.texture = target->cached ? nullptr : static_cast<zimg::TextureEntry*>(target->texture);
   });
   for (int32_t k = 0; k < n->child_count(); ++k) apply(n->children[k], to);

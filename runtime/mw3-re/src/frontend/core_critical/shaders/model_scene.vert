@@ -1,5 +1,7 @@
 #version 450
 // Optional replacement geometry only. Original TL vertices keep their shader.
+layout(location=11) out vec4 radialEye;
+layout(location=12) out vec3 radialScreen;
 layout(location=0) in vec3 position;
 layout(location=1) in vec3 normal;
 layout(location=2) in vec2 uv;
@@ -9,6 +11,7 @@ layout(location=2) noperspective out vec4 colorSmooth;
 layout(location=3) flat out vec4 colorFlat;
 layout(location=4) noperspective out vec4 specularSmooth;
 layout(location=5) flat out vec4 specularFlat;
+layout(location=10) out vec4 fogFactors;
 
 // First 64 bytes match the unmodified fragment shader's Push ABI.
 // target = (guestWidth, guestHeight, nearScale, nearClip).
@@ -28,6 +31,7 @@ layout(push_constant) uniform ModelPush {
 } draw;
 
 void main() {
+    fogFactors = vec4(0.0);
     vec4 p = vec4(position, 1.0);
     precise vec3 camera = vec3(dot(draw.camera0, p), dot(draw.camera1, p), dot(draw.camera2, p));
     vec3 n = vec3(dot(draw.camera0.xyz, normal), dot(draw.camera1.xyz, normal), dot(draw.camera2.xyz, normal));
@@ -38,8 +42,10 @@ void main() {
     float w = 1.0 / rhw;
     vec2 ndc = (screen + 0.5) / draw.target.xy * 2.0 - 1.0;
     gl_Position = vec4(ndc * w, rhw * w, w);
+    radialScreen = gl_Position.xyw;
+    radialEye = vec4(camera, float(draw.mode.x >> 16));
     gl_PointSize = 1.0;
     uvPerspective = uvAffine = uv;
-    colorSmooth = colorFlat = vec4(rgb, 1.0);
+    colorSmooth = colorFlat = vec4(rgb, uintBitsToFloat(draw.mode.w));
     specularSmooth = specularFlat = vec4(0.0, 0.0, 0.0, draw.factor.a);
 }

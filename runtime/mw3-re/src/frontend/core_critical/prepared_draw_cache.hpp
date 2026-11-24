@@ -38,6 +38,7 @@ public:
       std::shared_ptr<const mw34::vkscene::ModelGeometry> geometry,
       bool lighting, PreparedDrawCpuStatistics *profile = nullptr,
       bool enabled = true) {
+    validate_damage_tint(context);
     const auto build = [&] {
       return std::make_shared<PreparedSubmission>(
           prepare_draw(source, context, viewport, width, height, geometry,
@@ -63,11 +64,15 @@ public:
     append(context.fy_near);
     append(context.cx);
     append(context.cy);
+    append(context.opacity);
+    append(context.damage_tint_rgb);
+    append(context.damage_tint_weight);
     append(viewport);
     append(width);
     append(height);
     append(lighting);
-    append(zmod::fog());
+    append(zmod::render_fog());
+    append(zmod::render_fog_edge());
     append(zmod::fog_calc().camera_to_world);
     const int rounding = std::fegetround();
     append(rounding);
@@ -101,6 +106,9 @@ public:
       bytes +=
           sizeof(*value->draw.lit_normals) +
           value->draw.lit_normals->capacity() * sizeof(std::array<float, 3>);
+    if (value->draw.raw_fog)
+      bytes += sizeof(*value->draw.raw_fog) +
+               value->draw.raw_fog->capacity() * sizeof(std::array<float, 4>);
     if (found != entries_.end()) {
       statistics_.bytes -= found->second.bytes;
       entries_.erase(found);
@@ -130,9 +138,9 @@ private:
   static_assert(sizeof(zmod::Fog) == 56);
   using Signature =
       std::array<unsigned char,
-                 2 * sizeof(::platform::prepared::Matrix) + 7 * sizeof(float) +
+                 2 * sizeof(::platform::prepared::Matrix) + 12 * sizeof(float) +
                      sizeof(std::array<int, 4>) + 2 * sizeof(unsigned) +
-                     sizeof(bool) + sizeof(zmod::Fog) +
+                     sizeof(bool) + sizeof(zmod::Fog) + sizeof(zmod::RenderFogEdge) +
                      sizeof(zmod::FogCalc::camera_to_world) + sizeof(int) +
                      sizeof(std::uint32_t)>;
   struct Entry {

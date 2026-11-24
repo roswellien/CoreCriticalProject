@@ -15,6 +15,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include "platform/loading.hpp"  // Long hashes keep the window responsive.
 
 namespace platform::integrity {
 
@@ -38,6 +39,7 @@ public:
 
     const std::uint8_t *p = static_cast<const std::uint8_t *>(data);
     total_ += static_cast<std::uint64_t>(len);
+    std::size_t until_checkpoint = 65536;
     while (len != 0) {
       const std::size_t space = kBlockSize - buf_len_;
       const std::size_t take = len < space ? len : space;
@@ -45,6 +47,11 @@ public:
       buf_len_ += take;
       p += take;
       len -= take;
+      until_checkpoint -= (take < until_checkpoint ? take : until_checkpoint);
+      if (until_checkpoint == 0) {
+        platform::loading::checkpoint();
+        until_checkpoint = 65536;
+      }
       if (buf_len_ == kBlockSize) {
         process_block(buf_.data());
         buf_len_ = 0;

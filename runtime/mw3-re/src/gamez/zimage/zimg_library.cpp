@@ -3,10 +3,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <set>
 #include <string>
+#include <vector>
 
 #include "crt/msvc_string.h"
+#include "gamez/zutil/zfix.h"
 #include "gamez/zutil/zutl_path.h"
+#include "platform/file_position.h"
 
 namespace zimg {
 
@@ -40,10 +44,11 @@ std::string where(const Library& lib) {
 }
 
 // Ours (M3): a texture's bytes run to the next texture's offset or the end.
-long span_end(const Library& lib, uint32_t offset) {
-  long end = lib.size;
+int64_t span_end(const Library& lib, uint32_t offset) {
+  int64_t end = lib.size;
   for (int i = 0; i < lib.header.texture_count; ++i)
-    if (lib.entries[i].offset > offset && static_cast<long>(lib.entries[i].offset) < end) end = static_cast<long>(lib.entries[i].offset);
+    if (lib.entries[i].offset > offset && static_cast<int64_t>(lib.entries[i].offset) < end)
+      end = static_cast<int64_t>(lib.entries[i].offset);
   return end;
 }
 }  // namespace
@@ -141,18 +146,45 @@ bool open(Library& lib) {
   // FIX (A): State::dir plus the name, through the mounts (zutl_path.h).
   lib.file = zutl::open((std::string(g_state.dir) + lib.name).c_str(), "rb");
   if (!lib.file) return false;
-  if (lib.entries) return true;
-  std::fseek(lib.file, 0, SEEK_END);
-  lib.size = std::ftell(lib.file);
-  std::fseek(lib.file, 0, SEEK_SET);
+  if (platform::file_position::seek(lib.file, 0, SEEK_END) != 0) {
+    std::printf("mw3: %s: cannot determine the texture library size, not read\n", where(lib).c_str());
+    std::fclose(lib.file);
+    lib.file = nullptr;
+    return false;
+  }
+  const int64_t actual_size = platform::file_position::tell(lib.file);
+  if (actual_size < 0 || platform::file_position::seek(lib.file, 0, SEEK_SET) != 0) {
+    std::printf("mw3: %s: cannot determine the texture library size, not read\n", where(lib).c_str());
+    std::fclose(lib.file);
+    lib.file = nullptr;
+    return false;
+  }
+  constexpr int64_t kMaxTextureLibraryBytes = int64_t{1} << 32;
+  if (actual_size > kMaxTextureLibraryBytes) {
+    std::printf("mw3: %s: file is %lld bytes; texture offsets support files up to 4 GiB, not read\n", where(lib).c_str(),
+                static_cast<long long>(actual_size));
+    std::fclose(lib.file);
+    lib.file = nullptr;
+    return false;
+  }
+  if (lib.entries) {
+    if (actual_size != lib.size) {
+      std::printf("mw3: %s: its size changed while loaded, not read\n", where(lib).c_str());
+      std::fclose(lib.file);
+      lib.file = nullptr;
+      return false;
+    }
+    return true;
+  }
+  lib.size = actual_size;
   if (std::fread(&lib.header, 0x18, 1, lib.file) == 1 && lib.header.has_entries == 1) {
     // Ours (docs/modding.md, M3): counts the file cannot hold refuse it (the
     // exe mallocs and reads them as they are).
     const int64_t table = 0x18 + static_cast<int64_t>(lib.header.texture_count) * 0x28 +
                           static_cast<int64_t>(lib.header.palette_count) * 0x200;
     if (lib.header.texture_count < 0 || lib.header.palette_count < 0 || table > lib.size) {
-      std::printf("mw3: %s: its table is broken (%d textures, %d palettes in %ld bytes), not read\n", where(lib).c_str(),
-                  lib.header.texture_count, lib.header.palette_count, lib.size);
+      std::printf("mw3: %s: its table is broken (%d textures, %d palettes in %lld bytes), not read\n", where(lib).c_str(),
+                  lib.header.texture_count, lib.header.palette_count, static_cast<long long>(lib.size));
       std::fclose(lib.file);
       lib.file = nullptr;
       return false;
@@ -191,29 +223,71 @@ bool open(Library& lib) {
   return false;
 }
 
+namespace {
+std::vector<mech3::ModWarning> g_load_notes;
+// Said once for each texture of each file (a mission loads its textures again).
+void note(const Library& lib, const char* name, const mech3::ModWarning& w) {
+  g_load_notes.push_back(w);
+  static std::set<std::string> said;
+  const std::string line = mech3::mod_warning_line(where(lib) + ": texture " + name, w);
+  if (said.insert(line).second) std::printf("mw3: %s\n", line.c_str());
+}
+}  // namespace
+
+const std::vector<mech3::ModWarning>& load_notes() { return g_load_notes; }
+
 // Mech3.exe 1.2 @ 0x00518db0
 Texture* load(Library& lib, const char* name) {
+  g_load_notes.clear();
   if (!open(lib) || !lib.entries) return nullptr;
   for (int i = 0; i < lib.header.texture_count; ++i) {
     const Entry& e = lib.entries[i];
     if (crt::msvc_stricmp(e.name, name) != 0) continue;
-    // Ours (docs/modding.md, M3): the offset past the table and palettes,
-    // the palette one the library has, the texture within its bytes.
+    const std::string item = "its table entry " + std::to_string(i);
+    // Ours (docs/modding.md, M3): the offset past the table and palettes and inside the file, the texture within
+    // its bytes. The exe seeks and reads whatever is there.
     const int64_t table = 0x18 + static_cast<int64_t>(lib.header.texture_count) * 0x28 +
                           static_cast<int64_t>(lib.header.palette_count) * 0x200;
-    if (e.offset < table || static_cast<int64_t>(e.offset) >= lib.size || e.palette < -1 || e.palette >= lib.header.palette_count) {
-      std::printf("mw3: %s: texture %s is broken (its offset or palette), not read\n", where(lib).c_str(), name);
+    if (e.offset < table || static_cast<int64_t>(e.offset) >= lib.size) {
+      note(lib, name, {item + " puts its data at byte " + std::to_string(e.offset) + ", which is " +
+                           (e.offset < table ? "inside the file's own table" : "past the file's end (" + std::to_string(lib.size) + " bytes)"),
+                       "leaves this texture out", ""});
       return nullptr;
     }
-    std::fseek(lib.file, static_cast<long>(e.offset), SEEK_SET);
+    if (platform::file_position::seek(lib.file, e.offset, SEEK_SET) != 0) return nullptr;
     Texture* t = read_texture(lib.file, span_end(lib, e.offset));
     if (!t) {
-      std::printf("mw3: %s: texture %s is broken (its size past its end), not read\n", where(lib).c_str(), name);
+      note(lib, name, {item + " at byte " + std::to_string(e.offset) + " says a size its data does not fill before the next texture or the file's end",
+                       "leaves this texture out", ""});
       return nullptr;
     }
     if (e.palette == -1) return t;
+    // FIX (bug), ours: the entry names one of the file's palettes that is not there (hand-made entries write 0 in
+    // a file with none, where the game's own write -1). The exe reads palettes[base + n] unchecked (0x00518e2c);
+    // that list is only made when a loaded library has palettes (0x005188ec), and none of the game's own has
+    // one, so it is null and the read faults: the original crashes as it loads the texture (test_textures.py runs
+    // it). With palettes loaded it would take a stray pointer instead. fixes.md; docs/modding.md, M3.
+    if (e.palette < 0 || e.palette >= lib.header.palette_count) {
+      // The entry's number goes in the warning's `item`, not its words: many textures with this one fault then
+      // read the same, and the report says the fault once for them all.
+      const std::string which = "table entry " + std::to_string(i);
+      const std::string wrong = "its table entry names palette " + std::to_string(e.palette) + " of the file, and the file has " +
+                                (lib.header.palette_count ? std::to_string(lib.header.palette_count) : std::string("no")) +
+                                (lib.header.palette_count == 1 ? " palette" : " palettes") +
+                                " (the entry's last 4 bytes; -1, ff ff ff ff, means none)";
+      const char* original = "crashes if it ever loads this texture (it loads a texture only when something asks for it by "
+                             "name): it looks the palette up in a list that is empty, since none of the game's files has palettes";
+      if (!zfix::options().fixed || (t->flags & kGlobalPalette)) {
+        note(lib, name, {wrong + ", and this texture is drawn through that palette", "leaves this texture out", original, "", which});
+        free_texture(t);
+        return nullptr;
+      }
+      note(lib, name, {wrong + "; the texture needs none", "loads it without one", original,
+                       "set the last 4 bytes of its table entry (each entry is 40 bytes) to ff ff ff ff", which});
+      return t;
+    }
     // The original writes through t unchecked; a failed read would crash there.
-    if (t) t->palette = g_state.palettes[lib.palette_base + e.palette];
+    t->palette = g_state.palettes[lib.palette_base + e.palette];
     return t;
   }
   return nullptr;
@@ -276,11 +350,11 @@ int read_data(std::FILE* f, Texture& t, int bytes) {
 
 // Mech3.exe 1.2 @ 0x00517f80. Quirk kept: a failed pixel read still returns
 // the texture.
-Texture* read_texture(std::FILE* f, long end) {
+Texture* read_texture(std::FILE* f, int64_t end) {
   auto* t = static_cast<Texture*>(std::calloc(1, sizeof(Texture)));  // 0x00517c10
   if (read_info(f, *t) != 0) return nullptr;
   if (end >= 0) {  // ours (M3): sizes not below 0, the buffers within the bytes left
-    const long at = std::ftell(f);
+    const int64_t at = platform::file_position::tell(f);
     const int64_t px = static_cast<int64_t>(t->width) * t->height;
     const int64_t bpp = bytes_per_pixel(*t);
     const int64_t need = (t->palette_count != 0 ? px : bpp * px) + ((t->flags & kFullAlpha) ? px : 0) +

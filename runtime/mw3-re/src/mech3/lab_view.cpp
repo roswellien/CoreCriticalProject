@@ -27,6 +27,7 @@ namespace mech3 {
 
 // mech_lib.h's (its header brings the mech's own Handle with it).
 zcls::Node* mech_model(int32_t roster, int32_t variant);  // 0x00484760
+int32_t mech_count();  // mech_names.h: 19, or 20 and the mods' rows (19 none)
 
 namespace {
 constexpr int32_t kMechs = 0x13;                          // the 19 chassis
@@ -94,7 +95,8 @@ bool GameEngine::lab_world_load(Handle) {
   ls.x40_ = 1;
   zcls::frame_update();                   // 0x004f7f70
   zcls::purge_lists();                    // 0x004f7bd0
-  for (int32_t i = 0; i < kMechs; ++i) {  // 0x0044fcc0(i) into +0x20
+  for (int32_t i = 0; i < mech_count(); ++i) {  // 0x0044fcc0(i) into +0x20; ours: the mods' mechs after the exe's
+    if (i == kMechs) continue;  // 0x13: none
     const Handle h = alloc_block(0x14);
     set_field32(h, 0x08, static_cast<uint32_t>(i));
     set_field32(h, 0x10, 0xffffffffu);
@@ -105,6 +107,10 @@ bool GameEngine::lab_world_load(Handle) {
   zcls::scene_walk().hidden_surface = 0;  // 0x004f3550(0)
   std::memcpy(ls.cam_pos_, kCameraPos, sizeof kCameraPos);
   std::memcpy(ls.cam_rot_, kCameraRot, sizeof kCameraRot);
+  // Ours, last so no failed or abandoned load leaves it on: from a briefing the
+  // mission is already loaded, and its campaign lighting profile must not paint the
+  // turntable chassis (render3d.h). lab_world_unload turns it off unconditionally.
+  if (auto* render = platform_parts().render) render->set_lab_preview_lighting(true);
   return true;
 }
 
@@ -145,6 +151,7 @@ void GameEngine::lab_world_unload(Handle) {
   }
   ls.models_.clear();
   lab_view_.reset();
+  if (auto* render = platform_parts().render) render->set_lab_preview_lighting(false);
   ls.model_ = 0;
   video_show_cursor(ls.cursor_);
   twod_set_cursor(ls.cursor_);

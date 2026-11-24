@@ -1,6 +1,7 @@
 #include "frontend/sdl/sdl_install.h"
 #include "gamez/zutil/zutl_path.h"
 
+#include <sstream>
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -88,41 +89,56 @@ std::string reg_string(HKEY root, const char* key, const char* name, DWORD flags
 }  // namespace
 #endif
 
-std::vector<std::string> install_candidates() {
+std::vector<std::string> install_candidates(bool pirates_moon) {
   std::vector<std::string> out;
   auto add = [&](const std::string& d) {
     if (!d.empty() && std::find(out.begin(), out.end(), d) == out.end()) out.push_back(d);
   };
+  // The folder names the installers' defaults and players use, by game.
+  // Pirate's Moon must be installed apart from MechWarrior 3 (its readme).
+  const std::vector<std::string> names =
+      pirates_moon ? std::vector<std::string>{"MicroProse/MechWarrior 3 Pirate's Moon", "MicroProse/Pirate's Moon",
+                                              "Games/MechWarrior 3 Pirate's Moon", "Games/Pirate's Moon", "Games/PiratesMoon",
+                                              "MechWarrior 3 Pirate's Moon", "Pirate's Moon", "PiratesMoon"}
+                   : std::vector<std::string>{"MicroProse/MechWarrior 3", "MicroProse/MechWarrior3", "Games/MechWarrior 3",
+                                              "Games/MechWarrior3", "Games/MW3", "MechWarrior 3", "MechWarrior3", "MW3"};
 #if defined(_WIN32)
   // The original's InstallShield script (disc SETUP.INS, value.shl): SOFTWARE\
   // PUBLISHER_NAME\PRODUCT_NAME\PRODUCT_VERSION gets "Program" and "Version",
   // and InstallationInfo's App Paths entry for PRODUCT_KEY (mech3.exe). A
   // 32-bit installer on 64-bit Windows wrote the WOW6432Node view, or, without
-  // admin rights, the user's VirtualStore copy.
-  const char* const mp = "SOFTWARE\\MicroProse\\MechWarrior 3\\1.0";
+  // admin rights, the user's VirtualStore copy. Pirate's Moon's key is
+  // "MechWarrior 3 EP1" (its install's mw3pm.reg); both games' App Paths
+  // entry is mech3.exe, so it is asked for either (the caller checks which).
+  const std::string product = pirates_moon ? "MechWarrior 3 EP1" : "MechWarrior 3";
+  const std::string mp = "SOFTWARE\\MicroProse\\" + product + "\\1.0";
   const char* const app = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\mech3.exe";
   for (DWORD view : {static_cast<DWORD>(RRF_SUBKEY_WOW6432KEY), static_cast<DWORD>(RRF_SUBKEY_WOW6464KEY)}) {
-    add(install_of_program_value(reg_string(HKEY_LOCAL_MACHINE, mp, "Program", view)));
+    add(install_of_program_value(reg_string(HKEY_LOCAL_MACHINE, mp.c_str(), "Program", view)));
     add(install_of_program_value(reg_string(HKEY_LOCAL_MACHINE, app, "Path", view)));
     add(install_of_program_value(reg_string(HKEY_LOCAL_MACHINE, app, nullptr, view)));
   }
-  for (const char* store : {"Software\\Classes\\VirtualStore\\MACHINE\\SOFTWARE\\WOW6432Node\\MicroProse\\MechWarrior 3\\1.0",
-                            "Software\\Classes\\VirtualStore\\MACHINE\\SOFTWARE\\MicroProse\\MechWarrior 3\\1.0"})
-    add(install_of_program_value(reg_string(HKEY_CURRENT_USER, store, "Program", 0)));
-  // The installer's default, PROGRAMFILES\MicroProse\MechWarrior 3, and the
-  // usual hand-picked places.
+  for (const char* store : {"Software\\Classes\\VirtualStore\\MACHINE\\SOFTWARE\\WOW6432Node\\MicroProse\\",
+                            "Software\\Classes\\VirtualStore\\MACHINE\\SOFTWARE\\MicroProse\\"})
+    add(install_of_program_value(reg_string(HKEY_CURRENT_USER, (store + product + "\\1.0").c_str(), "Program", 0)));
+  // The installer's default, PROGRAMFILES\MicroProse\..., and the usual
+  // hand-picked places on the system drive.
+  auto win = [](std::string n) {
+    for (char& c : n) c = c == '/' ? '\\' : c;
+    return n;
+  };
   for (const char* env : {"ProgramFiles(x86)", "ProgramFiles", "ProgramW6432"})
-    if (const char* pf = std::getenv(env)) add(std::string(pf) + "\\MicroProse\\MechWarrior 3");
+    if (const char* pf = std::getenv(env))
+      for (const std::string& n : names)
+        if (n.rfind("MicroProse/", 0) == 0) add(std::string(pf) + "\\" + win(n));
   const char* sd = std::getenv("SystemDrive");
   const std::string drive = sd ? sd : "C:";
-  for (const char* d : {"\\MicroProse\\MechWarrior 3", "\\MicroProse\\MechWarrior3", "\\Games\\MechWarrior 3",
-                        "\\Games\\MechWarrior3", "\\Games\\MW3", "\\MechWarrior 3", "\\MechWarrior3", "\\MW3"})
-    add(drive + d);
+  for (const std::string& n : names) add(drive + "\\" + win(n));
 #else
-  // Ours (docs/linux.md): a Windows install under Wine, Proton or Lutris.
-  // Each prefix's drive_c with the installer's default and the usual
-  // hand-picked folders; MW3 is not sold on Steam, so a Proton prefix is a
-  // non-Steam game's (compatdata/<id>/pfx).
+  // Ours (docs/linux.md): a Windows install under Wine, Proton or Lutris, and
+  // on the Mac CrossOver's and Whisky's bottles. Each prefix's drive_c with
+  // the installer's default and the usual hand-picked folders; neither game is
+  // sold on Steam, so a Proton prefix is a non-Steam game's (compatdata/<id>/pfx).
   const char* home_env = std::getenv("HOME");
   const std::string home = home_env ? home_env : "";
   std::vector<std::string> prefixes;
@@ -130,18 +146,22 @@ std::vector<std::string> install_candidates() {
   if (!home.empty()) {
     prefixes.push_back(home + "/.wine");
     std::error_code ec;
-    for (const char* steam : {"/.steam/steam/steamapps/compatdata", "/.local/share/Steam/steamapps/compatdata",
-                              "/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/compatdata"})
-      for (const fs::directory_entry& e : fs::directory_iterator(home + steam, ec)) prefixes.push_back(e.path().string() + "/pfx");
-    for (const fs::directory_entry& e : fs::directory_iterator(home + "/Games", ec)) prefixes.push_back(e.path().string());
+    for (const char* many : {"/.steam/steam/steamapps/compatdata", "/.local/share/Steam/steamapps/compatdata",
+                             "/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/compatdata"})
+      for (const fs::directory_entry& e : fs::directory_iterator(home + many, ec)) prefixes.push_back(e.path().string() + "/pfx");
+    for (const char* many : {"/Games", "/Library/Application Support/CrossOver/Bottles",
+                             "/Library/Containers/com.isaacmarovitz.Whisky/Bottles"})
+      for (const fs::directory_entry& e : fs::directory_iterator(home + many, ec)) prefixes.push_back(e.path().string());
   }
   std::error_code ec;
   for (const std::string& pfx : prefixes)
-    for (const char* d : {"/drive_c/Program Files (x86)/MicroProse/MechWarrior 3", "/drive_c/Program Files/MicroProse/MechWarrior 3",
-                          "/drive_c/MicroProse/MechWarrior 3", "/drive_c/Games/MechWarrior 3", "/drive_c/MechWarrior 3"})
-      if (fs::is_directory(pfx + d, ec)) add(pfx + d);
+    for (const std::string& n : names)
+      for (const char* pf : {"/drive_c/Program Files (x86)/", "/drive_c/Program Files/", "/drive_c/"})
+        if ((n.rfind("MicroProse/", 0) == 0 || std::string(pf) == "/drive_c/") && fs::is_directory(pfx + pf + n, ec))
+          add(pfx + pf + n);
   if (!home.empty())
-    for (const char* d : {"/Games/MechWarrior 3", "/Games/MechWarrior3", "/Games/MW3", "/MechWarrior 3"}) add(home + d);
+    for (const std::string& n : names)
+      if (n.rfind("MicroProse/", 0) != 0) add(home + "/" + n);
 #endif
   // This program's folder and the one above (mw3 beside or inside the
   // install); on the Mac, beside the .app.
@@ -159,22 +179,71 @@ bool save_install(const std::string& write_dir, const std::string& install) {
   return save_config_value(write_dir, "install", install);
 }
 
+namespace {
+// mw3.cfg's lines, each with its own ending, byte for byte (a CRLF file stays
+// CRLF, a mixed one mixed), and the ending a new line takes: the file's first,
+// else the system's.
+struct CfgLines {
+  std::vector<std::string> lines;  // endings included; the last may have none
+#if defined(_WIN32)
+  std::string eol = "\r\n";
+#else
+  std::string eol = "\n";
+#endif
+};
+CfgLines read_cfg_lines(const fs::path& cfg) {
+  CfgLines c;
+  std::ifstream f(cfg, std::ios::binary);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  const std::string text = ss.str();
+  bool seen = false;
+  for (size_t at = 0; at < text.size();) {
+    const size_t nl = text.find('\n', at);
+    const size_t end = nl == std::string::npos ? text.size() : nl + 1;
+    c.lines.push_back(text.substr(at, end - at));
+    if (!seen && nl != std::string::npos) seen = true, c.eol = nl > at && text[nl - 1] == '\r' ? "\r\n" : "\n";
+    at = end;
+  }
+  return c;
+}
+bool write_cfg_lines(const fs::path& cfg, const CfgLines& c) {
+  std::ofstream o(cfg, std::ios::binary | std::ios::trunc);
+  for (const std::string& l : c.lines) o << l;
+  return static_cast<bool>(o);
+}
+bool is_key(const std::string& line, const std::string& key) { return line.rfind(key + "=", 0) == 0; }
+}  // namespace
+
 bool save_config_value(const std::string& write_dir, const std::string& key, const std::string& value) {
   if (write_dir.empty()) return false;
   const fs::path cfg = fs::path(write_dir) / "mw3.cfg";
-  std::vector<std::string> lines;
-  {
-    std::ifstream f(cfg);
-    std::string line;
-    while (std::getline(f, line)) {
-      if (!line.empty() && line.back() == '\r') line.pop_back();
-      if (line.rfind(key + "=", 0) != 0) lines.push_back(line);
-    }
+  CfgLines c = read_cfg_lines(cfg);
+  c.lines.erase(std::remove_if(c.lines.begin(), c.lines.end(), [&](const std::string& l) { return is_key(l, key); }), c.lines.end());
+  // A last line with no ending gets the file's, so the next one starts its own.
+  if (!c.lines.empty() && c.lines.back().back() != '\n') c.lines.back() += c.eol;
+  c.lines.insert(c.lines.begin(), key + "=" + value + c.eol);
+  return write_cfg_lines(cfg, c);
+}
+
+void apply_upgrades_config(const std::string& write_dir, const upgrades::Config& c, bool original) {
+  upgrades::apply(c);
+  if (upgrades::needs_migrating(c) && !write_dir.empty()) {
+    for (const upgrades::Switch& sw : upgrades::switches())
+      save_config_value(write_dir, std::string("upgrade_") + sw.key, c.bugfixes ? "1" : "0");
+    remove_config_value(write_dir, "bugfixes");
   }
-  lines.insert(lines.begin(), key + "=" + value);
-  std::ofstream o(cfg, std::ios::trunc);
-  for (const std::string& l : lines) o << l << '\n';
-  return static_cast<bool>(o);
+  if (original) zfix::set_upgrades(false);
+}
+
+bool remove_config_value(const std::string& write_dir, const std::string& key) {
+  if (write_dir.empty()) return false;
+  const fs::path cfg = fs::path(write_dir) / "mw3.cfg";
+  CfgLines c = read_cfg_lines(cfg);
+  const size_t before = c.lines.size();
+  c.lines.erase(std::remove_if(c.lines.begin(), c.lines.end(), [&](const std::string& l) { return is_key(l, key); }), c.lines.end());
+  if (c.lines.size() == before) return true;
+  return write_cfg_lines(cfg, c);
 }
 
 namespace {

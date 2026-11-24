@@ -5,6 +5,7 @@
 #include <memory>
 
 namespace cc::geometry { struct Resource; }
+namespace zcls { struct SourceAsset; struct ZbdReadContext; }
 
 #include "gamez/zmodel/gmod_matl.h"
 
@@ -44,7 +45,12 @@ struct Model {                   // 0x60-byte slot
   // These host fields are not part of the serialized 0x60-byte model slot.
   std::shared_ptr<const cc::geometry::Resource> render_geometry;
   std::vector<const Material*> render_materials;
+  std::shared_ptr<const zcls::SourceAsset> world_source_asset;
+  // Lazily allocated only for authenticated retained fixture sources. Weak
+  // consumers detect mutation/destruction without retaining a Model*.
+  mutable std::shared_ptr<const int> fixture_revision;
   void invalidate_render_geometry() noexcept {
+    fixture_revision.reset();
     render_geometry.reset();
     render_materials.clear();
   }
@@ -66,12 +72,12 @@ void reset_pool();
 // A free slot, its header cleared and +8 = 3 (flag 0x10 off). An empty pool
 // stops the game ("GameZ model resource failure").
 Model* model_alloc();                         // 0x00538fe0
-int read_models(std::FILE* f);                // 0x00538e30
-int read_model_data(std::FILE* f, Model& m);  // 0x00538a70
+int read_models(std::FILE* f, zcls::ZbdReadContext* proof = nullptr);                // 0x00538e30
+int read_model_data(std::FILE* f, Model& m, zcls::ZbdReadContext* proof = nullptr);  // 0x00538a70
 int model_release(Model* m);                  // 0x00539150, 1 while used (+0xc)
 int32_t models_free_unused();                 // 0x005392c0: the models nothing holds released; their count
 void models_purge(bool models, bool materials);  // 0x005394c0 ECX, EDX
-Model* reread_model(std::FILE* f, int32_t index);  // 0x00538640, f at the models' table
+Model* reread_model(std::FILE* f, int32_t index, zcls::ZbdReadContext* proof = nullptr);  // 0x00538640, f at the models' table
 // A new pool model with m's arrays copied (its use count 0, its sphere at
 // +0x48 not). With `own_materials` each polygon's material is copied too
 // (one copy per material of m), unless `shared` and the material does not

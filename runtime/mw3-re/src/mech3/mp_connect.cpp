@@ -2,12 +2,19 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "gamez/znetwork/znet_dplay.h"
 #include "gamez/znetwork/znet_session.h"
 #include "gamez/zutil/zutl_msgdll.h"
+#include "upgrades/mods/ia_mods_menu.h"
+#include "upgrades/mods/screen_fit.h"
 
 namespace mech3 {
+
+namespace {
+int32_t g_sessions_listed = 0;  // ours: the connection screen's games listed (connect_sessions_listed)
+}  // namespace
 
 namespace {
 // The bars' rejected characters (0x005a4840 with [0x005e28e8]) as a file
@@ -94,7 +101,12 @@ void SessionList::refill(int32_t count) {
     layout();
   }
   select(again);  // +0x98
+  // Ours, for the checks: the list's size, said as it changes (--click-sessions waits on it).
+  if (item_count() != g_sessions_listed)
+    g_sessions_listed = item_count(), std::printf("mw3: multiplayer: sessions listed %d\n", g_sessions_listed);
 }
+
+int32_t connect_sessions_listed() { return g_sessions_listed; }
 
 // Mech3.exe 1.2 @ 0x004938f0
 void ConnectBox::on_left_up() { set_checked(screen->connect(checked == 0)); }
@@ -163,6 +175,19 @@ ConnectScreen::ConnectScreen(Engine& e, Handle s)
     bind_button(&address, "CONNECT_INFO_EDIT");
     bind_button(&info1, "INFO_TEXT1");
     bind_button(&info2, "INFO_TEXT2");
+    if (mp_mods_page()) {  // ours
+      mods_tab = std::make_unique<ModsTab>(e);
+      if (bind_button(&mods_tab->btn, "MPMODS")) {
+        mods_text_put(mods_tab->line, "ia_dark_grey", 534, 262);
+        add(&mods_tab->line);
+        mods_text_put(mods_tab->hint, "ia_dark_grey", 180, 370);
+        mods_text_put(mods_tab->hint2, "ia_dark_grey", 180, 383);
+        add(&mods_tab->hint), add(&mods_tab->hint2);
+        const std::string line = mp_mods_line(mods_menu_write_dir());
+        mods_text_say(mods_tab->line, line);
+        std::printf("mw3: multiplayer screen made, %s\n", line.c_str());
+      }
+    }
   }
   // Ours (piece 9c): the host's two address lines, under the host setup.
   const Handle font = ztwod::host().font_find("ia_small_green");
@@ -203,6 +228,19 @@ void ConnectScreen::update(float dt) {
     reach_timer = 0.5f;
   }
   Window::update(dt);
+  // Ours: with the mouse over the MODS tab, what a press does (as Instant Action's tab, action_menu.cpp).
+  if (!mods_tab) return;
+  ModsTab& t = *mods_tab;
+  const bool over = cursor && !(t.btn.flags & ztwod::kHidden) && t.btn.hit(cursor->get_x(), cursor->get_y());
+  if (over == t.hinted) return;
+  t.hinted = over;
+  const auto lines = over ? mods_note_lines("Play multiplayer with mods. The game starts again to load them. Everyone needs the same mods.",
+                                            [&](const std::string& s) { return mods_text_fits(s, &t.hint, 420, 90); })
+                          : std::pair<std::string, std::string>{};
+  mods_text_say(t.hint, lines.first);
+  mods_text_say(t.hint2, lines.second);
+  if (over) std::printf("mw3: multiplayer: hover: %s | %s\n", t.hint.text, t.hint2.text);  // for the checks
+  dirty_all();
 }
 
 // Mech3.exe 1.2 @ 0x004953a0
@@ -221,6 +259,11 @@ void ConnectScreen::on_button(int32_t id, int32_t a, int32_t b) {
     case 5:
     case 6: find(); return;
     case 7: chosen(); return;
+    case 9:  // ours: MODS, its screen over this one (upgrades/mods/ia_mods_menu.h)
+      if (!mp_mods_state()) mp_mods_state() = e.construct(kMpModsStateCtor, {});
+      if (mp_mods_state()) e.push_state(mp_mods_state(), 0);
+      dirty_all();
+      return;
     default: return;
   }
 }
@@ -294,6 +337,14 @@ void ConnectScreen::focus(int32_t which) {
   else if (which == 3) session_name.set_focus(1);
 }
 
+const char* game_of_version(uint32_t version) {
+  switch (version) {
+    case 0x28: return "MechWarrior 3";
+    case 0x000b0005: return "Pirate's Moon";
+    default: return nullptr;
+  }
+}
+
 // Mech3.exe 1.2 @ 0x00495490. The game's version is that of the game chosen;
 // another one's leaves (0xfdd the host's older, 0xfde ours). Ours: DirectPlay
 // listed a game's players before the join (0x00588600, 0x00589600), ours
@@ -312,6 +363,15 @@ void ConnectScreen::join() {
     return;
   }
   if (g.user[1] != kGameVersion) {
+    // Ours: the other game's host named, where the exe says older or newer.
+    if (const char* other = game_of_version(g.user[1])) {
+      std::printf("mw3: join refused: the host's game is %s\n", other);
+      e.message_box_plain(0x30, 0x2a8, std::string("This game is ") + other + ". It can't be joined from here.");
+      e.pop_state(1);
+      e.network_set(0);
+      return;
+    }
+    std::printf("mw3: join refused: the host's version %#x, ours %#x\n", g.user[1], kGameVersion);
     e.message_box(0x30, 0x2a8, g.user[1] < kGameVersion ? 0xfdd : 0xfde);
     e.pop_state(1);
     e.network_set(0);

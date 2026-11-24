@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <set>
 #include <stdexcept>
 
 #include "frontend/sdl/gdi_font_size.h"
@@ -126,6 +127,56 @@ SdlTwodHost::~SdlTwodHost() {
   for (auto& [h, f] : fonts_)
     if (f.ttf) TTF_CloseFont(f.ttf);
   if (ttf_ok_) TTF_Quit();
+}
+
+// FIX (A): the game's installer put its fonts in Windows' folder as well, and an install can lack them (Pirate's
+// Moon's did: every label blank). The game folder's first, else the system's own of that name, else the
+// package's stand-in (assets/fonts: first on Linux, where the system's would be these same faces at best).
+std::string SdlTwodHost::font_path(const std::string& file) {
+  std::string found = zutl::find(file.c_str());
+  if (!found.empty()) return found;
+  std::vector<std::string> tries;
+  const std::string shipped = shipped_font(file);
+#if defined(_WIN32)
+  if (const char* w = std::getenv("WINDIR")) tries.push_back(std::string(w) + "\\Fonts\\" + file);
+#elif defined(__APPLE__)
+  const std::string mac = file == "impact.ttf" ? "Impact.ttf" : file == "lucon.ttf" ? "Courier New.ttf" : "Arial.ttf";
+  tries.push_back("/System/Library/Fonts/Supplemental/" + mac);
+#else
+  const std::string lib = file == "lucon.ttf" ? "LiberationMono-Regular.ttf" : "LiberationSans-Regular.ttf";
+  if (!shipped.empty()) tries.push_back(shipped);
+  tries.push_back("/usr/share/fonts/truetype/liberation/" + lib);
+  tries.push_back("/usr/share/fonts/liberation/" + lib);
+#endif
+#if defined(_WIN32) || defined(__APPLE__)
+  if (!shipped.empty()) tries.push_back(shipped);
+#endif
+  for (const std::string& t : tries)
+    if (std::filesystem::exists(t)) {
+      static std::set<std::string> said;
+      if (said.insert(file).second)
+        std::printf("mw3: note: %s isn't in the game folder; using %s (text may sit a little differently)\n", file.c_str(), t.c_str());
+      return t;
+    }
+  return std::string();
+}
+
+// The stand-in for one of the game's fonts, beside the program or in a
+// development build's assets; "" without one.
+std::string SdlTwodHost::shipped_font(const std::string& file) {
+  const char* name = file == "impact.ttf" ? "Anton-Regular.ttf"
+                     : file == "lucon.ttf" ? "LiberationMono-Regular.ttf"
+                                           : "LiberationSans-Regular.ttf";
+  std::error_code ec;
+  if (const char* base = SDL_GetBasePath()) {
+    const std::filesystem::path p = std::filesystem::path(base) / "assets" / "fonts" / name;
+    if (std::filesystem::exists(p, ec)) return p.string();
+  }
+#ifdef MW3_ASSETS_DIR
+  const std::filesystem::path p = std::filesystem::path(MW3_ASSETS_DIR) / "fonts" / name;
+  if (std::filesystem::exists(p, ec)) return p.string();
+#endif
+  return {};
 }
 
 std::string SdlTwodHost::font_file(const std::string& face) {
@@ -405,7 +456,11 @@ int32_t SdlTwodHost::sound_find(const char* name) {
 int32_t SdlTwodHost::sound_play(int32_t sound, float volume) {
   if (!engine_) return 0;
   auto* o = static_cast<zsnd::Object*>(engine_->object_of(static_cast<Handle>(sound)));
-  return o ? static_cast<int32_t>(engine_->handle_of(zsnd::play(o, volume))) : 0;
+  zsnd::VoiceBase* v = o ? zsnd::play(o, volume) : nullptr;
+  static const bool log = std::getenv("MW3_SOUND_LOG") != nullptr;  // ours: the menus' sounds too
+  if (log && o)
+    std::printf("mw3: menu sound %s %s\n", o->kind == 0 ? static_cast<zsnd::Sound*>(o)->name : "group", v ? "plays" : "refused");
+  return v ? static_cast<int32_t>(engine_->handle_of(v)) : 0;
 }
 void SdlTwodHost::sound_stop(int32_t handle) {
   if (engine_) engine_->voice_stop(static_cast<Handle>(handle));
@@ -457,17 +512,18 @@ SdlTwodHost::Dc* SdlTwodHost::dc(Handle h) {
 // (ascent + descent), 0 a default of 12 pixels.
 TTF_Font* SdlTwodHost::open_ttf(Font& f) {
   if (f.ttf || !ttf_ok_) return f.ttf;
-  const std::string path = find_text_font(font_file(f.face));
+  const std::string file = font_file(f.face), found = find_text_font(file),
+                    path = found.empty() ? font_path(file) : found;
   if (path.empty()) {
-    std::fprintf(stderr, "mw3: font %s (%s) not found\n", f.face.c_str(),
-                 font_file(f.face).c_str());
+    std::fprintf(stderr, "mw3: font %s (%s) not found in the game folder or the system's: its text will be blank\n",
+                 f.face.c_str(), file.c_str());
     return nullptr;
   }
   // FIX (A): GDI's size, ascent and descent for the height (VDMX, else the
   // win metrics scaled), and its widths: hinted advances (MONO matches the
   // fonts' hdmx), no kerning (twod.md section 6, Text widths).
   static std::map<std::string, GdiFaceMetrics> faces;
-  auto it = faces.find(path);
+  auto it = faces.find(file + path);
   if (it == faces.end()) {
     GdiFaceMetrics m;
     if (std::FILE* fp = std::fopen(path.c_str(), "rb")) {
@@ -477,7 +533,8 @@ TTF_Font* SdlTwodHost::open_ttf(Font& f) {
       std::fclose(fp);
       gdi_face_metrics(bytes, &m);
     }
-    it = faces.emplace(path, m).first;
+    stand_in_metrics(file, std::filesystem::path(path).filename().string(), &m);
+    it = faces.emplace(file + path, m).first;
   }
   const GdiSize size = gdi_font_size(it->second, f.height);
   f.ttf = TTF_OpenFont(path.c_str(), static_cast<float>(size.ppem));
@@ -683,25 +740,99 @@ int32_t SdlTwodHost::DrawTextA(Handle d, const char* text, int32_t length, ztwod
         if (p[yy * surf->pitch + xx]) put(x0 + xx, ly + yy + f->shift, fg);
     SDL_DestroySurface(surf);
   }
-  if (hud_text)
-    hud_text->pixels_hash =
-        platform::hud_identity(img->width, img->height, px, size_t(img->width) * img->height);
+  if (hud_text) {
+    const size_t count = size_t(img->width) * img->height;
+    hud_text->pixels_hash = platform::hud_identity(img->width, img->height, px, count);
+    hud_text->drawn.assign(px, px + count);
+    hud_text->recolour = {};
+  }
   return total;
+}
+
+bool SdlTwodHost::is_text_image(const zimg::Texture* image) {
+  const auto found = hud_text_sources_.find(image);
+  return hud_text_enabled_ && found != hud_text_sources_.end() && !found->second.lines.empty();
+}
+
+bool SdlTwodHost::derive_text_recolour(const HudTextSource& source, const uint16_t* current,
+                                       int width, int height, HudTextRecolour& out) {
+  // A gradient has one tint per row; a few distinct substitutions per row are
+  // enough for a two-colour font with a shadow. More means a real repaint.
+  constexpr size_t kMaxSubstitutionsPerRow = 8;
+  const size_t count = size_t(width) * height;
+  if (source.drawn.size() != count || source.base.size() != count) return false;
+  out.rows.assign(size_t(height), {});
+  bool any_change = false;
+  for (int row = 0; row < height; ++row) {
+    auto& substitutions = out.rows[size_t(row)];
+    for (int column = 0; column < width; ++column) {
+      const size_t at = size_t(row) * width + column;
+      const uint16_t drawn = source.drawn[at], now = current[at];
+      if (drawn == now) continue;
+      // Only pixels the text itself wrote may change colour.
+      const bool written_by_text = drawn != source.base[at];
+      if (!written_by_text) return false;
+      auto existing = std::find_if(substitutions.begin(), substitutions.end(),
+                                   [&](const auto& pair) { return pair.first == drawn; });
+      if (existing == substitutions.end()) {
+        if (substitutions.size() >= kMaxSubstitutionsPerRow) return false;
+        substitutions.emplace_back(drawn, now);
+      } else if (existing->second != now) {
+        return false;
+      }
+      any_change = true;
+    }
+  }
+  if (!any_change) return false;
+  // Every pixel of the drawn colour in a row is replaced (FontText tints all
+  // of them), so an unchanged pixel of a substituted colour means an edit.
+  for (int row = 0; row < height; ++row) {
+    const auto& substitutions = out.rows[size_t(row)];
+    if (substitutions.empty()) continue;
+    for (int column = 0; column < width; ++column) {
+      const size_t at = size_t(row) * width + column;
+      const bool unchanged_text_pixel =
+          source.drawn[at] == current[at] && source.drawn[at] != source.base[at];
+      if (!unchanged_text_pixel) continue;
+      for (const auto& pair : substitutions)
+        if (pair.first == source.drawn[at]) return false;
+    }
+  }
+  return true;
 }
 
 std::shared_ptr<const platform::HudImage> SdlTwodHost::hud_text_image(const zimg::Texture* source,
                                                                       float density, uint16_t key) {
+  // An empty or malformed image has no text to raster; the row lookups below
+  // (height - 1, width - 1) would underflow on it.
+  if (!source || source->width <= 0 || source->height <= 0) return {};
   auto found = hud_text_sources_.find(source);
   if (!hud_text_enabled_ || found == hud_text_sources_.end() || found->second.lines.empty() ||
       !std::isfinite(density) || density <= 1 || source->palette || source->alpha)
     return {};
   auto& record = found->second;
   const size_t count = size_t(source->width) * source->height;
-  if (record.base.size() != count ||
-      record.pixels_hash != platform::hud_identity(source->width, source->height,
-                                                   static_cast<const uint16_t*>(source->pixels),
-                                                   count))
-    return {};
+  if (record.base.size() != count) return {};
+  const auto* current = static_cast<const uint16_t*>(source->pixels);
+  const uint64_t current_hash =
+      platform::hud_identity(source->width, source->height, current, count);
+  const HudTextRecolour* recolour = nullptr;
+  if (current_hash != record.pixels_hash) {
+    // Pixels changed since the text was drawn. A two-colour font's row tint is
+    // reproduced; anything else keeps the native image (stale text must not
+    // replace changed pixels). The result is cached per pixel hash, so an
+    // unchanged image is compared once, not every frame.
+    if (record.recolour.pixels_hash != current_hash) {
+      HudTextRecolour derived;
+      derived.valid =
+          derive_text_recolour(record, current, source->width, source->height, derived);
+      derived.pixels_hash = current_hash;
+      if (!derived.valid) derived.rows.clear();
+      record.recolour = std::move(derived);
+    }
+    if (!record.recolour.valid) return {};
+    recolour = &record.recolour;
+  }
   const int scale = std::clamp(int(std::lround(density * 256)), 256, 2048);
   uint64_t signature = platform::hud_identity(source->width, source->height, record.base);
   auto bytes = [&](const void* data, size_t size) {
@@ -723,6 +854,16 @@ std::shared_ptr<const platform::HudImage> SdlTwodHost::hud_text_image(const zimg
     bytes(&line.colour, sizeof line.colour);
     bytes(&line.background, sizeof line.background);
   }
+  if (recolour) {
+    for (const auto& row : recolour->rows) {
+      const uint32_t substitutions = uint32_t(row.size());
+      bytes(&substitutions, sizeof substitutions);
+      for (const auto& pair : row) {
+        bytes(&pair.first, sizeof pair.first);
+        bytes(&pair.second, sizeof pair.second);
+      }
+    }
+  }
   if (record.cached && record.cached_scale == scale && record.cached_signature == signature)
     return record.cached;
   auto result = std::make_shared<platform::HudImage>();
@@ -740,7 +881,20 @@ std::shared_ptr<const platform::HudImage> SdlTwodHost::hud_text_image(const zimg
       result->pixels[size_t(y) * result->width + x] =
           (source->flags & zimg::kAlpha) && pixel == key ? 0 : SdlScreen2D::rgba(pixel, true);
     }
+  // The colour a line's COLORREF ends up as on output row y: its native
+  // packed colour, substituted as FontText's row tint substituted it.
+  auto row_colour = [&](uint32_t colour, int y) {
+    if (!recolour || y < 0) return colour;
+    const int native_row = std::min(source->height - 1, int(y / k));
+    const uint16_t packed = zvid::pack_bytes(static_cast<uint8_t>(colour),
+                                             static_cast<uint8_t>(colour >> 8),
+                                             static_cast<uint8_t>(colour >> 16));
+    for (const auto& pair : recolour->rows[size_t(native_row)])
+      if (pair.first == packed) return SdlScreen2D::rgba(pair.second, true) & 0xffffffu;
+    return colour;
+  };
   auto composite = [&](int x, int y, uint32_t colour, unsigned alpha, const ztwod::Rect& clip) {
+    colour = row_colour(colour, y);
     if (x < 0 || y < 0 || x >= int(result->width) || y >= int(result->height) ||
         x < int(std::floor(clip.left * k)) || y < int(std::floor(clip.top * k)) ||
         x >= int(std::ceil(clip.right * k)) || y >= int(std::ceil(clip.bottom * k)))

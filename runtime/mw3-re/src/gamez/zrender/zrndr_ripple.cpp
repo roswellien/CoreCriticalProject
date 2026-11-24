@@ -65,7 +65,10 @@ void ripple_at(int32_t x, int32_t y, int32_t inner, int32_t outer, int32_t ampli
   if (outer < 1) outer = 0;
   if (inner > outer) inner = outer;
   else if (inner < 0) inner = 0;
-  if (inner == outer) return;
+  if (inner == outer) {
+      observe_ripple(t.base, x, y, inner, outer, amplitude, wavelength, phase, clip_rect);
+      return;
+  }
   const int32_t inner2 = inner * inner, outer2 = outer * outer;
   int32_t* c = st.clip;
   if (clip_rect) {
@@ -106,6 +109,32 @@ void ripple_at(int32_t x, int32_t y, int32_t inner, int32_t outer, int32_t ampli
     std::memcpy(p, v, sizeof v);
   };
 
+  // Copied columns are contiguous because the original pointers advance only on a write.
+  // Rows excluded by the screen-coordinate inner test split that rectangle into at most two bands.
+  auto observe_bands = [&](int32_t row_begin, int32_t row_end, int32_t col_begin, int32_t col_end) {
+      if (observe_ripple(t.base, x, y, inner, outer, amplitude, wavelength, phase, clip_rect))
+          return;
+      uint32_t band_width = 0;
+      for (int32_t col = col_begin; col < col_end; ++col)
+          if (col > inner || col < -inner)
+              ++band_width;
+      if (!band_width)
+          return;
+      int32_t band_begin = row_begin;
+      auto report = [&](int32_t end) {
+          if (end > band_begin)
+              observe_resolved_region(src + band_begin * ps + col_begin, band_width,
+                                      static_cast<uint32_t>(end - band_begin),
+                                      static_cast<uint32_t>(t.pitch), "ripple");
+      };
+      for (int32_t row = row_begin; row < row_end; ++row) {
+          if (!(row > inner || row < -inner)) {
+              report(row);
+              band_begin = row + 1;
+          }
+      }
+      report(row_end);
+  };
   const bool inside = !(left - amplitude < c[0] || x + outer + amplitude >= c[2] || top - amplitude < c[1] ||
                         y + outer + amplitude >= c[3]);
   if (inside) {
@@ -127,11 +156,13 @@ void ripple_at(int32_t x, int32_t y, int32_t inner, int32_t outer, int32_t ampli
     // button away from the screen's top-left corner).
     for (int32_t row = top; row < y + outer; ++row) {
       if (!(row > inner || row < -inner)) continue;
-      uint16_t* s = src + row * ps + left;
+      uint16_t* const row_start = src + row * ps + left;
+      uint16_t* s = row_start;
       const uint16_t* d = dst + row * pd + left;
       for (int32_t col = left; col < x + outer; ++col)
         if (col > inner || col < -inner) *s++ = *d++;
     }
+    observe_bands(top, y + outer, left, x + outer);
     return;
   }
 
@@ -157,12 +188,14 @@ void ripple_at(int32_t x, int32_t y, int32_t inner, int32_t outer, int32_t ampli
   const int32_t col0 = left <= c[0] ? c[0] : left;
   for (int32_t row = top > c[1] ? top : c[1]; row < row_end; ++row) {
     if (!(row > inner || row < -inner)) continue;
-    uint16_t* s = src + row * ps + col0;
+    uint16_t* const row_start = src + row * ps + col0;
+    uint16_t* s = row_start;
     const uint16_t* d = dst + row * pd + col0;
     const int32_t col_end = c[2] <= x + outer ? c[2] : x + outer;
     for (int32_t col = col0; col < col_end; ++col)
       if (col > inner || col < -inner) *s++ = *d++;
   }
+  observe_bands(top > c[1] ? top : c[1], row_end, col0, c[2] <= x + outer ? c[2] : x + outer);
 }
 
 }  // namespace
@@ -173,7 +206,6 @@ RippleState& ripple_state() { return g_ripple; }
 void ripple(int32_t x, int32_t y, int32_t inner, int32_t outer, int32_t amplitude, float wavelength, float phase,
             const int32_t* clip, X87 precision) {
   if (!finish_target().base) return;
-  observe_framebuffer_write(finish_target().base, "ripple");
   if (precision == X87::k24) ripple_at<X87::k24>(x, y, inner, outer, amplitude, wavelength, phase, clip);
   else ripple_at<X87::k53>(x, y, inner, outer, amplitude, wavelength, phase, clip);
 }

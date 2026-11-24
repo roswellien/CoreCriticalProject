@@ -10,6 +10,7 @@
 #include "gamez/zreader/zreader.h"
 #include "gamez/zutil/zutl_msg.h"
 #include "gamez/zutil/zutl_path.h"
+#include "mech3/options.h"
 #include "gamez/zutil/zutl_reg.h"
 
 namespace mech3 {
@@ -401,8 +402,10 @@ void controls_save(const char* path) {
 // in it (fixes.md), so the mouse never fired again. Only that damage is
 // undone: fire moved to another button, or button 1 given to another
 // command, stays as the player set it.
-bool controls_repair_mouse_fire() {  // after the tables' rebuild (the hook's)
+bool controls_repair_mouse_fire(const platform::Input* di) {  // after the tables' rebuild (the hook's)
   constexpr int32_t kTrigger1 = 0x3d;
+  const platform::Input* active_di = di ? di : zin::state().di;
+  if (active_di && active_di->command_has_extended_binding(kTrigger1)) return false;
   const zin::CmdMap* m = zin::state().map;
   if (!m || m->count < 0xa7 || zin::mouse_of(kTrigger1) != 0) return false;
   for (int32_t c = 1; c < 0xa7; ++c)
@@ -443,7 +446,9 @@ int32_t controls_write_settings() {
     live[i].assign(e->data, e->data + e->size);
     std::memcpy(e->data, g_kept[i].bytes.data(), e->size);
   }
+  launch_screen_for_save(true);
   const int32_t r = zreg::write_all();
+  launch_screen_for_save(false);
   for (size_t i = 0; i < std::size(g_kept); ++i)
     if (zreg::Entry* e = zreg::find(g_kept[i].name); e && !live[i].empty()) std::memcpy(e->data, live[i].data(), e->size);
   return r;

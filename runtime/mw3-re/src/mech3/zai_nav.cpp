@@ -127,7 +127,16 @@ void Grid::reset(World* w) {
   ++version;
 }
 
+// Ours: a box these loops can walk. Nothing shipped comes near; a bad matrix gave
+// one billions of metres wide, and the loops ran on it for hours (docs/ai.md).
+static bool usable_box(float x0, float z0, float x1, float z1, float span) {
+  constexpr float kFar = 1e6f;  // m
+  return std::fabs(x0) < kFar && std::fabs(z0) < kFar && std::fabs(x1) < kFar && std::fabs(z1) < kFar && x1 - x0 < span &&
+         z1 - z0 < span;
+}
+
 void Grid::refresh(float x0, float z0, float x1, float z1, float now) {
+  if (!usable_box(x0, z0, x1, z1, 1e5f)) return;
   // A cell on either side of the change: the edges into it are the neighbour's.
   for (int tz = tile_of(cell_of(z0 - kCell)); tz <= tile_of(cell_of(z1 + kCell)); ++tz)
     for (int tx = tile_of(cell_of(x0 - kCell)); tx <= tile_of(cell_of(x1 + kCell)); ++tx) {
@@ -343,6 +352,19 @@ void Grid::hold(int cx, int cz, float y, float until, uint16_t what) {
     c->flags |= what;
     held_.push_back(h);
   }
+}
+
+void Grid::hold_parked(const std::array<float, 5>& r, float now) {
+  if (!usable_box(r[0], r[1], r[2], r[3], 1000.0f)) return;
+  for (int cz = cell_of(r[1]); cz <= cell_of(r[3]); ++cz)
+    for (int cx = cell_of(r[0]); cx <= cell_of(r[2]); ++cx) hold(cx, cz, r[4], now + 1.5f);
+  // Round it, as far as the giving way reaches (0x004cc3e0: too close
+  // inside +0x78 x 0.9, shipped mostly 25): a path through there is pushed
+  // back, so one is taken only with no other way (the HQs park in a pass).
+  const float mx = (r[0] + r[2]) * 0.5f, mz = (r[1] + r[3]) * 0.5f;
+  for (int cz = cell_of(mz - kGiveWay); cz <= cell_of(mz + kGiveWay); ++cz)
+    for (int cx = cell_of(mx - kGiveWay); cx <= cell_of(mx + kGiveWay); ++cx)
+      if (std::hypot(centre_of(cx) - mx, centre_of(cz) - mz) <= kGiveWay) hold(cx, cz, r[4], now + 1.5f, kNear);
 }
 
 void Grid::release(float now) {
@@ -652,6 +674,8 @@ void watch_begin() {
     for (int i = 0; i < pool.block_size; ++i) {
       zcls::Node& n = block[i];
       if (!n.data || n.cls() != 5 || !(n.flags() & 0x80000) || !(n.flags() & 0x100)) continue;
+      // FIX (bug): node_entity follows the part to its mech, freed by now (a mission restarted after a limb came off).
+      if (part_left_behind(n)) continue;
       const void* owner = node_entity(&n);
       if (owner && (entity_is_mech(owner) || is_program_vehicle(owner))) continue;
       Watched e{&n, n.data, {}, n.flags() & kThere, {}};
@@ -684,6 +708,12 @@ void watch_look(Grid& g, float now) {
 float g_watch_t = -1e30f;
 }  // namespace
 
+// A mech's part blown off keeps its node, no parent, after the mech is freed: its owner is gone.
+bool part_left_behind(const zcls::Node& n) {
+  const uint32_t id = n.get<uint32_t>(0x28);
+  return n.parent_count() == 0 && (id & 0xff) && !(id & 0xf000);
+}
+
 void restart() {
   Grid& g = grid();
   g.reset(&zcls_world());
@@ -704,17 +734,7 @@ void service(float now, int steps, int search_steps) {
     g.parked_t = now;
     std::vector<std::array<float, 5>> rects;
     g.world()->parked(&rects);
-    for (const auto& r : rects) {
-      for (int cz = cell_of(r[1]); cz <= cell_of(r[3]); ++cz)
-        for (int cx = cell_of(r[0]); cx <= cell_of(r[2]); ++cx) g.hold(cx, cz, r[4], now + 1.5f);
-      // Round it, as far as the giving way reaches (0x004cc3e0: too close
-      // inside +0x78 x 0.9, shipped mostly 25): a path through there is pushed
-      // back, so one is taken only with no other way (the HQs park in a pass).
-      const float mx = (r[0] + r[2]) * 0.5f, mz = (r[1] + r[3]) * 0.5f;
-      for (int cz = cell_of(mz - kGiveWay); cz <= cell_of(mz + kGiveWay); ++cz)
-        for (int cx = cell_of(mx - kGiveWay); cx <= cell_of(mx + kGiveWay); ++cx)
-          if (std::hypot(centre_of(cx) - mx, centre_of(cz) - mz) <= kGiveWay) g.hold(cx, cz, r[4], now + 1.5f, kNear);
-    }
+    for (const auto& r : rects) g.hold_parked(r, now);
   }
   while (!g.queue.empty() && steps > 0) {
     const auto [tx, tz] = g.queue.front();
@@ -724,7 +744,7 @@ void service(float now, int steps, int search_steps) {
 
 bool on_for(bool ally) {
   const zfix::Options& o = zfix::options();
-  if (!o.bugs || options().multiplayer) return false;
+  if (!o.improved_ai || options().multiplayer) return false;
   return ally ? o.nav_allies : o.nav_enemies;
 }
 

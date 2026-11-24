@@ -1,9 +1,14 @@
 #pragma once
+#include <charconv>
 #include <cstdint>
 #include <cstring>
+#include <istream>
+#include <stdexcept>
+#include <string>
 #include <vector>
 #include <memory>
 #include "frontend/core_critical/renderer/geometry/resource.hpp"
+#include "platform/producer_view.h"
 
 // What the rebuilt Direct3D layer (zvid_ddd3d.c, docs/render.md section 4)
 // needs from the machine: stands in for IDirect3DDevice3 and the DirectDraw
@@ -26,14 +31,30 @@ static_assert(sizeof(TLVertex) == 0x20, "TLVertex must match D3DTLVERTEX");
 
 enum class Primitive : uint8_t { kPoints = 1, kStrip = 5, kFan = 6 };  // D3DPRIMITIVETYPE values used
 
+// Host-only diagnostic values; no native texture or vertex layout is changed.
+enum class DrawQueue : uint8_t { Immediate, Transparent, Overlay };
+enum class TextureFilter : uint8_t { kDefault, kNearest, kLinear };
+struct FlareSpriteDiagnostic {
+  int32_t slot = -1;
+  float half_size_pixels = 0;  // before clipping, in the producer's screen pixels
+};
+
 // The render and texture-stage states the draw functions set (section 4).
 struct DrawState {
   bool native_sky{};
   int32_t texture = -1;            // SetTexture(0, ...): a handle from create_texture, -1 none
   uint8_t address_u = 1;           // ADDRESSU: 1 WRAP, 3 CLAMP
   uint8_t address_v = 1;           // ADDRESSV
-  bool blend = false;              // ALPHABLENDENABLE with SRCALPHA / INVSRCALPHA
+  bool blend = false;              // ALPHABLENDENABLE
+  bool additive = false;           // SRCBLEND ONE, DESTBLEND ONE
   bool multiply = false;           // the shadow passes: SRCBLEND ZERO, DESTBLEND SRCCOLOR
+  // Ours, the HD menu's gain and added-light maps (platform::MenuBackgroundGpuMap); both need
+  // blend set. brighten: SRCBLEND DESTCOLOR, DESTBLEND ONE (destination * (1 + source)).
+  // subtract: BLENDOP REVSUBTRACT with ONE, ONE (destination - source).
+  bool brighten = false;
+  bool subtract = false;
+  bool unsupported_blend = false;  // Source/destination pair outside the modeled modes
+  int32_t source_blend = 5, destination_blend = 6;  // D3D factors retained for failure diagnostics
   bool depth_write = true;         // ZWRITEENABLE
   bool depth_always = false;       // ZFUNC ALWAYS (overlays), else GREATEREQUAL
   bool alpha_modulate = false;     // ALPHAOP MODULATE (transparent), else SELECTARG1
@@ -43,6 +64,11 @@ struct DrawState {
   bool color_select = false;       // COLOROP SELECTARG1: the texture's colour alone (shadow passes)
   uint8_t texcoord = 0;            // TEXCOORDINDEX: which UV set of a draw_multi vertex
   bool sharp = false;              // ours: the 2D layer, a texel a game pixel, premultiplied, scaled sharp
+  // Explicit canvas sampling bypasses sharp's fractional edge smoothing.
+  // kDefault preserves every existing world/HUD sampling policy.
+  TextureFilter filter = TextureFilter::kDefault;
+  FlareSpriteDiagnostic flare_diagnostic{};
+  DrawQueue queue = DrawQueue::Immediate;
 };
 
 // A synchronous model-producer view, valid until end_model_draw(). Matrices use
@@ -51,8 +77,12 @@ struct ModelDrawContext {
   const void* node = nullptr;
   const float* model_to_world = nullptr;
   const float* model_to_camera = nullptr;
+  // Optional canonical scene view, borrowed only for this synchronous scope.
+  const float* world_to_camera = nullptr;
   float near_z = 0, clip_near = 0, far_z = 0, fx_near = 0, fy_near = 0, cx = 0, cy = 0;
   float opacity = 1;
+  float damage_tint_rgb[3] = {};
+  float damage_tint_weight = 0;
   bool ordinary = false, morphing = false, overlay = false;
   uint32_t source_vertices = 0, source_polygons = 0;
 };
@@ -72,25 +102,6 @@ struct DeferredMaterialBinding {
   virtual ~DeferredMaterialBinding() = default;
 };
 
-// Typed mission-change notification: the 0-based campaign world (launch
-// index) and the mission number within it. {-1, 0} is the empty identity
-// (failed load, non-campaign game type or scene reset).
-struct MissionIdentity {
-  int32_t world_index = -1;
-  int32_t number = 0;
-};
-
-inline MissionIdentity make_mission_identity(int32_t game_type,
-                                             int32_t world_index,
-                                             int32_t number,
-                                             bool load_success) {
-  // IA and multiplayer numbers name iaN/mpN blocks, not campaign mN blocks.
-  if (!load_success || (game_type != 1 && game_type != 4)) {
-    return MissionIdentity{-1, 0};
-  }
-  return MissionIdentity{world_index, number};
-}
-
 // Borrowed native player actor node, valid only during the tick callback.
 struct PlayerHeadlightTick {
   const void* node = nullptr;
@@ -100,11 +111,63 @@ struct PlayerHeadlightTick {
   uint64_t generation = 0;
 };
 
+struct HeadlightBinding {
+  unsigned key = 0;
+  int button = -1;
+  unsigned mouse = 0;
+
+  static HeadlightBinding read(std::istream& bindings, unsigned key_limit) {
+    auto number = [&bindings](auto& value) {
+      std::string field;
+      if (!(bindings >> field)) return false;
+      const auto end = field.data() + field.size();
+      const auto result = std::from_chars(field.data(), end, value);
+      return result.ec == std::errc{} && result.ptr == end;
+    };
+    HeadlightBinding binding;
+    std::string version, extra;
+    if (!(bindings >> version) ||
+        (version != "CC_MW3_HEADLIGHTS_V1" && version != "CC_MW3_HEADLIGHTS_V2") ||
+        !number(binding.key) || !number(binding.button) ||
+        (version == "CC_MW3_HEADLIGHTS_V2" && !number(binding.mouse)) ||
+        (bindings >> extra) || !bindings.eof() || bindings.bad() ||
+        binding.key >= key_limit || (binding.key && !(binding.key & 255)) ||
+        binding.button < -1 || binding.button > 25 || binding.mouse > 7)
+      throw std::runtime_error("Headlights: invalid input binding");
+    const auto scan = binding.key & 255;
+    if (scan == 0x43 || scan == 0x44 || scan == 0x57)
+      throw std::runtime_error("Headlights: key reserved for capture/replay");
+    return binding;
+  }
+
+  static uint32_t wheel_mask(unsigned mouse) {
+    return mouse == 6 ? 1u : mouse == 7 ? 2u : 0u;
+  }
+};
+
+// A held constituent stays suppressed until it is physically released.
+inline bool headlight_input_down(bool raw, bool suppressed, bool& suppressed_latch) {
+  suppressed_latch = raw && (suppressed || suppressed_latch);
+  return raw && !suppressed_latch;
+}
+
+// Synchronous receiver restoration only. This token never enters a queue/Scene.
+// Cookies belong to one receiver/reset generation; reset must make old tokens inert.
+struct ProducerViewRestoreToken {
+  ProducerView previous{};
+  std::uintptr_t receiver_cookie = 0;
+  uint64_t reset_generation = 0;
+  bool active = false;
+};
+
 class Render3D {
  public:
   virtual ~Render3D() = default;
   // What the load screen names as the video driver (ours; 0x005799f0 named the DirectDraw driver).
   virtual const char* driver_name() const { return "Default"; }
+  // Positive only for renderers that discard opaque typed world geometry
+  // outside this 3D eye radius before it can write color or depth.
+  virtual unsigned opaque_world_range() const { return 0; }
   virtual cc::geometry::Mode geometry_mode() const { return cc::geometry::Mode::legacy; }
   virtual cc::geometry::Submission submit_prepared_geometry(const ModelDrawContext&,
                                                             const cc::geometry::Fog&) {
@@ -117,9 +180,22 @@ class Render3D {
   }
   virtual void note_cpu_model_geometry() {}
   virtual bool wants_model_context() const { return false; }
+  // Neutral consumers may ignore transport. Core supplies its owned value and
+  // CPU-packet cleanup in the consumer step; these defaults claim no such work.
+  // A throwing exchange must leave the previous binding unchanged.
+  virtual ProducerViewRestoreToken exchange_producer_view(const ProducerView&) { return {}; }
+  virtual void restore_producer_view(const ProducerViewRestoreToken&) noexcept {}
+  virtual void abandon_producer_work() noexcept {}
+  virtual void reset_producer_work() noexcept {}
   // Typed mission-change callback from the native missions object. The
   // default is a no-op so renderers that do not care are unaffected.
   virtual void mission_changed(const MissionIdentity &) {}
+  // The Mech Lab preview: a briefing loads its mission before the Lab opens, but the
+  // chassis on the turntable is not part of that mission's scene. While this is on, a
+  // renderer lights it with its configured stock lighting instead of the mission's
+  // campaign profile (Operation 3's red sky tint made every paint look orange).
+  virtual void set_lab_preview_lighting(bool) {}
+  virtual uint32_t headlight_wheel_mask() const { return 0; }
   virtual bool wants_player_headlight_ticks() const { return false; }
   virtual void player_headlight_tick(const PlayerHeadlightTick&) {}
   virtual void retire_headlight_node(std::uintptr_t /*node*/) {}

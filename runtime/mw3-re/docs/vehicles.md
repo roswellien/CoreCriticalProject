@@ -806,7 +806,7 @@ goes to 0; a NaN difference stops.
 **The damage** (vt+0x160 0x458f50): nothing to an inactive base. Off
 multiplayer, a base on the player's side (the player's mech's allies
 +0xc4 against its team) takes the difficulty's share as the player's mech
-does ([0x608e5c]: 0.7, 1.0, 1.3). Then the basic damage (0x4ad3f0); a base
+does ([0x608e5c]: 0.4, 0.7, 1.0 from intensity.zrd). Then the basic damage (0x4ad3f0); a base
 it kills: the radio's "base lost" line (+0x94, 0x4e6d50) while any base is
 still active, else 0x47a720 on [0x60b544] (the last base lost); a base hit
 and alive: the attacker's entity (0x581e40, 0x40eee0) on its side gets the
@@ -1548,7 +1548,8 @@ aim and the limits. The limits' within on every kind directly in
 ## The turrets in the program (app_turret.cpp; step 4c3)
 
 The mission load (mission.cpp, the two cases at 0x490c8e / 0x490d25, when
-the app's +0x1b2 [0x608e3a] is set) calls `program_turrets_load`: the
+the app's +0x1b2 [0x608e3a] is set; a network game clears it,
+multiplayer-port.md, The network switch's other half) calls `program_turrets_load`: the
 loader, its hooks on the ports (zClass's lists, nodes and matrices, zEffect,
 zSound, zWeapon's definitions, beams, locks and shots, the hit callback, the
 matrix stack). The turret goes on zEntity's list (0x5a7f50) and so into

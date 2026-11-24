@@ -7,8 +7,8 @@ namespace cc::geometry {
 // Development CPU reference for the same modern materials and source geometry.
 // Attributes are evaluated before clipping, matching vertex-shader interpolation.
 struct ReferenceVertex {
-    std::array<float, 3> camera{}, normal{};
-    float u{}, v{}, visibility{1};
+    std::array<float, 3> camera{}, normal{}, fog{};
+    float u{}, v{};
 };
 inline std::vector<ReferenceVertex> clip_reference(const std::vector<ReferenceVertex> &input,
                                                    float plane, bool near_plane) {
@@ -30,11 +30,11 @@ inline std::vector<ReferenceVertex> clip_reference(const std::vector<ReferenceVe
         for (unsigned axis = 0; axis < 3; ++axis) {
             vertex.camera[axis] = mix(a.camera[axis], b.camera[axis]);
             vertex.normal[axis] = mix(a.normal[axis], b.normal[axis]);
+            vertex.fog[axis] = mix(a.fog[axis], b.fog[axis]);
         }
         vertex.camera[2] = plane;
         vertex.u = mix(a.u, b.u);
         vertex.v = mix(a.v, b.v);
-        vertex.visibility = mix(a.visibility, b.visibility);
         result.push_back(vertex);
     }
     return result;

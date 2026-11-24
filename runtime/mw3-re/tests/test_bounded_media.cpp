@@ -10,16 +10,35 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <io.h>
+// Lean windows.h: its RPC headers define `small` (a name this file uses) and min/max.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <winioctl.h>
+#undef small
+#endif
 
 #include "check.h"
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zinterp/zinterp.h"
 #include "gamez/zsound/zsnd.h"
+#include "gamez/zutil/zfix.h"
+#include "gamez/zutil/zutl_path.h"
 #include "gamez/zutil/zutl_zar.h"
+#include "platform/file_position.h"
 #include "mech3/mods.h"
 #include "platform/silent_sound.h"
 
@@ -40,6 +59,21 @@ std::string scratch(const char* name) {
   fs::create_directories(d, ec);
   return d;
 }
+
+struct DirectoryGuard {
+  fs::path path;
+  ~DirectoryGuard() {
+    std::error_code ec;
+    fs::remove_all(path, ec);
+  }
+};
+
+struct BankOverrideGuard {
+  std::shared_ptr<const zutl::BankOverrides> previous;
+  explicit BankOverrideGuard(std::shared_ptr<const zutl::BankOverrides> banks)
+      : previous(zutl::set_bank_overrides(std::move(banks))) {}
+  ~BankOverrideGuard() { zutl::set_bank_overrides(std::move(previous)); }
+};
 uint32_t u32(const std::vector<uint8_t>& d, size_t at) {
   uint32_t v = 0;
   if (at + 4 <= d.size()) std::memcpy(&v, &d[at], 4);
@@ -205,7 +239,12 @@ TEST(bounded_textures_survive_broken_copies) {
     OneLibrary one(dir, "lib.zbd");
     char name[32];
     std::memcpy(name, &small[0x18], sizeof name);
-    entries += zimg::open(one.lib) && zimg::load(one.lib, name) == nullptr;
+    if (!zimg::open(one.lib)) continue;
+    zimg::Texture* t = zimg::load(one.lib, name);
+    // an offset outside the file's textures: refused; a palette the file lacks on a texture needing none: loaded, said
+    if (at == 0x18 + 32) entries += t == nullptr && zimg::load_notes().size() == 1;
+    else entries += t != nullptr && zimg::load_notes().size() == 1 && zimg::load_notes()[0].did == "loads it without one";
+    if (t) zimg::free_texture(t);
   }
   EXPECT(tables == 4 && entries == 4);
   std::printf("  %d broken copies: %d refused whole, %d textures read; %d of %d cut copies kept exactly what they have\n",
@@ -492,17 +531,113 @@ TEST(bounded_check_mod_reads_textures_sounds_and_scripts) {
   std::string out;
   for (const std::string& l : mech3::mod_check(mod, "", &errors)) out += l + "\n";
   std::printf("%s", out.c_str());
+  // The same inside the game program, whose names are confined to its folders (zutl::Mounts::confined): the check
+  // reads the folder it was given by its host path, so it finds the same (IMPORT's staging folder, REPORT's mod).
+  {
+    const bool was = zutl::mounts().confined;
+    zutl::mounts().confined = true;
+    int errors2 = -1;
+    std::string out2;
+    for (const std::string& l : mech3::mod_check(mod, "", &errors2)) out2 += l + "\n";
+    EXPECT(zutl::mounts().confined);  // left as it was
+    zutl::mounts().confined = was;
+    EXPECT(errors2 == errors && out2 == out);
+    if (out2 != out) std::printf("confined:\n%s", out2.c_str());
+  }
   const std::string first_script = [&] {
     char n[0x79] = {};
     std::memcpy(n, &scripts[12], 0x78);
     return std::string(n);
   }();
-  EXPECT(errors == 6);  // the cut library: its last four textures
-  EXPECT(out.find("error: zbd/c2/rtexture2.zbd: texture ") != std::string::npos);
-  EXPECT(out.find("error: zbd/c1/interp.zbd: script " + first_script + " cannot be read") != std::string::npos);
-  EXPECT(out.find("error: zbd/soundsH.zbd: sound " + sounds[3].name + " cannot be read") != std::string::npos);
-  EXPECT(out.find("error: zbd/c1/rtexture2.zbd") == std::string::npos && out.find("error: zbd/interp.zbd") == std::string::npos &&
-         out.find("error: zbd/soundsL.zbd") == std::string::npos);
+  EXPECT(errors == 0);  // the cut library's last four textures, the script and the sound: warnings all
+  EXPECT(out.find("warning: zbd/c2/rtexture2.zbd: texture ") != std::string::npos && out.find("error: ") == std::string::npos);
+  // One script and one sound: a warning each, that one not used, the rest of its file used.
+  EXPECT(out.find("warning: zbd/c1/interp.zbd: script " + first_script + ": its place in the file is past the file's end. The rebuild: this "
+                  "script is treated as not there; the rest of the file is used.") != std::string::npos);
+  EXPECT(out.find("warning: zbd/soundsH.zbd: sound " + sounds[3].name + ": it cannot be read as a sound. The rebuild: this sound is not "
+                  "played; the rest of the file is used.") != std::string::npos);
+  EXPECT(out.find("zbd/c1/rtexture2.zbd: ") == out.rfind("zbd/c1/rtexture2.zbd: ") && out.find("warning: zbd/interp.zbd") == std::string::npos &&
+         out.find("warning: zbd/soundsL.zbd") == std::string::npos && out.find("0 errors, 6 warnings") != std::string::npos);
+}
+
+// A hand-made table entry naming a palette the file does not have (docs/modding.md, M3; fixes.md): a texture
+// that needs none loads as the same texture with -1 does, one drawn through the palette is left out, each said
+// in the mods' four parts; with the fixes off both are refused. The check gives warnings, never errors.
+TEST(bounded_textures_palette_field_slip) {
+  struct Made {
+    const char* name;
+    int32_t palette;
+    uint8_t flags;
+    int16_t count;
+  };
+  const Made made[] = {{"plain", -1, 5, 0}, {"pal0", 0, 5, 0}, {"pal5", 5, 5, 0}, {"eight", -1, 0x10, 256}, {"eight0", 0, 0x10, 256}};
+  const size_t n = sizeof made / sizeof made[0];
+  std::vector<uint8_t> d(0x18 + n * 0x28);
+  put32(d, 4, 1), put32(d, 12, static_cast<uint32_t>(n));  // no palettes
+  for (size_t i = 0; i < n; ++i) {
+    const size_t e = 0x18 + i * 0x28, at = d.size();
+    std::snprintf(reinterpret_cast<char*>(&d[e]), 32, "%s", made[i].name);
+    put32(d, e + 32, static_cast<uint32_t>(at)), put32(d, e + 36, static_cast<uint32_t>(made[i].palette));
+    d.resize(at + 0x10 + ((made[i].flags & zimg::kTwoBytes) ? 32 : 16));  // 4 x 4
+    d[at] = made[i].flags, d[at + 4] = 4, d[at + 6] = 4;
+    std::memcpy(&d[at + 12], &made[i].count, 2);
+    for (size_t k = at + 0x10; k < d.size(); ++k) d[k] = static_cast<uint8_t>(k);  // the same pixels in each
+  }
+  const std::string dir = scratch("bounded_palette_slip");
+  std::error_code ec;
+  fs::create_directories(dir + "/m/zbd", ec);
+  spit(dir + "/m/zbd/rimage.zbd", d);
+  const zfix::Options keep = zfix::options();
+  const auto bytes = [](const zimg::Texture* t) {
+    const uint8_t* p = static_cast<const uint8_t*>(t->pixels);
+    return std::vector<uint8_t>(p, p + zimg::bytes_per_pixel(*t) * t->pixel_count);
+  };
+  {
+    OneLibrary one(dir + "/m/zbd", "rimage.zbd");
+    zfix::options().fixed = true;
+    EXPECT(zimg::open(one.lib) && one.lib.header.texture_count == static_cast<int32_t>(n));
+    zimg::Texture* plain = zimg::load(one.lib, "plain");
+    EXPECT(plain && zimg::load_notes().empty());
+    for (const char* name : {"pal0", "pal5"}) {
+      zimg::Texture* t = zimg::load(one.lib, name);
+      EXPECT(t && zimg::load_notes().size() == 1);
+      if (t && plain) {
+        EXPECT(t->flags == plain->flags && t->width == 4 && t->height == 4 && t->palette == nullptr && bytes(t).size() == 32);
+      }
+      if (!zimg::load_notes().empty()) {
+        const mech3::ModWarning w = zimg::load_notes()[0];
+        EXPECT(w.wrong.find(std::string("names palette ") + (name[3] == '0' ? "0" : "5")) != std::string::npos &&
+               w.wrong.find("the texture needs none") != std::string::npos && w.did == "loads it without one" &&
+               w.original.find("crashes if it ever loads this texture (it loads a texture only when something asks for it by name)") != std::string::npos);
+      }
+      if (t) zimg::free_texture(t);
+    }
+    EXPECT(zimg::load(one.lib, "eight0") == nullptr && zimg::load_notes().size() == 1 &&
+           zimg::load_notes()[0].did == "leaves this texture out");
+    zimg::Texture* again = zimg::load(one.lib, "PLAIN");  // the notes are the last load's
+    EXPECT(again != nullptr && zimg::load_notes().empty());
+    if (again) zimg::free_texture(again);
+    zfix::options().fixed = false;  // the exe's path faults here; the port refuses
+    for (const char* name : {"pal0", "pal5", "eight0"}) {
+      EXPECT(zimg::load(one.lib, name) == nullptr && zimg::load_notes().size() == 1 &&
+             zimg::load_notes()[0].did == "leaves this texture out");
+    }
+    if (plain) zimg::free_texture(plain);
+  }
+  zfix::options() = keep;
+  std::ofstream(dir + "/m/mod.txt") << "name=Slip\n";
+  int errors = 0;
+  std::string out;
+  for (const std::string& l : mech3::mod_check(dir + "/m", "", &errors)) out += l + "\n";
+  std::printf("%s", out.c_str());
+  EXPECT(errors == 0);
+  EXPECT(out.find("warning: zbd/rimage.zbd: texture pal0 (table entry 1): its table entry names palette 0") != std::string::npos &&
+         out.find("warning: zbd/rimage.zbd: texture pal5 (table entry 2): its table entry names palette 5") != std::string::npos &&
+         out.find("warning: zbd/rimage.zbd: texture eight0 (table entry 4): its table entry names palette 0") != std::string::npos &&
+         out.find("To fix it: set the last 4 bytes of its table entry (each entry is 40 bytes) to ff ff ff ff.") != std::string::npos &&
+         out.find("The rebuild: leaves this texture out. The original game: crashes if it ever loads this texture (it loads a texture only when something asks for it by name)") != std::string::npos &&
+         out.find("texture plain") == std::string::npos);
+  EXPECT(zfix::options().fixed == keep.fixed);
 }
 
 // gamez.zbd's texture directory (c1's 553 entries): mip indices made huge,
@@ -561,4 +696,74 @@ TEST(bounded_gamez_texture_directory_mips) {
               out_of_range, refused, kept, read_ok, inside);
   EXPECT(out_of_range > 100 && refused == out_of_range && kept == refused && inside == read_ok);
   zimg::textures().count = 0;
+}
+
+TEST(large_texture_bank_seek_uses_64_bit_positions) {
+  const fs::path directory = scratch("large_texture_bank");
+  const DirectoryGuard directory_guard{directory};
+  const fs::path bank_path = directory / "rmechtex.zbd";
+  constexpr uint32_t texture_offset = 0x80000020u;
+  std::FILE* file = std::fopen(bank_path.string().c_str(), "wb+");
+  EXPECT(file != nullptr);
+  if (!file) return;
+
+#if defined(_WIN32)
+  const auto os_handle = _get_osfhandle(_fileno(file));
+  DWORD bytes_returned = 0;
+  if (os_handle == -1 ||
+      !DeviceIoControl(reinterpret_cast<HANDLE>(os_handle), FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0,
+                       &bytes_returned, nullptr)) {
+    std::printf("  SKIPPED large_texture_bank_seek_uses_64_bit_positions: could not mark test file sparse\n");
+    std::fclose(file);
+    return;
+  }
+#endif
+
+  uint8_t header[24]{};
+  const uint32_t has_entries = 1;
+  const int32_t texture_count = 1;
+  std::memcpy(header + 4, &has_entries, sizeof has_entries);
+  std::memcpy(header + 12, &texture_count, sizeof texture_count);
+  bool wrote = std::fwrite(header, 1, sizeof header, file) == sizeof header;
+
+  uint8_t entry[40]{};
+  std::memcpy(entry, "large", 5);
+  std::memcpy(entry + 32, &texture_offset, sizeof texture_offset);
+  const int32_t no_palette = -1;
+  std::memcpy(entry + 36, &no_palette, sizeof no_palette);
+  wrote = wrote && std::fwrite(entry, 1, sizeof entry, file) == sizeof entry;
+
+  uint8_t texture[18]{};
+  texture[0] = zimg::kTwoBytes;
+  const int16_t dimension = 1;
+  std::memcpy(texture + 4, &dimension, sizeof dimension);
+  std::memcpy(texture + 6, &dimension, sizeof dimension);
+  wrote = wrote && platform::file_position::seek(file, texture_offset, SEEK_SET) == 0 &&
+          std::fwrite(texture, 1, sizeof texture, file) == sizeof texture;
+  const bool closed = std::fclose(file) == 0;
+  if (!wrote || !closed) {
+    EXPECT(false);
+    return;
+  }
+
+  zimg::state() = zimg::State{};
+  static std::string bank_dir;
+  bank_dir = "zbd/";
+  zimg::state().dir = bank_dir.c_str();
+  BankOverrideGuard bank_override_guard(std::make_shared<const zutl::BankOverrides>(
+      zutl::BankOverrides{{"zbd/rmechtex.zbd", bank_path.string()}}));
+  zimg::Library library{};
+  std::snprintf(library.name, sizeof library.name, "%s", "rmechtex.zbd");
+  library.needs_resolve = false;
+  zimg::Texture* loaded = zimg::open(library) ? zimg::load(library, "large") : nullptr;
+  EXPECT(loaded != nullptr);
+  if (loaded) {
+    EXPECT(loaded->pixel_count == 1);
+    EXPECT(static_cast<const uint16_t*>(loaded->pixels)[0] == 0);
+    zimg::free_texture(loaded);
+  }
+  zimg::close(library);
+  std::free(library.entries);
+  free_palettes();
+  zimg::state() = zimg::State{};
 }

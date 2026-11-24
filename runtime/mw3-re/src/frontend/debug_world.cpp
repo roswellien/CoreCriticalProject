@@ -117,6 +117,7 @@ std::string world_load(const std::string& mission, const std::string& variant, p
   t.count = 0, t.group = 0;
   zmod::materials() = zmod::MaterialTable{};
   zmod::models() = zmod::ModelPool{};
+  zcls::fixture_pool_retire();
   zcls::nodes() = zcls::NodePool{};
   zcls::nodes().free_head = -1;
   zcls::lists() = zcls::Lists{};
@@ -158,7 +159,7 @@ std::string world_load(const std::string& mission, const std::string& variant, p
   // The draw table and the walk (0x579f50; [0x74a2e0] = 0x53f2e0).
   zvid::install_model_draw_table();
   zmod::use_device_light_output();  // the lighting's point colour and fog mix to the device
-  zcls::scene_walk() = zcls::SceneWalk{};
+  zcls::scene_walk().reset();
   zmod::walk_state() = zmod::WalkState{};
   zmod::walk_state().draw = zmod::draw_model;
   zmod::zones() = zmod::Zones{};

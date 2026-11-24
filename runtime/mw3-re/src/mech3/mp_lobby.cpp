@@ -1,4 +1,6 @@
 #include "mech3/mp_lobby.h"
+#include "upgrades/settings/upgrades.h"
+#include "upgrades/mods/mp_mods.h"
 #include "mech3/mission.h"
 #include "mech3/mods.h"
 
@@ -20,6 +22,8 @@
 
 namespace mech3 {
 
+const char* mech_title(int32_t mech);
+int32_t mech_count();  // mech3/mech_names.h: 19, or 20 and the mods' rows (19 none)
 int32_t mech_name_message(int32_t mech);  // mech3/mech_names.h (its Engine clashes with app_hooks.h's)
 float max_mass(int32_t mech);              // the same
 
@@ -28,6 +32,7 @@ uint8_t g_lobby_back = 0;   // [0x006099c8]
 
 namespace {
 constexpr uint32_t kModsMark = 0x53444f4d;  // "MODS": our block in a player's lobby data (the mods check)
+constexpr uint32_t kUpgradesMark = 0x52475055;  // "UPGR": after it, the Upgrades page's five as bits (1.1.0 on)
 LobbyScreen* g_lobby = nullptr;  // [0x006099d4]
 int32_t g_order_next = 1;        // [0x005e7920]
 
@@ -126,6 +131,40 @@ bool LobbyScreen::mods_of(const std::vector<uint32_t>& d, uint64_t* hash, std::v
     names->push_back(n);
   }
   return true;
+}
+
+// The upgrades block after the mods block: false without one (a build before
+// 1.1.0, or the original's data).
+bool LobbyScreen::upgrades_of(const std::vector<uint32_t>& d, uint32_t* bits) {
+  *bits = 0;
+  if (d.size() < 4 || d[0] != 1) return false;
+  const size_t worlds = d[3] < 64 ? d[3] : 64;
+  size_t at = std::max<size_t>(5, 4 + worlds);
+  if (at + 4 > d.size() || d[at] != kModsMark) return false;
+  const uint32_t count = std::min<uint32_t>(d[at + 3], 16);
+  at += 4;
+  for (uint32_t k = 0; k < count && at < d.size(); ++k) {
+    const uint32_t len = std::min<uint32_t>(d[at++], 64);
+    at += (len + 3) / 4;
+  }
+  if (at + 2 > d.size() || d[at] != kUpgradesMark) return false;
+  *bits = d[at + 1];
+  return true;
+}
+
+bool LobbyScreen::mod_hashes_of(const std::vector<uint32_t>& d, std::vector<uint64_t>* hashes) {
+  hashes->clear();
+  uint32_t bits = 0;
+  if (!upgrades_of(d, &bits)) return false;
+  const size_t worlds = d[3] < 64 ? d[3] : 64;
+  size_t at = std::max<size_t>(5, 4 + worlds) + 3;
+  const uint32_t count = std::min<uint32_t>(d[at], 16);
+  ++at;
+  for (uint32_t k = 0; k < count && at < d.size(); ++k) {
+    const uint32_t len = std::min<uint32_t>(d[at++], 64);
+    at += (len + 3) / 4;
+  }
+  return mp_mods_each_get(d, at + 2, hashes);  // past the upgrades block's two words
 }
 
 std::string LobbyScreen::mods_text(const std::vector<std::string>& names) {
@@ -285,21 +324,27 @@ void LobbyScreen::enter() {
   for (int32_t i = 0; i < 7; ++i) worlds.add_item(e.message(0x321 + i), kShipped[i][1] << 8 | kShipped[i][0]);
   // The add-on worlds (readermp3 on): each folder's numbered readers, named
   // by their mpinfo.zrd's db_name, recorded in the data. Ours: on past the
-  // exe's six to the mods' worlds (9 on), t1, lab and dev1/dev2 still left out.
+  // exe's six to the mods' worlds (9 on), t1, lab and dev1/dev2 still left out;
+  // a mod's world has no shipped two, so its maps count from readermp1, one
+  // with no db_name named "<world> <n>" (a copied world's, docs/modding.md).
   for (int32_t dir = 0; dir < mission_dir_count(); ++dir) {
     if (dir >= 6 && dir < 9) continue;
     const std::string folder = e.mission_dir(static_cast<uint32_t>(dir));
     for (const std::string& file : e.list_files(("zbd\\" + folder + "\\readermp*.zbd").c_str())) {
       if (file.size() < 8) continue;
       const int32_t n = std::atoi(file.substr(8, file.find('.') == std::string::npos ? std::string::npos : file.find('.') - 8).c_str());
-      if (n <= 2) continue;
+      const bool mod_world = dir >= 9;
+      if (n <= 2 && !(mod_world && n >= 1)) continue;
       char path[160];
       std::snprintf(path, sizeof path, "zbd\\%s\\readermp%d.zbd", folder.c_str(), n);
       if (!zrdr::open_archive(path, false)) continue;
       zrdr::Node* info = zrdr::load("mpinfo.zrd");
-      if (const char* s = zrdr::get_string(info, "db_name")) {
+      const char* named = zrdr::get_string(info, "db_name");
+      const std::string fallback = mod_world && !named ? folder + " " + std::to_string(n) : std::string();
+      if (const char* s = named ? named : fallback.empty() ? nullptr : fallback.c_str()) {
         const int32_t v = n << 8 | dir;
         worlds.add_item(s, v);
+        if (mod_world) std::printf("mw3: multiplayer lists the mod world's map \"%s\" (%s readermp%d)\n", s, folder.c_str(), n);  // ours, for the checks
         data[3] += 1;  // 0x00498160
         data.resize(4 + data[3]);
         data[3 + data[3]] = static_cast<uint32_t>(v);
@@ -315,11 +360,11 @@ void LobbyScreen::enter() {
   {
     const ModsIdentity& mods = mods_identity();
     data.push_back(kModsMark);
-    data.push_back(static_cast<uint32_t>(mods.hash));
-    data.push_back(static_cast<uint32_t>(mods.hash >> 32));
-    data.push_back(static_cast<uint32_t>(std::min<size_t>(mods.names.size(), 16)));
-    for (size_t i = 0; i < mods.names.size() && i < 16; ++i) {
-      const std::string cut = mods.names[i].substr(0, 64);
+    data.push_back(static_cast<uint32_t>(mods.mp_hash));
+    data.push_back(static_cast<uint32_t>(mods.mp_hash >> 32));
+    data.push_back(static_cast<uint32_t>(std::min<size_t>(mods.mp_names.size(), 16)));
+    for (size_t i = 0; i < mods.mp_names.size() && i < 16; ++i) {
+      const std::string cut = mods.mp_names[i].substr(0, 64);
       data.push_back(static_cast<uint32_t>(cut.size()));
       for (size_t k = 0; k < cut.size(); k += 4) {
         uint32_t w = 0;
@@ -327,6 +372,11 @@ void LobbyScreen::enter() {
         data.push_back(w);
       }
     }
+    // Ours (the Upgrades page): the five switches; a joiner plays on the host's.
+    data.push_back(kUpgradesMark);
+    data.push_back(upgrades::bits());
+    // Ours (mods in multiplayer): each of those mods' own hash, so a refusal names the mod.
+    mp_mods_each_put(data, mods.hashes);
   }
   mods_checked = 0;
   znet::set_player_data(me, data.data(), static_cast<uint32_t>(data.size() * 4));
@@ -410,11 +460,27 @@ void LobbyScreen::update(float dt) {
     if (mods_of(player_data(znet::session().host_id), &theirs, &their_names)) {
       mods_checked = 1;
       const ModsIdentity& mine = mods_identity();
-      if (theirs != mine.hash) {
+      uint32_t hosts = 0;
+      if (theirs != mine.mp_hash) {
         cursor_obj.erase();
-        engine().message_box_plain(0x30, 0x2a8, "Your mods don't match the host's. The host uses: " + mods_text(their_names) +
-                                                     ". You use: " + mods_text(mine.names) + ".");
+        MpMods host{their_names, {}};
+        mod_hashes_of(player_data(znet::session().host_id), &host.hashes);
+        const std::string which = mp_mods_difference(host, MpMods{mine.mp_names, mine.hashes});
+        const std::string said = "Your mods don't match the host's. " +
+                                 (which.empty() ? "The host uses: " + mods_text(their_names) + ". You use: " + mods_text(mine.mp_names) + "." : which);
+        std::printf("mw3: multiplayer: turned back: %s\n", said.c_str());
+        engine().message_box_plain(0x30, 0x2a8, said);
         g_lobby_back = 1;
+      } else if (upgrades_of(player_data(znet::session().host_id), &hosts)) {
+        const uint32_t own = upgrades::bits();
+        upgrades::take_hosts(hosts);  // the game on the host's switches; back at network_set(0)
+        std::printf("mw3: multiplayer: mods the host's (%s)\n", mods_text(mine.mp_names).c_str());
+        std::printf("mw3: upgrades: the host's switches 0x%x (ours 0x%x)\n", hosts, own);
+      } else {
+        // A host before 1.1.0 sends none: each side plays on its own (multiplayer-port.md).
+        cursor_obj.erase();
+        engine().message_box_plain(0x30, 0x2a8, "The host's game is older than 1.1.0 and does not send its upgrades: "
+                                                "each player's own Upgrades switches apply, which may differ.");
       }
     }
   }
@@ -540,7 +606,8 @@ void LobbyScreen::refresh_lists() {
     if (!team && p->skin != 0) s += skin_tag(e, " {%s} ", p->skin);
     if (mine) {
       const int32_t m = mech_name_message(mine->mech);
-      s += m < 0 ? "notmech" : e.message(m);  // 0x00484670
+      const char* t = mech_title(mine->mech);  // ours: a mod's row
+      s += t ? t : m < 0 ? "notmech" : e.message(m);  // 0x00484670
     }
     players_list.add(s, p.get());
   }
@@ -818,15 +885,22 @@ void LobbyScreen::lock() {
   if (game) {
     const ModsIdentity& mine = mods_identity();
     std::string lines;
+    bool named = false;  // a line said which mod: the whole list is then not repeated
     for (auto& p : game->lobby_players) {
       if (p->id == znet::local_id()) continue;
       uint64_t theirs = 0;
       std::vector<std::string> names;
       mods_of(player_data(p->id), &theirs, &names);
-      if (theirs != mine.hash) lines += p->name + " uses: " + mods_text(names) + ". ";
+      if (theirs == mine.mp_hash) continue;
+      MpMods other{names, {}};
+      mod_hashes_of(player_data(p->id), &other.hashes);
+      const std::string which = mp_mods_difference_of(p->name, MpMods{mine.mp_names, mine.hashes}, other);
+      if (which.empty()) lines += p->name + " uses: " + mods_text(names) + ". ";
+      else lines += which + " ", named = true;
     }
     if (!lines.empty()) {
-      e.message_box_plain(0, 0x1e3, "Every player needs the same mods. " + lines + "You use: " + mods_text(mine.names) + ".");
+      if (named) lines.pop_back();  // the last line's space
+      e.message_box_plain(0, 0x1e3, "Every player needs the same mods. " + lines + (named ? "" : "You use: " + mods_text(mine.mp_names) + "."));
       return;
     }
   }
@@ -837,6 +911,7 @@ void LobbyScreen::lock() {
     for (auto& p : game->lobby_players)
       if (p->id != znet::local_id() && !has_world(p->id, w)) names += p->name + " ", ++n;
     if (n > 0) {
+      std::printf("mw3: multiplayer: not locked: without the chosen world: %s\n", names.c_str());  // ours, for the checks
       e.message_box3(0, 0x1e3, 0xfe0, names.c_str(), nullptr, nullptr);
       return;
     }
@@ -855,6 +930,7 @@ void LobbyScreen::lock() {
     znet::set_game_info(info);
   }
   locked = 1;
+  std::printf("mw3: multiplayer: locked with %d players\n", game ? static_cast<int>(game->lobby_players.size()) : 0);  // ours, for the checks
   host_controls();
   send_rules();
   g_lobby_dirty = 1;
@@ -888,8 +964,8 @@ void LobbyScreen::lock_mech() {
   }
   int32_t best = -1;
   float best_mass = 0;
-  for (int32_t m = 0; m < 0x13; ++m) {
-    if (m == 7) continue;  // 0x00426080, and the check again
+  for (int32_t m = 0; m < mech_count(); ++m) {  // ours: the mods' mechs after the exe's
+    if (m == 7 || m == 0x13) continue;  // 0x00426080, and the check again; 0x13 none
     const float mass = max_mass(m);
     if (tons < mass) continue;
     if (best == -1 || best_mass < mass) best = m, best_mass = mass;
@@ -913,7 +989,7 @@ void LobbyScreen::lock_mech() {
   const ConfigList* l = e.mech_loadouts(slot.mech);
   int32_t at = -1;  // 0x00425b70: by pointer, which the slot's copy never is
   // FIX (bug): a chosen stock loadout kept, found by its name (fixes.md).
-  const bool by_name = zfix::options().bugs && slot.config->name;
+  const bool by_name = zfix::options().fixed && slot.config->name;
   if (l)
     for (size_t i = 0; i < l->configs.size(); ++i)
       if (by_name ? l->configs[i]->name && std::strcmp(l->configs[i]->name, slot.config->name) == 0

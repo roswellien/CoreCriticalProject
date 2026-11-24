@@ -1,12 +1,15 @@
 #include "frontend/sdl/sdl_input.h"
 
 #include "gamez/zutil/zutl_reg.h"
+#include "platform/sha256.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 
 namespace sdlfe {
@@ -222,6 +225,14 @@ std::string axis_slots_text(const int slots[8], int sdl_axes) {
 
 int joystick_rank(bool gamepad, int axes, int buttons) { return gamepad ? 2 : axes >= 2 && buttons >= 4 ? 1 : 0; }
 
+bool joystick_selection_disabled(const std::string& value) {
+  if (value.size() != 4) return false;
+  constexpr char kNone[] = "none";
+  for (size_t i = 0; i < value.size(); ++i)
+    if (std::tolower(static_cast<unsigned char>(value[i])) != kNone[i]) return false;
+  return true;
+}
+
 std::vector<uint16_t> read_hid_usages(SDL_Joystick* j) {
   std::vector<uint16_t> out;
   const uint16_t vendor = SDL_GetJoystickVendor(j), product = SDL_GetJoystickProduct(j);
@@ -245,9 +256,21 @@ std::vector<uint16_t> read_hid_usages(SDL_Joystick* j) {
 // mw3.cfg's joystick= by name, else the best ranked, the first of a rank;
 // each device found is logged.
 bool SdlInput::open_joystick() {
+  if (joystick_disabled && controller_profile_path.empty()) {
+    std::printf("mw3: joystick disabled by mw3.cfg\n");
+    return false;
+  }
   int n = 0;
   SDL_JoystickID* ids = SDL_GetJoysticks(&n);
-  int best = -1, best_rank = -1, wanted = -1;
+  int best = -1, best_rank = -1, wanted = -1, profile_match = -1;
+  if (!controller_profile_path.empty() && !controller_config_) {
+    std::error_code error;
+    const auto bytes = std::filesystem::file_size(controller_profile_path, error);
+    if (error || bytes > 16384) throw std::runtime_error("Controller profile is missing or too large");
+    std::ifstream config_file(controller_profile_path, std::ios::binary);
+    if (!config_file) throw std::runtime_error("Cannot open controller profile");
+    controller_config_ = std::make_unique<ControllerProfileConfig>(ControllerProfileConfig::read(config_file));
+  }
   for (int i = 0; ids && i < n; ++i) {
     SDL_Joystick* j = SDL_OpenJoystick(ids[i]);
     if (!j) continue;
@@ -262,22 +285,185 @@ bool SdlInput::open_joystick() {
     const int rank = joystick_rank(pad, axes, buttons);
     if (rank > best_rank) best = i, best_rank = rank;
     if (wanted < 0 && has_text(name, joystick_want)) wanted = i;
+    if (controller_config_ && pad) {
+      SDL_Gamepad* candidate = SDL_OpenGamepad(ids[i]);
+      if (candidate) {
+        const std::string key = controller_key(ids[i], candidate);
+        std::string unique_key = key;
+        for (int other = 0; other < n; ++other) {
+          if (other == i) continue;
+          if (!SDL_IsGamepad(ids[other])) continue;
+          SDL_Gamepad* other_pad = SDL_OpenGamepad(ids[other]);
+          if (other_pad) {
+            const bool duplicate = controller_key(ids[other], other_pad) == key;
+            SDL_CloseGamepad(other_pad);
+            if (duplicate) {
+              platform::integrity::Sha256 hash;
+              const std::string unique = key + ":" + std::to_string(ids[i]);
+              hash.update(unique.data(), unique.size());
+              unique_key = hash.hex();
+              std::transform(unique_key.begin(), unique_key.end(), unique_key.begin(),
+                             [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+              break;
+            }
+          }
+        }
+        if (unique_key == controller_config_->device) profile_match = i;
+        SDL_CloseGamepad(candidate);
+      }
+    }
     SDL_CloseJoystick(j);
   }
   if (!joystick_want.empty() && wanted < 0 && n > 0)
     std::printf("mw3: joystick=%s matches no device: the best one taken\n", joystick_want.c_str());
-  const int pick = wanted >= 0 ? wanted : best;
+  if (joystick_disabled && profile_match < 0)
+    std::printf("mw3: joystick disabled by mw3.cfg; no saved controller identity matched\n");
+  const int pick = profile_match >= 0 ? profile_match : joystick_disabled ? -1 : wanted >= 0 ? wanted : best;
   if (pick >= 0) {
     if (SDL_IsGamepad(ids[pick])) pad_ = SDL_OpenGamepad(ids[pick]);
     joy_ = pad_ ? SDL_GetGamepadJoystick(pad_) : SDL_OpenJoystick(ids[pick]);
     if (joy_) {
       id_ = ids[pick], guid_ = SDL_GetJoystickGUID(joy_);
-      std::printf("mw3: joystick %d opened (%s)\n", pick, wanted >= 0 ? "mw3.cfg's joystick=" : n > 1 ? "the best ranked" : "the only one");
+      const char* selection = profile_match >= 0 ? "controller profile identity"
+                                : wanted >= 0 ? "mw3.cfg's joystick=" : n > 1 ? "the best ranked" : "the only one";
+      std::printf("mw3: joystick %d opened (%s)\n", pick, selection);
       map_axes();
+      if (controller_config_ && profile_match < 0)
+        std::printf("mw3: saved controller identity was not found; using the existing joystick selection\n");
     }
   }
   SDL_free(ids);
   return joy_ != nullptr;
+}
+
+std::string SdlInput::controller_key(SDL_JoystickID id, SDL_Gamepad* pad) const {
+  const SDL_GUID guid = SDL_GetGamepadGUIDForID(id);
+  std::string identity;
+  identity.reserve(128);
+  static constexpr char digits[] = "0123456789ABCDEF";
+  for (uint8_t byte : guid.data) {
+    identity.push_back(digits[byte >> 4]);
+    identity.push_back(digits[byte & 15]);
+  }
+  const char* serial_value = SDL_GetGamepadSerial(pad);
+  const char* path_value = SDL_GetGamepadPath(pad);
+  const std::string serial = serial_value ? serial_value : "";
+  const std::string path = path_value ? path_value : "";
+  identity += ":" + (serial.empty() ? path : serial);
+  if (serial.empty() && path.empty()) identity += ":session:" + std::to_string(id);
+  platform::integrity::Sha256 hash;
+  hash.update(identity.data(), identity.size());
+  std::string key = hash.hex();
+  std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+  return key;
+}
+
+void SdlInput::poll_controller() {
+  if (!controller_config_ || !pad_) return;
+  SDL_UpdateJoysticks();
+  ControllerSample sample;
+  for (size_t i = 0; i < sample.axes.size(); ++i)
+    sample.axes[i] = SDL_GetGamepadAxis(pad_, static_cast<SDL_GamepadAxis>(i));
+  for (size_t i = 0; i < sample.buttons.size(); ++i)
+    sample.buttons[i] = SDL_GetGamepadButton(pad_, static_cast<SDL_GamepadButton>(i));
+  sample.connected = SDL_GamepadConnected(pad_);
+  sample.focused = focused_ && !muted();
+  controller_state_.update(*controller_config_, sample);
+}
+
+uint32_t SdlInput::command_state(int32_t command) {
+  const auto index = static_cast<size_t>(command);
+  uint32_t state = 0;
+  if (controller_config_ && (joy_ || unplugged_) && index < controller_state_.actions.size())
+    state = controller_state_.actions[index];
+  if (input_poll_eligible_ && index < input_state_.actions.size())
+    state |= input_state_.actions[index];
+  return state;
+}
+
+bool SdlInput::set_input_bindings(const std::string& path, size_t* count_out) {
+  input_config_ = InputBindingConfig::read_file(path);
+  reset_extended_input();
+  bound_wheel_mask_ = input_config_.mouse_wheel_mask() | headlight_wheel_mask_;
+  if (count_out) *count_out = input_config_.binding_count();
+  return true;
+}
+
+void SdlInput::set_headlight_wheel(uint32_t mask) {
+  mask &= 3u;
+  if (headlight_wheel_mask_ == mask) return;
+  headlight_wheel_mask_ = mask;
+  bound_wheel_mask_ = input_config_.mouse_wheel_mask() | mask;
+  reset_extended_input();
+}
+
+void SdlInput::reset_extended_input() {
+  input_poll_eligible_ = false;
+  input_state_.reset_transients();
+  wheel_pending_.fill(0);
+  wheel_frac_up_ = wheel_frac_down_ = 0;
+}
+
+void SdlInput::swallow_held_buttons(size_t first) {
+  for (size_t b = first; b < std::size(buttons_); ++b) {
+    latched_[b] = 0;
+    if (buttons_[b]) buttons_[b] = 0, swallow_[b] = true;
+  }
+}
+
+void SdlInput::route_wheel(bool eligible) {
+  if (!eligible) {
+    dz_ += static_cast<float>((wheel_pending_[0] - wheel_pending_[1]) * 120.0);
+    wheel_frac_up_ = wheel_frac_down_ = 0;
+  } else {
+    for (unsigned direction = 0; direction < wheel_pending_.size(); ++direction) {
+      float& fraction = direction == 0 ? wheel_frac_up_ : wheel_frac_down_;
+      const double total = fraction + wheel_pending_[direction];
+      const double whole = std::floor(total);
+      fraction = static_cast<float>(total - whole);
+      input_state_.enqueue_wheel(6 + direction, static_cast<unsigned>(
+          std::min(whole, static_cast<double>(WheelNotchQueue::kMaxWheelNotches))));
+    }
+  }
+  wheel_pending_.fill(0);
+}
+
+void SdlInput::begin_poll(bool text_entry, bool commands_enabled) {
+  refresh();
+  const bool ready = focused_ && !muted();
+  const bool mouse_ready = ready && acquired_[kMouse];
+  const bool keyboard_ready = ready && acquired_[kKeyboard];
+  input_poll_eligible_ = (mouse_ready || keyboard_ready) && commands_enabled && !text_entry;
+  if (mouse_ready) route_wheel(input_poll_eligible_);
+  InputBindingState::Buttons buttons{};
+  if (mouse_ready) {
+    for (size_t i = 0; i < std::size(buttons_); ++i)
+      buttons[i + 1] = (buttons_[i] | latched_[i]) != 0;
+    latched_[4] = 0;  // the legacy four-slot read drains the other latches
+  }
+  InputBindingState::Keys keys{};
+  if (keyboard_ready) std::copy(std::begin(held_), std::end(held_), keys.begin());
+  input_state_.evaluate(input_config_, keys, buttons, text_entry, input_poll_eligible_);
+}
+
+bool SdlInput::key_suppressed(uint32_t scan) const {
+  return input_poll_eligible_ && input_state_.key_suppressed(scan);
+}
+
+bool SdlInput::mouse_suppressed(int32_t id) const {
+  return input_poll_eligible_ && input_state_.mouse_suppressed(id);
+}
+
+bool SdlInput::extended_command_pressed(int32_t command) const {
+  return input_poll_eligible_ && input_state_.extended_command_pressed(command);
+}
+
+bool SdlInput::mouse_input_down(int32_t mouse_id) const {
+  return input_poll_eligible_ && acquired_[kMouse] && input_state_.mouse_input_down(mouse_id);
+}
+
+bool SdlInput::command_has_extended_binding(int32_t command) const {
+  return input_config_.has_command_binding(command);
 }
 
 // The axis map (W54): a gamepad's is DirectInput's XInput layout (pad_axis);
@@ -324,7 +510,10 @@ bool SdlInput::open(Device d) {
 }
 
 void SdlInput::close(Device d) {
+  if (d == kMouse || d == kKeyboard) reset_extended_input();
+  if (d == kMouse) swallow_held_buttons(3);
   opened_[d] = acquired_[d] = false;
+  if (d == kJoystick && controller_config_) controller_state_.update(*controller_config_, ControllerSample{});
   if (d == kJoystick && pad_) SDL_CloseGamepad(pad_), pad_ = nullptr, joy_ = nullptr;
   if (d == kJoystick && joy_) SDL_CloseJoystick(joy_), joy_ = nullptr;
   if (d == kJoystick) unplugged_ = false;
@@ -335,6 +524,7 @@ void SdlInput::close(Device d) {
 // taken only while the window has the focus, and lost when it goes.
 int32_t SdlInput::acquire(Device d) {
   if (!opened_[d]) return kNotAcquired;
+  check_focus();  // W4: the focus as it really is
   if ((coop_[d] & 5) == 5 && !focused_) return kNotAcquired;
   acquired_[d] = true;
   lost_[d] = false;
@@ -342,6 +532,8 @@ int32_t SdlInput::acquire(Device d) {
   return 0;
 }
 int32_t SdlInput::unacquire(Device d) {
+  if (d == kMouse || d == kKeyboard) reset_extended_input();
+  if (d == kMouse) swallow_held_buttons(3);
   acquired_[d] = false;
   if (d == kMouse) refresh();
   if (d == kKeyboard) keys_.clear();  // a lost device's buffer is gone
@@ -360,13 +552,88 @@ int32_t SdlInput::keyboard_data(platform::KeyEvent* out, uint32_t* count) {
 }
 
 void SdlInput::capture(bool on) {
+  if (on && !captured_) {  // W4: when it was taken and how the focus stood, for a stuck one's log
+    captured_ns_ = clock(), motion_seen_ = false, quiet_said_ = false, heals_ = 0;
+    if (focus_report) std::printf("mw3: mouse: taken (%s)\n", focus_report().c_str());
+  }
   captured_ = on;
+  if (on) SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE, "1");  // the system's speed and acceleration (sdl_input.h)
   if (window) SDL_SetWindowRelativeMouseMode(window, on);
+}
+
+uint64_t SdlInput::clock() const { return now_ns ? now_ns() : SDL_GetTicksNS(); }
+
+// FIX (A), playtest W4 (sdl_input.h, has_focus): the focus as it really is.
+// A difference from what the events said is taken as the event that did not
+// come; a window in front that SDL has not noted is shown to SDL again.
+void SdlInput::check_focus() {
+  if (!has_focus) return;
+  const bool real = has_focus();
+  const uint64_t now = clock();
+  // Asked whatever `real` says: has_focus may take the system's word (FocusWatch) while SDL, which gives the
+  // motion, still has not noted the window. Once a second, kNudges times running at most.
+  if (nudge_focus && (!nudged_ns_ || now - nudged_ns_ >= kHealGapNs)) {
+    if (nudges_ >= kNudges) {
+      // given up until the focus next changes (focus_lost)
+    } else if (nudge_focus()) {
+      nudged_ns_ = now ? now : 1, ++nudges_;
+      std::printf("mw3: focus: the window is in front and SDL has not noted it: asked to look again (%d)\n", nudges_);
+    } else {
+      nudges_ = 0, nudged_ns_ = 0;
+    }
+  }
+  if (real == focused_) return;
+  if (real) {
+    std::printf("mw3: focus: the window has the focus: the mouse is taken now\n");
+    focus_gained(now);
+    return;
+  }
+  std::printf("mw3: focus: the window does not have the focus%s: the mouse waits for it\n", focus_report ? (" (" + focus_report() + ")").c_str() : "");
+  focus_lost();
+}
+
+// W4: let go and taken again, as the quit box or Alt+Tab does by hand.
+void SdlInput::heal(const char* by, bool key) {
+  const uint64_t now = clock();
+  if (!captured_ || motion_seen_ || heals_ >= kHeals || (heals_ && now - healed_ns_ < kHealGapNs)) return;
+  if (key && now - captured_ns_ < kQuietNs) return;  // a key held at a mission's start, the mouse not yet touched: left alone
+  ++heals_, ++heals_total_, healed_ns_ = now;
+  std::printf("mw3: mouse: held %llu ms with no motion yet: let go and taken again at a %s press (%d)%s\n",
+              static_cast<unsigned long long>((now - captured_ns_) / 1000000), by, heals_, focus_report ? (" (" + focus_report() + ")").c_str() : "");
+  if (nudge_focus) nudge_focus();
+  if (window) SDL_SetWindowRelativeMouseMode(window, false), SDL_SetWindowRelativeMouseMode(window, true);
+}
+
+// FIX (A) (docs/input.md, The mouse's speed): a desktop pixel of motion
+// (the system's pointer speed, held or not) is the share of the frame it
+// covers on the screen, so the mouse moves as on the desktop at any window
+// size, as DDrawCompat's default (MouseSensitivity=desktop) moves the
+// original's on Windows 11. Before, a held mouse's raw count was a whole
+// 640-wide pixel: six screen pixels at 3840 across.
+FrameShape SdlInput::effective_shape() const {
+  if (!shape) return {};
+  if (shape->menu_layout_active && !(in_mission && in_mission())) return menu_frame_shape(*shape);
+  return *shape;
+}
+
+float SdlInput::motion_scale() const {
+  int w = 0, h = 0;
+  if (window_size) window_size(&w, &h);
+  else if (window) SDL_GetWindowSize(window, &w, &h);
+  if (w <= 0 || h <= 0) return mickey_scale;
+  return shape ? sdlfe::mickey_scale(static_cast<float>(w), static_cast<float>(h), effective_shape())
+               : 640.0f / static_cast<float>(w);
 }
 
 // An exclusive mouse (DISCL_EXCLUSIVE) held while the window has the focus;
 // in a window only in a mission and not let go (sdl_input.h).
 void SdlInput::refresh() {
+  check_focus();
+  if (captured_ && !motion_seen_ && !quiet_said_ && clock() - captured_ns_ >= kQuietNs) {  // W4: once, for the log
+    quiet_said_ = true;
+    std::printf("mw3: mouse: no motion in 3 s since it was taken%s\n", focus_report ? (" (" + focus_report() + ")").c_str() : "");
+  }
+  const bool was_muted = muted();
   win_ = windowed && windowed();
   const bool mission = in_mission && in_mission();
   if (mission != mission_) {
@@ -376,22 +643,38 @@ void SdlInput::refresh() {
     // is not the mission's fire. The exe's load took seconds, so the click
     // was long let go; ours is at once. A latched press is dropped, and a
     // button still held is kept from the game until it is let go.
-    if (mission)
-      for (int b = 0; b < 4; ++b) {
-        latched_[b] = 0;
-        if (buttons_[b]) buttons_[b] = 0, swallow_[b] = true;
-      }
+    reset_extended_input();
+    swallow_held_buttons(mission ? 0 : 3);
   }
-  if (win_ && !mission_ && !absolute_) cursor_moved_ = false;
-  absolute_ = win_ && !mission_;
-  const bool want = acquired_[kMouse] && (coop_[kMouse] & 1) && focused_ && !(win_ && (!mission_ || released_));
+  const bool free = mission_ && pointer_free && pointer_free();
+  const bool absolute = (win_ && !mission_) || free;
+  if (absolute && !absolute_) cursor_moved_ = false;
+  absolute_ = absolute;
+  const bool want = acquired_[kMouse] && (coop_[kMouse] & 1) && focused_ && !free && !(win_ && (!mission_ || released_));
   // Playtest W19: SDL's own state, not only ours; a relative mode refused or
   // dropped (a fullscreen switch, the focus) is asked for again, else the
   // system's cursor showed at the centre the game puts it each frame.
   if (want != captured_ || (window && SDL_GetWindowRelativeMouseMode(window) != want)) capture(want);
   // The menus and a held mouse draw the game's own cursor or none; a mouse let
   // go in a window shows the system's.
-  const bool hide = absolute_ || captured_;
+  if (free != free_) {
+    free_ = free;
+    if (want != captured_) capture(want);
+    // Into the editor: zInput's mouse at the cursor at once (where the system
+    // puts it as the hold ends), when the cursor is over the window.
+    float x = 0, y = 0;
+    if (free && window && SDL_GetMouseFocus() == window) {
+      SDL_GetMouseState(&x, &y);
+      mouse_x = x, mouse_y = y, cursor_moved_ = true;
+    }
+    if (!free) released_ = false;  // out of the editor: held again
+  }
+  if (was_muted != muted()) {
+    reset_extended_input();
+    swallow_held_buttons(3);
+  }
+  // The game editor's pointer is the system's cursor.
+  const bool hide = (absolute_ && !free_) || captured_;
   if (window && (hide != cursor_hidden_ || SDL_CursorVisible() == hide)) {
     if (hide) SDL_HideCursor();
     else SDL_ShowCursor();
@@ -431,6 +714,8 @@ void SdlInput::release_chord(SDL_Scancode s, bool down) {
   chord_held_ = static_cast<SDL_Keymod>(chord_held_ & ~m);
   if (chord_armed_ && !chord_spoiled_ && win_ && mission_ && !released_) {
     released_ = true;
+    reset_extended_input();
+    swallow_held_buttons(3);
     std::fill(std::begin(buttons_), std::end(buttons_), 0);
     std::fill(std::begin(latched_), std::end(latched_), 0);
     dx_ = dy_ = dz_ = 0;
@@ -443,6 +728,7 @@ void SdlInput::set_cooperative_level(Device d, uint32_t flags) { coop_[d] = flag
 
 int32_t SdlInput::mouse_state(platform::MouseState* out) {
   refresh();
+  latched_[4] = 0;
   if (!opened_[kMouse] || !acquired_[kMouse]) return lost_[kMouse] ? kInputLost : kNotAcquired;
   if (muted()) {  // let go in a mission: no motion, no buttons
     *out = platform::MouseState{};
@@ -453,6 +739,8 @@ int32_t SdlInput::mouse_state(platform::MouseState* out) {
     absolute_cursor(mouse_x, mouse_y);
     dx_ = dy_ = 0;
   }
+  // Direct device reads outside zInput's poll retain the legacy wheel axis.
+  if (wheel_pending_[0] || wheel_pending_[1]) route_wheel(false);
   out->x = static_cast<int32_t>(dx_), out->y = static_cast<int32_t>(dy_), out->z = static_cast<int32_t>(dz_);
   dx_ -= out->x, dy_ -= out->y, dz_ -= out->z;  // the fractions carry over
   // FIX (A): DirectInput's device state caught a click shorter than a frame
@@ -481,10 +769,12 @@ int32_t SdlInput::joystick_state(platform::JoyState* out) {
   if (!opened_[kJoystick]) return kNotAcquired;
   if (!joy_) {
     if (!unplugged_) return kNotAcquired;
+    if (controller_config_) controller_state_.update(*controller_config_, ControllerSample{});
     neutral(out);
     return acquired_[kJoystick] ? 0 : kNotAcquired;
   }
   SDL_UpdateJoysticks();  // Poll (IDirectInputDevice2 +0x64)
+  poll_controller();
   *out = platform::JoyState{};
   int32_t* axes[8] = {&out->x, &out->y, &out->z, &out->rx, &out->ry, &out->rz, &out->slider[0], &out->slider[1]};
   for (int i = 0; i < 8; ++i) {
@@ -492,7 +782,36 @@ int32_t SdlInput::joystick_state(platform::JoyState* out) {
     // its dead zone (DIPROP_DEADZONE, 1/10000 of the range) around the centre.
     const int k = slot_[i];
     if (k < 0) continue;  // an axis the device lacks stays 0 in DIJOYSTATE2
-    const double c0 = pad_ ? pad_axis(i) : (SDL_GetJoystickAxis(joy_, k) + 32768) / 65535.0 * 2.0 - 1.0;
+    double c0 = pad_ ? pad_axis(i) : (SDL_GetJoystickAxis(joy_, k) + 32768) / 65535.0 * 2.0 - 1.0;
+    if (controller_config_ && pad_) {
+      // The profile owns the gamepad axes only after its neutral, focused
+      // sample has armed. Before that, keep every mapped DI axis centred.
+      if (!controller_state_.connected) {
+        c0 = 0.0;
+      } else {
+        const auto calibrated_axis = [this](size_t calibration, SDL_GamepadAxis axis) {
+          return controller_config_->calibration[calibration].adjust(SDL_GetGamepadAxis(pad_, axis), false);
+        };
+        switch (k) {
+          case 0: c0 = calibrated_axis(0, SDL_GAMEPAD_AXIS_LEFTX); break;
+          case 1: c0 = calibrated_axis(1, SDL_GAMEPAD_AXIS_LEFTY); break;
+          case 2:  // DirectInput Z is left trigger minus right trigger.
+            {
+              const auto calibrated_trigger = [this](size_t calibration, SDL_GamepadAxis axis) {
+                const auto& profile_axis = controller_config_->calibration[calibration];
+                const double rest = profile_axis.inverted ? 1.0 : 0.0;
+                return profile_axis.adjust(SDL_GetGamepadAxis(pad_, axis), true) - rest;
+              };
+              c0 = calibrated_trigger(4, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) -
+                   calibrated_trigger(5, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+            }
+            break;
+          case 3: c0 = calibrated_axis(2, SDL_GAMEPAD_AXIS_RIGHTX); break;
+          case 4: c0 = calibrated_axis(3, SDL_GAMEPAD_AXIS_RIGHTY); break;
+          default: break;
+        }
+      }
+    }
     double c = c0;
     const double dz = deadzone_[i] / 10000.0;
     c = std::fabs(c) <= dz ? 0.0 : (c - std::copysign(dz, c)) / (1.0 - dz);
@@ -589,6 +908,55 @@ int32_t SdlInput::joystick_set_deadzone(uint32_t ofs, uint32_t dz) {
   return 0;
 }
 
+void SdlInput::focus_gained(uint64_t ns) {
+  focused_ = true;
+  if (held_at_loss_) released_ = false, activation_guard_ = true, gained_ns_ = ns;  // ours
+  held_at_loss_ = false;
+  refresh();  // a mission let go before (Ctrl+Alt) stays let go until a click
+}
+
+void SdlInput::focus_lost() {
+  nudges_ = 0;
+  held_at_loss_ = win_ && mission_ && !released_;
+  activation_guard_ = false;
+  focused_ = false;
+  if (controller_config_) controller_state_.update(*controller_config_, ControllerSample{});
+  if (win_) released_ = true;
+  chord_held_ = SDL_KMOD_NONE, chord_armed_ = false;
+  // FIX (A): what is let go while away never comes back as an event, and
+  // DirectInput's state after the next Acquire was the device's as it
+  // was: no button or key stays down from before.
+  std::fill(std::begin(buttons_), std::end(buttons_), 0);
+  std::fill(std::begin(latched_), std::end(latched_), 0);
+  std::fill(std::begin(swallow_), std::end(swallow_), false);
+  reset_extended_input();
+  dz_ = 0;
+  std::fill(std::begin(held_), std::end(held_), false);
+  mouse_buttons = 0;
+  for (int d = 0; d < 3; ++d) {
+    if (acquired_[d] && (coop_[d] & 5) == 5) {  // the system takes a foreground device away
+      acquired_[d] = false;
+      lost_[d] = true;
+    }
+  }
+  refresh();
+}
+
+void SdlInput::discard_loading_input() {
+  keys_.clear();
+  overflow_ = false;
+  std::fill(std::begin(held_), std::end(held_), false);
+  std::fill(std::begin(buttons_), std::end(buttons_), 0);
+  std::fill(std::begin(latched_), std::end(latched_), 0);
+  std::fill(std::begin(swallow_), std::end(swallow_), false);
+  reset_extended_input();
+  dx_ = dy_ = dz_ = raw_dx_ = raw_dy_ = 0;
+  mouse_buttons = 0;
+  chord_held_ = SDL_KMOD_NONE;
+  chord_armed_ = chord_spoiled_ = false;
+  controller_state_ = {};
+}
+
 void SdlInput::on_event(const SDL_Event& e) {
   switch (e.type) {
     case SDL_EVENT_JOYSTICK_REMOVED:  // ours (W54): centred until it is back
@@ -597,6 +965,7 @@ void SdlInput::on_event(const SDL_Event& e) {
         if (pad_) SDL_CloseGamepad(pad_), pad_was_ = true;
         else SDL_CloseJoystick(joy_), pad_was_ = false;
         pad_ = nullptr, joy_ = nullptr, unplugged_ = true;
+        if (controller_config_) controller_state_.update(*controller_config_, ControllerSample{});
       }
       break;
     case SDL_EVENT_JOYSTICK_ADDED:  // the same device back: read again, its map kept
@@ -612,36 +981,17 @@ void SdlInput::on_event(const SDL_Event& e) {
       }
       break;
     case SDL_EVENT_WINDOW_FOCUS_GAINED:
-      focused_ = true;
-      if (held_at_loss_) released_ = false, activation_guard_ = true, gained_ns_ = e.common.timestamp;  // ours
-      held_at_loss_ = false;
-      refresh();  // a mission let go before (Ctrl+Alt) stays let go until a click
+      if (has_focus && !has_focus()) break;  // W4: not really ours yet; check_focus takes it when it is
+      focus_gained(e.common.timestamp);
       break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
-      held_at_loss_ = win_ && mission_ && !released_;
-      activation_guard_ = false;
-      focused_ = false;
-      if (win_) released_ = true;
-      chord_held_ = SDL_KMOD_NONE, chord_armed_ = false;
-      // FIX (A): what is let go while away never comes back as an event, and
-      // DirectInput's state after the next Acquire was the device's as it
-      // was: no button or key stays down from before.
-      std::fill(std::begin(buttons_), std::end(buttons_), 0);
-      std::fill(std::begin(latched_), std::end(latched_), 0);
-      std::fill(std::begin(held_), std::end(held_), false);
-      mouse_buttons = 0;
-      for (int d = 0; d < 3; ++d) {
-        if (acquired_[d] && (coop_[d] & 5) == 5) {  // the system takes a foreground device away
-          acquired_[d] = false;
-          lost_[d] = true;
-        }
-      }
-      refresh();
+      focus_lost();
       break;
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
       const bool down = e.type == SDL_EVENT_KEY_DOWN;
       if (!e.key.repeat) release_chord(e.key.scancode, down);
+      if (down && !e.key.repeat) heal("key", true);  // W4
       const uint8_t dik = dik_from_scancode(e.key.scancode);
       if (!dik) break;
       if (down && e.key.repeat) break;  // DirectInput reports a held key once
@@ -655,29 +1005,39 @@ void SdlInput::on_event(const SDL_Event& e) {
       break;
     }
     case SDL_EVENT_MOUSE_MOTION:
+      if (captured_ && !motion_seen_ && (e.motion.xrel != 0 || e.motion.yrel != 0)) {  // W4: it works
+        motion_seen_ = true;
+        std::printf("mw3: mouse: first motion %llu ms after it was taken\n", static_cast<unsigned long long>((clock() - captured_ns_) / 1000000));
+      }
       mouse_x = e.motion.x, mouse_y = e.motion.y;
       cursor_moved_ = true;
       raw_dx_ += e.motion.xrel, raw_dy_ += e.motion.yrel;
       if (acquired_[kMouse] && !muted()) {
-        float k = captured_ ? 1.0f : mickey_scale;
-        if (!captured_ && fitted() && window) {
-          int w = 0, h = 0;
-          SDL_GetWindowSize(window, &w, &h);
-          k = sdlfe::mickey_scale(static_cast<float>(w), static_cast<float>(h), *shape);
-        }
+        const float k = motion_scale();
         dx_ += e.motion.xrel * k, dy_ += e.motion.yrel * k;
       }
       break;
     case SDL_EVENT_MOUSE_WHEEL:
-      if (acquired_[kMouse] && !muted()) dz_ += e.wheel.y * 120.0f;  // WHEEL_DELTA a notch
+      // Clear the previous mission's wheel queue before staging a fresh event.
+      refresh();
+      if (focused_ && acquired_[kMouse] && !muted() && std::isfinite(e.wheel.y)) {
+        const unsigned direction = e.wheel.y < 0 ? 1 : 0;
+        // Events arrive before zInput knows whether this poll accepts commands.
+        if (bound_wheel_mask_ & (1u << direction))
+          wheel_pending_[direction] += std::abs(e.wheel.y);
+        else
+          dz_ += e.wheel.y * 120.0f;  // WHEEL_DELTA a notch
+      }
       break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP: {
-      // DirectInput's order: left, right, middle, then the fourth.
+      // DirectInput's order for the first four slots, followed by SDL X2.
       const int b = e.button.button == SDL_BUTTON_LEFT ? 0 : e.button.button == SDL_BUTTON_RIGHT ? 1
-                    : e.button.button == SDL_BUTTON_MIDDLE ? 2 : e.button.button == SDL_BUTTON_X1 ? 3 : -1;
+                    : e.button.button == SDL_BUTTON_MIDDLE ? 2 : e.button.button == SDL_BUTTON_X1 ? 3
+                    : e.button.button == SDL_BUTTON_X2 ? 4 : -1;
       if (b < 0) break;
       const bool down = e.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+      if (down) heal("button", false);  // W4
       const bool activating = down && activation_guard_ && e.button.timestamp < gained_ns_ + kActivationNs;
       if (down) activation_guard_ = false;
       if (activating) {  // the click that brought the focus back (the mouse already taken): not the game's
@@ -688,7 +1048,7 @@ void SdlInput::on_event(const SDL_Event& e) {
         refresh();
       } else if (swallow_[b] && !down) {
         swallow_[b] = false;
-      } else if (!muted() && !swallow_[b]) {
+      } else if (!muted() && !swallow_[b] && (b < 3 || (focused_ && acquired_[kMouse]))) {
         buttons_[b] = down ? 0x80 : 0;
         if (down) latched_[b] = 0x80;
       }
@@ -713,22 +1073,26 @@ SDL_Scancode scancode_of(uint32_t dik) {
 
 void SdlZinHost::window_size(int* w, int* h) const {
   *w = fw_, *h = fh_;
-  if (input_ && input_->window) SDL_GetWindowSize(input_->window, w, h);
+  if (input_ && input_->window_size) input_->window_size(w, h);
+  else if (input_ && input_->window) SDL_GetWindowSize(input_->window, w, h);
 }
 // With any_resolution the client area is the frame (the display rect) and the
 // mapping goes through its rect in the window (sdl_fit.h); else the 640x480
 // frame stretched over the window.
 void SdlZinHost::client_size(int32_t* w, int32_t* h) {
   *w = fw_, *h = fh_;
-  if (input_ && input_->fitted()) *w = input_->shape->client_w(), *h = input_->shape->client_h();
+  if (input_ && input_->fitted()) {
+    const FrameShape eff = input_->effective_shape();
+    *w = eff.client_w(), *h = eff.client_h();
+  }
 }
 void SdlZinHost::client_to_screen(int32_t* x, int32_t* y) {
   int w, h;
   window_size(&w, &h);
   if (input_ && input_->fitted()) {
     float wx, wy;
-    frame_to_window(static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(w), static_cast<float>(h),
-                    *input_->shape, &wx, &wy);
+    frame_to_window(static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(w),
+                    static_cast<float>(h), input_->effective_shape(), &wx, &wy);
     *x = static_cast<int32_t>(std::lround(wx)), *y = static_cast<int32_t>(std::lround(wy));
     return;
   }
@@ -739,8 +1103,8 @@ void SdlZinHost::screen_to_client(int32_t* x, int32_t* y) {
   window_size(&w, &h);
   if (input_ && input_->fitted() && w > 0 && h > 0) {
     float fx, fy;
-    window_to_frame(static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(w), static_cast<float>(h),
-                    *input_->shape, &fx, &fy);
+    window_to_frame(static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(w),
+                    static_cast<float>(h), input_->effective_shape(), &fx, &fy);
     *x = static_cast<int32_t>(std::floor(fx)), *y = static_cast<int32_t>(std::floor(fy));
     return;
   }
@@ -749,6 +1113,7 @@ void SdlZinHost::screen_to_client(int32_t* x, int32_t* y) {
 // Windows' cursor follows the game's mouse; a captured (relative) mouse has none.
 // In a window the player's cursor is never moved (sdl_input.h).
 void SdlZinHost::set_cursor_pos(int32_t x, int32_t y) {
+  if (input_ && input_->pointer_is_free()) return;  // the game editor's pointer is the player's too
   if (input_ && input_->window && !input_->in_window() && !SDL_GetWindowRelativeMouseMode(input_->window))
     SDL_WarpMouseInWindow(input_->window, static_cast<float>(x), static_cast<float>(y));
 }

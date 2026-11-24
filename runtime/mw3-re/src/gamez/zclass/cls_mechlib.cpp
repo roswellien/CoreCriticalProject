@@ -5,15 +5,23 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <set>
+#include <string>
 #include <vector>
 
 #include "gamez/zclass/cls_data.h"
+#include "gamez/zclass/cls_mechlib_json.h"
+#include "gamez/zmodel/gmod_strip.h"
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/object3d.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_matl.h"
+#include "gamez/zutil/zutl_path.h"
+#include "platform/file_position.h"
 #include "gamez/zutil/zutl_zar.h"
+#include "gamez/zutil/zutl_zip.h"
 #include "platform/sha256.hpp"
 
 namespace zcls {
@@ -24,12 +32,13 @@ namespace {
 // class, a tree deeper than 64, or an index past its array mark the read
 // broken; the caller refuses it. Without an end (-1) the reads are the
 // original's.
-long g_end = -1;
+int64_t g_end = -1;
 bool g_broken = false;
 // Whether `bytes` more fit before the end; false (and broken) when not.
 bool fits(std::FILE* f, uint64_t bytes) {
   if (g_end < 0) return true;
-  if (g_broken || static_cast<uint64_t>(g_end - std::ftell(f)) < bytes || std::ftell(f) > g_end) g_broken = true;
+  const int64_t at = platform::file_position::tell(f);
+  if (g_broken || at < 0 || at > g_end || static_cast<uint64_t>(g_end - at) < bytes) g_broken = true;
   return !g_broken;
 }
 
@@ -42,14 +51,14 @@ T* read_array(std::FILE* f, uint32_t count, uint32_t size) {
 }
 
 // Digest the archive member, including bytes beyond what the tree parser uses.
-std::string member_sha256(std::FILE* file, long start, uint32_t remaining) {
+std::string member_sha256(std::FILE* file, int64_t start, uint32_t remaining) {
   std::fpos_t saved;
   if (!file || start < 0 || std::ferror(file) || std::feof(file) ||
       std::fgetpos(file, &saved) != 0) return {};
 
   platform::integrity::Sha256 hash;
   std::array<unsigned char, 8192> buffer;
-  bool complete = std::fseek(file, start, SEEK_SET) == 0;
+  bool complete = platform::file_position::seek(file, start, SEEK_SET) == 0;
   while (complete && remaining != 0) {
     const auto count = std::min<std::size_t>(remaining, buffer.size());
     complete = std::fread(buffer.data(), 1, count, file) == count;
@@ -72,9 +81,43 @@ uint32_t u32_at(const uint8_t* p, int off) {
 
 bool materials_fit(const MechLib& lib, const Node* node);
 
-bool& mechlib_post_process() {
-  static bool on = false;
-  return on;
+namespace {
+// Ours (docs/modding.md, mech3ax's JSON): the entry as unzbd's JSON in an
+// enabled mod, first mod first, up to the first with its own copy of the
+// archive: zbd\mechlib\<entry>.json, then unzbd's zbd\mechlib.zip. Its bytes
+// in `bytes`; false for none, or for one refused (said once in the log), when
+// the archive's entry is read.
+bool mod_entry(const MechLib& lib, const std::string& entry, std::vector<uint8_t>* bytes) {
+  if (zutl::mounts().mods.empty() || !lib.archive.path) return false;
+  std::string dir = zutl::host(lib.archive.path);
+  const size_t slash = dir.rfind('/');
+  std::string stem = slash == std::string::npos ? dir : dir.substr(slash + 1);
+  dir = slash == std::string::npos ? std::string{} : dir.substr(0, slash + 1);
+  if (const size_t dot = stem.rfind('.'); dot != std::string::npos) stem.resize(dot);
+  static std::set<std::string> said;
+  for (size_t m = 0; m < zutl::mounts().mods.size(); ++m) {
+    std::string text, what, why;
+    const int got = zutl_zip::mod_json(m, dir, stem, entry + ".json", &text, &what, &why);
+    if (got > 0 && (entry == "materials" ? mechlib_materials_from_json(text, bytes, &why) : mechlib_model_from_json(text, bytes, &why))) {
+      if (said.insert(what + "\n").second) std::printf("mw3: mod: %s instead of %s's entry\n", what.c_str(), lib.archive.path);
+      return true;
+    }
+    if (got != 0) {
+      if (said.insert(what + "\n" + why).second)
+        std::printf("mw3: mod: %s: %s; %s's entry read instead\n", what.c_str(), why.c_str(), lib.archive.path);
+      return false;
+    }
+    if (!zutl::find_in_mod(m, dir + stem + ".zbd").empty()) return false;  // this mod's own archive comes first
+  }
+  return false;
+}
+}  // namespace
+
+// Mech3.exe 1.2 @ 0x004fc8b0
+void mechlib_strip(Node* node) {
+  if (!node) return;
+  for (int32_t i = 0; i < node->child_count(); ++i) mechlib_strip(node->children[i]);
+  if (node->model) zmod::strip_model(*node->model, 0x7fffffff, 4);
 }
 
 // Mech3.exe 1.2 @ 0x004fc6d0
@@ -95,9 +138,13 @@ bool mechlib_open(MechLib& lib, const char* path) {
 // the entry; a broken table leaves none (said in the log).
 bool mechlib_read_materials(MechLib& lib) {
   uint32_t length = 0;
-  std::FILE* f = zutl_zar::seek(lib.archive, zutl_zar::find(lib.archive, "materials"), &length);
+  std::vector<uint8_t> json;
+  const bool from_mod = mod_entry(lib, "materials", &json);
+  std::unique_ptr<zutl_zip::ScratchFile> scratch(from_mod ? new zutl_zip::ScratchFile(json.data(), json.size()) : nullptr);
+  std::FILE* f = from_mod ? scratch->file : zutl_zar::seek(lib.archive, zutl_zar::find(lib.archive, "materials"), &length);
+  if (from_mod) length = static_cast<uint32_t>(json.size());
   if (!f) return false;
-  g_end = std::ftell(f) + static_cast<long>(length), g_broken = false;
+  g_end = platform::file_position::tell(f) + static_cast<int64_t>(length), g_broken = false;
   uint32_t count = 0;
   if (fits(f, 4)) std::fread(&count, 4, 1, f);
   if (!fits(f, static_cast<uint64_t>(count) * 0x28)) count = 0;
@@ -129,10 +176,14 @@ Node* mechlib_find(MechLib& lib, const char* name) {
 Node* mechlib_load(MechLib& lib, const char* name) {
   if (Node* hit = mechlib_find(lib, name)) return hit;
   uint32_t length = 0;
-  const int index = zutl_zar::find(lib.archive, name);
-  std::FILE* f = zutl_zar::seek(lib.archive, index, &length);
-  const long start = f ? std::ftell(f) : -1;
-  if (f) g_end = std::ftell(f) + static_cast<long>(length), g_broken = false;
+  std::vector<uint8_t> json;
+  const bool from_mod = mod_entry(lib, name, &json);
+  std::unique_ptr<zutl_zip::ScratchFile> scratch(from_mod ? new zutl_zip::ScratchFile(json.data(), json.size()) : nullptr);
+  const int index = from_mod ? -1 : zutl_zar::find(lib.archive, name);
+  std::FILE* f = from_mod ? scratch->file : zutl_zar::seek(lib.archive, index, &length);
+  if (from_mod) length = static_cast<uint32_t>(json.size());
+  const int64_t start = !from_mod && f ? platform::file_position::tell(f) : -1;
+  if (f) g_end = platform::file_position::tell(f) + static_cast<int64_t>(length), g_broken = false;
   Node* root = read_tree(lib.reader, f, nullptr);
   g_end = -1;
   // Ours: a broken tree, or one whose polygons name a material the library
@@ -149,7 +200,8 @@ Node* mechlib_load(MechLib& lib, const char* name) {
     auto identity = std::make_shared<SourceAsset>();
     identity->name = name;
     // A rejected legacy seek can leave the stream at a different entry.
-    if (start >= 0 && static_cast<uint64_t>(start) == lib.archive.entries[index].start)
+    if (!from_mod && index >= 0 && start >= 0 &&
+        static_cast<uint64_t>(start) == lib.archive.entries[index].start)
       identity->member_sha256 = member_sha256(f, start, length);
     std::vector<Node*> pending{root};
     for (size_t i = 0; i < pending.size(); ++i) {
@@ -162,7 +214,7 @@ Node* mechlib_load(MechLib& lib, const char* name) {
         pending.push_back(node->children[child]);
     }
   }
-  // 0x004fc8b0 (an edge pass per model) is not ported: only one video mode sets the flag.
+  if (zmod::strips()) mechlib_strip(root);
   if (root) lib.trees.push_back(root);
   return root;
 }

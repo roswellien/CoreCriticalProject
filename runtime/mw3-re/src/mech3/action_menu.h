@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 #include <cstdint>
 #include <vector>
 
@@ -98,6 +99,7 @@ class ActionScreen : public MenuScreen {
   ActionScreen(Engine& e, Handle state);  // 0x00488bc0
   ~ActionScreen() override = default;     // 0x00489ee0 (deleting 0x00489b70)
   void on_button(int32_t id, int32_t a, int32_t b) override;  // +0x14  0x0048a680
+  void update(float dt) override;    // ours: the MODS tab's hover line; the original's update otherwise
 
   void reset();                      // 0x0048aac0: on entering, from the pilot's game and [0x00605820..]
   void accept();                     // 0x0048a140: the ActionGame filled, the pilot saved, the briefing
@@ -125,6 +127,20 @@ class ActionScreen : public MenuScreen {
   ztwod::Image lines1{0};            // +0x174fc  LINES1
   ztwod::Image lines2{0};            // +0x175b8  LINES2
   ztwod::Image lines3{0};            // +0x17674  LINES3
+  // Ours (upgrades/mods/ia_mods_menu.h): the MODS tab (5) and its line
+  // ("MODS: 2 on"), made and bound only where the program turns them on
+  // (the original's constructor makes nothing more).
+  struct ModsTab {
+    explicit ModsTab(Engine& e) : btn(e, 5) {}
+    ShellButton btn;
+    ztwod::Text line;
+    // The tab's hover line (Owen, 2026-11-11: every button says what a press does), two rows under the box.
+    ztwod::Text hint, hint2;
+    bool hinted = false;
+  };
+  std::unique_ptr<ModsTab> mods_tab;
+  // Ours, for the checks (playtest W6): the width the screen's images show, all added, logged as it changes.
+  int32_t pictures_wide = -1;
 };
 
 }  // namespace mech3

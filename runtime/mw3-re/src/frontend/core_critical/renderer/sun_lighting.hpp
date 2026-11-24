@@ -50,6 +50,16 @@ struct Settings {
   float sdr_shadow_lift{0.f};
   float sdr_extra_shadow_lift{0.f};
 };
+// One colour selection for both mission haze and edge fog, including frame gaps.
+// Campaign lighting already owns this replacement; never change authored ZBD colours.
+inline std::array<float, 3> fog_color(const Settings &settings,
+                                      std::array<float, 3> authored) {
+  if (!settings.enabled || !settings.haze_active) return authored;
+  if (settings.haze_manual) return settings.haze_color;
+  for (unsigned channel = 0; channel < 3; ++channel)
+    authored[channel] = std::fmin(1.f, authored[channel] * settings.haze_scale[channel]);
+  return authored;
+}
 inline Settings display_ambient(Settings settings, bool lighting_mode_enabled,
                                 bool hdr_enabled) {
   if (settings.enabled && lighting_mode_enabled && !hdr_enabled) {
@@ -188,8 +198,16 @@ struct alignas(16) Uniform {
   std::array<float, 4> geometry_fog0{}, geometry_fog1{};
   // Raster tile columns, rows, SSBO word offset and active flag for this draw.
   std::array<std::uint32_t, 4> tiled_lights{};
+  // Signed world-height relief, height chart and filter-safe atlas bounds.
+  // Separate from surface_parameters so relief never enables the BRDF path.
+  std::array<float, 4> pom_params{}, pom_uv{}, pom_atlas{};
+  std::array<std::uint32_t, 4> pom_policy{};
 };
-static_assert(sizeof(Uniform) == 992);
+static_assert(sizeof(Uniform) == 1056 && alignof(Uniform) == 16);
+static_assert(offsetof(Uniform, pom_params) == 992);
+static_assert(offsetof(Uniform, pom_uv) == 1008);
+static_assert(offsetof(Uniform, pom_atlas) == 1024);
+static_assert(offsetof(Uniform, pom_policy) == 1040);
 static_assert(offsetof(Uniform, tiled_lights) == 976);
 static_assert(offsetof(Uniform, surface_parameters) == 128);
 static_assert(offsetof(Uniform, surface_eye) == 144);

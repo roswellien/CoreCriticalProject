@@ -1,14 +1,20 @@
 #pragma once
 #include <SDL3/SDL.h>
 
+#include <array>
+#include <chrono>
+#include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "frontend/sdl/sdl_fit.h"
 #include "frontend/sdl/sdl_render3d.h"
 #include "frontend/sdl/gpu_hud.h"
 #include "platform/platform.h"
+#include "platform/prepared_menu_background.h"
 
 namespace zgame { class App; }
 
@@ -19,6 +25,16 @@ namespace sdlfe {
 
 class SdlInput;
 class SdlMusicOutput;
+
+// Shared by presentation and the asset-free GPU readback checks. Textures are indexed by
+// platform::MenuBackgroundGpuMap; a map the layers mark unused may be -1 and is not drawn. All
+// handles remain caller-owned.
+using MenuBackgroundGpuTextures = std::array<int32_t, platform::kMenuGpuMapCount>;
+void draw_menu_background_gpu(FrameRenderer& renderer, int32_t background_texture,
+                              const MenuBackgroundGpuTextures& textures,
+                              const platform::MenuBackgroundGpuLayers& layers,
+                              const platform::MenuBackgroundLayerRect& rectangle,
+                              const platform::MenuBackgroundLayerRect* background_rectangle = nullptr);
 
 // The main window ("Mech3Class", CWnd::CreateEx in 0x00482d10) with the GPU
 // device behind Render3D. Made hidden at start so Render3D exists before the
@@ -49,6 +65,9 @@ class SdlWindow : public platform::Window {
   // A play run (not a check or a shot): a first start takes the desktop's size.
   void set_first_start_desktop(bool on) { first_start_desktop_ = on; }
   bool first_start_size(int* width, int* height) override;
+  // A play run's --window WxH: this run's frame follows the launcher's resolution.
+  void set_launch_size(int width, int height) { launch_w_ = width, launch_h_ = height; }
+  bool launch_size(int* width, int* height) override;
 
   SDL_Window* sdl() const { return window_; }
   SDL_GPUDevice* device() const { return device_; }
@@ -63,6 +82,7 @@ class SdlWindow : public platform::Window {
   bool auto_size_ = false;
   bool fullscreen_ = false;
   bool first_start_desktop_ = false;
+  int launch_w_ = 0, launch_h_ = 0;  // set_launch_size; zero: none
   void inside_usable(int* w, int* h) const;  // shrunk into the display's usable area
   int windowed_w_ = 1280, windowed_h_ = 960;  // the size create() asked for
   FrameShape shape_;
@@ -77,6 +97,9 @@ class SdlScreen2D : public platform::Screen2D {
   ~SdlScreen2D() override;
   void begin_overlay_16(const uint16_t*, int width, int height, int pitch) override;
   void cancel_overlay_16() override;
+  void begin_menu_observation(const uint16_t*, int width, int height, int pitch) override;
+  void cancel_menu_observation() noexcept override;
+  void finish_menu_observation() noexcept override;
   void present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) override;
   // A 16-bit pixel (565, else 555) as the layer's RGBA8, opaque.
   static uint32_t rgba(uint16_t pixel, bool rgb565);
@@ -85,18 +108,62 @@ class SdlScreen2D : public platform::Screen2D {
   void overlay_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, uint16_t key,
                   const uint8_t* alpha, const uint16_t* colour) override;
   int frames = 0;  // frames shown
+  // True while the mission's own state runs (not a menu or the pause); the same signal
+  // SdlInput::in_mission uses. The live GPU menu and its 4:3 menu layout never apply then, so a
+  // 2D-only frame presented during a mission keeps the mission's frame shape, matching input.
+  // Unset means "not in a mission" (tests and hosts without missions).
+  std::function<bool()> in_mission;
 
  private:
   void upload(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, bool keyed, uint16_t key,
               const uint8_t* alpha = nullptr, const uint16_t* colour = nullptr);
-  void draw_layer(int width, int height, bool blend);
+  void draw_layer(int width, int height, bool blend, bool sharp = true,
+                  const platform::MenuBackgroundLayerRect* rectangle = nullptr);
+  bool prepare_menu_gpu(const uint16_t* pixels, int width, int height, int pitch,
+                        bool rgb565, bool* cache_hit);
   FrameRenderer* render_;
   std::unique_ptr<GpuHud> hud_;
+  std::unique_ptr<platform::MenuBackgroundImage> menu_background_;
   SDL_Window* hud_window_{};
   const FrameShape* hud_shape_{};
   int32_t texture_ = -1;
   int tw_ = 0, th_ = 0;
   std::vector<uint8_t> rgba_;
+  // The compositor shares texture_; only a native upload can validate these cached bytes.
+  bool native_texture_current_ = false;
+  std::vector<uint32_t> menu_composed_;
+  platform::PreparedMenuBackgroundComposer menu_composer_;
+  platform::PreparedMenuBackgroundComposer menu_gpu_composer_;
+  platform::MenuBackgroundGpuLayers menu_gpu_layers_;
+  MenuBackgroundGpuTextures menu_gpu_textures_{-1, -1, -1, -1, -1, -1};
+  int32_t menu_hd_texture_ = -1;
+  int menu_gpu_width_ = 0, menu_gpu_height_ = 0;
+  // Per map, the layers' map revision its texture holds; zero means never uploaded.
+  std::array<uint64_t, platform::kMenuGpuMapCount> menu_gpu_uploaded_revisions_{};
+  bool menu_use_gpu_ = true;
+  bool menu_gpu_available_ = true;
+  bool hud_overlay_enabled_ = false;
+  unsigned menu_hd_bound_width_ = 0;
+  unsigned menu_hd_bound_height_ = 0;
+  std::chrono::steady_clock::time_point menu_background_report_start_ = std::chrono::steady_clock::now();
+  unsigned menu_background_report_frames_ = 0, menu_background_report_hits_ = 0, menu_background_report_gpu_frames_ = 0;
+  double menu_background_report_milliseconds_ = 0;
+  double menu_background_report_gpu_milliseconds_ = 0;
+  bool menu_observation_active_{};
+  bool menu_observation_enabled_{};
+  bool menu_layout_active_{};
+  bool menu_gpu_recording_{};
+  bool menu_gpu_sealed_{};
+  const uint16_t* menu_gpu_target_{};
+  int menu_gpu_recorded_width_{};
+  int menu_gpu_recorded_height_{};
+  int menu_gpu_recorded_pitch_{};
+  std::chrono::steady_clock::time_point menu_report_start_{};
+  uint64_t menu_report_frames_{}, menu_report_images_{}, menu_report_text_hits_{},
+      menu_report_fallbacks_{};
+  std::map<std::string, uint64_t> menu_report_shadow_reasons_;
+  bool live_menu_gpu_enabled() const;
+  void set_menu_layout_active(bool active) noexcept;
 };
 
 // GetTickCount from the game's start, and Sleep. With `frame_ms` (ours,
@@ -113,9 +180,17 @@ class SdlClock : public platform::Clock {
     if (frame_ms) slept_ += ms;
     else SDL_Delay(ms);
   }
-  void frame() { ++frames_; }  // a pass of the app's loop
+  // A pass of the app's loop. `paced` (a network run): the pass also waits
+  // until the wall clock has caught up, as the other players run in real time.
+  void frame() {
+    ++frames_;
+    if (!paced) return;
+    const Uint64 due = start_ + frames_ * frame_ms + slept_, now = SDL_GetTicks();
+    if (due > now) SDL_Delay(static_cast<Uint32>(due - now));
+  }
 
   uint32_t frame_ms = 0;
+  bool paced = false;
 
  private:
   Uint64 start_;
@@ -162,6 +237,13 @@ class SdlPump : public platform::MessagePump {
   bool stays_active = false;
   // Ours: Alt+Enter, swallowed before the game sees the Enter.
   std::function<void()> toggle_fullscreen;
+  // Ours: the game editor's ImGui sees each event first while it is up; true
+  // ends the event's handling there (editor_imgui.h). It answers true only
+  // for mouse, key and text events, so window and quit events go on as ever.
+  std::function<bool(const SDL_Event&)> overlay_event;
+  // Ours (#289): a layer ahead of the game's input (mw3 --replay3d's
+  // controls), after the editor's; true when it took the event.
+  std::function<bool(const SDL_Event&)> intercept;
 
   void handle(const SDL_Event& e);  // public for the tests
 

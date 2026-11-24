@@ -1,9 +1,15 @@
 #include "gamez/zclass/camera.h"
 
+#include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
+#include <optional>
+#include <vector>
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -13,6 +19,7 @@
 #include "gamez/zclass/cls_util.h"
 #include "gamez/zclass/cls_world.h"
 #include "gamez/zclass/list.h"
+#include "gamez/zclass/window.h"
 #include "gamez/zclass/object3d.h"
 #include "gamez/zerror/zerr.h"
 #include "gamez/zmath/zmth_matrix.h"
@@ -25,6 +32,7 @@
 #include "gamez/zrender/zrndr_flare.h"
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "mech3/options.h"
 
 namespace zcls {
 
@@ -32,12 +40,251 @@ namespace {
 const char kFile[] = "C:\\zipper\\GameZMech3\\zClass\\Camera.c";
 SceneWalk g_walk;
 WorldRenderHooks g_hooks;
+// These render-scope and log-deduplication globals are game-thread state:
+// render_world is called by GameEngine::vcall and app_hud's zview_render;
+// FrameRenderer submission serializes the scene before RenderWorker::run.
+unsigned g_visual_far_request = kDefaultVisualFar;
+const void* g_visual_camera = nullptr;
+float g_visual_far = 0.0f;
+const void* g_zoom_visual_camera = nullptr;
+zcls::VisualFarLogSink g_visual_far_log_sink = nullptr;
+
+struct VisualFarLogState {
+  unsigned requested_far;
+  float authored_far;
+  float expanded_far;
+  bool full_viewport;
+  int32_t window_width, window_height;
+  int32_t render_width, render_height;
+  bool extended_scope, default_fog_scope;
+  int32_t camera_class;
+  float fog_near, fog_far;
+  int32_t mission_linear, mission_on;
+};
+
+std::vector<VisualFarLogState> g_previous_visual_far_log_states;
+using VisualFarLogClock = std::chrono::steady_clock;
+std::array<VisualFarLogClock::time_point, zcls::kVisualFarLogLinesPerSecond>
+    g_visual_far_log_times{};
+std::size_t g_visual_far_log_count = 0;
+std::array<bool, 3> g_visual_far_camera_class_logged{};
+zcls::VisualFarLogNow g_visual_far_log_now = nullptr;
+
+constexpr float kVisualFarLogFloatEpsilon = 0.5f;
+
+bool same_visual_far_log_float(float left, float right) {
+  if (left == right) return true;
+  if (std::isnan(left) || std::isnan(right))
+    return std::isnan(left) && std::isnan(right);
+  return std::abs(left - right) <= kVisualFarLogFloatEpsilon;
+}
+
+bool same_visual_far_log_state(const VisualFarLogState& left,
+                               const VisualFarLogState& right) {
+  return left.requested_far == right.requested_far &&
+         same_visual_far_log_float(left.authored_far, right.authored_far) &&
+         same_visual_far_log_float(left.expanded_far, right.expanded_far) &&
+         left.full_viewport == right.full_viewport &&
+         left.window_width == right.window_width &&
+         left.window_height == right.window_height &&
+         left.render_width == right.render_width &&
+         left.render_height == right.render_height &&
+         left.extended_scope == right.extended_scope &&
+         left.default_fog_scope == right.default_fog_scope &&
+         left.camera_class == right.camera_class &&
+         same_visual_far_log_float(left.fog_near, right.fog_near) &&
+         same_visual_far_log_float(left.fog_far, right.fog_far) &&
+         left.mission_linear == right.mission_linear &&
+         left.mission_on == right.mission_on;
+}
+
+bool emit_visual_far_log_line(const char* line, int32_t first_line_camera_class = -1) {
+  const VisualFarLogClock::time_point now =
+      g_visual_far_log_now ? g_visual_far_log_now() : VisualFarLogClock::now();
+  std::size_t recent_count = 0;
+  for (std::size_t i = 0; i < g_visual_far_log_count; ++i) {
+    if (now - g_visual_far_log_times[i] < std::chrono::seconds(1))
+      g_visual_far_log_times[recent_count++] = g_visual_far_log_times[i];
+  }
+  g_visual_far_log_count = recent_count;
+  const bool first_line_for_class =
+      first_line_camera_class >= 0 &&
+      static_cast<std::size_t>(first_line_camera_class) <
+          g_visual_far_camera_class_logged.size() &&
+      !g_visual_far_camera_class_logged[static_cast<std::size_t>(first_line_camera_class)];
+  std::size_t reserved_class_lines = 0;
+  for (bool logged : g_visual_far_camera_class_logged)
+    if (!logged) ++reserved_class_lines;
+  // Ordinary diagnostics leave one slot for every camera class not yet seen.
+  // This keeps the global cap while guaranteeing main, zoom and other each log once.
+  const std::size_t maximum_recent_lines =
+      first_line_for_class ? g_visual_far_log_times.size()
+                           : g_visual_far_log_times.size() - reserved_class_lines;
+  if (recent_count >= maximum_recent_lines) return false;
+  if (g_visual_far_log_sink)
+    g_visual_far_log_sink(line);
+  else
+    std::printf("%s", line);
+  g_visual_far_log_times[g_visual_far_log_count++] = now;
+  if (first_line_for_class)
+    g_visual_far_camera_class_logged[static_cast<std::size_t>(first_line_camera_class)] = true;
+  return true;
+}
+
+bool same_visual_far_log_slot(const VisualFarLogState& left,
+                              const VisualFarLogState& right) {
+  return left.camera_class == right.camera_class &&
+         left.window_width == right.window_width &&
+         left.window_height == right.window_height &&
+         left.render_width == right.render_width &&
+         left.render_height == right.render_height;
+}
+
+void log_visual_far_state(const VisualFarLogState& state) {
+  if (state.camera_class < 0 || state.camera_class >= 3) return;
+  const auto previous_state = std::find_if(
+      g_previous_visual_far_log_states.begin(), g_previous_visual_far_log_states.end(),
+      [&state](const VisualFarLogState& previous) {
+        return same_visual_far_log_slot(previous, state);
+      });
+  if (previous_state != g_previous_visual_far_log_states.end() &&
+      same_visual_far_log_state(*previous_state, state))
+    return;
+  char line[512];
+  const char* camera_class = state.camera_class == 0 ? "main" :
+                             state.camera_class == 1 ? "zoom" : "other";
+  const int line_length = std::snprintf(line, sizeof line,
+                "mw3: view distance: requested %u, authored %.3g, expanded %.3g; "
+                "full viewport %d (window %dx%d, render %dx%d); "
+                "extended %d, default-800 fog-only %d; camera %s; "
+                "scoped fog %.3g..%.3g, mission fog linear %d on %d\n",
+                state.requested_far,
+                static_cast<double>(state.authored_far),
+                static_cast<double>(state.expanded_far), state.full_viewport,
+                state.window_width, state.window_height, state.render_width,
+                state.render_height, state.extended_scope,
+                state.default_fog_scope, camera_class,
+                static_cast<double>(state.fog_near),
+                static_cast<double>(state.fog_far), state.mission_linear,
+                state.mission_on);
+  if (line_length < 0 || static_cast<std::size_t>(line_length) >= sizeof line)
+    return;
+  if (!emit_visual_far_log_line(line, state.camera_class)) return;
+  if (previous_state == g_previous_visual_far_log_states.end())
+    g_previous_visual_far_log_states.push_back(state);
+  else
+    *previous_state = state;
+}
 
 constexpr uint32_t kActive = 4, kTreeValid = 0x80000, kOverride = 0x800000;
 constexpr uint32_t kDrawn = 0x80000000u, kUnk25 = 0x2000000;
 const float kOnes[3] = {1.0f, 1.0f, 1.0f};
 const float kZeros[3] = {};
 const float kNullOffset[3] = {};   // 0x0063d870, never written
+
+bool full_display_viewport(Node* window, int32_t* width, int32_t* height) {
+  int32_t x = 0, y = 0;
+  const mech3::Rect& render = mech3::render();
+  if (render.w <= 0 || render.h <= 0) return false;
+  const bool origin_valid = !zcls::window_origin(window, &x, &y);
+  if (!origin_valid) return false;
+  const bool size_valid = !zcls::window_size(window, width, height);
+  return size_valid && x == 0 && y == 0 && *width == render.w &&
+         *height == render.h;
+}
+
+void update_far_corners(Camera* camera, float far_z) {
+  camera->put<uint32_t>(0xfc, 0);
+  camera->put<uint32_t>(0x100, 0);
+  camera->put<uint32_t>(0x104, 0);
+  const float a = static_cast<float>(
+      std::tan(static_cast<double>(camera->get<float>(0xe8) * 0.5f)) * far_z);
+  const float b = -static_cast<float>(
+      std::tan(static_cast<double>(camera->get<float>(0xec) * 0.5f)) * far_z);
+  const float c = -far_z;
+  const float corners[12] = {a, b, c, -a, b, c, a, -b, c, -a, -b, c};
+  std::memcpy(camera->floats(0x108), corners, sizeof corners);
+}
+
+void update_plane_point(Camera* camera, int off, float distance) {
+  const float* dir = camera->floats(0x74);
+  const float* pos = camera->floats(0x2c);
+  float* point = camera->floats(off);
+  for (int i = 0; i < 3; ++i) {
+    point[i] = dir[i] * distance;
+    point[i] = point[i] + pos[i];
+  }
+}
+
+class VisualRenderScope {
+ public:
+  VisualRenderScope(Camera* camera, Node* window) {
+    int32_t window_width = 0, window_height = 0;
+    const bool full_viewport =
+        full_display_viewport(window, &window_width, &window_height);
+    const float authored_far = camera->get<float>(0xb4);
+    const mech3::Rect& render = mech3::render();
+    const bool zoom_camera = g_zoom_visual_camera == camera;
+    bool default_fog_scope = false;
+    float expanded_far = authored_far;
+    if (g_visual_far_request <= kDefaultVisualFar) {
+      // Cover the default world's edge without changing its geometry, clip or camera cache.
+      const bool default_far = g_visual_far_request == kDefaultVisualFar &&
+                               authored_far == kDefaultVisualFar;
+      default_fog_scope = full_viewport && default_far;
+      if (default_fog_scope)
+        fog_.emplace(authored_far, authored_far);
+    } else if (full_viewport || zoom_camera) {
+      expanded_far = visual_far(authored_far, g_visual_far_request, true);
+      if (expanded_far > authored_far) {
+        camera_ = camera;
+        previous_camera_ = g_visual_camera;
+        previous_far_ = g_visual_far;
+        g_visual_camera = camera;
+        g_visual_far = expanded_far;
+        fog_.emplace(authored_far, expanded_far);
+        active_ = true;
+      }
+    }
+    const zmod::Fog& mission_fog = zmod::fog();
+    const zmod::Fog& scoped_fog = zmod::render_fog();
+    const int32_t camera_class = zoom_camera ? 1 : (full_viewport ? 0 : 2);
+    log_visual_far_state({g_visual_far_request,
+                          authored_far,
+                          active_ ? expanded_far : authored_far,
+                          full_viewport,
+                          window_width,
+                          window_height,
+                          render.w,
+                          render.h,
+                          active_,
+                          default_fog_scope,
+                          camera_class,
+                          scoped_fog.near_range,
+                          scoped_fog.far_range,
+                          mission_fog.linear,
+                          mission_fog.on});
+  }
+  ~VisualRenderScope() {
+    if (active_) {
+      g_visual_camera = previous_camera_;
+      g_visual_far = previous_far_;
+      // The scope starts before camera_update: an entry snapshot can be zero
+      // or belong to the previous pose. Rebuild from the pose updated this frame.
+      // An enclosing scope on this camera still owns its render-only distance.
+      const float far_z = visual_far_for_render(camera_, camera_->get<float>(0xb4));
+      update_far_corners(camera_, far_z);
+      update_plane_point(camera_, 0xc4, far_z);
+    }
+  }
+
+ private:
+  Camera* camera_ = nullptr;
+  const void* previous_camera_ = nullptr;
+  float previous_far_ = 0.0f;
+  bool active_ = false;
+  std::optional<zmod::ScopedRenderFog> fog_;
+};
 
 Camera* cam_of(Node* n) { return static_cast<Camera*>(n->data); }
 zmth::Mat34* mat(float* p) { return reinterpret_cast<zmth::Mat34*>(p); }
@@ -198,6 +445,11 @@ int32_t render_object3d(Node* node, int32_t mode) {
         if (!g_walk.recompute) recomputed = 1, g_walk.recompute = 1;
       }
     }
+    // Copy the already-composed matrix; no extra transform evaluation.
+    const auto& fixture_stack = zmth::matrix_stack();
+    if (!fixture_stack.overflow && fixture_stack.top >= 0 &&
+        fixture_stack.top < zmth::kStackDepth && fixture_stack.slot[fixture_stack.top])
+      fixture_observe_world(node, fixture_stack.slot[fixture_stack.top]->m);
     int32_t caster = 0, saved_shadows = 0, overlay = 0, opacity = 0, color = 0;
     if (is_caster(node)) {
       caster = 1;
@@ -297,6 +549,10 @@ int32_t render_lod(Node* node, int32_t mode) {
   uint32_t flags = node->flags();
   if (!(flags & kActive)) return 0;
   auto* d = static_cast<Lod*>(node->data);
+  const float distance_scale = visual_distance_scale(
+      g_walk.camera->get<float>(0xb4), g_visual_far_request,
+      g_walk.camera == g_visual_camera);
+  const float distance_scale_squared = distance_scale * distance_scale;
   flags &= ~kUnk25;
   node->set_flags(flags);
   auto ret0 = [&]() {
@@ -305,8 +561,8 @@ int32_t render_lod(Node* node, int32_t mode) {
   };
   if (d->get<int32_t>(0) == 0) {
     const float d2 = g_walk.lod[g_walk.lod_level].d2;
-    if (d2 < d->get<float>(4)) return 0;
-    if (!(d2 < d->get<float>(0xc))) return 0;
+    if (d2 < d->get<float>(4) * distance_scale_squared) return 0;
+    if (!(d2 < d->get<float>(0xc) * distance_scale_squared)) return 0;
   }
   if ((nu(node, 0x2c) & 1) || g_walk.recompute || !(flags & kTreeValid)) {
     refresh_sphere(node);
@@ -320,16 +576,16 @@ int32_t render_lod(Node* node, int32_t mode) {
     const float dx = pos[0] - e.centre[0], dy = pos[1] - e.centre[1], dz = pos[2] - e.centre[2];
     const float d2 = (dx * dx + dy * dy) + dz * dz;
     e.d2 = g_walk.camera->get<float>(0xd4) * d2;
-    if (e.d2 < d->get<float>(4)) return ret0();
-    if (!(e.d2 < d->get<float>(0xc))) return ret0();
+    if (e.d2 < d->get<float>(4) * distance_scale_squared) return ret0();
+    if (!(e.d2 < d->get<float>(0xc) * distance_scale_squared)) return ret0();
   }
   const float dist = approx_sqrt(e.d2);
-  float far_v = d->get<float>(8);
+  float far_v = d->get<float>(8) * distance_scale;
   float dc = dist > far_v ? far_v : dist;
   auto grow = [&](int on, int len, int k, float* s) {
     if (!(d->get<float>(on) > 0.01f)) return;  // 0x005cdb54
     scaled = 1;
-    const float l = d->get<float>(len);
+    const float l = d->get<float>(len) * distance_scale;
     const float t = far_v - l;
     if (dc > t)
       *s = 1.0f - ((t - dc) * (d->get<float>(k) - 1.0f)) / l;
@@ -345,12 +601,12 @@ int32_t render_lod(Node* node, int32_t mode) {
   }
   float fade = 1.0f;
   if (d->get<float>(0x40) > 0.01f) {
-    const float l = d->get<float>(0x3c);
+    const float l = d->get<float>(0x3c) * distance_scale;
     if (far_v - l < dc) faded = 1, fade = (far_v - dc) / l;
   }
   if (d->get<float>(0x38) > 0.01f) {
-    const float l = d->get<float>(0x34);
-    const float nr = approx_sqrt(d->get<float>(4));
+    const float l = d->get<float>(0x34) * distance_scale;
+    const float nr = approx_sqrt(d->get<float>(4)) * distance_scale;
     if (dc < nr) dc = nr;
     if (nr + l > dc) {
       const float o = (dc - nr) / l;
@@ -370,10 +626,11 @@ int32_t render_lod(Node* node, int32_t mode) {
     node->set_flags(node->flags() | kDrawn);
     push_mask(mask);
     if (d->get<int32_t>(0x48)) {
-      const float t = d->get<float>(0xc) - d->get<float>(0x4c);
+      const float t = (d->get<float>(0xc) - d->get<float>(0x4c)) * distance_scale_squared;
+      const float far_squared = d->get<float>(0xc) * distance_scale_squared;
       const float d2 = g_walk.lod[g_walk.lod_level].d2;
       g_walk.morph = 1;
-      g_walk.morph_factor = t < d2 ? (d2 - t) / (d->get<float>(0xc) - t) : 0.0f;
+      g_walk.morph_factor = t < d2 ? (d2 - t) / (far_squared - t) : 0.0f;
     }
     if (node->child_count() > 0) {
       ++g_walk.lod_level;
@@ -559,9 +816,11 @@ void footprint(Camera* cam, int line, float* min_x, float* max_x, float* min_z, 
 
 void add_cell(int32_t ring, int32_t x, int32_t z, int32_t wrapped, float dx, float dz, uint32_t mask,
               int line_rings, int line_cells) {
-  if (ring >= 50) return fill_rect_error(line_rings, "Error: Need more diamond tiler rings.");
+  if (ring >= kTilerRingCapacity)
+    return fill_rect_error(line_rings, "Error: Diamond tiler ring capacity exceeded.");
   ScreenRing& r = g_walk.rings[ring];
-  if (r.count >= 30) return fill_rect_error(line_cells, "Error: Need more diamond tiler cells per ring.");
+  if (r.count >= kTilerCellsPerRing)
+    return fill_rect_error(line_cells, "Error: Diamond tiler cell capacity exceeded.");
   ScreenRing::Cell& c = r.cell[r.count++];
   c.x = x, c.z = z, c.mask = mask, c.wrapped = wrapped;
   if (wrapped) c.dx = dx, c.dz = dz;
@@ -570,8 +829,46 @@ void add_cell(int32_t ring, int32_t x, int32_t z, int32_t wrapped, float dx, flo
 Partition& cell_at(World* w, int32_t x, int32_t z) { return w->rows[z][x]; }
 }  // namespace
 
+void SceneWalk::reset() {
+  // SceneWalk is too large for a stack temporary; reconstruct it in place.
+  this->~SceneWalk();
+  new (this) SceneWalk();
+}
+
 SceneWalk& scene_walk() { return g_walk; }
 WorldRenderHooks& world_render_hooks() { return g_hooks; }
+void set_visual_far_request(unsigned requested_far) {
+  if (g_visual_far_request != requested_far)
+    g_visual_far_request = requested_far;
+}
+unsigned visual_far_request() { return g_visual_far_request; }
+float visual_far_for_render(const void* camera, float authored_far) {
+  return camera == g_visual_camera ? g_visual_far : authored_far;
+}
+VisualFarLogSink set_visual_far_log_sink(VisualFarLogSink sink) {
+  // Only VisualFarLogSinkGuard in test_camera_visual_far.cpp installs a sink;
+  // it does so before its render_world/camera_update calls and restores it
+  // afterward, so this reset shares the render scope's game-thread contract.
+  const VisualFarLogSink previous = g_visual_far_log_sink;
+  g_visual_far_log_sink = sink;
+  g_previous_visual_far_log_states.clear();
+  g_visual_far_log_count = 0;
+  g_visual_far_camera_class_logged.fill(false);
+  return previous;
+}
+VisualFarLogNow set_visual_far_log_clock_for_testing(VisualFarLogNow now) {
+  const VisualFarLogNow previous = g_visual_far_log_now;
+  g_visual_far_log_now = now;
+  g_visual_far_log_count = 0;
+  return previous;
+}
+ScopedZoomVisualFar::ScopedZoomVisualFar(const void* camera)
+    : previous_camera_(g_zoom_visual_camera) {
+  g_zoom_visual_camera = camera;
+}
+ScopedZoomVisualFar::~ScopedZoomVisualFar() {
+  g_zoom_visual_camera = previous_camera_;
+}
 
 // Mech3.exe 1.2 @ 0x004f6c80 (ECX the camera, EDX the zone list). The ids
 // are read up to the count byte, as many as it says.
@@ -802,7 +1099,8 @@ int camera_update(Node* node) {
 }
 
 // Mech3.exe 1.2 @ 0x004f41b0. The local planes are rebuilt when the fov
-// changed (+0x138), the far corners when clip or fov changed (+0xf8):
+// changed (+0x138), the far corners when clip or fov changed (+0xf8) or the
+// render-only far differs from its cached corner depth:
 // (a, b, -far), (-a, b, -far), (a, -b, -far), (-a, -b, -far) with
 // a = tan(h/2) far, b = -tan(v/2) far, after the origin at +0xfc.
 int camera_update_offset(Node* node, const float* offset) {
@@ -816,23 +1114,20 @@ int camera_update_offset(Node* node, const float* offset) {
   }
   d->put<int32_t>(0x184, 0);
   zmod::camera_world_planes(d);
-  if (d->get<int32_t>(0xf8)) {
-    d->put<int32_t>(0xf8, 0);
-    d->put<uint32_t>(0xfc, 0), d->put<uint32_t>(0x100, 0), d->put<uint32_t>(0x104, 0);
-    const float far_z = d->get<float>(0xb4);
-    const float a = static_cast<float>(std::tan(static_cast<double>(d->get<float>(0xe8) * 0.5f)) * far_z);
-    const float b = -static_cast<float>(std::tan(static_cast<double>(d->get<float>(0xec) * 0.5f)) * far_z);
-    const float c = -far_z;
-    const float corners[12] = {a, b, c, -a, b, c, a, -b, c, -a, -b, c};
-    std::memcpy(d->floats(0x108), corners, sizeof corners);
+  const bool clip_changed = d->get<int32_t>(0xf8) != 0;
+  const float authored_far = d->get<float>(0xb4);
+  const float far_z = visual_far_for_render(d, authored_far);
+  // The first far corner stores -far at +0x110. Track it so a render-only
+  // extension is restored to the authored footprint when its scope ends.
+  if (visual_far_corners_need_update(clip_changed, far_z,
+                                     d->get<float>(0x110))) {
+    if (clip_changed) d->put<int32_t>(0xf8, 0);
+    update_far_corners(d, far_z);
   }
-  const float* dir = d->floats(0x74);
-  const float* pos = d->floats(0x2c);
   for (int off : {0xb8, 0xc4}) {
-    const float k = d->get<float>(off == 0xb8 ? 0xb0 : 0xb4);
-    float* p = d->floats(off);
-    p[0] = dir[0] * k, p[1] = dir[1] * k, p[2] = dir[2] * k;
-    p[0] = p[0] + pos[0], p[1] = p[1] + pos[1], p[2] = p[2] + pos[2];
+    const float k = off == 0xb8 ? d->get<float>(0xb0)
+                                : visual_far_for_render(d, d->get<float>(0xb4));
+    update_plane_point(d, off, k);
   }
   return 0;
 }
@@ -880,6 +1175,7 @@ int camera_matrices(Node* node, Camera* d, const float* offset) {
 // caller leaves its child (or cell node) count there, so a node is culled
 // only when it has a sibling; the world's own children get 2 (0x004f6c29).
 void render_node(Node* node, int32_t siblings) {
+  FixtureWalkScope fixture_scope(node);
   if (!zmod::zone_visible(node->raw[0x30])) return;
   if ((nu(node, 0x2c) & 0x20) && g_walk.pre) g_walk.pre(node);
   const bool horizon = g_walk.camera && node == g_walk.camera->nodes[2];
@@ -1015,6 +1311,36 @@ int pick_cells_virtual(Node* world, Camera* cam) {
     }
   }
   zmth::pop();
+  int32_t used_rings = 0;
+  int32_t max_cells = 0;
+  for (int32_t ring = 0; ring < kTilerRingCapacity; ++ring) {
+    const int32_t count = g_walk.rings[ring].count;
+    if (count > 0) used_rings = ring + 1;
+    if (count > max_cells) max_cells = count;
+  }
+  using Clock = std::chrono::steady_clock;
+  static Clock::time_point last_capacity_log{};
+  static int32_t last_logged_rings = -1;
+  static int32_t last_logged_cells = -1;
+  const Clock::time_point now = Clock::now();
+  // Four rings or eight cells avoids reporting small frame-to-frame jitter.
+  const bool meaningful_change =
+      last_logged_rings < 0 || std::abs(used_rings - last_logged_rings) >= 4 ||
+      std::abs(max_cells - last_logged_cells) >= 8;
+  if (meaningful_change &&
+      (last_logged_rings < 0 || now - last_capacity_log >= std::chrono::seconds(1))) {
+    char line[128];
+    const int line_length = std::snprintf(
+        line, sizeof line,
+        "mw3: virtual view cells: rings %d/%d, max cells per ring %d/%d\n",
+        used_rings, kTilerRingCapacity, max_cells, kTilerCellsPerRing);
+    if (line_length >= 0 && static_cast<std::size_t>(line_length) < sizeof line &&
+        emit_visual_far_log_line(line)) {
+      last_capacity_log = now;
+      last_logged_rings = used_rings;
+      last_logged_cells = max_cells;
+    }
+  }
   return 0;
 }
 
@@ -1025,9 +1351,9 @@ int render_cells(Node* world, Node* camera_node, Camera* cam) {
   int32_t restored = 1;
   const int r = w->get<int32_t>(0x50) ? pick_cells_virtual(world, cam) : pick_cells(world, cam);
   if (r) return r;
-  const int32_t fog = zmod::fog_on();
-  const float fog_near = fog ? zmod::fog_near() : 0.0f;
-  for (int32_t ring = 0; ring < 50; ++ring) {
+  const int32_t fog = zmod::render_fog().on;
+  const float fog_near = fog ? zmod::render_fog().near_range : 0.0f;
+  for (int32_t ring = 0; ring < kTilerRingCapacity; ++ring) {
     g_walk.ring = ring;
     for (int32_t k = 0; k < g_walk.rings[ring].count; ++k) {
       const ScreenRing::Cell& e = g_walk.rings[ring].cell[k];
@@ -1087,13 +1413,18 @@ int render_cells(Node* world, Node* camera_node, Camera* cam) {
         uint8_t* f = p.fades + 0x44 * i;
         float fl[16];
         std::memcpy(fl, f + 4, sizeof fl);  // +0x04..+0x40
+        const float distance_scale = visual_distance_scale(
+            g_walk.camera->get<float>(0xb4), g_visual_far_request,
+            g_walk.camera == g_visual_camera);
+        const SquaredFadeRange fade_range = scale_squared_fade_range(
+            fl[12], fl[13], fl[14], distance_scale);
         const float* cpos = zmth::view().camera.m + 9;  // 0x0073fc24
         const float dx = cpos[0] - fl[9], dy = cpos[1] - fl[10], dz = cpos[2] - fl[11];
         const float d2 = (dx * dx + dy * dy) + dz * dz;
         float o;
-        if (!(d2 > fl[12])) o = 1.0f;
-        else if (!(d2 < fl[13])) o = 0.0f;
-        else o = (fl[13] - d2) * fl[14];
+        if (!(d2 > fade_range.near_squared)) o = 1.0f;
+        else if (!(d2 < fade_range.far_squared)) o = 0.0f;
+        else o = (fade_range.far_squared - d2) * fade_range.interpolation_factor;
         if (!(o > 0.0f)) continue;
         if (o < 1.0f) {
           g_walk.opacity[++g_walk.opacity_top] = o;
@@ -1161,7 +1492,26 @@ void horizon_follow() {
 // only `node` walked (0x004f5910 with 2: never culled alone), from its
 // parent's world matrix when it has one parent.
 int render_subtree(Node* camera_node, Node* node, int32_t hw) {
+  return render_subtree(camera_node, node, hw, false);
+}
+
+int render_subtree(Node* camera_node, Node* node, int32_t hw,
+                   bool use_requested_producer_purpose) {
   if (!node || !camera_node) return 1;
+  zvid::ProducerWorldScope producer_view(!use_requested_producer_purpose);
+  struct EmissionScope {
+    zvid::ProducerWorldScope* producer_view = nullptr;
+
+    EmissionScope(zvid::ProducerWorldScope& scope, bool enabled) {
+      if (enabled) {
+        scope.begin_emission();
+        producer_view = &scope;
+      }
+    }
+    ~EmissionScope() noexcept {
+      if (producer_view) producer_view->end_emission();
+    }
+  };
   zmth::Mat34 local;
   zmth::push(&local);
   Camera* cam = cam_of(camera_node);
@@ -1180,6 +1530,7 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw) {
   camera_update(camera_node);
   horizon_follow();
   zmod::set_camera(g_walk.camera);
+  EmissionScope emission(producer_view, use_requested_producer_purpose);
   zmod::world_update_lights(world);
   if (g_hooks.world_sounds) g_hooks.world_sounds(g_hooks.ctx, world);
   if (zmod::shadows_on()) {
@@ -1234,6 +1585,7 @@ int camera_draw_flares(Camera* cam, int32_t from) {
 // The Direct3D frame's 3D part: LoD scale, lights, camera, horizon,
 // viewport, zones, then the scene walk between BeginScene and EndScene.
 int render_world(Node* camera_node, int32_t after) {
+  zvid::ProducerWorldScope producer_view;
   zmth::check_stack_at_frame();  // FIX (bug), ours (W59): one imbalance cannot carry
   zmth::Mat34 local;
   zmth::push(&local);
@@ -1241,6 +1593,7 @@ int render_world(Node* camera_node, int32_t after) {
   g_walk.camera = cam;
   Node* world = camera_world(camera_node);
   auto* window = static_cast<Window*>(cam->nodes[1]->data);
+  VisualRenderScope visual_scope(cam, cam->nodes[1]);
   if (g_walk.lod_dynamic) {
     if (ztimer::state().dt > g_walk.lod_target)
       g_walk.lod_factor = g_walk.lod_factor - g_walk.lod_step;
@@ -1255,6 +1608,7 @@ int render_world(Node* camera_node, int32_t after) {
   camera_update(camera_node);
   horizon_follow();
   zmod::set_camera(g_walk.camera);
+  producer_view.begin_emission();
   zmod::world_update_lights(world);
   if (g_hooks.world_sounds) g_hooks.world_sounds(g_hooks.ctx, world);
   if (zmod::shadows_on()) {
@@ -1286,6 +1640,7 @@ int render_world(Node* camera_node, int32_t after) {
   if (g_hooks.begin_scene) g_hooks.begin_scene(g_hooks.ctx);
   render_scene(world, camera_node, g_walk.camera);
   if (g_hooks.puffers) g_hooks.puffers(g_hooks.ctx);
+  producer_view.end_emission();
   zmth::pop();
   if (g_hooks.flush_transparent) g_hooks.flush_transparent(g_hooks.ctx);
   if (after && g_hooks.after_scene) g_hooks.after_scene(g_hooks.ctx, ztimer::state().dt);

@@ -1,7 +1,13 @@
 #include "gamez/zeffect/zeff_anim_init.h"
+#include "gamez/zeffect/zeff_anim_json.h"
+#include "upgrades/mods/anim_defs.h"
+#include "gamez/zutil/zutl_zip.h"
 
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <set>
+#include <memory>
 #include <ctime>
 #include <type_traits>
 #include <vector>
@@ -9,6 +15,7 @@
 #include "gamez/zclass/light.h"
 #include "gamez/zutil/zfix.h"
 #include "gamez/zutil/zutl_path.h"
+#include "platform/file_position.h"
 #include "gamez/zclass/list.h"
 #include "gamez/zclass/sound.h"
 #include "gamez/zerror/zerr.h"
@@ -32,9 +39,10 @@ AnimHooks g_hooks{};
 
 // Ours (docs/modding.md, M3): the bytes left in the file, so a count or a
 // size from a broken copy is refused before it is allocated.
-long g_file_end = -1;
+int64_t g_file_end = -1;
 bool fits(std::FILE* f, uint64_t bytes) {
-  return g_file_end < 0 || (std::ftell(f) <= g_file_end && bytes <= static_cast<uint64_t>(g_file_end - std::ftell(f)));
+  const int64_t at = platform::file_position::tell(f);
+  return g_file_end < 0 || (at >= 0 && at <= g_file_end && bytes <= static_cast<uint64_t>(g_file_end - at));
 }
 
 // `count` records of T read with one fread, as the exe does.
@@ -144,7 +152,7 @@ bool fix_def(int32_t index, AnimDef& d, const char** prev_name) {
     if (e == -1) return false;
   }
   // Prerequisites: type 1 names a def; types 2/3 name a node, 3 under the
-  // node found before it. FIX (bug), behind bugs: the exe's def search stops
+  // node found before it. FIX (bug), behind small_fixes: the exe's def search stops
   // one short and never finds the last def; this searches them all
   // (docs/fixes.md).
   Node* last = nullptr;
@@ -154,7 +162,7 @@ bool fix_def(int32_t index, AnimDef& d, const char** prev_name) {
     if (type == 1) {
       p.def = nullptr;
       const char* want = reinterpret_cast<const char*>(p.raw + 8);
-      const int32_t defs = zfix::options().bugs ? g_anim.def_count() : g_anim.def_count() - 1;
+      const int32_t defs = zfix::options().small_fixes ? g_anim.def_count() : g_anim.def_count() - 1;
       for (int32_t j = 0; j < defs; ++j) {
         if (std::strcmp(g_anim.defs[j].name(), want) == 0) {
           p.def = &g_anim.defs[j];
@@ -170,7 +178,7 @@ bool fix_def(int32_t index, AnimDef& d, const char** prev_name) {
                       "ACTIVATION_PREREQUISITE error; couldn't find node.\n  Animation: %s; node: %s\n",
                       d.name(), want);
         zerr::report(0x400, kFile, 0x33a0, msg);
-        if (!g_anim.fix_prerequisites || !zfix::options().bugs) {
+        if (!g_anim.fix_prerequisites || !zfix::options().small_fixes) {
           d.raw[0x110] = 0;  // the exe: the def loses every prerequisite
           break;
         }
@@ -219,20 +227,87 @@ void anim_allow_loading(int32_t on) { g_anim.loading = on; }
 // place; the caller (0x50ae60) ignores the result.
 int anim_read_zbd() {
   AnimState& a = g_anim;
-  if (!a.loading || a.path[0] == 0) return -1;
-  std::FILE* f = zutl::open(a.path, "rb");  // FIX (A): the mounts (zutl_path.h)
+  const char* file = a.host_path.empty() ? a.path : a.host_path.c_str();
+  if (!a.loading || file[0] == 0) return -1;
+  // Ours (docs/modding.md, mech3ax's JSON): an enabled mod's unzbd JSON for this world, as the file it stands for;
+  // one that does not read is said and the anim.zbd read instead.
+  std::vector<uint8_t> json_zbd;
+  std::string what, why;
+  std::unique_ptr<zutl_zip::ScratchFile> scratch;
+  std::FILE* f = nullptr;
+  if (a.host_path.empty()) {
+    static std::set<std::string> said;
+    const int got = anim_from_mod(a.path, &json_zbd, &what, &why, mech3::anim_defs::mod_defs_only);
+    if (got > 0) scratch = std::make_unique<zutl_zip::ScratchFile>(json_zbd.data(), json_zbd.size());
+    if (got > 0 && scratch->file) {
+      f = std::fopen(scratch->path.string().c_str(), "rb");  // its own handle, closed below as the archive's is
+      if (said.insert(what + "\n").second) std::printf("mw3: mod: %s instead of %s\n", what.c_str(), a.path);
+    } else if (got != 0 && said.insert(what + "\n" + why).second) {
+      std::printf("mw3: mod: %s: %s; %s read instead\n", what.c_str(), why.c_str(), a.path);
+    }
+  }
+  // Ours (modding.md, anim=defs): a mod whose whole anim.zbd is the original's
+  // copy is passed over for the next one's (a mod's, else the install's).
+  if (!f && a.host_path.empty())
+    if (const std::string past = mech3::anim_defs::whole_file_past_defs_only(a.path); !past.empty()) f = std::fopen(past.c_str(), "rb");
+  if (!f) f = zutl::open(file, "rb");  // FIX (A): the mounts (zutl_path.h)
   if (!f) return -1;
-  std::fseek(f, 0, SEEK_END);
-  g_file_end = std::ftell(f);
-  std::fseek(f, 0, SEEK_SET);
+  // Ours (docs/modding.md, Animations a def at a time): the enabled mods' def
+  // files merged into the file chosen, as a file of its own.
+  std::unique_ptr<zutl_zip::ScratchFile> merged;
+  if (a.host_path.empty() && !zutl::mounts().mods.empty()) {
+    std::vector<uint8_t> base;
+    char buf[1 << 15];
+    for (size_t got; (got = std::fread(buf, 1, sizeof buf, f)) > 0;) base.insert(base.end(), buf, buf + got);
+    platform::file_position::seek(f, 0, SEEK_SET);
+    static std::set<std::string> said;
+    std::vector<std::string> notes;
+    // With the world up: the mods' node files read first, then each def file
+    // whose nodes the world does not have left out (the fixup would stop there).
+    if (a.world) mech3::anim_defs::load_mod_node_files(a.path, &notes);
+    std::vector<mech3::anim_defs::DefFile> defs = mech3::anim_defs::mod_def_files(a.path, base, &notes);
+    if (a.world)
+      for (auto it = defs.begin(); it != defs.end();) {
+        std::string missing;
+        if (mech3::anim_defs::def_nodes_found(it->bytes, &missing)) {
+          ++it;
+          continue;
+        }
+        notes.push_back(it->from + ": " + it->key + " names " + missing + ", which this world does not have; left out");
+        it = defs.erase(it);
+      }
+    for (const std::string& n : notes)
+      if (said.insert(n).second) std::printf("mw3: mod: %s\n", n.c_str());
+    if (!defs.empty()) {
+      std::string why;
+      const std::vector<uint8_t> out = mech3::anim_defs::with_defs(base, defs, &why);
+      if (!out.empty()) merged = std::make_unique<zutl_zip::ScratchFile>(out.data(), out.size());
+      if (merged && merged->file) {
+        std::fclose(f);
+        f = std::fopen(merged->path.string().c_str(), "rb");
+        const std::string line = std::to_string(defs.size()) + " animation def files into " + a.path;
+        if (said.insert(line).second) std::printf("mw3: mod: %s\n", line.c_str());
+        if (!f) return -1;
+      } else if (said.insert(std::string(a.path) + why).second) {
+        std::printf("mw3: mod: the animation def files for %s not merged: %s\n", a.path, why.c_str());
+      }
+    }
+  }
+  if (platform::file_position::seek(f, 0, SEEK_END) != 0 ||
+      (g_file_end = platform::file_position::tell(f)) < 0 ||
+      platform::file_position::seek(f, 0, SEEK_SET) != 0) {
+    std::fclose(f);
+    g_file_end = -1;
+    return -1;
+  }
   // Ours: a broken copy is refused whole (the log names it) and the world has
   // no animations; the exe left what it had read in place, half bound.
   bool header_ok = false;
-  const auto fail = [f, &a, &header_ok] {
+  const auto fail = [f, &a, &header_ok, file] {
     std::fclose(f);
     g_file_end = -1;
     if (header_ok) {
-      std::printf("mw3: %s is broken (a count, size or name it cannot hold), its animations not read\n", a.path);
+      std::printf("mw3: %s is broken (a count, size or name it cannot hold), its animations not read\n", file);
       delete[] a.defs, a.defs = nullptr;
       a.block.put<int16_t>(0x0a, 0), a.block.put<int32_t>(0x10, 0);
       delete[] a.messages, a.messages = nullptr;
@@ -711,6 +786,7 @@ int32_t anim_init() {
   AnimState& a = g_anim;
   if (a.block.get<int32_t>(0) != 0) anim_free_all();
   a.path[0] = 0;
+  a.host_path.clear();
   for (int off : {0x00, 0x04, 0x08, 0x0c, 0x10, 0x14, 0x18, 0x20, 0x24, 0x28}) a.block.put<int32_t>(off, 0);
   a.defs = nullptr, a.messages = nullptr, a.world = nullptr, a.player_node = nullptr;
   a.block.put<int32_t>(0x3c, 1);

@@ -18,8 +18,9 @@
 //       compared with REF (raw RGB565, FFmpeg's decode of that frame); the
 //       DLLs loaded.
 //
-// Built 32-bit with clang-cl as a GUI program (tools/windows/build_indeo.cmd),
-// so mw3 starting it opens no console; Windows only.
+// The normal package build uses 32-bit clang-cl (tools/windows/build_indeo.cmd);
+// the pinned MW3-RE staging recipe uses the selected x86 MSVC toolset. Both
+// make a GUI program, so mw3 starting it opens no console; Windows only.
 #if !defined(_WIN32)
 #error "mw3indeo is Windows' (32-bit): the codec is an x86 Win32 driver"
 #else

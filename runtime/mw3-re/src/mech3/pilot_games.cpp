@@ -9,11 +9,16 @@
 #include "gamez/zutil/zutl_msg.h"
 #include "gamez/zutil/zutl_msgdll.h"
 #include "gamez/zutil/zutl_path.h"
+#include "platform/loading.hpp"
 #include "mech3/mech_config.h"
 #include "mech3/mech_names.h"
+#include "mech3/mod_rows_file.h"
 #include "mech3/mech_objective.h"
 #include "mech3/mech_reader.h"
 #include "mech3/pilot.h"
+#include "gamez/zutil/zfix.h"
+#include "upgrades/mods/loadout_fallback.h"
+#include "upgrades/mods/save_mods.h"
 
 namespace mech3 {
 
@@ -39,7 +44,10 @@ ActionSetup& action_setup() { return g_action_setup; }
 
 Config* PilotHooks::config_load(const char* name, std::FILE* f) { return Config::from_file(name, f); }
 void PilotHooks::save_world(const char* path, int32_t kind) { zsave::save(path, kind); }
-bool PilotHooks::load_world(const char* path, int32_t kind) { return zsave::load(path, kind); }
+bool PilotHooks::load_world(const char* path, int32_t kind) {
+  save_mods_begin_load();  // ours: the save's mods, said after the load (upgrades/mods/save_mods)
+  return zsave::load(path, kind);
+}
 void PilotHooks::config_save(Config* c, std::FILE* f) {
   if (c) c->save(f);
 }
@@ -62,6 +70,9 @@ int32_t PilotHooks::store_add_mech(Store& s, int32_t mech, const char* config) {
   if (s.full) return 1;
   const MechDfn* d = mech_dfn(mech);
   const Config* c = d && d->configs ? d->configs->find(config) : nullptr;
+  // Ours (upgrades/mods/loadout_fallback.h, W20): a mod's mech with its loadout renamed is given by the nearest.
+  if (!c && d && d->configs && zfix::options().fixed)
+    c = loadout_fallback(*d->configs, config, config && std::strcmp(config, message(0xf20)) == 0, mech_name(mech));
   return c ? (s.give_config(mech, c) ? 1 : 0) : 0;
 }
 
@@ -103,8 +114,8 @@ void Store::fill_all() {
     it->b10 = 1;
     items.push_back(it);
   };
-  for (int32_t m = 0; m < 0x13; ++m) {
-    if (m == 7) continue;  // 0x00426080
+  for (int32_t m = 0; m < mech_count(); ++m) {  // ours: the mods' mechs after the exe's
+    if (m == 7 || m == kNoMech) continue;  // 0x00426080
     auto* b = new BaseItem;
     b->value = m;
     put(b);
@@ -478,6 +489,7 @@ bool GameSlot::set_config(const Config* c) {
 
 // Mech3.exe 1.2 @ 0x00433ef0
 void GameSlot::save(Pilot& p) {
+  rows_file::note_mech(mech);  // ours (mod_rows_file.h)
   wr(p.file, &mech, 4);
   wr(p.file, &x14, 4);
   wr(p.file, &skin, 4);
@@ -490,6 +502,7 @@ void GameSlot::save(Pilot& p) {
 // without deleting it (a leak in the exe; deleted here).
 void GameSlot::load(Pilot& p) {
   rd(p.file, &mech, 4);
+  mech = rows_file::mech(mech);  // ours (mod_rows_file.h)
   rd(p.file, &x14, 4);
   rd(p.file, &skin, 4);
   int32_t has = 0;
@@ -623,18 +636,18 @@ void CampaignGame::merge_salvage() {
 // settled in place: the slots' mechs and loadouts listed in +0x50 (docs/campaign.md 4).
 CampaignGame* CampaignGame::next_mission(bool next_one, bool save) {
   PilotHooks& h = pilot_hooks();
-  int32_t m = mission_number(), op = operation();
-  const bool over = campaign_advance(op, m);
+  int32_t m = mission, op = campaign, bases = a8;
+  const bool over = advance(op, m, bases);
   if (next_one) {
     if (over) return nullptr;
-    auto* g = new CampaignGame(pilot, op, m);
+    auto* g = new_campaign_game(pilot, op, m);
     g->store.assign(store);
     g->store.add_all(store64);
     std::memcpy(g->b4, b4, sizeof b4);
     if (Store* salvage = h.mission_salvage()) g->store3c.assign(*salvage);
     else g->store3c.clear();  // [0x00609990] is always set in the exe
     g->slot.copy_from(slot);
-    g->a8 = (m == 1 || (op == 4 && m == 4)) ? 3 : a8;
+    g->a8 = bases;
     g->c4 = c4;
     g->copy_lancemates(*this);
     if (save) h.save_world(g->path(), 2);
@@ -656,6 +669,14 @@ CampaignGame* CampaignGame::next_mission(bool next_one, bool save) {
   store78.clear();
   b0 = 0;
   return this;
+}
+
+// Inline in 0x00434e00: the advance (0x00484870, campaign_advance) and the
+// next game's +0xa8.
+bool CampaignGame::advance(int32_t& op, int32_t& m, int32_t& bases) const {
+  const bool over = campaign_advance(op, m);
+  bases = (m == 1 || (op == 4 && m == 4)) ? 3 : a8;
+  return over;
 }
 
 // Mech3.exe 1.2 @ 0x00435110
@@ -705,16 +726,27 @@ void CampaignGame::copy_lancemates(const CampaignGame& from) {
   }
 }
 
-// Mech3.exe 1.2 @ 0x00434950
+// Mech3.exe 1.2 @ 0x00434950 (ours: in pilots_folder())
 const char* CampaignGame::path_for(const char* pilot_name) {
   char buf[0x200];
-  std::snprintf(buf, sizeof buf, "pilots//games//%s%02d%02d.mw3", pilot_name, operation(), mission_number());
+  std::snprintf(buf, sizeof buf, "%s//games//%s%02d%02d.mw3", pilots_folder().c_str(), pilot_name, campaign, mission);
   text = buf;
   return text.c_str();
 }
 
 // Mech3.exe 1.2 @ 0x00434980
 const char* CampaignGame::path() { return path_for(pilot->name); }
+
+// Mech3.exe 1.2 @ 0x00435350 (vt+0x54)
+int32_t CampaignGame::world_index() const {
+  switch (operation()) {
+    case 1: return 0;
+    case 2: return 1;
+    case 3: return 2;
+    case 4: return (3 < mission_number()) + 3;
+    default: return -1;
+  }
+}
 
 // Mech3.exe 1.2 @ 0x00435330 (0x00576080: _access)
 bool CampaignGame::readable() { return zutl::exists(path()); }
@@ -724,6 +756,8 @@ bool CampaignGame::readable() { return zutl::exists(path()); }
 // Mission 4, whose file is there: zSave reads it (kind 2) into the world.
 bool CampaignGame::restore() {
   if (b0 || mission == 1 || (campaign == 4 && mission == 4) || !readable()) return false;
+  platform::loading::Phase phase("saved-game-restore");
+  platform::loading::Measure timing(platform::loading::Work::restore);
   return pilot_hooks().load_world(path(), 2);
 }
 

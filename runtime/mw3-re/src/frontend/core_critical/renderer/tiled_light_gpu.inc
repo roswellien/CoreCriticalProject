@@ -3,11 +3,18 @@ VkDescriptorSetLayout tiledSetLayout{};
 VkPipelineLayout tiledLayout{};
 VkPipeline tiledPipeline{};
 VkDescriptorPool tiledPool{};
-Buffer tiledViews, tiledLists;
+Buffer tiledViews, tiledLists, tiledReadback;
 VkDeviceSize tiledViewStride{}, tiledListAlignment{}, tiledRange{};
 std::vector<VkDescriptorSet> tiledSets;
+std::array<std::array<VkDescriptorBufferInfo, 3>, mw34::tiled::max_views> tiledDescriptorInfo{};
 std::vector<uint32_t> tiledOffsets;
 std::vector<VkDeviceSize> tiledLengths;
+bool tiledOverflowReported{};
+bool tiledAffineFallbackReported{};
+// A vk::Renderer data member like the flags above (this file is included inside the
+// class body, vk_scene.hpp), so each renderer warns once about a draw whose projection
+// the tiled stage cannot use; a new renderer (device reset, another test) warns again.
+bool tiledProjectionFallbackReported{};
 
 void init_tiled() {
   if (tiledPipeline)
@@ -26,7 +33,7 @@ void init_tiled() {
   const auto alignment = p.limits.minUniformBufferOffsetAlignment;
   tiledViewStride = (sizeof(mw34::tiled::View) + alignment - 1) / alignment * alignment;
   tiledListAlignment = p.limits.minStorageBufferOffsetAlignment;
-  tiledRange = std::min<VkDeviceSize>(p.limits.maxStorageBufferRange, 128ULL * 1024 * 1024);
+  tiledRange = std::min<VkDeviceSize>(p.limits.maxStorageBufferRange, 1024ULL * 1024 * 1024);
   try {
     const VkDescriptorSetLayoutBinding bindings[3]{
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -55,6 +62,21 @@ void init_tiled() {
         f.vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cp, nullptr, &tiledPipeline);
     f.vkDestroyShaderModule(device, module, nullptr);
     check(result, "tiled compute pipeline");
+    const unsigned n = unsigned(mw34::tiled::max_views);
+    const VkDescriptorPoolSize sizes[2]{{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, n * 2},
+                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, n}};
+    VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pi.maxSets = n;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sizes;
+    check(f.vkCreateDescriptorPool(device, &pi, nullptr, &tiledPool), "tiled descriptor pool");
+    std::vector<VkDescriptorSetLayout> layouts(n, tiledSetLayout);
+    tiledSets.resize(n);
+    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    ai.descriptorPool = tiledPool;
+    ai.descriptorSetCount = n;
+    ai.pSetLayouts = layouts.data();
+    check(f.vkAllocateDescriptorSets(device, &ai, tiledSets.data()), "tiled descriptor sets");
   } catch (...) {
     destroy_tiled();
     throw;
@@ -70,75 +92,71 @@ void destroy_tiled() {
   if (tiledSetLayout)
     f.vkDestroyDescriptorSetLayout(device, tiledSetLayout, nullptr);
   tiledPool = {};
+  tiledSets.clear();
+  tiledDescriptorInfo = {};
   tiledPipeline = {};
   tiledLayout = {};
   tiledSetLayout = {};
-  for (auto *b : {&tiledViews, &tiledLists}) {
+  for (auto *b : {&tiledViews, &tiledLists, &tiledReadback}) {
     if (b->buffer)
       f.vkDestroyBuffer(device, b->buffer, nullptr);
     if (b->memory)
-      f.vkFreeMemory(device, b->memory, nullptr);
+      release_memory(device, b->memory, nullptr);
     *b = {};
   }
 }
 
 void prepare_tiled(const std::vector<mw34::tiled::View> &views) {
-  if (views.size() > 64)
+  if (views.size() > mw34::tiled::max_views)
     throw std::runtime_error("Too many tiled camera views");
   tiledOffsets.clear();
   tiledLengths.clear();
-  tiledSets.clear();
   VkDeviceSize total = 260;
   if (!views.empty()) {
     init_tiled();
-    total = 0;
+    mw34::tiled::ViewBudget budget{tiledRange, tiledListAlignment};
     for (const auto &v : views) {
       const auto checked = mw34::tiled::make_view(v.camera, v.projection, v.depth[0], v.depth[1],
                                                   v.extent[0], v.extent[1]);
       if (checked.extent != v.extent)
         throw std::runtime_error("Tiled view extent mismatch");
-      total = (total + tiledListAlignment - 1) / tiledListAlignment * tiledListAlignment;
       const auto length = mw34::tiled::bytes(v);
-      if (length > tiledRange || total > tiledRange - length)
+      const auto offset = budget.reserve(length);
+      if (!offset)
         throw std::runtime_error("Tiled view storage exceeds bounded capacity");
-      tiledOffsets.push_back(uint32_t(total / 4));
+      tiledOffsets.push_back(uint32_t(*offset / 4));
       tiledLengths.push_back(length);
-      total += length;
     }
+    total = budget.used;
   }
-  ensure(tiledLists, total,
-         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-             VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-         false);
+  // A driver may recycle a destroyed buffer handle. Its old descriptors are
+  // invalid even when the replacement gets the same handle, offset and range.
+  if (!tiledLists.buffer || tiledLists.size < total ||
+      (!views.empty() && (!tiledViews.buffer || tiledViews.size < tiledViewStride * views.size())))
+    tiledDescriptorInfo = {};
+  ensure_device_buffer(tiledLists, total,
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                       false);
   if (views.empty())
     return;
   ensure(tiledViews, tiledViewStride * views.size(), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, false);
   for (size_t i = 0; i < views.size(); ++i)
     std::memcpy(static_cast<char *>(tiledViews.mapped) + tiledViewStride * i, &views[i],
                 sizeof(views[i]));
-  if (tiledPool)
-    f.vkDestroyDescriptorPool(device, tiledPool, nullptr);
-  tiledPool = {};
   const unsigned n = unsigned(views.size());
-  const VkDescriptorPoolSize sizes[2]{{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, n * 2},
-                                      {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, n}};
-  VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-  pi.maxSets = n;
-  pi.poolSizeCount = 2;
-  pi.pPoolSizes = sizes;
-  check(f.vkCreateDescriptorPool(device, &pi, nullptr, &tiledPool), "tiled descriptor pool");
-  std::vector<VkDescriptorSetLayout> layouts(n, tiledSetLayout);
-  tiledSets.resize(n);
-  VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-  ai.descriptorPool = tiledPool;
-  ai.descriptorSetCount = n;
-  ai.pSetLayouts = layouts.data();
-  check(f.vkAllocateDescriptorSets(device, &ai, tiledSets.data()), "tiled descriptor sets");
   for (unsigned i = 0; i < n; ++i) {
     const VkDescriptorBufferInfo info[3]{
         {effectBuffer.buffer, 0, sizeof(mw34::effects::Uniform)},
         {tiledViews.buffer, tiledViewStride * i, sizeof(mw34::tiled::View)},
         {tiledLists.buffer, VkDeviceSize(tiledOffsets[i]) * 4, tiledLengths[i]}};
+    bool changed = false;
+    for (unsigned binding = 0; binding < 3; ++binding) {
+      const auto &prior = tiledDescriptorInfo[i][binding];
+      changed |= prior.buffer != info[binding].buffer || prior.offset != info[binding].offset ||
+                 prior.range != info[binding].range;
+    }
+    if (!changed)
+      continue;
     VkWriteDescriptorSet writes[3]{};
     for (unsigned b = 0; b < 3; ++b) {
       writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -150,6 +168,7 @@ void prepare_tiled(const std::vector<mw34::tiled::View> &views) {
       writes[b].pBufferInfo = &info[b];
     }
     f.vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
+    std::copy_n(info, 3, tiledDescriptorInfo[i].begin());
   }
 }
 void record_tiled(const std::vector<mw34::tiled::View> &views) {
@@ -163,11 +182,11 @@ void record_tiled(const std::vector<mw34::tiled::View> &views) {
   }
   VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
   barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_HOST_READ_BIT;
+  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
   barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   barrier.buffer = tiledLists.buffer;
   barrier.size = VK_WHOLE_SIZE;
   f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 0,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
                          nullptr, 1, &barrier, 0, nullptr);
 }

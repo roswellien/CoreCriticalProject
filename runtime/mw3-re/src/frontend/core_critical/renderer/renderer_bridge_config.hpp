@@ -21,6 +21,7 @@ struct RendererBridgeConfig {
   unsigned world_scale_percent{100};
   unsigned remaster_width{0};
   unsigned remaster_height{0};
+  unsigned draw_distance{800};
 
   // Quality / AA / AF
   std::string antialiasing{"off"};
@@ -36,6 +37,8 @@ struct RendererBridgeConfig {
   bool geometry_debug_normals{false};
   bool gpu_models{false};
   bool normal_maps_enabled{false};
+  // Transport is opt-in for internal qualification; no CLI/capability claim.
+  bool parallax_materials{false};
   bool prepared_cache{true};
 
   // Lighting / Sun
@@ -64,12 +67,14 @@ struct RendererBridgeConfig {
   std::string world_normal_manifest;
   std::vector<std::string> environment_authored_manifests,
       environment_world_manifests;
+  bool environment_packs_explicit{false};
   std::string native_material_sidecar;
   std::string native_material_asset_id;
   bool trace_native_bindings{false};
 
   // Surface Detail
   std::optional<double> detail_fixed_time{std::nullopt};
+  bool water_detail{false}, cloud_detail{false};
 
   // Temporal
   bool temporal_inputs{false};
@@ -86,7 +91,8 @@ struct RendererBridgeConfig {
   std::string sky_debug;
   std::string sun_shadow_audit;
 
-  static RendererBridgeConfig from_diagnostic_env() {
+  static RendererBridgeConfig from_diagnostic_env(bool include_local_lights = true,
+                                                   bool include_sun_shadows = true) {
     RendererBridgeConfig cfg;
     auto read_env_bool = [](const char *name, bool fallback) {
       const char *value = std::getenv(name);
@@ -99,19 +105,23 @@ struct RendererBridgeConfig {
       throw std::runtime_error(
           std::string("Invalid boolean environment value: ") + name);
     };
-    cfg.effect_lights = read_env_bool("MW34_EFFECT_LIGHTS", false);
-    cfg.mech_headlights = read_env_bool("MW34_MECH_HEADLIGHTS", false);
-    if (const char *path = std::getenv("MW34_STOCK_HEADLIGHTS"))
-      cfg.stock_headlights = path;
-    if (const char *path = std::getenv("MW34_HEADLIGHT_BINDINGS"))
-      cfg.headlight_bindings = path;
-    cfg.fixture_lights =
-        read_env_bool("MW34_FIXTURE_LIGHTS", cfg.effect_lights);
-    if (cfg.fixture_lights && !cfg.effect_lights)
-      throw std::runtime_error(
-          "MW34_FIXTURE_LIGHTS requires MW34_EFFECT_LIGHTS");
-    if (const char *path = std::getenv("MW34_EFFECT_LIGHT_CATALOG"))
-      cfg.effect_light_catalog = path;
+    if (include_local_lights) {
+      cfg.effect_lights = read_env_bool("MW34_EFFECT_LIGHTS", false);
+      cfg.mech_headlights = read_env_bool("MW34_MECH_HEADLIGHTS", false);
+      if (const char *path = std::getenv("MW34_STOCK_HEADLIGHTS"))
+        cfg.stock_headlights = path;
+      if (const char *path = std::getenv("MW34_HEADLIGHT_BINDINGS"))
+        cfg.headlight_bindings = path;
+      cfg.fixture_lights =
+          read_env_bool("MW34_FIXTURE_LIGHTS", cfg.effect_lights);
+      if (cfg.fixture_lights && !cfg.effect_lights)
+        throw std::runtime_error(
+            "MW34_FIXTURE_LIGHTS requires MW34_EFFECT_LIGHTS");
+      if (const char *path = std::getenv("MW34_EFFECT_LIGHT_CATALOG"))
+        cfg.effect_light_catalog = path;
+    }
+    if (include_sun_shadows)
+      cfg.sun_shadows = read_env_bool("MW34_SUN_SHADOWS", false);
     if (const char *path = std::getenv("MW34_NATIVE_MATERIALS"))
       cfg.native_material_sidecar = path;
     if (const char *id = std::getenv("MW34_NATIVE_MATERIAL_ID"))

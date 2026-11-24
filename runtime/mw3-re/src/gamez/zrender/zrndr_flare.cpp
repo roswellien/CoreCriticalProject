@@ -1,11 +1,13 @@
 #include "gamez/zrender/zrndr_flare.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_draw.h"
 #include "gamez/zrender/zrndr_draw.h"
 #include "gamez/zrender/zrndr_fog.h"
+#include "gamez/zvideo/zvid_ddd3d.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -85,19 +87,30 @@ void flare_quads(const float screen[3], float scale) {
   const float z = hardware() ? 0.99f : 10.0f;
   const float size = (right - left) * scale * 0.0625f;  // 0x005ce64c
   const zimg::TextureEntry* const* t = g_flares.textures;
-  auto draw_sprite = [](const float* p, const zimg::TextureEntry* tex, float sz, float a, int32_t c) {
+  int clipped = 0;
+  auto draw_sprite = [&](int slot, const float* p, const zimg::TextureEntry* tex,
+                          float sz, float a, int32_t c) {
+    const zvid::FlareDiagnosticScope diagnostic(slot, sz);
     if (flare_hooks().sprite) flare_hooks().sprite(p, tex, sz, a, c);
-    else zrndr::draw_sprite(p, tex, sz, a, c);
+    else if (zrndr::draw_sprite(p, tex, sz, a, c) == SpriteDrawResult::Clipped) ++clipped;
   };
   const float p0[3] = {screen[0], screen[1], z};
-  draw_sprite(p0, t[0], size, 0.5f, 0);
+  draw_sprite(0, p0, t[0], size, 0.5f, 0);
   const float p1[3] = {cx - dx * -0.5f, cy - dy * -0.5f, z};  // 0x005ce650
-  draw_sprite(p1, t[1], size, 0.5f, 0);
+  draw_sprite(1, p1, t[1], size, 0.5f, 0);
   const float p2[3] = {cx - dx * -0.1f, cy - dy * -0.1f, z};  // 0x005ce654
-  draw_sprite(p2, t[2], size * 0.5f, 0.5f, 0);
+  draw_sprite(2, p2, t[2], size * 0.5f, 0.5f, 0);
   // The last mirrors x through the centre but keeps y on the light's side.
   const float p3[3] = {cx - dx, dy + cy, z};
-  draw_sprite(p3, t[3], size * 1.5f, 0.5f, 0);  // 0x005ce658
+  draw_sprite(3, p3, t[3], size * 1.5f, 0.5f, 0);  // 0x005ce658
+  // A separate process-lifetime warning stays bounded even when an off-screen
+  // sun or a subpixel fade rejects the same sprites on every frame.
+  static bool logged_clipping = false;
+  if (clipped && !logged_clipping) {
+    logged_clipping = true;
+    std::fprintf(stderr, "[FLARE_CLIP] surviving_clip=%d/4 clipped=%d screen=[%g,%g] scale=%g\n",
+                 4 - clipped, clipped, screen[0], screen[1], scale);
+  }
 }
 
 // Mech3.exe 1.2 @ 0x00567d30. The x87's "below" is also true for NaN.

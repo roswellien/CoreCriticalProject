@@ -27,7 +27,7 @@ inline constexpr std::uint64_t world_normal_catalog_budget = 4096ULL * 1024 * 10
 inline constexpr std::uint64_t world_normal_page_file_limit = 16ULL * 1024 * 1024;
 inline constexpr std::uint64_t world_normal_lru_resident_limit = 512ULL * 1024 * 1024;
 inline constexpr std::uint64_t max_normal_stream_bytes = 256ULL * 1024 * 1024;
-inline constexpr std::size_t max_world_normal_pages = 256;
+inline constexpr std::size_t max_world_normal_pages = 512;
 inline constexpr std::size_t max_authored_catalog_pages = 16;
 inline constexpr std::size_t max_normal_batches = 256;
 inline constexpr std::size_t max_normal_images = 64;
@@ -515,32 +515,46 @@ class WorldNormalCache {
         page.loaded = true;
     }
 
-    int surface_normal_index(const SurfaceKey &key, bool enabled = true) {
+    int resolve_surface_normal(
+        const SurfaceKey &key, bool enabled,
+        std::uint64_t pixel_budget = world_normal_lru_resident_limit) {
         if (!enabled || !normal_maps_enabled)
             return -1;
-        const auto it = bindings.find(key);
-        if (it != bindings.end()) {
-            if (it->second >= 0)
-                require_image(it->second);
-            return it->second;
+        const auto existing_binding = bindings.find(key);
+        if (existing_binding != bindings.end()) {
+            if (existing_binding->second >= 0)
+                require_image(existing_binding->second, pixel_budget);
+            return existing_binding->second;
         }
-        const auto w_it = world_bindings.find(key);
-        if (w_it != world_bindings.end()) {
-            load_page(w_it->second);
-            const auto loaded_it = bindings.find(key);
-            if (loaded_it != bindings.end())
-                return loaded_it->second;
+        const auto world_binding = world_bindings.find(key);
+        if (world_binding != world_bindings.end()) {
+            load_page(world_binding->second, pixel_budget);
+            const auto loaded_binding = bindings.find(key);
+            if (loaded_binding != bindings.end())
+                return loaded_binding->second;
             return -1;
         }
         return -1;
     }
 
-    void require_image(int index) {
+    void preload_surface(
+        const SurfaceKey &key, bool enabled = true,
+        std::uint64_t pixel_budget = world_normal_lru_resident_limit) {
+        (void)resolve_surface_normal(key, enabled, pixel_budget);
+    }
+
+    int surface_normal_index(const SurfaceKey &key, bool enabled = true) {
+        return resolve_surface_normal(key, enabled);
+    }
+
+    void require_image(
+        int index,
+        std::uint64_t pixel_budget = world_normal_lru_resident_limit) {
         if (index < 0 || !normal_maps_enabled)
             return;
         const auto found = world_images.find(index);
         if (found != world_images.end())
-            load_page(found->second);
+            load_page(found->second, pixel_budget);
     }
 };
 

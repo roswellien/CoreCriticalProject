@@ -765,7 +765,69 @@ test("keeps the report archive inaccessible without a valid admin Access token",
         env: adminEnvironment,
     });
     assert.equal(tampered.status, 403);
-    assert.ok(!(await tampered.text()).includes("abcdef1234567890"));
+    const invalidTokenPage = await tampered.text();
+    assert.ok(!invalidTokenPage.includes("abcdef1234567890"));
+
+    const tamperedAgain = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": tamperedToken },
+        }),
+        env: { ...adminEnvironment, CRASH_REPORT_ADMIN_EMAIL: "other@example.com" },
+    });
+    assert.equal(tamperedAgain.status, tampered.status);
+    assert.equal(await tamperedAgain.text(), invalidTokenPage);
+});
+
+test("allows both configured archive admins and rejects a partial match", async () => {
+    const { privateKey, token } = await createAdminAccess();
+    const env = {
+        ...adminEnvironment,
+        CRASH_REPORT_ADMIN_EMAIL: " admin@example.com, SECOND@example.com, ",
+        CRASH_REPORT_DB: { prepare: () => ({ all: async () => ({ results: [] }) }) },
+    };
+
+    const response = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": token },
+        }),
+        env,
+    });
+    assert.equal(response.status, 200);
+
+    const secondToken = await makeAccessToken(privateKey, { email: "second@example.com" });
+    const secondResponse = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": secondToken },
+        }),
+        env,
+    });
+    assert.equal(secondResponse.status, 200);
+
+    const thirdToken = await makeAccessToken(privateKey, { email: "cond@example.com" });
+    const thirdResponse = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": thirdToken },
+        }),
+        env,
+    });
+    assert.equal(thirdResponse.status, 403);
+});
+
+test("rejects an archive admin allowlist containing only separators and whitespace", async () => {
+    const { token } = await createAdminAccess();
+    const env = {
+        ...adminEnvironment,
+        CRASH_REPORT_ADMIN_EMAIL: " , , ",
+        CRASH_REPORT_DB: { prepare: () => ({ all: async () => ({ results: [] }) }) },
+    };
+
+    const response = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": token },
+        }),
+        env,
+    });
+    assert.equal(response.status, 503);
 });
 
 test("renders archived reports and log lines only for the configured admin", async () => {
@@ -821,4 +883,252 @@ test("renders archived reports and log lines only for the configured admin", asy
     assert.ok(detailHtml.includes("Recent log excerpts"));
     assert.ok(detailHtml.includes("first line\nsecond line &lt;script&gt;"));
     assert.ok(!detailHtml.includes("<script>"));
+});
+
+test("accepts signed int32 Windows exit codes, camelCase settings/packs, and native_crash/native_run logs", async () => {
+    const calls = githubResponder();
+    const sentBodies = recordSentBodies();
+    const response = await onRequestPost({
+        request: crashRequest({
+            exit_code: -1073741819,
+            launcher_version: "1.0.53-preview",
+            runtime_version: "mw3-re-2026.11 (abcdef123456)",
+            runtime_source_commit: "abcdef1234567890abcdef1234567890abcdef12",
+            os: "Windows 11 23H2 (OS Build 10.0.22631.4317)",
+            failure_summary:
+                "HOST EXCEPTION c0000005 at C:\\Games\\Core Critical\\NativePreview\\bin\\mw3.exe +0x45678 (access 0 address 0000000000000018)",
+            settings: {
+                engineMode: "remaster",
+                width: 2560,
+                height: 1440,
+                windowMode: "fullscreen_windowed",
+                antiAliasing: "fxaa",
+                anisotropicFiltering: 16,
+                drawDistance: 2400,
+                fogDistance: 1600,
+                localCdAudio: true,
+                instantReplay: false,
+                performanceMonitor: true,
+                renderThread: true,
+            },
+            packs: [
+                {
+                    id: "com.mw3remaster.updated-mw3-mechs",
+                    version: "1.4.0",
+                    schemaVersion: 2,
+                    isEnabled: true,
+                    priority: 1,
+                },
+            ],
+            logs: {
+                launcher: "Startup: Checking game files...",
+                native_run:
+                    "mw3: crash details, if any, are written to C:\\Users\\Jane Doe\\AppData\\Local\\MW3Remaster\\mw3-re\\profiles\\native-preview\\crash.txt\nmw3: window 2560x1440 on Vulkan\nC:\\Users\\Jane Doe\\secret\\notes.txt",
+                native_crash:
+                    "HOST EXCEPTION c0000005 at C:\\Games\\Core Critical\\NativePreview\\bin\\mw3.exe +0x45678 (access 0 address 0000000000000018)\nmw3: crashed: exception 0xc0000005 at 00007FF612345678 module base 00007FF612300000 RVA 0x45678\nmw3: access violation: read (0) target 0x0000000000000018\nmw3: minidump: C:\\Users\\Jane Doe\\AppData\\Local\\MW3Remaster\\mw3-re\\profiles\\native-preview\\crash.dmp\n",
+            },
+        }),
+        env: environment,
+    });
+
+    assert.equal(response.status, 200);
+    assert.ok(calls.some((query) => query.includes("createIssue")));
+    assert.equal(archivedReports.length, 1);
+    const archived = JSON.parse(archivedReports[0][7]);
+    assert.equal(archived.exit_code, -1073741819);
+    assert.equal(archived.settings.Width, 2560);
+    assert.equal(archived.settings.Height, 1440);
+    assert.equal(archived.settings.WindowMode, "fullscreen_windowed");
+    assert.equal(archived.settings.RenderThread, true);
+    assert.deepEqual(archived.packs, [
+        {
+            id: "com.mw3remaster.updated-mw3-mechs",
+            version: "1.4.0",
+            schema_version: 2,
+            enabled: true,
+            priority: 1,
+        },
+    ]);
+    assert.ok(
+        archived.failure_summary.includes(
+            "<local-path>/mw3.exe +0x45678 (access 0 address 0000000000000018)",
+        ),
+    );
+    assert.ok(archived.logs.native_crash.includes("RVA 0x45678"));
+    assert.ok(
+        archived.logs.native_crash.includes("access violation: read (0) target 0x0000000000000018"),
+    );
+    assert.ok(archived.logs.native_crash.includes("mw3: minidump: <local-path>"));
+    assert.ok(
+        archived.logs.native_run.includes(
+            "mw3: crash details, if any, are written to <local-path>",
+        ),
+    );
+    assert.ok(!JSON.stringify(archived).includes("Jane Doe"));
+    assert.ok(!JSON.stringify(archived).includes("Core Critical\\NativePreview"));
+
+    assert.equal(sentBodies.length, 1);
+    const crashHeadingIndex = sentBodies[0].indexOf("#### Native crash details (crash.txt)");
+    const runHeadingIndex = sentBodies[0].indexOf("#### Native run log (mw3.log)");
+    const launcherHeadingIndex = sentBodies[0].indexOf("#### Launcher log");
+    assert.ok(crashHeadingIndex >= 0 && runHeadingIndex > crashHeadingIndex);
+    assert.ok(launcherHeadingIndex > runHeadingIndex);
+});
+
+test("groups relocated native faults but distinguishes different relative addresses", async () => {
+    githubResponder();
+    const failures = [
+        "mw3: crashed: exception 0xc0000005 at 00007FF700005234 module base 00007FF700000000 RVA 0x5234 (access violation: write (1) target 0000000000000000)",
+        "mw3: crashed: exception 0xc0000005 at 00007FF600005234 module base 00007FF600000000 RVA 0x5234 (access violation: write (1) target 0000000000000010)",
+        "mw3: crashed: exception 0xc0000005 at 00007FF600005678 module base 00007FF600000000 RVA 0x5678 (access violation: write (1) target 0000000000000010)",
+    ];
+    for (const failure_summary of failures) {
+        const response = await onRequestPost({
+            request: crashRequest({ failure_summary }),
+            env: environment,
+        });
+        assert.equal(response.status, 200);
+    }
+    const fingerprints = archivedReports.map((report) => report[6]);
+    assert.ok(fingerprints[0]);
+    assert.equal(fingerprints[0], fingerprints[1]);
+    assert.notEqual(fingerprints[0], fingerprints[2]);
+});
+
+test("keeps 'No specific failure was recorded.' ungrouped", async () => {
+    const calls = githubResponder();
+    const response = await onRequestPost({
+        request: crashRequest({
+            exit_code: -1073741819,
+            failure_summary: "No specific failure was recorded.",
+        }),
+        env: environment,
+    });
+    assert.equal(response.status, 200);
+    assert.ok(!calls.some((query) => query.includes("matched: search")));
+    assert.ok(calls.some((query) => query.includes("createIssue")));
+    assert.equal(archivedReports.length, 1);
+    assert.equal(archivedReports[0][6], null);
+});
+
+test("renders structured semantic admin detail sections for rich and sparse reports with escaped HTML", async () => {
+    const { token } = await createAdminAccess();
+    const richReport = {
+        format_version: 1,
+        report_id: "report-rich-5678",
+        created_utc: "2026-11-23T12:00:00Z",
+        launcher_version: "1.0.53-preview",
+        runtime_version: "mw3-re-2026.11 (abcdef123456)",
+        mode: "remaster",
+        exit_code: -1073741819,
+        os: "Windows 11 23H2 (OS Build 10.0.22631.4317)",
+        architecture: "X64",
+        dotnet_runtime: ".NET 8.0.10",
+        failure_summary:
+            "mw3: crashed: exception 0xc0000005 RVA 0x45678 <img src=x onerror=alert(1)>",
+        hardware: {
+            Processors: [
+                {
+                    Manufacturer: "AMD",
+                    Model: "Ryzen 7 7800X3D",
+                    PhysicalCores: 8,
+                    LogicalProcessors: 16,
+                },
+            ],
+            Memory: {
+                TotalBytes: 34359738368,
+                Modules: [
+                    {
+                        CapacityBytes: 17179869184,
+                        Type: "DDR5",
+                        ConfiguredSpeedMhz: 6000,
+                    },
+                ],
+            },
+            GraphicsAdapters: [
+                {
+                    Name: "NVIDIA GeForce RTX 4080",
+                    DedicatedVideoMemoryBytes: 17179869184,
+                    SharedSystemMemoryBytes: 17179869184,
+                    DriverVersion: "32.0.15.6094",
+                    DriverDate: "2026-08-14T00:00:00Z",
+                },
+            ],
+        },
+        settings: {
+            Width: 2560,
+            Height: 1440,
+            WindowMode: "fullscreen_windowed",
+            AntiAliasing: "fxaa",
+            AnisotropicFiltering: 16,
+            DrawDistance: 2400,
+            RenderThread: true,
+        },
+        packs: [
+            {
+                id: "com.mw3remaster.updated-mw3-mechs",
+                version: "1.4.0",
+                schema_version: 2,
+                enabled: true,
+                priority: 1,
+            },
+        ],
+        logs: {
+            launcher: "Launcher log line",
+            native_run: "mw3: run log line",
+            native_crash: "mw3: crashed: exception 0xc0000005 RVA 0x45678",
+        },
+    };
+    const richRow = {
+        report_id: richReport.report_id,
+        created_utc: richReport.created_utc,
+        stored_utc: "2026-11-23T12:00:05Z",
+        mode: richReport.mode,
+        exit_code: richReport.exit_code,
+        failure_summary: richReport.failure_summary,
+        crash_fingerprint: "cafebabe1234",
+        report_json: JSON.stringify(richReport),
+    };
+    const adminDb = {
+        prepare() {
+            return {
+                all: async () => ({ results: [richRow] }),
+                bind: () => ({ first: async () => richRow }),
+            };
+        },
+    };
+
+    const detail = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports?id=report-rich-5678", {
+            headers: { "cf-access-jwt-assertion": token },
+        }),
+        env: { ...adminEnvironment, CRASH_REPORT_DB: adminDb },
+    });
+    assert.equal(detail.status, 200);
+    const html = await detail.text();
+    assert.ok(html.includes("-1073741819 (0xC0000005)"));
+    assert.ok(html.includes("1.0.53-preview"));
+    assert.ok(html.includes("mw3-re-2026.11 (abcdef123456)"));
+    assert.ok(html.includes("Windows 11 23H2 (OS Build 10.0.22631.4317)"));
+    assert.ok(html.includes("Ryzen 7 7800X3D"));
+    assert.ok(html.includes("8 physical cores, 16 logical processors"));
+    assert.ok(html.includes("32 GiB total"));
+    assert.ok(html.includes("16 GiB · DDR5 @ 6000 MHz"));
+    assert.ok(html.includes("NVIDIA GeForce RTX 4080"));
+    assert.ok(html.includes("VRAM: 16 GiB"));
+    assert.ok(html.includes("2560 × 1440"));
+    assert.ok(html.includes("Render thread"));
+    assert.ok(html.includes("com.mw3remaster.updated-mw3-mechs"));
+    assert.ok(html.includes("Enabled"));
+    assert.ok(
+        html.indexOf("Native crash details (crash.txt)") < html.indexOf("Native run log (mw3.log)"),
+    );
+    assert.ok(
+        html.includes(
+            '<details class="pane" open><summary>Native crash details (crash.txt)</summary>',
+        ),
+    );
+    assert.ok(html.includes("Raw report metadata (JSON)"));
+    assert.ok(!html.includes("<img src=x"));
+    assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt;"));
 });

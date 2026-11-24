@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "frontend/sdl/sdl_fit.h"
+#include "frontend/sdl/controller_profile.h"
+#include "frontend/sdl/input_bindings.h"
 #include "gamez/zinput/zinput.h"
 #include "platform/platform.h"
 
@@ -41,6 +43,7 @@ std::string axis_slots_text(const int slots[8], int sdl_axes);
 // Which attached device a start opens, with no joystick= in mw3.cfg: a
 // gamepad, else one with 2 axes and 4 buttons or more, else any.
 int joystick_rank(bool gamepad, int axes, int buttons);
+bool joystick_selection_disabled(const std::string& value);
 
 class SdlInput : public platform::Input {
  public:
@@ -56,7 +59,11 @@ class SdlInput : public platform::Input {
   // W54 (ours): mw3.cfg's joystick= (a part of the device's name, any case:
   // that one, else the best ranked) and joystick_axes= (the axis map, else
   // the device's HID descriptor, then kKnownSticks, then SDL's packed order).
+  bool joystick_disabled = false;  // mw3.cfg's joystick=none disables device selection
   std::string joystick_want, joystick_axes;
+  // Optional launcher-exported CC_MW3_CONTROLLER_V1 profile. A matching SDL
+  // identity takes precedence over mw3.cfg's name/best-ranked selection.
+  std::string controller_profile_path;
   // The axis usages of the open stick's HID descriptor, empty when it cannot
   // be read (tests replace it; read_hid_usages by default).
   std::function<std::vector<uint16_t>(SDL_Joystick*)> hid_usages;
@@ -70,21 +77,35 @@ class SdlInput : public platform::Input {
   int32_t joystick_set_range(uint32_t ofs, int32_t min, int32_t max) override;
   int32_t joystick_get_range(uint32_t ofs, int32_t* min, int32_t* max) override;
   int32_t joystick_set_deadzone(uint32_t ofs, uint32_t dz) override;
+  uint32_t command_state(int32_t command) override;
+  bool set_input_bindings(const std::string& path, size_t* count_out = nullptr);
+  void begin_poll(bool text_entry, bool commands_enabled) override;
+  bool key_suppressed(uint32_t scan) const override;
+  bool mouse_suppressed(int32_t id) const override;
+  bool extended_command_pressed(int32_t command) const override;
+  bool mouse_input_down(int32_t mouse_id) const override;
+  void set_headlight_wheel(uint32_t mask) override;
+  bool command_has_extended_binding(int32_t command) const override;
 
   // The window an exclusive mouse captures (relative mouse mode, as
-  // DirectInput's DISCL_EXCLUSIVE hides and holds the cursor). Captured, a
-  // mickey is a count of the mouse's own, as DirectInput's were at any screen
-  // size (FIX (A); SDL's relative motion is raw, without the system's speed).
-  // Not captured, the mickeys a window pixel of motion makes (the game's 640
-  // over the window's width).
+  // DirectInput's DISCL_EXCLUSIVE hides and holds the cursor). Held or not,
+  // a mickey is a frame pixel's worth of the system pointer's motion (FIX
+  // (A), motion_scale: the system's speed, the window's size now), as the
+  // original moves under DDrawCompat on Windows 11 at any screen size.
+  // `mickey_scale` only without a window (tests).
   SDL_Window* window = nullptr;
   float mickey_scale = 1.0f;
-  // With any_resolution, the frame's shape in the window (sdl_fit.h): an
-  // uncaptured mouse's scale is then a frame pixel a mickey, through the
-  // pillarboxed rect.
+  std::function<void(int*, int*)> window_size;  // tests: the window's size (unset: SDL's)
+  float motion_scale() const;  // the mickeys a window pixel (point on the Mac) of motion makes
+  // The frame's shape in the window (sdl_fit.h): with any_resolution the
+  // scale is through the pillarboxed rect, else the window's whole width.
+  // When shape->menu_layout_active is true outside a mission, effective_shape()
+  // enforces the uniform centered 4:3 menu layout while keeping the native
+  // canvas client size.
   const FrameShape* shape = nullptr;
+  FrameShape effective_shape() const;
   bool captured() const { return captured_; }
-  bool fitted() const { return shape && shape->fit; }
+  bool fitted() const { return shape && (shape->fit || (shape->menu_layout_active && !(in_mission && in_mission()))); }
 
   // FIX (A), ours (docs/input.md, the mouse in a window): in a window the
   // mouse is the player's to take out. The menus never capture: the cursor
@@ -97,12 +118,42 @@ class SdlInput : public platform::Input {
   std::function<bool()> windowed;    // shown, not fullscreen (unset: fullscreen's rules)
   std::function<bool()> in_mission;  // the mission's own state (not a menu or the pause)
   std::function<void(float, float)> absolute_cursor;  // window point -> zInput's mouse
+  // Ours (docs/editor.md, The pointer): the game editor up in a mission. The
+  // mouse is let go, in a window and fullscreen, the system's cursor shows
+  // and zInput's mouse is put where it is, so the panel's lit row, the net
+  // editor's picks and the dialogs all point where the player sees.
+  std::function<bool()> pointer_free;
+  bool pointer_is_free() const { return free_; }  // as of the last refresh
+  // FIX (A), playtest W4 (sdl_focus.h; docs/input.md, The focus is checked):
+  // the window's real focus, asked at every refresh, so a window that came up
+  // without it does not hold a mouse that gives no motion, and takes the mouse
+  // when the focus is really its own. Unset (tests, a hidden window): SDL's
+  // focus events alone, the window taken as focused from the start.
+  std::function<bool()> has_focus;
+  // SDL made to look at the focus again (sdl_focus.h, window_focus_nudge); true when asked.
+  std::function<bool()> nudge_focus;
+  // The focus as the system and SDL have it, for the log's lines.
+  std::function<std::string()> focus_report;
+  std::function<uint64_t()> now_ns;  // tests: the clock (unset: SDL's)
+  // Held with no motion seen since it was taken, a mouse button press lets
+  // the mouse go and takes it again, the game none the wiser: what cures a
+  // stuck one by hand (the quit box, Alt+Tab). A key press does so only after
+  // kQuietNs with no motion (a player holding a key at a mission's start,
+  // the mouse not yet touched, sees no flicker). At most kHeals times a
+  // capture, kHealGapNs apart, and never once motion has come.
+  static constexpr int kHeals = 8;
+  static constexpr int kNudges = 10;  // nudge_focus asked this many times running, a second apart
+  static constexpr uint64_t kHealGapNs = 1000000000ull;
+  static constexpr uint64_t kQuietNs = 3000000000ull;  // "no motion in 3 s", said once a capture
+  int heals() const { return heals_total_; }
+  bool focused() const { return focused_; }
   bool released() const { return released_; }
   bool in_window() const { return win_; }  // as of the last refresh
   void refresh();  // the capture as the window, the state and the release say
 
   // From the message pump: every SDL input event passes through here.
   void on_event(const SDL_Event& e);
+  void discard_loading_input();  // Clear transients without changing capture or acquisition.
 
   // The keys held now, by DIK code (kept from the events, for tools).
   bool key_down(uint8_t dik) const { return held_[dik]; }
@@ -119,6 +170,11 @@ class SdlInput : public platform::Input {
   void capture(bool on);
   int axis_count() const;
   bool open_joystick();
+  std::string controller_key(SDL_JoystickID id, SDL_Gamepad* pad) const;
+  void poll_controller();
+  void reset_extended_input();
+  void swallow_held_buttons(size_t first);
+  void route_wheel(bool eligible);
   void map_axes();
   void neutral(platform::JoyState* out) const;
   double pad_axis(int i) const;
@@ -128,15 +184,24 @@ class SdlInput : public platform::Input {
   uint32_t coop_[3] = {};
   bool focused_ = true;
   bool captured_ = false;  // capture(true) asked: the relative mouse
-  bool muted() const { return released_ && win_ && mission_; }
+  bool muted() const { return released_ && win_ && mission_ && !free_; }
+  void focus_gained(uint64_t ns);
+  void focus_lost();
+  void check_focus();
+  void heal(const char* by, bool key);
+  int nudges_ = 0;
+  uint64_t clock() const;
+  uint64_t captured_ns_ = 0, healed_ns_ = 0, nudged_ns_ = 0;
+  bool motion_seen_ = false, quiet_said_ = false;
+  int heals_ = 0, heals_total_ = 0;
   void release_chord(SDL_Scancode s, bool down);
-  bool win_ = false, mission_ = false, absolute_ = false;
+  bool win_ = false, mission_ = false, absolute_ = false, free_ = false;
   bool released_ = false;
   bool cursor_hidden_ = false;
   bool cursor_moved_ = false;  // the cursor moved since the menus took it (else zInput's place stays)
   SDL_Keymod chord_held_ = SDL_KMOD_NONE;
   bool chord_armed_ = false, chord_spoiled_ = false;
-  bool swallow_[4] = {};  // the recapturing click's buttons, kept from the game until let go
+  bool swallow_[5] = {};  // the recapturing click's buttons, kept from the game until let go
   // Ours (playtest, Owen): a held mission's mouse comes back with the focus,
   // no click needed; the click that brought it back (within kActivationNs of
   // the focus) is still not the game's (input.md section 8).
@@ -152,8 +217,14 @@ class SdlInput : public platform::Input {
   bool held_[256] = {};
   float dx_ = 0, dy_ = 0, dz_ = 0;
   float raw_dx_ = 0, raw_dy_ = 0;
-  uint8_t buttons_[4] = {};
-  uint8_t latched_[4] = {};  // a press not yet read (FIX (A): a click inside one frame)
+  uint8_t buttons_[5] = {};
+  uint8_t latched_[5] = {};  // a press not yet read (FIX (A): a click inside one frame)
+  InputBindingConfig input_config_;
+  InputBindingState input_state_;
+  bool input_poll_eligible_ = false;
+  uint32_t headlight_wheel_mask_ = 0, bound_wheel_mask_ = 0;
+  std::array<double, 2> wheel_pending_{};
+  float wheel_frac_up_ = 0, wheel_frac_down_ = 0;
   SDL_Joystick* joy_ = nullptr;
   // FIX (A): a gamepad SDL knows (an XInput pad, a PlayStation one) is read
   // as DirectInput showed an XInput pad on Windows: X, Y the left stick, Z the
@@ -170,6 +241,8 @@ class SdlInput : public platform::Input {
   bool pad_was_ = false;    // it was opened as a gamepad
   platform::JoyState last_;  // the last live read
   bool tried_ = false;      // zInput asked for a joystick
+  std::unique_ptr<ControllerProfileConfig> controller_config_;
+  ControllerState controller_state_;
 };
 
 // The default hid_usages: the device's HID descriptor through SDL_hid, only

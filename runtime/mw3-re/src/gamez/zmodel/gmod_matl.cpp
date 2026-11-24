@@ -1,11 +1,13 @@
 #include "gamez/zmodel/gmod_matl.h"
 
 #include <cstdlib>
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 
 #include "gamez/zerror/zerr.h"
 #include "gamez/zmodel/gmod_const.h"
+#include "gamez/zclass/cls_zbd.h"
 #include "gamez/zreader/zreader.h"
 #include "gamez/zvideo/zvid_format.h"
 
@@ -66,6 +68,7 @@ Material* new_material(const Material& m) {
   }
   const int32_t index = t.free_head;
   Material& e = t.at(index);
+  e.fixture_revision.reset();
   const int16_t prev = e.prev, next = e.next;
   t.free_head = next;
   if (prev >= 0) t.at(prev).next = next;
@@ -148,6 +151,7 @@ Material& default_material() {
 // Mech3.exe 1.2 @ 0x00536a70. The exe keeps flag bits 3..7 of whatever the
 // material held (callers pass an uninitialised one on the stack); 0 here.
 void material_init(Material& m) {
+  m.fixture_revision.reset();
   m.cycle = nullptr;
   m.texture = nullptr;
   m.alpha = 0xff;
@@ -168,6 +172,7 @@ int material_set_soil(Material* m, uint32_t soil) {
 // Mech3.exe 1.2 @ 0x005375d0
 int cycle_create(Material& m, int32_t count) {
   if (&m == &default_material()) return 0;
+  m.fixture_revision.reset();
   m.flags |= 5;
   if (m.cycle && count <= static_cast<int32_t>(m.cycle->texture_count)) return 0;
   // The exe reallocs the cycle and drops its old texture list. It sets every
@@ -191,6 +196,7 @@ int cycle_add(Material& m, zimg::TextureEntry* t) {
   if (!(m.flags & 4)) return 0;
   Cycle* c = m.cycle;
   if (!c->textures || c->added >= c->texture_count) return 0;
+  m.fixture_revision.reset();
   c->textures[c->added++] = t;
   return 1;
 }
@@ -232,6 +238,7 @@ Material* material_copy(const Material& m) { return new_material(m); }
 // itself is left as it is.
 void material_free(Material* m) {
   if (!m) return;
+  m->fixture_revision.reset();
   MaterialTable& t = g_table;
   if ((m->flags & 4) && m->cycle) {
     std::free(m->cycle->textures);
@@ -278,21 +285,40 @@ int32_t materials_purge() {
 
 // Mech3.exe 1.2 @ 0x005363d0. FIX (A): owned blocks (MaterialTable); the
 // capacity is rounded up to whole blocks.
-int read_materials(std::FILE* f) {
+int read_materials(std::FILE* f, zcls::ZbdReadContext* proof) {
   MaterialTable& t = g_table;
   int32_t size, count, free_head, used_head;
+  if (proof) proof->span(f, 16);
   if (!read4(f, &size) || !read4(f, &count) || !read4(f, &free_head) || !read4(f, &used_head)) {
+    if (proof) proof->require(false, "material table header read failed");
     zerr::report(0x200, kFile, 0, "Error reading GameZ Material buffer data.");
     return -1;
+  }
+  if (proof) {
+    proof->require(size >= 0 && size <= 32000 && count >= 0 && count <= size &&
+        free_head >= -1 && free_head < size && used_head >= -1 && used_head < size,
+        "invalid source material table counts/heads");
+    if (!proof->failed) proof->material_count = size;
+    if (proof->strict()) proof->span(f, std::uint64_t(size) * 0x2c);
   }
   t.capacity = size, t.count = count, t.free_head = free_head, t.used_head = used_head;
   if (size == 0) return 0;
   const int blocks = (size + kBlock - 1) / kBlock;
+  if (proof && proof->strict()) proof->allocate(std::uint64_t(blocks) * kBlock * sizeof(Material));
+  // FIX (A), the owned blocks' other half: the exe reads over the blocks it has (0x0063fbc8, never freed here),
+  // so its last-made material (0x0063fbd0) stays the same slot, now with the new file's contents. The blocks
+  // here are new ones, and the pointer went on into the freed ones (a use after free in material_add, when
+  // a table was read over another without the models' free between: the tests, not a mission's load).
+  const int32_t last = t.index_of(t.last);
   t.blocks.clear();
   for (int b = 0; b < blocks; ++b) t.blocks.emplace_back(new Material[kBlock]{});
+  t.last = last >= 0 && last < blocks * kBlock ? &t.at(last) : nullptr;
   for (int i = 0; i < size; ++i) {
     uint8_t raw[0x2c];
-    if (std::fread(raw, 0x2c, 1, f) != 1) return -1;
+    if (std::fread(raw, 0x2c, 1, f) != 1) {
+      if (proof) proof->require(false, "material table record read failed");
+      return -1;
+    }
     Material& m = t.at(i);
     m.alpha = raw[0], m.flags = raw[1], m.rgb = at<uint16_t>(raw, 2);
     m.r = at<float>(raw, 4), m.g = at<float>(raw, 8), m.b = at<float>(raw, 0xc);
@@ -301,6 +327,21 @@ int read_materials(std::FILE* f) {
     m.soil = at<uint32_t>(raw, 0x20);
     m.file_cycle = at<uint32_t>(raw, 0x24);
     m.prev = at<int16_t>(raw, 0x28), m.next = at<int16_t>(raw, 0x2a);
+  }
+  if (proof && proof->strict()) {
+    proof->allocate(std::uint64_t(size));
+    std::vector<std::uint8_t> seen(std::size_t(size), 0);
+    std::int32_t used_count = 0;
+    for (const auto head : {used_head, free_head})
+      for (auto index = head; index != -1; index = t.at(index).next) {
+        proof->require(index >= 0 && index < size && !seen[std::size_t(index)],
+                        "source material list index/cycle is invalid");
+        seen[std::size_t(index)] = 1;
+        if (head == used_head) ++used_count;
+      }
+    proof->require(used_count == count &&
+        std::find(seen.begin(), seen.end(), 0) == seen.end(),
+        "source material used/free lists do not cover the declared table");
   }
   // The rest of a partial last block goes on the free list (never in the data).
   for (int i = blocks * kBlock - 1; i >= size; --i) {
@@ -315,25 +356,42 @@ int read_materials(std::FILE* f) {
   for (int i = t.used_head; i != -1; i = t.at(i).next) {
     Material& m = t.at(i);
     if (m.flags & 1) {
+      if (proof) proof->require(m.texture_index < std::uint32_t(proof->texture_count),
+                                "material texture index outside source table");
       m.texture = zimg::texture_at(static_cast<int32_t>(m.texture_index));
     } else {
       const float rgb[3] = {m.r, m.g, m.b};
       m.rgb = zvid::pack_rgb(rgb);
     }
     if (m.flags & 4) {
+      if (proof) { proof->span(f, 0x1c); proof->allocate(sizeof(Cycle)); }
       auto* c = static_cast<Cycle*>(std::calloc(1, sizeof(Cycle)));
+      if (proof) proof->own_malloc(c);
       uint8_t raw[0x1c];
-      if (std::fread(raw, 0x1c, 1, f) != 1) return -1;
+      if (std::fread(raw, 0x1c, 1, f) != 1) {
+        if (proof) proof->require(false, "material cycle header read failed");
+        return -1;
+      }
       c->looping = at<uint32_t>(raw, 0), c->frame = at<uint32_t>(raw, 4);
       c->index = at<float>(raw, 8), c->speed = at<float>(raw, 0xc);
       c->texture_count = at<uint32_t>(raw, 0x10), c->added = at<uint32_t>(raw, 0x14);
+      if (proof) {
+        proof->require(c->texture_count <= 1048576 && c->added <= c->texture_count,
+                        "invalid material cycle count");
+        proof->span(f, std::uint64_t(c->texture_count) * 4);
+        proof->allocate(std::uint64_t(c->texture_count) * sizeof(void*));
+      }
       c->textures = static_cast<zimg::TextureEntry**>(std::malloc(c->texture_count * sizeof(void*)));
+      if (proof && (c->texture_count || c->textures)) proof->own_malloc(c->textures);
       for (uint32_t k = 0; k < c->texture_count; ++k) {
         int32_t idx;
         if (!read4(f, &idx)) {
+          if (proof) proof->require(false, "material cycle texture list read failed");
           zerr::report(0x200, kFile, 0x3c0, "Error reading GameZ Material cycle texture data.");
           return -1;
         }
+        if (proof) proof->require(idx >= -1 && idx < proof->texture_count,
+                                  "material cycle texture index outside source table");
         c->textures[k] = zimg::texture_at(idx);
       }
       m.cycle = c;

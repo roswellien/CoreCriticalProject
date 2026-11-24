@@ -1,7 +1,11 @@
+#include "frontend/core_critical/native_staging_budget.hpp"
 #include "frontend/core_critical/render_worker.hpp"
 
 #include <atomic>
+#include <thread>
+#include <chrono>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -10,6 +14,40 @@ using cc_mw3_re::RenderWorker;
 void require(bool condition, const char *message) {
     if (!condition)
         throw std::runtime_error(message);
+}
+
+void native_staging_bounds() {
+    using cc_mw3_re::staging::fits;
+    constexpr auto limit = cc_mw3_re::staging::native_budget_bytes;
+    constexpr auto largest = std::numeric_limits<std::size_t>::max();
+    struct Case {
+        std::size_t current, pending, maximum;
+        bool allowed;
+    };
+    const Case cases[] = {
+        {0, 0, limit, true},
+        {limit, 0, limit, true},
+        {limit + 1, 0, limit, false},
+        {1, limit - 1, limit, true},
+        {2, limit - 1, limit, false},
+        {0, limit, limit, true},
+        {0, limit + 1, limit, false},
+        {largest, 0, limit, false},
+        {1, largest, limit, false},
+        {largest, largest, largest, false},
+        {largest, 0, largest, true},
+        {0, largest, largest, true},
+        {1, largest, largest, false},
+        {0, 0, 0, true},
+        {1, 0, 0, false},
+        {344029601, 0, limit, true},
+        {128u * 1024u * 1024u + 1, 0, limit, true},
+    };
+    for (const auto &test : cases)
+        require(fits(test.current, test.pending, test.maximum) == test.allowed,
+                "Native local-light staging admission boundary changed");
+    require(limit == std::size_t{1024} * 1024 * 1024 && fits(344029601, 0),
+            "Native default staging allowance does not admit the measured enhanced packet");
 }
 
 void ordered_ownership() {
@@ -143,13 +181,40 @@ void failure_cancels_barrier() {
 }
 } // namespace
 
+// The presenter keeps one frame in flight by waiting for the previous present's submission number.
+// wait_for_job must return only after that job (and every earlier one) has run, and must not wait
+// for jobs submitted after it.
+void numbered_wait() {
+    RenderWorker worker(8, 1024);
+    std::atomic<bool> release_first{false};
+    std::atomic<int> finished{0};
+    const auto first = worker.post_numbered([&] {
+        while (!release_first.load()) std::this_thread::yield();
+        finished.fetch_add(1);
+    });
+    const auto second = worker.post_numbered([&] { finished.fetch_add(1); });
+    require(second == first + 1, "Submission numbers are not consecutive");
+    std::thread releaser([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        release_first.store(true);
+    });
+    worker.wait_for_job(first);
+    require(finished.load() >= 1, "wait_for_job returned before its job ran");
+    releaser.join();
+    worker.wait_for_job(second);
+    require(finished.load() == 2, "wait_for_job did not cover the later job");
+    worker.wait_for_job(first); // an already-finished job returns at once
+}
+
 int main() {
     try {
+        native_staging_bounds();
         ordered_ownership();
         bounded_queue(2, 10);  // Byte budget binds first.
         bounded_queue(1, 100); // Job limit binds even when bytes would fit.
         floating_point();
         failure_cancels_barrier();
+        numbered_wait();
         std::puts("Render worker ownership, bounds, FP and failure checks passed");
         return 0;
     } catch (const std::exception &error) {

@@ -75,6 +75,11 @@ struct Lighting {
   const float (*normals)[3] = nullptr;  // 0x00747ca8
   float (*rec)[8] = nullptr;       // 0x007481a8  work records: +0 darkness, +4 point, +8 fog/saturated
   float stale[3] = {};             // 0x00545720's [ebp-0x1c]: see shade_polygon
+  // Ours: how many records rec holds (the draw's 64, clip2d's work). A light
+  // past them keeps its intensities in rec_extra; FIX (bug): the exe indexes
+  // the 64 records by light, up to 128, into the shadow sets (fixes.md).
+  int32_t rec_slots = 64;
+  float rec_extra[LightList::kMax][2] = {};
 };
 Lighting& lighting();
 
@@ -97,6 +102,11 @@ void use_device_light_output();
 // --- The light list (per frame) ---
 // ECX nodes, EDX data, stack count: the active nodes (flag 4) in order, at most 128.
 void build_light_list(zcls::Node** nodes, zcls::Light** data, int32_t count);  // 0x00543b60
+// Retire borrowed cache references before their owner frees storage. These
+// compare pointer identities only; cached sources need not be readable.
+void clear_light_list();
+void retire_world_lights(const zcls::World* world);
+void retire_light(const zcls::Node* node, const zcls::Light* data);
 // ECX world node, EDX 1 for no lights.
 int32_t world_build_lights(zcls::Node* world, int32_t none);  // 0x004f2f30 (cls_world.c)
 // ECX world node: light_update on each of its lights.

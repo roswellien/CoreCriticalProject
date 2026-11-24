@@ -85,6 +85,17 @@ if (args.Length == 1 && args[0] == "--runtime-layout-only")
     NativeRuntimeLayoutChecks.Run();
     return;
 }
+if (args.Length == 1 && args[0] == "--mw3-re-contract-only")
+{
+    NativeRuntimeLayoutChecks.RunMw3ReStageA();
+    return;
+}
+if (args.Length > 0 && args[0] == "--mw3-re-stage-plan")
+{
+    if (args.Length != 5) throw new ArgumentException("Stage planning requires payload, game, data and profile inputs.");
+    NativeRuntimeLayoutChecks.RunMw3ReStagePlan(args[1], args[2], args[3], args[4]);
+    return;
+}
 if (args.Length == 1 && args[0] == "--content-only")
 {
     ChassisPackChecks.Run();
@@ -120,7 +131,12 @@ if (args.Length == 2 && args[0] == "--preview-controller")
 
 if (args.Length == 1 && args[0] == "--controls-only")
 {
-    ControlProfileChecks.Run(); return;
+    ControlProfileChecks.Run();
+    NativeControlChecks.Run();
+    var tempRoot = Directory.CreateTempSubdirectory("MW3ControlsUi-");
+    try { GraphicsSetupUiChecks.RunControlsUi(tempRoot.FullName); }
+    finally { tempRoot.Delete(recursive: true); }
+    return;
 }
 if (args.Length == 3 && args[0] == "--preview-controls")
 {
@@ -398,6 +414,15 @@ GameValidatorChecks.Run();
 OriginalSupportChecks.Run();
 PlayerRegistryChecks.Run();
 ControlProfileChecks.Run();
+NativeControlChecks.Run();
+var tempUi = Directory.CreateTempSubdirectory("MW3LauncherUi-");
+try
+{
+    var tempHeadlights = tempUi.CreateSubdirectory("headlights");
+    var tempControls = tempUi.CreateSubdirectory("controls");
+    GraphicsSetupUiChecks.RunControlsAndHeadlights(tempHeadlights.FullName, tempControls.FullName);
+}
+finally { tempUi.Delete(recursive: true); }
 ControllerChecks.Run();
 JoystickSelectionChecks.Run();
 SaveBackupChecks.Run();

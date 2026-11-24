@@ -1,5 +1,5 @@
 ; Core Critical installer. Branding follows the launcher's charcoal/amber art.
-; The full private playtest bundles the precompiled native runtime; the player
+; The full private playtest bundles the MW3-RE native runtime; the player
 ; supplies original game data through the first-run setup flow.
 ; See docs/public-release-readiness.md before assembling any release payload.
 
@@ -26,8 +26,15 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={sd}\Games\Core Critical\Launcher
+#ifdef NativePreviewUpgradeOnly
+UsePreviousAppDir=no
+DisableDirPage=yes
+Uninstallable=no
+CreateUninstallRegKey=no
+#else
 UsePreviousAppDir=yes
 DisableDirPage=no
+#endif
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=no
 AllowNoIcons=yes
@@ -59,8 +66,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
 WelcomeLabel1=Set up Core Critical
-#ifdef PrecompiledRuntimeIncluded
-WelcomeLabel2=Install the Core Critical Launcher and native MechWarrior 3 runtime.%n%nAfter installation, select your original game files and choose your display and graphics settings.%n%nStart with stock game content, then enable optional packs whenever you want.
+#ifdef NativePreviewIncluded
+WelcomeLabel2=Install the Core Critical Launcher and MW3-RE runtime.%n%nAfter installation, select your original game files and choose your display and graphics settings.%n%nStart with stock game content, then enable optional packs whenever you want.
 #else
 WelcomeLabel2=Install or update the Core Critical Launcher.%n%nYour selected game runtime and saved preferences are preserved. Game updates and optional content packs are managed in the launcher.
 #endif
@@ -75,25 +82,40 @@ Name: "addtosteam"; Description: "Add Core Critical Launcher to my Steam library
 ; Publish self-contained and run stage_media_tools.ps1 first (see setup handoff).
 ; The optional Preparation payload contains tools and metadata, not original
 ; game files or a precompiled translated game module. Clean Windows remains a gate.
-Source: "{#PublishDirectory}\*"; Excludes: "Runtime\*,user\*,hostfxr.dll,Tools\Unshield\unshield.exe,Tools\Unshield\zlib1.dll,Tools\Unshield\LICENSE-unshield.txt,Tools\Unshield\LICENSE-zlib.txt,Tools\Unshield\provenance.json,Tools\Unshield\LOCAL-DEVELOPMENT.txt"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-#ifdef PrecompiledRuntimeIncluded
-Source: "{#PublishDirectory}\Runtime\*"; DestDir: "{app}\Runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
-#endif
+Source: "{#PublishDirectory}\*"; Excludes: "Runtime\*,user\*,hostfxr.dll,Tools\Unshield\unshield.exe,Tools\Unshield\zlib1.dll,Tools\Unshield\LICENSE-unshield.txt,Tools\Unshield\LICENSE-zlib.txt,Tools\Unshield\provenance.json,Tools\Unshield\LOCAL-DEVELOPMENT.txt,NativePreview\*,Planner\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Required explicit entries make missing runtime/extractor staging a compile error.
 Source: "{#PublishDirectory}\hostfxr.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PublishDirectory}\Tools\Unshield\unshield.exe"; DestDir: "{app}\Tools\Unshield"; Flags: ignoreversion
 Source: "{#PublishDirectory}\Tools\Unshield\LICENSE-unshield.txt"; DestDir: "{app}\Tools\Unshield"; Flags: ignoreversion
 Source: "{#PublishDirectory}\Tools\Unshield\LICENSE-zlib.txt"; DestDir: "{app}\Tools\Unshield"; Flags: ignoreversion
 Source: "{#PublishDirectory}\Tools\Unshield\provenance.json"; DestDir: "{app}\Tools\Unshield"; Flags: ignoreversion
-#ifdef PrecompiledRuntimeIncluded
-Source: "launcher-precompiled-installation.json"; DestDir: "{app}"; DestName: "launcher-installation.json"; Flags: ignoreversion
-#else
+#ifndef NativePreviewIncluded
 ; A launcher-only upgrade preserves the installed native-runtime delivery marker.
 Source: "launcher-installation.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
 #endif
 ; Default asset and font directories
 Source: "Assets\*"; Excludes: "Installer\*"; DestDir: "{app}\Assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+#ifdef NativePreviewUpgradeOnly
+; Keep the existing delivery marker and write the descriptor after its pinned files.
+Source: "{#PublishDirectory}\NativePreview\*"; Excludes: "runtime.json"; DestDir: "{app}\NativePreview"; Flags: ignoreversion recursesubdirs; Check: HasBundledMw3Re
+Source: "{#PublishDirectory}\NativePreview\runtime.json"; DestDir: "{app}\NativePreview"; Flags: ignoreversion; Check: HasBundledMw3Re
+#elif defined(NativePreviewIncluded)
+; MW3-RE native runtime
+Source: "{#PublishDirectory}\NativePreview\*"; DestDir: "{app}\NativePreview"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PublishDirectory}\NativePreview\runtime.json"; DestDir: "{app}\NativePreview"; Flags: ignoreversion
+Source: "launcher-mw3re-installation.json"; DestDir: "{app}"; DestName: "launcher-installation.json"; Flags: ignoreversion
+#endif
+
+; The launcher update also repairs the existing installation's planner.
+Source: "{#PublishDirectory}\Planner\mw3_re_launch.py"; DestDir: "{app}\Planner"; Flags: ignoreversion
+Source: "{#PublishDirectory}\Planner\prepared_skin_packs.py"; DestDir: "{app}\Planner"; Flags: ignoreversion
+Source: "{#PublishDirectory}\Planner\prepared_mech_packs.py"; DestDir: "{app}\Planner"; Flags: ignoreversion
+Source: "{#PublishDirectory}\Planner\content_capabilities.py"; DestDir: "{app}\Planner"; Flags: ignoreversion
+Source: "{#PublishDirectory}\Planner\native_assets.py"; DestDir: "{app}\Planner"; Flags: ignoreversion
+Source: "{#PublishDirectory}\Planner\legacy_content_capabilities.json"; DestDir: "{app}\Planner"; Flags: ignoreversion
+
+#ifndef NativePreviewUpgradeOnly
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
@@ -108,8 +130,12 @@ Type: files; Name: "{app}\MW3RemasterLauncher.deps.json"
 Type: files; Name: "{app}\MW3RemasterLauncher.runtimeconfig.json"
 Type: files; Name: "{autodesktop}\Core Critical.lnk"
 Type: files; Name: "{autoprograms}\Core Critical\Core Critical.lnk"
-#ifdef PrecompiledRuntimeIncluded
-; Retire only the old installer-owned compilation trigger and archive.
+#ifdef NativePreviewIncluded
+; MW3-RE replaces the old precompiled Remaster runtime, which must not stay installed
+; or launchable after an upgrade; the installer-owned Runtime folder is removed.
+Type: filesandordirs; Name: "{app}\Runtime"
+Type: filesandordirs; Name: "{app}\NativePreview"
+Type: filesandordirs; Name: "{app}\Planner"
 Type: files; Name: "{app}\Preparation\initial.mw3update"
 Type: files; Name: "{app}\Preparation\initial.zip"
 #endif
@@ -117,7 +143,24 @@ Type: files; Name: "{app}\Preparation\initial.zip"
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--setup-game"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
+#endif
+
 [Code]
+#ifdef NativePreviewUpgradeOnly
+function HasBundledMw3Re: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\NativePreview\runtime.json'));
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  if not WizardSilent or (ExpandConstant('{param:DIR|}') = '') or
+     not FileExists(ExpandConstant('{app}\launcher-installation.json')) or
+     not FileExists(ExpandConstant('{app}\{#MyAppExeName}')) then
+    Result := 'Apply this upgrade from an existing Core Critical installation.';
+end;
+#else
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
@@ -127,3 +170,4 @@ begin
         '--add-steam --silent', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
         MsgBox('The Steam shortcut could not be added. Exit Steam completely, then open Core Critical and use Settings & Steam > Add to Steam Library. Your launcher installation is ready.', mbInformation, MB_OK);
 end;
+#endif

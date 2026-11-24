@@ -113,6 +113,9 @@ namespace {
 // The MMX rows: four words at a time, each field scaled in its own word
 // (PMULLW keeps the low 16 bits); a count's last count % 4 pixels are left.
 void mmx_row(uint16_t* row, int32_t count, uint16_t rm, uint16_t gm, uint16_t bm) {
+  // An empty or inverted span tints nothing. Returning here keeps that explicit instead of
+  // relying on the unsigned wrap of a negative count failing the inside() check below.
+  if (count <= 0) return;
   const FinishConstants& k = g_k;
   const uint32_t quads = static_cast<uint32_t>(count) >> 2;
   if (!inside(row, static_cast<int32_t>(quads > 0x10000000u ? 0x7fffffff : quads * 4))) return;
@@ -142,11 +145,11 @@ void tint_row_565_mmx(uint16_t* row, int32_t count) { mmx_row(row, count, 0xf800
 uint32_t finish() {
   const TintState& s = g_tint;
   if (!s.pending) return 0;
-  observe_framebuffer_write(g_target.base, "tint");
   FinishConstants& k = g_k;
   const FinishTarget& t = g_target;
   if (g_machine.mmx) k.row = g_machine.format == 5 ? 2 : 3;
   else k.row = g_machine.format == 5 ? 0 : 1;
+  if (g_machine.format == 5) observe_framebuffer_write(t.base, "RGB555 target");
   const zvid::ChannelMasks& m = zvid::channel_masks();
   const auto in = static_cast<uint32_t>(crt::msvc_ftol(static_cast<float>(s.alpha) * 32.0f));
   uint32_t red = ((m.r & s.colour) * in) >> 5;
@@ -170,11 +173,48 @@ uint32_t finish() {
   uint16_t* row = t.base + (top * t.pitch_px + left);
   const int32_t count = right - left;
   for (int32_t y = top; y < bottom; ++y) {
+    uint16_t* const row_start = row;
     switch (k.row) {
       case 0: tint_row_555(row, count); break;
       case 1: tint_row_565(row, count); break;
       case 2: tint_row_555_mmx(row, count); break;
       default: tint_row_565_mmx(row, count); break;
+    }
+    if (g_machine.format != 5 && t.base && t.width > 0 && t.height > 0 && t.pitch > 0) {
+      int64_t written = 0;
+      if (k.row >= 2) {
+        // The MMX rows write nothing for an empty or inverted span (see mmx_row), so report
+        // nothing rather than letting a negative count wrap into the quads clamp.
+        const bool span_has_pixels = count > 0;
+        if (span_has_pixels) {
+          const uint32_t quads = static_cast<uint32_t>(count) >> 2;
+          const int32_t needed =
+              static_cast<int32_t>(quads > 0x10000000u ? 0x7fffffff : quads * 4);
+          if (inside(row_start, needed)) written = needed;
+        }
+      } else if ((count >> 1) >= 0) {
+        const int64_t requested = (static_cast<int64_t>(count >> 1) + 1) * 2;
+        const int64_t available = room(row_start);
+        if (available > 0) written = requested < available ? requested : available;
+      }
+      int64_t remaining = written;
+      uint16_t* run = row_start;
+      while (remaining > 0) {
+        const int64_t offset = run - t.base;
+        if (offset < 0 || t.pitch_px <= 0) break;
+        const int64_t row_index = offset / t.pitch_px;
+        const int64_t col_index = offset % t.pitch_px;
+        if (row_index >= t.height) break;
+        const int64_t step = t.pitch_px - col_index < remaining ? t.pitch_px - col_index : remaining;
+        if (col_index < t.width) {
+          const int64_t visible = t.width - col_index < step ? t.width - col_index : step;
+          if (visible > 0)
+            observe_resolved_region(run, static_cast<uint32_t>(visible), 1,
+                                    static_cast<uint32_t>(t.pitch), "tint");
+        }
+        run += step;
+        remaining -= step;
+      }
     }
     ret = static_cast<uint32_t>(t.pitch_px);
     row += t.pitch_px;

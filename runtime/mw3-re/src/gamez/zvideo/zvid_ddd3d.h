@@ -20,6 +20,93 @@ namespace zvid {
 
 using TLVertex = platform::TLVertex;  // D3DTLVERTEX, FVF 0x1c4
 
+// Labels only the synchronous flare sprite call. Deferred queues copy the value.
+class FlareDiagnosticScope {
+ public:
+  FlareDiagnosticScope(int32_t slot, float half_size_pixels);
+  ~FlareDiagnosticScope();
+  FlareDiagnosticScope(const FlareDiagnosticScope&) = delete;
+  FlareDiagnosticScope& operator=(const FlareDiagnosticScope&) = delete;
+ private:
+  platform::FlareSpriteDiagnostic previous_;
+};
+
+// A caller labels one world invocation. An untyped nested walk cannot inherit it.
+class ProducerPurposeScope {
+ public:
+  explicit ProducerPurposeScope(platform::ProducerPurpose purpose);
+  ~ProducerPurposeScope() noexcept;
+  ProducerPurposeScope(const ProducerPurposeScope&) = delete;
+  ProducerPurposeScope& operator=(const ProducerPurposeScope&) = delete;
+ private:
+  platform::ProducerPurpose previous_;
+  uint64_t epoch_;
+};
+
+// Binds the current camera emission to synchronous native model submissions.
+// TL draws use the same value through dispatch_immediate; retained model draws
+// need an explicit binding because they bypass that dispatch path.
+class ProducerBindingScope {
+ public:
+  explicit ProducerBindingScope(platform::Render3D* receiver);
+  ProducerBindingScope(platform::Render3D* receiver,
+                       const platform::ProducerView& view);
+  ~ProducerBindingScope() noexcept;
+  ProducerBindingScope(const ProducerBindingScope&) = delete;
+  ProducerBindingScope& operator=(const ProducerBindingScope&) = delete;
+ private:
+  platform::Render3D* receiver_;
+  platform::ProducerViewRestoreToken token_{};
+};
+
+cc::geometry::Submission submit_prepared_geometry_for_current_view(
+    platform::Render3D* receiver, const platform::ModelDrawContext& context,
+    const cc::geometry::Fog& fog);
+cc::geometry::Submission submit_model_geometry_for_current_view(
+    platform::Render3D* receiver,
+    std::shared_ptr<const cc::geometry::Resource> source,
+    const platform::ModelDrawContext& context,
+    const std::vector<cc::geometry::Material>& materials,
+    const cc::geometry::Fog& fog);
+
+// Lives around the whole camera walk; emission ends before pop/flush/callback.
+class ProducerWorldScope {
+ public:
+  explicit ProducerWorldScope(bool force_original = false);
+  ~ProducerWorldScope() noexcept;
+  void begin_emission();
+  void end_emission() noexcept;
+  ProducerWorldScope(const ProducerWorldScope&) = delete;
+  ProducerWorldScope& operator=(const ProducerWorldScope&) = delete;
+ private:
+  platform::ProducerView previous_{};
+  platform::ProducerPurpose previous_request_;
+  platform::ProducerPurpose purpose_;
+  uint64_t epoch_, generation_ = 0;
+};
+
+void set_producer_canvas_rect(int32_t x, int32_t y, int32_t width, int32_t height, bool available = true) noexcept;
+void set_producer_camera_rect(int32_t x, int32_t y, int32_t width, int32_t height, bool available = true) noexcept;
+platform::ProducerView capture_producer_view();
+struct ProducerViewStateForTest {
+  platform::ProducerView view{};
+  platform::MissionIdentity mission{};
+  platform::ProducerRect canvas{};
+  platform::ProducerRect camera_rect{};
+  bool canvas_available = false;
+  bool camera_rect_available = false;
+};
+ProducerViewStateForTest capture_producer_view_state_for_test();
+// Test support only: restore the producer view record and the canvas/camera
+// metadata captured with it. Production code must use the scoped producer APIs.
+void restore_producer_view_for_test(const ProducerViewStateForTest& state) noexcept;
+void producer_mission_changed(const platform::MissionIdentity& identity) noexcept;
+void reset_producer_transport() noexcept;
+void abandon_producer_transport() noexcept;
+// Passive attached-owner invalidation; never calls back into Render3D. A detached
+// receiver must not invalidate the current producer's queue or revive its latch.
+void invalidate_producer_transport(platform::Render3D* owner, bool failed) noexcept;
+
 // The texture record 0x0057b130 makes (0x18 bytes in the original).
 // FIX (A): the system and video surfaces (+0x00, +0x04) and the
 // IDirect3DTexture2 (+0x08) become one Render3D handle.

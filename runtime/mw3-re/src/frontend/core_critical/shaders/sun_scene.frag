@@ -1,7 +1,10 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 // Direct3D 6 fixed-function pixel stage for one texture stage: colour/alpha operation and arguments,
 // flat or Gouraud colour, perspective or affine texture coordinates, specular add, vertex fog (specular
 // alpha) and alpha test. Unmodelled states are refused on the host before a draw reaches this shader.
+#include "radial_visibility.glsl"
+layout(location=11) in vec4 radialEye;
 layout(location=0) in vec2 uvPerspective;
 layout(location=1) noperspective in vec2 uvAffine;
 layout(location=2) in vec4 colorSmooth;
@@ -12,6 +15,7 @@ layout(location=6) in vec3 worldNormal;
 layout(location=7) in vec3 worldPosition;
 layout(location=8) in vec3 shadowPosition;
 layout(location=9) noperspective in vec2 screenPos;
+layout(location=10) in vec4 fogFactors;
 layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 normal0; vec4 normal1; vec4 normal2;
  vec4 direction; vec4 sunColor; vec4 ambient;
@@ -23,9 +27,10 @@ layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 detail; vec4 detailMotion;
  vec4 weather; vec4 weatherFog;
  vec4 emissionParams; vec4 emissionRegions[32];
- vec4 geometryFog0;
- vec4 geometryFog1;
+ vec4 geometryFog0; vec4 geometryFog1;
  uvec4 tiledLights;
+ vec4 pomParams; vec4 pomUV; vec4 pomAtlas;
+ uvec4 pomPolicy;
 } sun;
 #ifdef MW34_EFFECT_LIGHTING
 struct EffectLight {vec4 start;vec4 end;vec4 color;};
@@ -70,13 +75,22 @@ vec3 effectIllumination(vec3 p,vec3 n){
  vec3 illumination=vec3(0);
  if (sun.tiledLights.w == 0u)
    return illumination;
- uvec2 tile = uvec2(gl_FragCoord.xy) / 16u;
- if (any(greaterThanEqual(tile, sun.tiledLights.xy)))
-   return illumination;
- uint base = sun.tiledLights.z + (tile.y * sun.tiledLights.x + tile.x) * 65u;
- uint count = min(tiles.words[base], 64u);
+ bool allLights = sun.tiledLights.w == 2u;
+ uint base = 0u;
+ uint count = uint(clamp(effects.params.x, 0.0, 64.0));
+ if (!allLights) {
+   uvec2 tile = uvec2(gl_FragCoord.xy) / 16u;
+   if (any(greaterThanEqual(tile, sun.tiledLights.xy)))
+     return illumination;
+   base = sun.tiledLights.z + (tile.y * sun.tiledLights.x + tile.x) * 65u;
+   count = min(tiles.words[base], 64u);
+ }
  for (uint at = 0u; at < count; ++at) {
-   int i = int(tiles.words[base + 1u + at]);
+   int i;
+   if (allLights)
+     i = int(at);
+   else
+     i = int(tiles.words[base + 1u + at]);
    if (i < 0 || i >= min(int(effects.params.x), 64))
      continue;
    EffectLight l = effects.lights[i];
@@ -113,12 +127,16 @@ vec3 effectIllumination(vec3 p,vec3 n){
 layout(set=0,binding=0) uniform sampler2D image;
 layout(set=1,binding=1) uniform sampler2DShadow shadowMap;
 layout(set=2,binding=0) uniform sampler2D normalMap;
+layout(set=2,binding=1) uniform sampler2D heightMap;
 layout(location=0) out vec4 result;
-// mode.x flags: 1 flat, 2 perspective, 4 textured, 8 specular, 16 fog, 32 alpha test.
-// mode.y colour op | arg1 << 8 | arg2 << 16; mode.z alpha op | arg1 << 8 | arg2 << 16;
+// mode.x flags: 1 flat, 2 perspective, 4 textured, 8 specular, 16 fog, 32 alpha test,
+// 128 damage tint; 512 selects the textured alpha source for tinted model draws.
+// Normally mode.y/z hold colour/alpha operations. With tint, mode.y packs RGB8
+// and mode.z stores the float weight; bit 512 retains textured alpha selection.
 // mode.w alpha function | reference << 8.
 layout(push_constant) uniform Push { vec4 target; vec4 fogColor; vec4 factor; uvec4 mode; } draw;
 vec4 diffuse, specular, texel;
+#include "parallax_material.glsl"
 vec4 argument(uint a) {
     vec4 v;
     uint s = a & 15u;
@@ -266,15 +284,27 @@ vec3 surfaceBrdf(vec3 albedo, vec3 N, vec3 V, vec3 L, vec3 parameters) {
 
     return diffuse + spec;
 }
-void main() {
+void shadeScene() {
     uint flags = draw.mode.x;
+    bool tinted = (flags & 128u) != 0u;
+    uint colorOperation = tinted ? (4u | (2u << 8)) : draw.mode.y;
+    uint alphaOperation = tinted ? ((flags & 512u) != 0u ? (2u | (2u << 8)) : 2u)
+                                 : draw.mode.z;
     diffuse = (flags & 1u) != 0u ? colorFlat : colorSmooth;
     specular = (flags & 1u) != 0u ? specularFlat : specularSmooth;
+    if (fogFactors.w > 1.5) {
+        specular.a = clamp(fogFactors.x, 0.0, 1.0);
+    } else if (fogFactors.w > 0.5) {
+        // Clamp after interpolation, independently of flat colour/texture modes.
+        // Keep specular alpha in range before texture arguments, weather and fog use it.
+        vec3 amounts = clamp(fogFactors.xyz, 0.0, 1.0);
+        specular.a = (1.0 - amounts.x * amounts.y) * (1.0 - amounts.z);
+    }
     vec2 uv = (flags & 2u) != 0u ? uvPerspective : uvAffine;
     texel = (flags & 4u) != 0u ? texture(image, uv) : vec4(1.0);
     if(sun.skyBlend.w>2.99){ // Path debug: green per-frame TL terrain, blue GPU-kept world, magenta mech, yellow sky/haze-only.
         float k=sun.skyBlend.w-3.0;vec3 c=k<0.5?vec3(0.1,0.85,0.1):k<1.5?vec3(0.1,0.3,1.0):k<2.5?vec3(1.0,0.1,1.0):vec3(1.0,0.9,0.1);
-        float lum=dot(operation(draw.mode.y).rgb,vec3(0.333));result=vec4(c*(0.55+0.6*lum),1.0);return;
+        float lum=dot(operation(colorOperation).rgb,vec3(0.333));result=vec4(c*(0.55+0.6*lum),1.0);return;
     }
     if(sun.skyBlend.w>0.5&&sun.skyBlend.w<1.99){ // Sky debug: R dome, B horizon band, G haze-only, L lit; brightness = draw index.
         float k=fract(sun.skyBlend.w);
@@ -284,7 +314,7 @@ void main() {
         // Sealed maps have no natural sky. This also avoids evaluating
         // the valid interior horizon interval [0,0] through smoothstep.
         if(sun.skyTint.w>4.5&&sun.skyTint.w<5.5){
-            result=vec4(0.0,0.0,0.0,operation(draw.mode.z).a);return;
+            result=vec4(0.0,0.0,0.0,operation(alphaOperation).a);return;
         }
         vec3 v=skyRay();float side=skySide(v);vec3 haze=hazeColor(v),c=haze;
         if(sun.extra.w<2.5){
@@ -303,7 +333,7 @@ void main() {
                     base=mix(vec3(0.58,0.74,0.91),vec3(0.18,0.43,0.72),height);
                 base*=sun.skyTint.rgb*sun.skyGrade.x*mix(sun.skyGrade.y,1.0,pow(side,1.5));
             }else{
-                vec3 legacy=operation(draw.mode.y).rgb*sun.skyTint.rgb*sun.skyGrade.x*mix(sun.skyGrade.y,1.0,pow(side,1.5));
+                vec3 legacy=operation(colorOperation).rgb*sun.skyTint.rgb*sun.skyGrade.x*mix(sun.skyGrade.y,1.0,pow(side,1.5));
                 if(sun.detail.x>2.5)legacy*=cloudRelief(uv,v);
                 base=legacy;
             }
@@ -315,12 +345,12 @@ void main() {
             c=mix(haze,base,f);
             if(sun.skyBlend.w>1.99&&sun.skyBlend.w<2.99)c=vec3(clamp(v.y*2.0,0.0,1.0),side,f); // Debug 2: R view height, G sun side, B dome blend.
         }else if(sun.skyBlend.w>1.99&&sun.skyBlend.w<2.99)c=vec3(clamp(v.y*2.0,0.0,1.0),side,0.0);
-        result=vec4(skyDither(min(c,vec3(1.0))),operation(draw.mode.z).a);return;
+        result=vec4(skyDither(min(c,vec3(1.0))),operation(alphaOperation).a);return;
     }
     vec3 N;
     if(dot(worldNormal,worldNormal)<=1e-20){
         N=normalize(cross(dFdx(worldPosition),dFdy(worldPosition)));
-        vec3 eye=vec3(sun.normal0.w,sun.normal1.w,sun.normal2.w);
+        vec3 eye=sun.pomParams.x>0.5?sun.surfaceEye.xyz:vec3(sun.normal0.w,sun.normal1.w,sun.normal2.w);
         if(dot(N,eye-worldPosition)<0.0)N=-N;
     }else{
         N=normalize(worldNormal);
@@ -340,6 +370,19 @@ void main() {
     // A rank-one chart can have a nonzero tangent but no invertible UV basis.
     // Compare relative area so normal mapping remains valid at small footprints.
     bool validBasis = uvScale > 0.0 && uvArea * uvArea > 1e-12 * uvScale;
+    bool displacedMaterial = sun.pomParams.x > 0.5 && sun.pomParams.z != 0.0;
+    if (displacedMaterial) {
+        uv = pomTrace(uv, N, dp1, dp2, duv1, duv2);
+        vec4 displacedTexel = (flags & 4u) != 0u ? textureGrad(image, uv, duv1, duv2) : vec4(1.0);
+        // Relief shades the receiver only; alpha coverage keeps its original
+        // sampling even for an unexpected non-opaque uploaded alpha channel.
+        displacedTexel.a = texel.a;
+        texel = displacedTexel;
+    }
+    if (sun.pomParams.w > 0.5) {
+        result = pomEncodeUV(uv);
+        return;
+    }
     vec3 n;
     // Scale-independent: near the camera the per-pixel tangents are tiny but still valid
     // (an absolute 1e-10 cut-off dropped the normal map on nearby ground, leaving a flat band).
@@ -350,7 +393,9 @@ void main() {
     }else if (validBasis && det > 1e-30) {
         float invmax = inversesqrt(det);
         // BWNRM2 encodes a neutral tangent as (128,128,255), not (127.5,127.5,255).
-        vec3 map = max((texture(normalMap, uv).xyz * 255.0 - 128.0) / 127.0, vec3(-1.0));
+        vec3 normalTexel = displacedMaterial ? textureGrad(normalMap, uv, duv1, duv2).xyz
+                                            : texture(normalMap, uv).xyz;
+        vec3 map = max((normalTexel * 255.0 - 128.0) / 127.0, vec3(-1.0));
         float strength = max(sun.extra.y, 0.0);
         vec3 perturbation = vec3(map.xy * strength, map.z);
         vec3 n_tan = dot(perturbation,perturbation)>1e-8 ? normalize(perturbation) : vec3(0,0,1);
@@ -371,27 +416,28 @@ void main() {
     // Original blended sprites retain their emission. Local lights use true
     // world positions, distinct from inverse-transpose normal coordinates.
     vec3 localLight=sun.detailMotion.w<0.0?vec3(0):effectIllumination(shadowPosition,n);
-    vec3 rgb = operation(draw.mode.y).rgb*(sun.extra.w>3.5?
+    vec3 rgb = operation(colorOperation).rgb*(sun.extra.w>3.5?
         (sun.detailMotion.w<0.0?vec3(1):vec3(sun.detailMotion.w)+localLight):illumination+localLight);
     float fixtureEmissive = max(draw.fogColor.w - 1.0, 0.0);
     if(fixtureEmissive > 0.0){
-        vec3 baseCol = operation(draw.mode.y).rgb;
+        vec3 baseCol = operation(colorOperation).rgb;
         float lum = dot(texel.rgb, vec3(0.299, 0.587, 0.114));
         float bulb = smoothstep(0.55, 0.9, lum);
         if(sun.emissionParams.x>0.5){
-            float mask=0.0;vec2 t=fract(uv);vec2 feather=max(fwidth(t),vec2(0.0005));
+            float mask=0.0;vec2 t=fract(uv);
+            vec2 feather=max(displacedMaterial ? abs(duv1)+abs(duv2) : fwidth(t),vec2(0.0005));
             for(int i=0;i<min(int(sun.emissionParams.x),32);++i){vec4 r=sun.emissionRegions[i];vec2 low=smoothstep(r.xy-feather,r.xy+feather,t);vec2 high=1.0-smoothstep(r.zw-feather,r.zw+feather,t);mask=max(mask,low.x*low.y*high.x*high.y);}
             bulb=mask*smoothstep(0.20,0.70,max(texel.r,max(texel.g,texel.b)));
         }
         rgb += texel.rgb * (fixtureEmissive * bulb);
     }
 #else
-    vec3 rgb = operation(draw.mode.y).rgb*(sun.extra.w>3.5?vec3(1.0):illumination);
+    vec3 rgb = operation(colorOperation).rgb*(sun.extra.w>3.5?vec3(1.0):illumination);
 #endif
     if(sun.surfaceParameters.w>.5 && sun.surfaceEye.w>.5){
         vec3 toEye=sun.surfaceEye.xyz-worldPosition;
         if(dot(toEye,toEye)>1e-12){
-            vec3 albedo=operation(draw.mode.y).rgb;
+            vec3 albedo=operation(colorOperation).rgb;
             vec3 response=surfaceBrdf(clamp(albedo,vec3(0),vec3(1)),n,
                 normalize(toEye),sun.direction.xyz,sun.surfaceParameters.xyz);
             // Replace only directional Lambert lighting. Preserve ambient,
@@ -442,7 +488,12 @@ void main() {
         rgb=mix(rgb,dustColor+sun.sunColor.rgb*dustScatter,clamp(sun.weather.z*(1.0-specular.a),0.0,0.72));
     }
     if(sun.ambient.w>0.5)rgb=n*0.5+0.5;
-    float alpha = operation(draw.mode.z).a;
+    if (tinted) {
+        vec3 tint = vec3(draw.mode.y & 255u, (draw.mode.y >> 8) & 255u,
+                         (draw.mode.y >> 16) & 255u) / 255.0;
+        rgb = mix(rgb, tint, uintBitsToFloat(draw.mode.z));
+    }
+    float alpha = operation(alphaOperation).a;
     if ((flags & 8u) != 0u) rgb = min(rgb + specular.rgb, 1.0);
     // Lift SDR shadows without moving black or the highlight endpoint.
     if (sun.weatherFog.z > 0.0 && sun.extra.w <= 1.5 &&
@@ -462,4 +513,10 @@ void main() {
         if (!pass) discard;
     }
     result = vec4(rgb, alpha);
+}
+
+void main() {
+    vec4 visibility = radialVisibility(radialEye, ivec2(gl_FragCoord.xy), draw.mode.x);
+    shadeScene();
+    result.rgb = mix(visibility.rgb, result.rgb, visibility.a);
 }

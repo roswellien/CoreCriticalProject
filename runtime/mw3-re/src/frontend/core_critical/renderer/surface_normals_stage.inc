@@ -3,11 +3,13 @@
 
 struct SurfaceNormalState {
   bool loaded{false};
+  bool preload_pending{false};
   std::uint64_t peak_decoded_bytes{};
   mw34::materials::WorldNormalCache cache{};
   std::string native_material_bytes;
   std::uint64_t expected_mesh_uv_hash{};
   std::uint32_t expected_polygon_count{};
+  mw34::detail::Bindings detail_bindings;
   std::shared_ptr<mw34::materials::SurfaceMaterialPack> native_material_pack;
   std::set<std::pair<std::uint64_t, std::uint64_t>> traced_native;
   std::set<std::tuple<std::uintptr_t, std::uintptr_t, std::uint64_t>>
@@ -19,9 +21,14 @@ struct NativeBindingContext {
   const zmod::Model *model{};
   ::platform::MaterialDrawContext material{};
   std::uint64_t epoch{};
+  bool height_eligible{};
   bool material_active{};
   bool fingerprint_computed{};
   std::optional<std::uint64_t> fingerprint;
+  // Borrowed source scope ends at end_model_draw; deferred fixture receipts
+  // retain only the completed values, never these native pointers.
+  ::platform::prepared::Matrix fixture_world{};
+  bool fixture_eligible{};
 } native_context_;
 std::uint64_t binding_rejected_mismatch_{};
 std::uint64_t native_fingerprint_evaluations_{};
@@ -31,6 +38,8 @@ struct NativeDeferredBinding final : ::platform::DeferredMaterialBinding {
   std::uint64_t epoch{}, version{};
   int texture{-1}, normal_index{-1};
   std::array<float, 4> surface_parameters{};
+  std::shared_ptr<const mw34::materials::HeightBinding> height_binding;
+  std::shared_ptr<const mw34::native_fixtures::Observation> fixture;
 };
 const std::shared_ptr<const int> material_binding_owner_ =
     std::make_shared<const int>(0);
@@ -49,6 +58,13 @@ bool reject_surface_binding(const char *reason) {
 
 bool surface_normals_enabled() const { return lighting_.normals; }
 
+mw34::detail::Settings surface_detail_settings() const {
+  mw34::detail::Settings settings;
+  settings.water = bridge_config_.water_detail;
+  settings.clouds = bridge_config_.cloud_detail;
+  return settings;
+}
+
 void surface_normals_load() {
   if (surface_normals_.loaded) {
     return;
@@ -56,6 +72,7 @@ void surface_normals_load() {
   // Transactional build: fill a local cache first and publish only on success,
   // so an exception leaves no partial entries behind for a subsequent attempt.
   mw34::materials::WorldNormalCache cache{};
+  mw34::detail::Bindings detail_bindings;
   std::vector<std::string> authored_paths;
   if (!bridge_config_.surface_normal_catalog.empty())
     authored_paths.push_back(bridge_config_.surface_normal_catalog);
@@ -109,6 +126,54 @@ void surface_normals_load() {
     }
   }
   surface_normals_load_world(cache);
+  auto load_detail_role = [&](::platform::prepared::EnvironmentRole source_role,
+                              unsigned detail_role, bool active) {
+    if (!active)
+      return;
+    std::string path;
+    if (environment_) {
+      for (const auto &[region, resources] : environment_->resources) {
+        const auto found = resources.find(source_role);
+        if (found != resources.end()) {
+          path = found->second;
+          break;
+        }
+      }
+    }
+    if (path.empty())
+      throw std::runtime_error("Enabled surface detail has no admitted role catalog");
+    const auto digest = environment_->detail_digests.find(source_role);
+    if (digest == environment_->detail_digests.end() ||
+        ::platform::integrity::sha256_file(std::filesystem::u8path(path)) !=
+            digest->second)
+      throw std::runtime_error(
+          "Surface detail catalog changed after environment admission");
+    const auto size = std::filesystem::file_size(std::filesystem::u8path(path));
+    if (size < 12 || size > 16ULL * 1024 * 1024)
+      throw std::runtime_error("Surface detail catalog size is outside its limit");
+    std::ifstream input(std::filesystem::u8path(path), std::ios::binary);
+    if (!input)
+      throw std::runtime_error("Admitted surface detail catalog cannot be opened");
+    auto parsed = mw34::materials::read_surface_normals(input);
+    const auto texture_base = cache.textures.size();
+    mw34::detail::register_catalog(detail_bindings, parsed, detail_role,
+                                   texture_base);
+    for (auto &image : parsed.pack.images) {
+      mw34::materials::WorldNormalCache::TextureRecord record{};
+      record.name = std::move(image.name);
+      record.width = image.width;
+      record.height = image.height;
+      record.hash = image.hash;
+      record.pixels32 = std::move(image.pixels);
+      cache.textures.push_back(std::move(record));
+    }
+  };
+  load_detail_role(::platform::prepared::EnvironmentRole::water, 1,
+                   bridge_config_.water_detail);
+  load_detail_role(::platform::prepared::EnvironmentRole::surf, 2,
+                   bridge_config_.water_detail);
+  load_detail_role(::platform::prepared::EnvironmentRole::cloud, 3,
+                   bridge_config_.cloud_detail);
   std::string native_bytes;
   std::uint64_t expected_hash{};
   std::uint32_t expected_polygons{};
@@ -143,6 +208,7 @@ void surface_normals_load() {
   surface_normals_.expected_mesh_uv_hash = expected_hash;
   surface_normals_.expected_polygon_count = expected_polygons;
   surface_normals_.cache = std::move(cache);
+  surface_normals_.detail_bindings = std::move(detail_bindings);
   surface_normals_.loaded = true;
 }
 
@@ -246,7 +312,9 @@ bool native_surface_binding_matches(const mw34::materials::SurfaceKey &key,
                                std::ios::binary);
       auto pack = mw34::materials::read_surface_materials(
           input, bridge_config_.native_material_asset_id,
-          surface_normals_.expected_mesh_uv_hash, names);
+          surface_normals_.expected_mesh_uv_hash, names,
+          mw34::materials::max_surface_sidecar_bytes,
+          mw34::materials::max_surface_sidecar_bytes, prepared_.surface_budget());
       surface_normals_.native_material_pack =
           std::make_shared<mw34::materials::SurfaceMaterialPack>(
               std::move(pack));
@@ -282,6 +350,84 @@ native_surface_parameters(const mw34::materials::SurfaceKey &key, int texture) {
   return {record.roughness, record.reflectivity, record.metallic, 1.f};
 }
 
+std::shared_ptr<const mw34::materials::HeightBinding>
+native_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
+  VisualFloatScope preserve;
+  if (!bridge_config_.parallax_materials || !lighting_.normals ||
+      !native_context_.height_eligible || geometry_debug_)
+    return {};
+  if (native_context_.material_active && native_context_.model &&
+      native_context_.model->polygons &&
+      native_context_.material.polygon < native_context_.model->count(0x10)) {
+    const auto *material = native_context_.model->polygons[native_context_.material.polygon].material;
+    if (material && !native_ground_material_eligible(*material))
+      return {};
+  }
+  if (environment_ && !current_mission_id_.empty()) {
+    const auto region = ::platform::prepared::environment_region(current_mission_id_);
+    const auto selected = environment_->material_targets.find(region);
+    if (selected != environment_->material_targets.end()) {
+      const auto *target = select_native_ground_target(
+          selected->second, native_context_.node, native_context_.model);
+      if (!target)
+        return {};
+      NativeGroundHeightInput input;
+      input.enabled = true;
+      input.eligible = true;
+      input.node = native_context_.node;
+      input.model = native_context_.model;
+      input.material = native_context_.material;
+      if (!native_context_.material_active)
+        input.material = {};
+      input.key = key;
+      input.texture = texture;
+      input.source_epoch = zcls::world_source_epoch();
+      input.producer_epoch = native_context_.epoch;
+      input.current_group_epoch = group_load_epoch_;
+      if (texture >= 0 && std::size_t(texture) < textures_.size()) {
+        const auto &slot = textures_[texture];
+        input.slot_key = slot.surface_key;
+        input.slot_epoch = slot.group_load_epoch;
+        input.texture_version = input.current_texture_version = slot.version;
+        input.normal_index = surface_normal_index(key, true, texture);
+        if (input.normal_index >= 0) {
+          const auto &normal = surface_normal_image(input.normal_index);
+          input.normal_width = normal.width;
+          input.normal_height = normal.height;
+          input.normal_hash = normal.hash;
+        }
+      }
+      try {
+        return admit_native_ground_height(*target, input, prepared_.surface_budget());
+      } catch (const std::runtime_error &error) {
+        reject_surface_binding(error.what());
+        throw;
+      }
+    }
+  }
+  // Diagnostic sidecar bytes never supply a source-aware environment target.
+  return {};
+}
+
+void preload_surface_normal(const mw34::materials::SurfaceKey &key) {
+  if (!surface_normals_enabled() || !key.hash) {
+    return;
+  }
+  surface_normals_load();
+  // Decode the matching world page at texture admission so the first visible
+  // turn does not stall on disk IO and decompression. Do not create a renderer
+  // texture handle here because create_texture reads the thread-local active
+  // surface key. Mark preload_pending so the post-load mission callback knows
+  // authentic source textures were admitted and can upload their GPU normal
+  // textures once source admission finishes.
+  surface_normals_.preload_pending = true;
+  mw34::timing::ScopedDuration decode_timer(
+      producer_resource_timing_.page_decode_target());
+  surface_normals_.cache.preload_surface(key, true);
+  surface_normals_.peak_decoded_bytes = std::max(
+      surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
+}
+
 int surface_normal_index(const mw34::materials::SurfaceKey &input_key,
                          bool enabled = true, int texture_handle = -1) {
   if (!enabled || !surface_normals_enabled()) {
@@ -301,6 +447,8 @@ int surface_normal_index(const mw34::materials::SurfaceKey &input_key,
     native_surface_binding_matches(key, texture_handle);
   if (candidate && !native_surface_binding_matches(key, texture_handle))
     return -1;
+  mw34::timing::ScopedDuration decode_timer(
+      producer_resource_timing_.page_decode_target());
   const int index = surface_normals_.cache.surface_normal_index(key, enabled);
   surface_normals_.peak_decoded_bytes = std::max(
       surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
@@ -309,7 +457,11 @@ int surface_normal_index(const mw34::materials::SurfaceKey &input_key,
 
 const mw34::materials::WorldNormalCache::TextureRecord &
 surface_normal_image(int index) {
+  mw34::timing::ScopedDuration decode_timer(
+      producer_resource_timing_.page_decode_target());
   surface_normals_.cache.require_image(index);
+  surface_normals_.peak_decoded_bytes = std::max(
+      surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
   return surface_normals_.cache.textures.at(static_cast<std::size_t>(index));
 }
 
@@ -318,16 +470,37 @@ std::uint64_t resident_normal_decoded_bytes() const {
 }
 
 const NativeDeferredBinding *
-validated_deferred_binding(const mw34::materials::SurfaceKey &key, int texture) {
+validated_deferred_binding(const mw34::materials::SurfaceKey &key, int texture,
+                            bool require_height = false) {
   const auto *binding = dynamic_cast<const NativeDeferredBinding *>(
       deferred_material_binding_.get());
   if (!binding || binding->owner.lock() != material_binding_owner_ ||
       binding->epoch != group_load_epoch_ || binding->texture != texture ||
       texture < 0 || std::size_t(texture) >= textures_.size() ||
-      binding->version != textures_[texture].version || binding->key < key ||
+      binding->version != textures_[texture].version ||
+      textures_[texture].group_load_epoch != group_load_epoch_ || binding->key < key ||
       key < binding->key) {
     reject_surface_binding("stale or foreign deferred material admission");
+    if (require_height && binding && binding->height_binding &&
+        bridge_config_.parallax_materials && lighting_.normals)
+      throw std::runtime_error("Deferred native ground texture admission is stale or foreign");
     return nullptr;
+  }
+  if (require_height && binding->height_binding && bridge_config_.parallax_materials && lighting_.normals &&
+      !mw34::materials::height_binding_stamps_match(
+          *binding->height_binding, zcls::world_source_epoch(), binding->epoch,
+          binding->version, key)) {
+    reject_surface_binding("deferred height source/image snapshot mismatch");
+    throw std::runtime_error("Deferred native ground height admission is stale");
+  }
+  if (require_height && binding->height_binding && bridge_config_.parallax_materials && lighting_.normals) {
+    if (binding->normal_index < 0)
+      throw std::runtime_error("Deferred native ground normal identity is missing");
+    const auto &normal = surface_normal_image(binding->normal_index);
+    const auto &height = *binding->height_binding;
+    if (normal.width != height.normal_width || normal.height != height.normal_height ||
+        normal.hash != height.normal_hash)
+      throw std::runtime_error("Deferred native ground normal identity changed");
   }
   return binding;
 }
@@ -348,10 +521,20 @@ deferred_surface_parameters(const mw34::materials::SurfaceKey &key, int texture)
   return binding ? binding->surface_parameters : std::array<float, 4>{};
 }
 
+std::shared_ptr<const mw34::materials::HeightBinding>
+deferred_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
+  if (!bridge_config_.parallax_materials || !lighting_.normals)
+    return {};
+  if (!deferred_material_binding_)
+    return native_height_binding(key, texture);
+  const auto *binding = validated_deferred_binding(key, texture, true);
+  return binding ? binding->height_binding : nullptr;
+}
+
 bool authenticated_deferred_world_draw() const {
   const auto *binding = dynamic_cast<const NativeDeferredBinding *>(
       deferred_material_binding_.get());
-  return binding && (binding->normal_index >= 0 ||
+  return binding && (binding->normal_index >= 0 || binding->fixture ||
                      binding->surface_parameters[3] > .5f) &&
          binding->owner.lock() == material_binding_owner_ &&
          binding->epoch == group_load_epoch_ && binding->texture >= 0 &&
@@ -360,3 +543,401 @@ bool authenticated_deferred_world_draw() const {
          !(binding->key < textures_[binding->texture].surface_key) &&
          !(textures_[binding->texture].surface_key < binding->key);
 }
+
+std::vector<NativeGroundRangeAdmission> native_geometry_admissions(
+    const std::shared_ptr<const cc::geometry::Resource> &resource,
+    const ::platform::ModelDrawContext &context,
+    const std::vector<cc::geometry::Material> &materials) {
+  VisualFloatScope preserve;
+  // This scope is synchronous even when submit_model_geometry precedes the
+  // normal begin_model_draw callback. Restore the caller's existing scope.
+  struct Restore {
+    NativeBindingContext &destination;
+    NativeBindingContext saved;
+    ~Restore() { destination = std::move(saved); }
+  } restore{native_context_, native_context_};
+  native_context_ = {};
+  native_context_.node = static_cast<const zcls::Node *>(context.node);
+  native_context_.model = native_context_.node ? native_context_.node->model : nullptr;
+  native_context_.epoch = group_load_epoch_;
+  native_context_.height_eligible = native_ground_eligible(context) && !geometry_debug_;
+  const auto *model = native_context_.model;
+  const ::platform::prepared::MaterialTarget *target{};
+  if (bridge_config_.parallax_materials && lighting_.normals &&
+      native_context_.height_eligible && environment_ && !current_mission_id_.empty()) {
+    const auto region = ::platform::prepared::environment_region(current_mission_id_);
+    const auto selected = environment_->material_targets.find(region);
+    if (selected != environment_->material_targets.end())
+      target = select_native_ground_target(selected->second, native_context_.node, model);
+  }
+  if (target && (!model || model->render_geometry != resource ||
+                 resource->source_vertices != model->count(0x14) ||
+                 resource->source_polygons != model->count(0x10) ||
+                 context.source_vertices != model->count(0x14) ||
+                 context.source_polygons != model->count(0x10)))
+    throw std::runtime_error("Selected native ground resource is not its live original model");
+  return admit_native_ground_ranges(resource->ranges, resource->source_polygons,
+      [&](std::size_t index, std::uint32_t polygon) {
+        const auto &range = resource->ranges[index];
+        const auto &material = materials[index];
+        native_context_.height_eligible = native_ground_eligible(context) && !geometry_debug_ &&
+                                          (material.color >> 24) == 255;
+        native_context_.material = {};
+        native_context_.material_active = false;
+        if (model && model->polygons && polygon < model->count(0x10)) {
+          const auto *original = model->polygons[polygon].material;
+          if (target && (range.material_slot >= model->render_materials.size() ||
+                         model->render_materials[range.material_slot] != original))
+            throw std::runtime_error("Selected native ground original material-slot mismatch");
+          native_context_.material = {model, original, original ? original->texture : nullptr,
+                                      polygon};
+          native_context_.material_active = true;
+        } else if (target) {
+          throw std::runtime_error("Selected native ground original polygon is missing");
+        }
+        NativeGroundRangeAdmission admission;
+        if (material.texture < 0) {
+          if (target)
+            admission.height_binding = native_height_binding({}, material.texture);
+          return admission;
+        }
+        const auto &slot = textures_.at(std::size_t(material.texture));
+        admission.normal_index = surface_normal_index(slot.surface_key, true, material.texture);
+        admission.surface_parameters = native_surface_parameters(slot.surface_key, material.texture);
+        admission.height_binding = native_height_binding(slot.surface_key, material.texture);
+        if (admission.height_binding) {
+          const auto &record = admission.height_binding->material;
+          admission.surface_parameters = {record.roughness, record.reflectivity, record.metallic, 1.f};
+        }
+        return admission;
+      });
+}
+
+void apply_native_geometry_admission(vk::Draw &draw,
+                                     const NativeGroundRangeAdmission &admission) {
+  draw.height_binding = admission.height_binding;
+  draw.surface_parameters = admission.surface_parameters;
+  if (admission.normal_index >= 0) {
+    const bool first_normal_handle =
+        surface_normal_textures_.find(admission.normal_index) ==
+        surface_normal_textures_.end();
+    const int32_t normal_handle =
+        surface_normal_texture(admission.normal_index);
+    mw34::timing::ScopedDuration upload_timer(
+        first_normal_handle ? producer_resource_timing_.page_upload_target()
+                            : nullptr);
+    draw.normal_texture = int(bind_texture(normal_handle, false));
+  }
+}
+
+private:
+friend struct testing::RigidCaptureTestAccess;
+
+static void add_capture_bytes(std::size_t &used, std::size_t bytes, std::size_t limit) {
+  if (bytes > limit || used > limit - bytes)
+    throw std::runtime_error("Owned rigid capture exceeds maximum_owned_bytes budget");
+  used += bytes;
+}
+
+std::shared_ptr<const CapturedNativeRigid> capture_original_rigid(
+    const zcls::Node &node, const ::platform::ModelDrawContext &context,
+    const zmod::RigidGeometryEligibility &eligibility, std::size_t maximum_owned_bytes) {
+  VisualFloatScope preserve;
+  struct Restore {
+    NativeBindingContext &destination;
+    NativeBindingContext saved;
+    ~Restore() { destination = std::move(saved); }
+  } restore{native_context_, native_context_};
+
+  if (context.node != &node || !node.model)
+    throw std::runtime_error("Owned rigid capture node/model scope is invalid");
+  const zmod::Model &model = *node.model;
+  const std::uint32_t vertex_count = model.count(0x14);
+  const std::uint32_t polygon_count = model.count(0x10);
+  if (!model.vertices || !model.polygons || !vertex_count || !polygon_count ||
+      context.source_vertices != vertex_count || context.source_polygons != polygon_count)
+    throw std::runtime_error("Owned rigid capture source counts do not match live model");
+
+  const bool actual_ordinary = model.count(0) == 0;
+  const bool actual_morphing = model.count(0x20) != 0;
+  if (context.ordinary != actual_ordinary || context.morphing != actual_morphing ||
+      context.overlay != eligibility.overlay || context.opacity != eligibility.opacity)
+    throw std::runtime_error("Owned rigid capture context disagrees with model/eligibility");
+
+  if (geometry_mode_ == cc::geometry::Mode::legacy)
+    return {};
+  if (prepared_.has_binding(context))
+    return {};
+  if (!native_ground_eligible(context) || eligibility.overlay || eligibility.second_pass ||
+      eligibility.opacity != 1.f)
+    return {};
+  const zmod::RigidGeometryEligibility derived_eligibility{
+      context.overlay || eligibility.overlay, eligibility.second_pass, context.opacity};
+  if (!zmod::rigid_source_supported(model, derived_eligibility))
+    return {};
+
+  std::size_t owned_bytes = 0;
+  add_capture_bytes(owned_bytes, zmod::preflight_rigid_source_bytes(model), maximum_owned_bytes);
+  add_capture_bytes(owned_bytes, sizeof(CapturedNativeRigid), maximum_owned_bytes);
+  if (polygon_count > std::numeric_limits<std::size_t>::max() / sizeof(CapturedNativeRigidRange))
+    throw std::runtime_error("Owned rigid capture range table overflow");
+  add_capture_bytes(owned_bytes, std::size_t(polygon_count) * sizeof(CapturedNativeRigidRange),
+                    maximum_owned_bytes);
+
+  const std::uint64_t sampled_world_epoch = zcls::world_source_epoch();
+  const std::uint64_t sampled_group_epoch = group_load_epoch_;
+
+  auto registered = zmod::register_rigid_source(model);
+  if (!registered.resource || registered.resource->source_vertices != vertex_count ||
+      registered.resource->source_polygons != polygon_count ||
+      registered.resource->ranges.size() != polygon_count ||
+      registered.original_materials.size() != polygon_count)
+    throw std::runtime_error("Owned rigid capture registration cardinality mismatch");
+
+  const auto copied_materials = zmod::copy_rigid_materials(model, *registered.resource);
+  if (copied_materials.size() != polygon_count)
+    throw std::runtime_error("Owned rigid capture material count mismatch");
+
+  for (std::uint32_t i = 0; i < polygon_count; ++i) {
+    const auto &range = registered.resource->ranges[i];
+    const auto *original = model.polygons[i].material;
+    if (!original || range.polygon != i || range.material_slot != i ||
+        registered.original_materials[range.material_slot] != original)
+      throw std::runtime_error("Owned rigid capture polygon/material-slot correspondence mismatch");
+  }
+
+  native_context_ = {};
+  native_context_.node = &node;
+  native_context_.model = &model;
+  native_context_.epoch = sampled_group_epoch;
+  native_context_.height_eligible = native_ground_eligible(context) && !geometry_debug_;
+
+  const ::platform::prepared::MaterialTarget *target{};
+  if (bridge_config_.parallax_materials && lighting_.normals &&
+      native_context_.height_eligible && environment_ && !current_mission_id_.empty()) {
+    const auto region = ::platform::prepared::environment_region(current_mission_id_);
+    const auto selected = environment_->material_targets.find(region);
+    if (selected != environment_->material_targets.end())
+      target = select_native_ground_target(selected->second, &node, &model);
+  }
+
+  std::map<int, std::shared_ptr<const CapturedRgbaImage>> local_albedo_images;
+  std::map<int, std::shared_ptr<const CapturedRgbaImage>> local_normal_images;
+  std::set<std::shared_ptr<const mw34::materials::SurfaceMaterialImage>,
+           std::owner_less<std::shared_ptr<const mw34::materials::SurfaceMaterialImage>>>
+      charged_height_images;
+  std::vector<CapturedNativeRigidRange> captured_ranges;
+  captured_ranges.reserve(polygon_count);
+
+  for (std::uint32_t i = 0; i < polygon_count; ++i) {
+    const auto &range = registered.resource->ranges[i];
+    const auto &material = copied_materials[i];
+    const auto *original = model.polygons[i].material;
+    if (!original || registered.original_materials[range.material_slot] != original)
+      throw std::runtime_error("Owned rigid capture original material mutated during capture");
+
+    native_context_.height_eligible =
+        native_ground_eligible(context) && !geometry_debug_ && (material.color >> 24) == 255;
+    native_context_.material = {&model, original, original->texture, i};
+    native_context_.material_active = true;
+
+    CapturedNativeRigidRange out_range{};
+    out_range.polygon = range.polygon;
+    out_range.material_slot = range.material_slot;
+    out_range.material = material;
+
+    if (material.texture < 0) {
+      if (target)
+        out_range.height_binding = native_height_binding({}, material.texture);
+    } else {
+      if (std::size_t(material.texture) >= textures_.size())
+        throw std::runtime_error("Owned rigid capture references out-of-range texture slot");
+      const auto &slot = textures_[std::size_t(material.texture)];
+      if (!slot.width || !slot.height || slot.pixels.empty() ||
+          slot.pixels.size() != std::uint64_t(slot.width) * slot.height ||
+          slot.group_load_epoch != sampled_group_epoch)
+        throw std::runtime_error("Owned rigid capture references released or invalid albedo slot");
+
+      out_range.texture_handle = material.texture;
+      out_range.albedo_key = slot.surface_key;
+      out_range.texture_version = slot.version;
+      out_range.texture_group_epoch = slot.group_load_epoch;
+
+      out_range.normal_index = surface_normal_index(slot.surface_key, true, material.texture);
+      out_range.surface_parameters = native_surface_parameters(slot.surface_key, material.texture);
+      out_range.height_binding = native_height_binding(slot.surface_key, material.texture);
+      if (out_range.height_binding) {
+        const auto &record = out_range.height_binding->material;
+        out_range.surface_parameters =
+            {record.roughness, record.reflectivity, record.metallic, 1.f};
+      }
+
+      auto albedo_it = local_albedo_images.find(material.texture);
+      if (albedo_it == local_albedo_images.end()) {
+        const std::uint64_t pixel_count = std::uint64_t(slot.width) * slot.height;
+        if (pixel_count > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t))
+          throw std::runtime_error("Owned rigid capture albedo byte count overflow");
+        add_capture_bytes(owned_bytes, sizeof(CapturedRgbaImage), maximum_owned_bytes);
+        add_capture_bytes(owned_bytes, std::size_t(pixel_count) * sizeof(std::uint32_t),
+                          maximum_owned_bytes);
+        auto img = std::make_shared<CapturedRgbaImage>();
+        img->width = slot.width;
+        img->height = slot.height;
+        img->pixels32 = slot.pixels;
+        albedo_it = local_albedo_images.emplace(material.texture, std::move(img)).first;
+      }
+      out_range.albedo_image = albedo_it->second;
+
+      if (out_range.normal_index >= 0) {
+        const auto &normal = surface_normal_image(out_range.normal_index);
+        if (!normal.width || !normal.height || !normal.hash ||
+            normal.pixels32.size() != std::uint64_t(normal.width) * normal.height)
+          throw std::runtime_error("Owned rigid capture references invalid normal image record");
+        out_range.normal_width = normal.width;
+        out_range.normal_height = normal.height;
+        out_range.normal_hash = normal.hash;
+        auto norm_it = local_normal_images.find(out_range.normal_index);
+        if (norm_it == local_normal_images.end()) {
+          const std::uint64_t norm_pixels = std::uint64_t(normal.width) * normal.height;
+          if (norm_pixels > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t))
+            throw std::runtime_error("Owned rigid capture normal byte count overflow");
+          add_capture_bytes(owned_bytes, sizeof(CapturedRgbaImage), maximum_owned_bytes);
+          add_capture_bytes(owned_bytes, std::size_t(norm_pixels) * sizeof(std::uint32_t),
+                            maximum_owned_bytes);
+          auto img = std::make_shared<CapturedRgbaImage>();
+          img->width = normal.width;
+          img->height = normal.height;
+          img->pixels32 = normal.pixels32;
+          norm_it = local_normal_images.emplace(out_range.normal_index, std::move(img)).first;
+        }
+        out_range.normal_image = norm_it->second;
+      }
+    }
+
+    if (out_range.height_binding) {
+      const auto &hb = *out_range.height_binding;
+      if (!hb.image || !hb.image->width || !hb.image->height ||
+          hb.image->pixels.size() != std::uint64_t(hb.image->width) * hb.image->height ||
+          !hb.retained_decoded_bytes || out_range.texture_handle < 0 ||
+          out_range.normal_index < 0 || !out_range.normal_image ||
+          hb.normal_width != out_range.normal_width ||
+          hb.normal_height != out_range.normal_height ||
+          hb.normal_hash != out_range.normal_hash ||
+          !mw34::materials::height_binding_stamps_match(
+              hb, sampled_world_epoch, sampled_group_epoch, out_range.texture_version,
+              out_range.albedo_key))
+        throw std::runtime_error("Owned rigid capture height binding failed stamp verification");
+      add_capture_bytes(owned_bytes, mw34::materials::height_binding_metadata_bytes(hb),
+                        maximum_owned_bytes);
+      if (charged_height_images.insert(hb.image).second) {
+        if (hb.retained_decoded_bytes > std::numeric_limits<std::size_t>::max())
+          throw std::runtime_error("Owned rigid capture height byte count overflow");
+        add_capture_bytes(owned_bytes, std::size_t(hb.retained_decoded_bytes),
+                          maximum_owned_bytes);
+      }
+    }
+    captured_ranges.push_back(std::move(out_range));
+  }
+
+  if (zcls::world_source_epoch() != sampled_world_epoch ||
+      group_load_epoch_ != sampled_group_epoch)
+    throw std::runtime_error("Owned rigid capture producer epoch changed before seal");
+
+  for (const auto &r : captured_ranges) {
+    if (r.texture_handle >= 0) {
+      if (std::size_t(r.texture_handle) >= textures_.size())
+        throw std::runtime_error("Owned rigid capture texture slot disappeared before seal");
+      const auto &slot = textures_[std::size_t(r.texture_handle)];
+      if (slot.version != r.texture_version || slot.group_load_epoch != sampled_group_epoch ||
+          slot.surface_key < r.albedo_key || r.albedo_key < slot.surface_key ||
+          !r.albedo_image || slot.width != r.albedo_image->width ||
+          slot.height != r.albedo_image->height || slot.pixels != r.albedo_image->pixels32)
+        throw std::runtime_error("Owned rigid capture texture slot mutated before seal");
+    }
+    if (r.normal_index >= 0) {
+      const auto &normal = surface_normal_image(r.normal_index);
+      if (!r.normal_image || normal.width != r.normal_width ||
+          normal.height != r.normal_height || normal.hash != r.normal_hash ||
+          normal.pixels32 != r.normal_image->pixels32)
+        throw std::runtime_error("Owned rigid capture normal record mutated before seal");
+    }
+    if (r.height_binding &&
+        !mw34::materials::height_binding_stamps_match(
+            *r.height_binding, sampled_world_epoch, sampled_group_epoch, r.texture_version,
+            r.albedo_key))
+      throw std::runtime_error("Owned rigid capture height binding became stale before seal");
+  }
+
+  registered.original_materials.clear();
+  return RigidCaptureSeal::seal(
+      std::move(registered.resource), std::move(captured_ranges), material_binding_owner_,
+      sampled_world_epoch, sampled_group_epoch);
+}
+
+bool validate_captured_original_rigid(const CapturedNativeRigid &captured) {
+  VisualFloatScope preserve;
+  if (captured.renderer_owner().lock() != material_binding_owner_)
+    return false;
+  const std::uint64_t current_world_epoch = zcls::world_source_epoch();
+  if (captured.world_source_epoch() != current_world_epoch ||
+      captured.group_load_epoch() != group_load_epoch_)
+    return false;
+  const auto &res = captured.resource();
+  const auto &ranges = captured.ranges();
+  if (!res || ranges.empty() || res->ranges.size() != ranges.size() ||
+      res->source_polygons != ranges.size())
+    return false;
+  for (std::size_t i = 0; i < ranges.size(); ++i) {
+    const auto &r = ranges[i];
+    const auto &rr = res->ranges[i];
+    if (r.polygon != i || r.material_slot != i || rr.polygon != i || rr.material_slot != i)
+      return false;
+    if (r.texture_handle < 0) {
+      if (r.material.texture >= 0 || r.albedo_image || r.normal_index >= 0 || r.normal_image ||
+          r.height_binding)
+        return false;
+      continue;
+    }
+    if (r.material.texture != r.texture_handle ||
+        std::size_t(r.texture_handle) >= textures_.size())
+      return false;
+    const auto &slot = textures_[std::size_t(r.texture_handle)];
+    if (slot.group_load_epoch != group_load_epoch_ ||
+        r.texture_group_epoch != group_load_epoch_ || slot.version != r.texture_version ||
+        slot.surface_key < r.albedo_key || r.albedo_key < slot.surface_key || !r.albedo_image ||
+        !r.albedo_image->width || !r.albedo_image->height ||
+        slot.width != r.albedo_image->width || slot.height != r.albedo_image->height ||
+        r.albedo_image->pixels32.size() !=
+            std::uint64_t(r.albedo_image->width) * r.albedo_image->height ||
+        slot.pixels != r.albedo_image->pixels32)
+      return false;
+    if (r.normal_index >= 0) {
+      if (std::size_t(r.normal_index) >= surface_normals_.cache.textures.size() ||
+          !r.normal_image)
+        return false;
+      const auto &normal = surface_normal_image(r.normal_index);
+      if (!r.normal_width || !r.normal_height || !r.normal_hash ||
+          normal.width != r.normal_width || normal.height != r.normal_height ||
+          normal.hash != r.normal_hash || r.normal_image->width != r.normal_width ||
+          r.normal_image->height != r.normal_height ||
+          r.normal_image->pixels32 != normal.pixels32)
+        return false;
+    } else if (r.normal_image || r.normal_width || r.normal_height || r.normal_hash) {
+      return false;
+    }
+    if (r.height_binding) {
+      const auto &hb = *r.height_binding;
+      if (r.normal_index < 0 || !r.normal_image || !hb.image ||
+          hb.image->pixels.size() != std::uint64_t(hb.image->width) * hb.image->height ||
+          !hb.retained_decoded_bytes || !prepared_.surface_budget() ||
+          prepared_.surface_budget()->used() < hb.retained_decoded_bytes ||
+          hb.normal_width != r.normal_width || hb.normal_height != r.normal_height ||
+          hb.normal_hash != r.normal_hash ||
+          !mw34::materials::height_binding_stamps_match(
+              hb, current_world_epoch, group_load_epoch_, r.texture_version, r.albedo_key))
+        return false;
+    }
+  }
+  return true;
+}
+public:

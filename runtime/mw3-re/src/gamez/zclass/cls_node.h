@@ -1,7 +1,9 @@
 #pragma once
 #include <cstdint>
+#include <array>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <map>
 #include <string>
 #include <vector>
@@ -19,10 +21,17 @@ struct ListItem;
 struct Node;
 using NodeAction = void (*)(Node* node);  // +0x48, run by the action lists with ECX = node
 
+struct WorldSourceIdentity {
+  std::string kind, member, sha256;
+  std::uint64_t bytes{}, load_epoch{};
+  std::uint32_t model_slot{};
+};
 struct SourceAsset {
   std::string name;
   std::map<std::string, unsigned> nodes;
   std::string member_sha256; // Empty if the source bytes could not be verified.
+  // World containers are distinct from the existing MechLib entry identity.
+  std::optional<WorldSourceIdentity> world;
 };
 
 struct Node {                      // 0xd4-byte pool slot
@@ -41,7 +50,10 @@ struct Node {                      // 0xd4-byte pool slot
   // entry so optional visuals can bind without changing game-facing raw fields.
   std::shared_ptr<const SourceAsset> source_asset;
   bool source_asset_root = false;
+  std::string source_asset_root_name; // Original name survives a death rename.
   uint32_t source_model_vertices = 0;
+  int32_t prepared_skin_index = 0; // Host-only per-instance visual selection.
+  std::uint64_t fixture_life = 0; // Never serialized or copied by copy_node_base.
 
   template <typename T> T get(int off) const {
     T v;
@@ -56,6 +68,48 @@ struct Node {                      // 0xd4-byte pool slot
   int32_t parent_count() const { return get<int32_t>(0x54); }
   int32_t child_count() const { return get<int32_t>(0x5c); }
 };
+
+
+// Host-only visual truth. IDs never repeat, including pool/address reuse.
+// Queries copy values; native pointers never leave the synchronous producer.
+struct FixtureNodeProof {
+  std::uint64_t life{}, pool_epoch{}, load_epoch{}, source_revision{}, transform_revision{};
+  std::uint64_t vehicle_root{}, healthy_root{};
+  int node_class{};
+  bool active{}, destroyed_path{}, healthy_branch{}, destroyed_branch{};
+};
+struct FixtureVehicleProof {
+  std::uint64_t root{}, transform_revision{}, pose_revision{};
+  bool registered{}, active{}, pose_valid{}, world_valid{};
+  std::array<float, 12> local_pose{}, observed_local{}, observed_world{};
+};
+struct FixtureAncestry {
+  std::vector<FixtureNodeProof> nodes;
+  bool supported{};
+};
+void fixture_source_begin(Node* node);
+void fixture_source_retire(Node* node);
+void fixture_pool_retire();
+void fixture_load_retire();
+void fixture_source_changed(Node* node);
+void fixture_transform_changed(Node* node);
+void fixture_source_refresh(Node* node);
+std::optional<FixtureNodeProof> fixture_source_proof(std::uint64_t life);
+std::optional<FixtureVehicleProof> fixture_vehicle_proof(std::uint64_t root);
+void fixture_vehicle_register(const void* owner, Node* root, bool active, const float* pose);
+void fixture_vehicle_unregister(const void* owner);
+void fixture_vehicle_state(const Node* root, bool active);
+void fixture_vehicle_pose(const Node* root, bool active, const float* pose);
+// Scope follows the existing camera descent; it never performs another walk.
+class FixtureWalkScope {
+public:
+  explicit FixtureWalkScope(Node* node);
+  ~FixtureWalkScope();
+  FixtureWalkScope(const FixtureWalkScope&) = delete;
+  FixtureWalkScope& operator=(const FixtureWalkScope&) = delete;
+};
+FixtureAncestry fixture_ancestry();
+void fixture_observe_world(const Node* node, const float* world);
 
 constexpr uint32_t kNodeLive = 0x1000000;
 constexpr uint32_t kNodeLinkMask = 0xffffff;

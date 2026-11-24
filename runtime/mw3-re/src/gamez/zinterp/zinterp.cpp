@@ -2,7 +2,9 @@
 // archive and the ScrollAlways list: Mech3.exe 0x594dc0..0x596e04, the
 // functions after zinterp_parse.cpp's dispatcher. The exe names no file here;
 // this one is named for the module (docs/interp.md).
+#include "gamez/zutil/zfix.h"
 #include "gamez/zinterp/zinterp.h"
+#include "upgrades/reference/reference.h"
 #include "gamez/zmodel/gmod_init.h"
 
 #include <sys/stat.h>
@@ -34,6 +36,7 @@
 #include "gamez/zmodel/gmod_matl.h"
 #include "gamez/zrender/zrndr_flare.h"
 #include "gamez/zutil/zutl_path.h"
+#include "platform/file_position.h"
 #include "gamez/zvideo/zvid_format.h"
 
 namespace zint {
@@ -90,6 +93,22 @@ Engine make_engine() {
   e.lod_add_child = zcls::node_link;            // 0x004fe0a0 is a jmp to it
   e.display_set_clear_color = zcls::display_set_clear_color;
   e.light_create = zcls::light_create;
+  // FIX (bug), playtest W12: the light setters were left null, so each world script's sun (c1.gs: LightNew
+  // sunlight, LightSetColor ... LightSetStatic) kept a new light's state: a point light, ambient only. Wired by
+  // address to the ported Light.c setters (their names in zcls are the flags' meanings, the script's the
+  // commands').
+  e.light_set_ambient = zcls::light_set_ambient;           // 0x004fa940
+  e.light_set_color = zcls::light_set_color;               // 0x004fb510
+  e.light_set_diffuse = zcls::light_set_diffuse;           // 0x004fa9b0
+  e.light_set_directed = zcls::light_set_bit3;             // 0x004faaa0
+  e.light_set_directional = zcls::light_set_bit2;          // 0x004faa20
+  e.light_set_orientation = zcls::light_set_orientation;   // 0x004faff0
+  e.light_set_point = zcls::light_set_bit4;                // 0x004fab20
+  e.light_set_ranges = zcls::light_set_range;              // 0x004fadf0
+  e.light_set_saturated = zcls::light_set_ambient_only;    // 0x004faba0
+  e.light_set_static = zcls::light_set_directional;        // 0x004fad30
+  e.light_set_subdivide = zcls::light_set_diffuse_only;    // 0x004fac70
+  e.light_set_translate = zcls::light_set_position;        // 0x004faf80
   e.object3d_create = zcls::object3d_create;
   e.model_set_priority = zmod::model_set_priority;  // Object3DSetPriority's
   // The support scripts' render settings (item 7's census: every mission).
@@ -246,7 +265,7 @@ std::FILE* open_on_path(const std::string& dirs, const char* name, const char* m
   return zutl::open(name, mode);
 }
 
-void includes_push(Interp& in, ScriptFile* f, long pos, uint8_t binary) {  // 0x00595da0
+void includes_push(Interp& in, ScriptFile* f, int64_t pos, uint8_t binary) {  // 0x00595da0
   in.includes.push_back({f, pos, binary, f->end, f->what});
 }
 
@@ -334,7 +353,10 @@ bool argv0_starts(Interp& in, const char* name, size_t n) {
 }
 
 // Mech3.exe 1.2 @ 0x00595270
-bool argv0_is(Interp& in, const char* name) { return std::strcmp(in.argc ? in.argv[0] : "", name) == 0; }
+bool argv0_is(Interp& in, const char* name) {
+  upgrades::reference::seen(name);  // ours: the modding reference's test (null in play)
+  return std::strcmp(in.argc ? in.argv[0] : "", name) == 0;
+}
 
 // Mech3.exe 1.2 @ 0x004108f0. The exe keeps this copy in MW3's code; nothing
 // sets the callback unless the debug console is open, so the shipped game
@@ -467,8 +489,8 @@ bool read_line(Interp& in, ScriptFile* f, char* line) {
     if (std::fread(&size, 4, 1, f->f) != 1 || size > 0x100000) size = 0;
     // Ours (docs/modding.md, M3): a line past the script's end ends it, said.
     if (size != 0 && f->end >= 0) {
-      const long at = std::ftell(f->f);
-      if (at < 0 || at + 4 > f->end || static_cast<long>(size) > f->end - at - 4) {
+      const int64_t at = platform::file_position::tell(f->f);
+      if (at < 0 || at + 4 > f->end || static_cast<int64_t>(size) > f->end - at - 4) {
         std::printf("mw3: %s is broken (a line past its end), read up to it\n", f->what.c_str());
         size = 0;
         f->cut = true;
@@ -572,7 +594,7 @@ void tokenize(Interp& in, char* line) {
 bool source(Interp& in, const char* name) {
   ScriptFile* f = nullptr;
   bool binary = false;
-  if (in.file) includes_push(in, in.file, std::ftell(in.file->f), in.binary);
+  if (in.file) includes_push(in, in.file, platform::file_position::tell(in.file->f), in.binary);
   if (g_globals.use_archive && open_archive(in, in.archive_name.c_str())) {
     if ((f = archive_find(in, name))) binary = true;
   }
@@ -591,7 +613,7 @@ bool source(Interp& in, const char* name) {
   Include top;
   if (includes_pop(in, &top)) {
     in.file = top.file;
-    std::fseek(top.file->f, top.pos, SEEK_SET);
+    platform::file_position::seek(top.file->f, top.pos, SEEK_SET);
     top.file->end = top.end, top.file->what = top.what;  // ours (M3)
     in.binary = top.binary;
     return r;
@@ -641,6 +663,7 @@ void echo(Interp& in) {
 
 // Mech3.exe 1.2 @ 0x00595e70. argv[0], the command, is never expanded.
 char* next_arg(Interp& in) {
+  upgrades::reference::arg_read('s');
   const uint32_t i = in.cursor++;
   char* a = i < in.argc ? in.argv[i] : nullptr;
   if (!a) return nullptr;
@@ -649,6 +672,7 @@ char* next_arg(Interp& in) {
 
 // Mech3.exe 1.2 @ 0x00595ea0
 bool arg_bool(Interp& in, bool def) {
+  upgrades::reference::arg_read('b');  // ours: the reference test's (null in play); before next_arg's 's'
   const char* s = next_arg(in);
   if (!s) return def;
   return crt::msvc_stricmp(s, "on") == 0 || crt::msvc_stricmp(s, "true") == 0;
@@ -656,12 +680,14 @@ bool arg_bool(Interp& in, bool def) {
 
 // Mech3.exe 1.2 @ 0x00595ef0. atof's double, rounded by each caller.
 double arg_float(Interp& in, float def) {
+  upgrades::reference::arg_read('f');
   const char* s = next_arg(in);
   return s ? crt::msvc_atof(s) : def;
 }
 
 // Mech3.exe 1.2 @ 0x00595f10
 int32_t arg_int(Interp& in, int32_t def) {
+  upgrades::reference::arg_read('i');
   const char* s = next_arg(in);
   return s ? crt::msvc_atoi(s) : def;
 }
@@ -726,9 +752,26 @@ bool open_archive(Interp& in, const char* name) {
   in.archive = ScriptFile{};
   in.archive.f = f;
   if (!f) return false;
-  std::fseek(f, 0, SEEK_END);  // ours (M3): the scripts' bound
-  const long size = std::ftell(f);
-  std::fseek(f, 0, SEEK_SET);
+  if (platform::file_position::seek(f, 0, SEEK_END) != 0) {
+    std::fclose(f);
+    in.archive.f = nullptr;
+    return false;
+  }
+  const int64_t size = platform::file_position::tell(f);
+  if (size < 0 || platform::file_position::seek(f, 0, SEEK_SET) != 0) {
+    std::fclose(f);
+    in.archive.f = nullptr;
+    return false;
+  }
+  constexpr int64_t kMaxScriptArchiveBytes = int64_t{1} << 31;
+  if (size >= kMaxScriptArchiveBytes) {
+    std::printf(
+        "mw3: %s: file is %lld bytes; signed 32-bit script offsets support files under 2 GiB, not read\n",
+        where.c_str(), static_cast<long long>(size));
+    std::fclose(f);
+    in.archive.f = nullptr;
+    return false;
+  }
   uint32_t head[2];
   int32_t count = 0;
   bool ok = std::fread(head, 8, 1, f) == 1 && head[0] == 0x08971119 && head[1] == 7 &&
@@ -780,15 +823,15 @@ ScriptFile* archive_find(Interp& in, const char* name) {
   // Ours (docs/modding.md, M3): a script starts past the directory and runs
   // to the next one's start or the file's end; one outside the file is not
   // the archive's (the exe seeks there and reads what it finds).
-  const long start = in.dir[idx].offset, table = 12 + static_cast<long>(in.entry_count) * 0x80;
+  const int64_t start = in.dir[idx].offset, table = 12 + static_cast<int64_t>(in.entry_count) * 0x80;
   if (in.archive_size >= 0 && (start < table || start >= in.archive_size)) {
     std::printf("mw3: %s: script %s is broken (its offset past the file), not read\n", in.archive_where.c_str(), in.dir[idx].name);
     return nullptr;
   }
-  long end = in.archive_size;
+  int64_t end = in.archive_size;
   for (int32_t i = 0; i < in.entry_count; ++i)
     if (in.dir[i].offset > start && in.dir[i].offset < end) end = in.dir[i].offset;
-  if (std::fseek(in.archive.f, in.dir[idx].offset, SEEK_SET) != 0) return nullptr;
+  if (platform::file_position::seek(in.archive.f, in.dir[idx].offset, SEEK_SET) != 0) return nullptr;
   in.archive.eof = in.archive.err = false;
   in.archive.end = end;
   in.archive.cut = false;
@@ -845,6 +888,9 @@ bool scroll_on(Node* node, float u, float v, bool always) {
 // Otherwise each listed node's model scroll offset (+0x30) goes back to 0.
 void scroll_list_clear(bool full) {
   if (full) {
+    // FIX (bug): the exe keeps its three model pointers (0x00730c14..1c) past the mission whose models they
+    // are; the next mission's CycleTextureSet* before its own CycleTextureSetOn would write into a freed one.
+    if (zfix::options().fixed) g_globals.object_model = g_globals.cycle_model = g_globals.model_out = nullptr;
     g_scroll.nodes.clear();
     if (g_scroll.holder && call(g_engine.pool_alive)) {
       call(g_engine.set_action, g_scroll.holder, static_cast<Action>(nullptr));

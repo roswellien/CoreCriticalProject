@@ -66,13 +66,13 @@ single-use PIN to that inbox; the admin enters it on the Access login page.
 The PIN expires after 10 minutes. An email address alone does not grant access.
 See Cloudflare's [One-time PIN login guide](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/).
 
-The current Pages Function permits one admin email. The maintainer must choose
-it and set `CRASH_REPORT_ADMIN_EMAIL` to that same value as the Access policy.
+Set `CRASH_REPORT_ADMIN_EMAIL` to the same approved emails as the Access policy.
+Separate multiple addresses with commas. An existing single address remains valid.
 Also add `CRASH_REPORT_ACCESS_ISSUER` and `CRASH_REPORT_ACCESS_AUD` as Pages
 production variables matching the Access application. The Pages Function also
-verifies the signed Access JWT and exact email before reading D1, so a direct
-Pages URL without an admin JWT cannot return report data. No Access token or
-private signing key is stored in the repository. D1 rows persist until manually
+verifies the signed Access JWT and exact match to an approved email before
+reading D1. A direct Pages URL without a valid admin JWT returns no report data.
+No Access token or private signing key is stored in the repository. D1 rows persist until manually
 deleted with Wrangler; there is no automatic expiry or delete control in the
 page. See the archive setup and deletion instructions in `README.md`.
 

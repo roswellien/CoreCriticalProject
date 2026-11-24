@@ -114,6 +114,10 @@ if(BUILD_TESTING)
     add_test(NAME owned_emission_contract COMMAND mw34_owned_emission_tests)
 
     if(WIN32)
+        add_executable(mw34_native_stage_fixture tests/native_stage_fixture.cpp)
+        target_link_libraries(mw34_native_stage_fixture PRIVATE mw34_normal_hash)
+        mw34_warnings(mw34_native_stage_fixture)
+
         add_executable(mw34_local_cd_audio_tests tests/local_cd_audio_tests.cpp)
         target_include_directories(mw34_local_cd_audio_tests PRIVATE "${PROJECT_SOURCE_DIR}/runtime")
         target_compile_definitions(mw34_local_cd_audio_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -140,6 +144,9 @@ if(BUILD_TESTING)
     add_test(NAME surface_materials_python
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_surface_materials.py -v)
     set_tests_properties(surface_materials_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME mw3_re_launch_plan_python
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_mw3_re_launch.py -v)
+    set_tests_properties(mw3_re_launch_plan_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME owned_visuals_python
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p "test_owned*.py" -v)
     set_tests_properties(owned_visuals_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")

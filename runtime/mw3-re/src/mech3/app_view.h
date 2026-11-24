@@ -49,6 +49,7 @@ int32_t program_view_look_state();
 // For the tests: the camera put at (x, y, z), then the view's ground and water
 // check (0x0040af30); the camera's y after it, whether it found ground, and
 // whether it is under water (the world taking the water's fog).
+bool program_view_follow_ground();  // ours (#289): the camera's zone and fog after the replay moved it
 bool program_view_ground_probe(float x, float y, float z, float* y_after, bool* under);
 // For the tests: a point within `range` of (x, z) where water (soil 1) lies
 // over the ground: its x, the surface's y, its z, and the ground's y under it.
@@ -57,6 +58,9 @@ void* program_cameras(int32_t roster);       // 0x00430e70
 void program_cameras_free(void* list);      // 0x0040abf0
 // The options' camera choice (0x0040ce70 / 0x0040ce10; defined with the options).
 int32_t program_camera_option();
+void* program_view_world();                  // the camera's world node
+const uint32_t* program_weather_flags();     // [0x006098d0] +0x0c, null without weather
+void program_weather_show(bool on);          // its vt+0x60(-1), vt+0x64
 const float* program_mission_fog(bool water);  // world.zrd's fog: range 2, altitude 2, colour 3 (app_mission.cpp)
 void program_camera_set(int32_t mode);
 int32_t program_mouse_mode();

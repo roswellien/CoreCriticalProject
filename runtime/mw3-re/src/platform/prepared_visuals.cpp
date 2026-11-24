@@ -1,4 +1,5 @@
 #include "platform/prepared_visuals.h"
+#include "platform/loading.hpp"
 #include "frontend/core_critical/renderer/normal_codec.hpp"
 #include "frontend/core_critical/renderer/surface_materials.hpp"
 
@@ -34,6 +35,11 @@ class Reader {
         if (count > remaining_ || !input_.read(static_cast<char *>(target), std::streamsize(count)))
             fail("truncated payload");
         remaining_ -= count;
+        bytes_since_checkpoint_ += count;
+        if (bytes_since_checkpoint_ >= 65536) {
+            loading::checkpoint();
+            bytes_since_checkpoint_ = 0;
+        }
     }
     uint32_t u32() {
         uint8_t bytes_[4];
@@ -95,6 +101,7 @@ class Reader {
     }
 
   private:
+    size_t bytes_since_checkpoint_ = 0;
     std::istream &input_;
     uint64_t remaining_ = 0;
 };
@@ -151,6 +158,7 @@ Rig read_rig(Reader &reader) {
 } // namespace
 
 Mesh read_mesh(std::istream &input) {
+    loading::Measure timing(loading::Work::mesh);
     Reader reader(input);
     char magic[8];
     reader.bytes(magic, sizeof magic);
@@ -213,6 +221,7 @@ Mesh read_mesh(std::istream &input) {
 }
 
 Textures read_textures(std::istream &input) {
+    loading::Measure timing(loading::Work::bwtex);
     Reader reader(input);
     char magic[8];
     reader.bytes(magic, sizeof magic);
@@ -243,10 +252,11 @@ Textures read_textures(std::istream &input) {
         const size_t count = size_t(image.width) * image.height;
         reader.need(uint64_t(count) * 2);
         image.pixels.resize(count);
-        for (auto &pixel : image.pixels) {
-            uint8_t bytes[2];
-            reader.bytes(bytes, 2);
-            pixel = uint16_t(bytes[0]) | uint16_t(bytes[1]) << 8;
+        std::vector<uint8_t> bytes(count * 2);
+        reader.bytes(bytes.data(), bytes.size());
+        for (size_t pixel = 0; pixel < count; ++pixel) {
+            if (pixel % 65536 == 0) loading::checkpoint();
+            image.pixels[pixel] = uint16_t(bytes[pixel * 2]) | uint16_t(bytes[pixel * 2 + 1]) << 8;
         }
         textures.images.push_back(std::move(image));
     }

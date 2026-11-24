@@ -16,6 +16,8 @@
 #pragma once
 #include "capture_pixels.hpp"
 #include "frontend/sdl/cpu_interval.h"
+#include "frontend/core_critical/producer_view_test_hook.hpp"
+#include "gamez/zclass/visual_distance.h"
 #define VK_NO_PROTOTYPES
 #include "buffer_reserve.hpp"
 #include "camera_history.hpp"
@@ -35,12 +37,16 @@
 #include "geometry/resource.hpp"
 #include "launcher_display.hpp"
 #include "light_cull_tiled_comp.h"
+#include "menu_ripple_frag.h"
 #include "model_scene_vert.h"
 #include "native_geometry_vert.h"
+#include "native_texture_identity.hpp"
 #include "platform/vk_loader.hpp"
 #include "platform/wsi_surface.hpp"
 #include "platform/wsi_win32_dxgi.hpp"
+#include "preload_budget.hpp"
 #include "renderer_bridge_config.hpp"
+#include "resource_timing.hpp"
 #include "status_model_fit.hpp"
 #include "sun_lighting.hpp"
 #include "sun_model_vert.h"
@@ -48,6 +54,7 @@
 #include "sun_tl_vert.h"
 #include "sun_world_vert.h"
 #include "surface_detail.hpp"
+#include "surface_materials.hpp"
 #include "texture_staging.hpp"
 #include "tiled_light_stage.inc"
 #include "world_binding.hpp"
@@ -64,15 +71,38 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <new>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 #include <vulkan/vulkan_core.h>
+#if defined(_WIN32)
+#include <cmath>
+#include <exception>
+#include <mutex>
+#ifdef near
+#undef near
+#endif
+#ifdef far
+#undef far
+#endif
+#include "frontend/sdl/editor_imgui.h"
+#include "backends/imgui_impl_vulkan.h"
+#include "editor_srgb_frag.h"
+#endif
 
 namespace mw34::vkscene {
+struct MenuRipplePass {
+    float center_u{}, center_v{}, scale_u{}, scale_v{};
+    float inner{}, outer{}, amplitude{}, wavelength{}, phase{};
+    bool has_clip{};
+    float clip_u0{}, clip_v0{}, clip_u1{}, clip_v1{};
+};
 // rgba8888: host-composed straight-alpha RGBA (GPU HUD images: RGB565 colour
 // with the image's alpha mask or colour key), carried in pixels32 (R, G, B, A
 // bytes in memory order).
@@ -89,6 +119,9 @@ struct TextureRef {
 };
 // Fixed-function state that selects a pipeline: blend enable/source/destination
 // (D3DBLEND), depth enable/function (D3DCMP)/write, cull mode (D3DCULL).
+// A PipelineKey source factor past D3DBLEND's range: source and destination ONE combined by
+// VK_BLEND_OP_REVERSE_SUBTRACT (destination - source), for the HD menu's negative added light.
+constexpr std::uint8_t kReverseSubtractBlend = 14;
 struct PipelineKey {
   std::uint8_t blend, src, dst, zenable, zfunc, zwrite, cull,
       points = 0; // points: D3DPT_POINTLIST input assembly
@@ -107,6 +140,11 @@ struct Push {
   std::uint32_t mode[4];
 };
 static_assert(sizeof(Push) == 64);
+struct TlPush {
+  Push base;
+  std::array<float, 4> radial_projection;
+};
+static_assert(sizeof(TlPush) == 80 && offsetof(TlPush, radial_projection) == 64);
 using ModelVertex = cc::geometry::Vertex;
 static_assert(sizeof(ModelVertex) == 32);
 struct ModelGeometry {
@@ -118,6 +156,8 @@ struct ModelGeometry {
 struct ModelInstance {
   std::shared_ptr<const ModelGeometry> geometry;
   std::array<float, 12> camera{};
+  std::array<float, 12> world_to_camera{};
+  bool has_world_to_camera{};
   std::array<float, 6> projection{};
   std::uint32_t color{};
   float diagnostic_fog_factor{1.f};
@@ -151,6 +191,9 @@ struct Draw {
   // Camera-space smooth normals for CPU-clipped/deformed TL geometry.
   // Owned until submission; never retained as immutable model cache entries.
   std::shared_ptr<const std::vector<std::array<float, 3>>> lit_normals{};
+  // Parallel TL fog stream: xyz are unclamped factors when w == 1;
+  // x is unquantised legacy visibility when w == 2. Zero w uses packed alpha.
+  std::shared_ptr<const std::vector<std::array<float, 4>>> raw_fog{};
   unsigned char sky{};
   std::shared_ptr<const mw34::sun::Tl> sky_view{};
   std::shared_ptr<const mw34::temporal::Snapshot> camera_view{};
@@ -165,7 +208,9 @@ struct Draw {
   // and eye (world xyz, valid); owned values, zero preserves the legacy path.
   std::array<float, 4> surface_parameters{};
   std::array<float, 4> surface_eye{};
+  std::shared_ptr<const mw34::materials::HeightBinding> height_binding;
   bool geometry_debug_normals{};
+  ::platform::ProducerView producer_view{};
 };
 struct Clear {
   unsigned flags;
@@ -181,9 +226,16 @@ struct Command {
 };
 struct Scene {
   double detail_time{};
+  mw34::detail::Settings detail_settings{};
   std::uint64_t world_frame{}, world_generation{}, world_context{};
   std::array<float, 3> world_eye{};
   bool world_eye_valid{};
+  // Private authored-fixture capture. Mode 1 packs the actual fragment UV in
+  // four raw bytes; production guest color remains the ordinary RGB565 copy.
+  unsigned pom_diagnostic_mode{};
+  bool pom_raw_readback{};
+  std::vector<unsigned char> pom_rgba8;
+  std::vector<float> pom_depth32;
   mw34::effects::Uniform effect_lights{};
   unsigned width, height;
   std::vector<std::uint16_t> color,
@@ -201,6 +253,16 @@ struct Scene {
   mw34::submission::DrawEmissions emissions;
   std::vector<Clear> clears;
   std::vector<Command> order;
+
+  bool texture_slot_matches(std::size_t slot, std::uint64_t key,
+                            std::uint64_t version, unsigned texture_width,
+                            unsigned texture_height) const {
+    if (slot >= textures.size())
+      return false;
+    const auto &texture = textures[slot];
+    return texture.key == key && texture.hash == version &&
+           texture.width == texture_width && texture.height == texture_height;
+  }
 };
 
 // Owns the loader, device, caches, render targets and child presentation
@@ -209,6 +271,8 @@ struct Scene {
 // and fences on one queue.
 class Renderer {
 public:
+  // Set only by the producer after draining all existing worker jobs.
+  cc_mw3_re::testing::ProducerViewObserver* producer_view_observer{};
   struct WindowSurface {
     std::vector<const char *> extensions;
     std::function<VkSurfaceKHR(VkInstance)> create;
@@ -222,6 +286,20 @@ public:
     bool fxaa;
   };
   enum class ColorTarget { device_default, rgba8 };
+  static constexpr unsigned scene_texture_bindings = 3;
+  static std::array<unsigned, 2> material_descriptor_counts(std::uint64_t capacity) {
+    if (capacity > (std::uint64_t(UINT32_MAX) - 2) / 5)
+      throw std::runtime_error("Material descriptor pool arithmetic overflow");
+    return {unsigned(capacity * 5 + 2), unsigned(capacity * 2 + 1)};
+  }
+  static unsigned material_descriptor_capacity(std::uint64_t draw_count,
+                                                std::uint64_t caster_count) {
+    constexpr std::uint64_t limit = (std::uint64_t(UINT32_MAX) - 2) / 5;
+    if (draw_count > limit || caster_count > limit - draw_count ||
+        draw_count + caster_count > limit - 64)
+      throw std::runtime_error("Scene material descriptor capacity overflows Vulkan counts");
+    return unsigned(draw_count + caster_count + 64);
+  }
   // An explicit format preference lets format-sensitive callers exercise the
   // RGBA fallback without changing device capabilities or process settings.
   explicit Renderer(ColorTarget color_target = ColorTarget::device_default,
@@ -230,11 +308,14 @@ public:
                     mw34::sun::Settings lighting = {},
                     bool native_geometry = false,
                     cc_mw3_re::RendererBridgeConfig config = {})
-      : require_rgba8(color_target == ColorTarget::rgba8),
+      : use_native_geometry(native_geometry),
+        profile_cpu(config.cpu_profile || sdlfe::cpu_profile_requested()),
+        profile_gpu(config.gpu_profile),
+        require_rgba8(color_target == ColorTarget::rgba8),
         surface_source(std::move(source)), quality_settings(quality),
         use_gpu_models(models), lighting_settings(lighting),
-        use_native_geometry(native_geometry), bridge_config(std::move(config)),
-        effects_settings(mw34::effects::from_config(
+        bridge_config(std::move(config)),
+        effects_settings(mw34::effects::settings(
             bridge_config, lighting_settings.enabled)) {
     if (surface_source.create) {
       bridge_config.dxgi_present = false;
@@ -287,7 +368,17 @@ public:
   // support); the caller then uses its other presenter.
   bool present(cc_mw3_re::platform::NativeWindowHandle hwnd,
                const std::uint8_t *pixels, unsigned w, unsigned h,
-               unsigned pitch, bool wide_world = false, bool rgba32 = false) {
+               unsigned pitch, bool wide_world = false, bool rgba32 = false
+#if defined(_WIN32)
+               , sdlfe::EditorUi *editor = nullptr
+#endif
+               ) {
+    mw34::timing::PresentBoundaryScope<mw34::timing::GpuResourceTiming>
+        gpu_timing_scope(gpu_resource_timing_);
+#if defined(_WIN32)
+    const bool requested_editor = editor_requested(editor);
+    try {
+#endif
     const bool visible = surface_source.is_visible
                              ? surface_source.is_visible(hwnd)
                              : cc_mw3_re::platform::is_window_visible(hwnd);
@@ -309,22 +400,42 @@ public:
       if (!child && bridge_config.dxgi_present)
         throw std::runtime_error(
             "Cannot create the required DXGI presentation window");
-      if (!child && !surface_source.create)
+      if (!child && !surface_source.create) {
+#if defined(_WIN32)
+        if (requested_editor)
+          editor_check(VK_ERROR_INITIALIZATION_FAILED, "required editor presentation child unavailable");
+#endif
         return false;
+      }
       // A presenting instance selects the device that can present to this
       // window (on hybrid systems the display may belong to another adapter
       // than the one rendering scenes).
       if (!device)
         init(surface_source.create ? hwnd : child);
-      else if (presentable && !surface(surface_source.create ? hwnd : child))
+      else if (presentable && !surface(surface_source.create ? hwnd : child)) {
+#if defined(_WIN32)
+        if (requested_editor)
+          editor_check(VK_ERROR_INITIALIZATION_FAILED, "required editor window surface unavailable");
+#endif
         return false;
+      }
     }
-    if (!presentable || (!windowSurface && !dxgi.active()))
+    if (!presentable || (!windowSurface && !dxgi.active())) {
+#if defined(_WIN32)
+      if (requested_editor)
+        editor_check(VK_ERROR_INITIALIZATION_FAILED, "required editor device cannot present to this window");
+#endif
       return false;
+    }
     // The previous Flip's copy/blit is waited for here, before its upload
     // buffer, command pool or source image are reused, instead of right after
     // vkQueuePresentKHR (presentation stays one frame per Flip).
     if (presentInFlight) {
+#if defined(_WIN32)
+      if (editor_.pending)
+        editor_wait_present();
+      else
+#endif
       check(
           f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
           "wait present");
@@ -366,8 +477,18 @@ public:
         check(r, "acquire swapchain image");
     }
     const bool suboptimal_acquire = r == VK_SUBOPTIMAL_KHR;
+#if defined(_WIN32)
+    const bool editor_frame = prepare_editor(editor, requested_editor);
+#else
+    const bool editor_frame = false;
+#endif
     const VkImage swap_target =
         dxgi.active() ? dxgi.image() : swapImages[index];
+    VkImage game_target = swap_target;
+#if defined(_WIN32)
+    if (editor_frame)
+      game_target = editor_.composition.color.image;
+#endif
     check(f.vkResetCommandPool(device, presentPool, 0), "reset present pool");
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -405,6 +526,10 @@ public:
       bar(swap_target, VK_IMAGE_LAYOUT_UNDEFINED,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
           VK_ACCESS_TRANSFER_WRITE_BIT);
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_begin_composition();
+#endif
     // Scaled to the window's client area with nearest sampling (the GDI
     // presenter's COLORONCOLOR).
     VkImageBlit blit{};
@@ -419,15 +544,15 @@ public:
         swapExtent.height, wide_world);
     blit.dstOffsets[0] = {destination.left, destination.top, 0};
     blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
-    if (destination.left || destination.top ||
+    if (!editor_frame && (destination.left || destination.top ||
         destination.right != int32_t(swapExtent.width) ||
-        destination.bottom != int32_t(swapExtent.height)) {
+        destination.bottom != int32_t(swapExtent.height))) {
       const VkClearColorValue black{};
       const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-      f.vkCmdClearColorImage(presentCmd, swap_target,
+      f.vkCmdClearColorImage(presentCmd, game_target,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1,
                              &all);
-      bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      bar(game_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
           VK_ACCESS_TRANSFER_WRITE_BIT);
     }
@@ -439,9 +564,13 @@ public:
       blit.dstOffsets[1] = {fit.x + fit.width, fit.y + fit.height, 1};
     }
     f.vkCmdBlitImage(presentCmd, srcImage.image,
-                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swap_target,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, game_target,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                      VK_FILTER_NEAREST);
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_finish_composition(swap_target);
+#endif
     if (dxgi.active())
       dxgi.release_image(presentCmd, f.vkCmdPipelineBarrier);
     else
@@ -461,6 +590,11 @@ public:
     si.signalSemaphoreCount = dxgi.active() ? 0 : 1;
     si.pSignalSemaphores = dxgi.active() ? nullptr : &swapRendered[index];
     check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_submit(si);
+    else
+#endif
     check(f.vkQueueSubmit(queue, 1, &si, presentFence), "submit present");
     if (dxgi.active()) {
       presentInFlight = true;
@@ -486,6 +620,11 @@ public:
       if (r != VK_SUBOPTIMAL_KHR && r != VK_ERROR_OUT_OF_DATE_KHR &&
           r != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)
         check(r, "present");
+#if defined(_WIN32)
+      if (editor_.pending)
+        editor_wait_present();
+      else
+#endif
       check(
           f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
           "wait present");
@@ -495,6 +634,16 @@ public:
     check(r, "present");
     presentInFlight = true;
     return true;
+#if defined(_WIN32)
+    } catch (...) {
+      const auto failure = std::current_exception();
+      if (requested_editor || editor_.cpu) {
+        editor_note_failure(failure);
+        editor_rethrow(failure);
+      }
+      throw;
+    }
+#endif
   }
   // Presents the resident scene target (lazy residency on this device: the 3D
   // scenes and the GPU HUD of the frame) directly: no guest copy, no upload.
@@ -513,7 +662,17 @@ public:
     }
   }
   bool present_resident(cc_mw3_re::platform::NativeWindowHandle hwnd,
-                        unsigned w, unsigned h, bool manage_window = true) {
+                        unsigned w, unsigned h, bool manage_window = true
+#if defined(_WIN32)
+                        , sdlfe::EditorUi *editor = nullptr
+#endif
+                        ) {
+    mw34::timing::PresentBoundaryScope<mw34::timing::GpuResourceTiming>
+        gpu_timing_scope(gpu_resource_timing_);
+#if defined(_WIN32)
+    const bool requested_editor = editor_requested(editor);
+    try {
+#endif
     finish_world();
     const bool visible = surface_source.is_visible
                              ? surface_source.is_visible(hwnd)
@@ -525,6 +684,11 @@ public:
         !colorImage.image || w != width || h != height)
       return false;
     if (presentInFlight) {
+#if defined(_WIN32)
+      if (editor_.pending)
+        editor_wait_present();
+      else
+#endif
       check(
           f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
           "wait present");
@@ -556,8 +720,18 @@ public:
         check(r, "acquire swapchain image");
     }
     const bool suboptimal_acquire = r == VK_SUBOPTIMAL_KHR;
+#if defined(_WIN32)
+    const bool editor_frame = prepare_editor(editor, requested_editor);
+#else
+    const bool editor_frame = false;
+#endif
     const VkImage swap_target =
         dxgi.active() ? dxgi.image() : swapImages[index];
+    VkImage game_target = swap_target;
+#if defined(_WIN32)
+    if (editor_frame)
+      game_target = editor_.composition.color.image;
+#endif
     check(f.vkResetCommandPool(device, presentPool, 0), "reset present pool");
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -592,6 +766,10 @@ public:
       bar(swap_target, VK_IMAGE_LAYOUT_UNDEFINED,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_begin_composition();
+#endif
     // The frame keeps its aspect ratio (side or top bars are cleared to black
     // when the window's differs).
     const auto ss = sample_grid();
@@ -600,15 +778,15 @@ public:
         ow, oh, swapExtent.width, swapExtent.height);
     const int dw = destination.right - destination.left;
     const int dh = destination.bottom - destination.top;
-    if (destination.left || destination.top ||
+    if (!editor_frame && (destination.left || destination.top ||
         destination.right != int32_t(swapExtent.width) ||
-        destination.bottom != int32_t(swapExtent.height)) {
+        destination.bottom != int32_t(swapExtent.height))) {
       const VkClearColorValue black{};
       const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-      f.vkCmdClearColorImage(presentCmd, swap_target,
+      f.vkCmdClearColorImage(presentCmd, game_target,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1,
                              &all);
-      bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      bar(game_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
           VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
           VK_PIPELINE_STAGE_TRANSFER_BIT);
@@ -620,10 +798,14 @@ public:
     blit.dstOffsets[0] = {destination.left, destination.top, 0};
     blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
     f.vkCmdBlitImage(presentCmd, colorImage.image,
-                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swap_target,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, game_target,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                      (dw == int(rw) && dh == int(rh)) ? VK_FILTER_NEAREST
                                                       : VK_FILTER_LINEAR);
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_finish_composition(swap_target);
+#endif
     if (dxgi.active())
       dxgi.release_image(presentCmd, f.vkCmdPipelineBarrier);
     else
@@ -661,6 +843,11 @@ public:
     si.signalSemaphoreCount = dxgi.active() ? 0 : 1;
     si.pSignalSemaphores = dxgi.active() ? nullptr : &swapRendered[index];
     check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
+#if defined(_WIN32)
+    if (editor_frame)
+      editor_submit(si);
+    else
+#endif
     check(f.vkQueueSubmit(queue, 1, &si, presentFence),
           "submit resident present");
     if (dxgi.active()) {
@@ -689,6 +876,11 @@ public:
       if (r != VK_SUBOPTIMAL_KHR && r != VK_ERROR_OUT_OF_DATE_KHR &&
           r != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)
         check(r, "present");
+#if defined(_WIN32)
+      if (editor_.pending)
+        editor_wait_present();
+      else
+#endif
       check(
           f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
           "wait present");
@@ -698,6 +890,16 @@ public:
     check(r, "present");
     presentInFlight = true;
     return true;
+#if defined(_WIN32)
+    } catch (...) {
+      const auto failure = std::current_exception();
+      if (requested_editor || editor_.cpu) {
+        editor_note_failure(failure);
+        editor_rethrow(failure);
+      }
+      throw;
+    }
+#endif
   }
   std::uint64_t resident_presents{};
   bool dxgi_presenting() const { return dxgi.active(); }
@@ -976,7 +1178,51 @@ public:
     check(f.vkQueueSubmit(queue, 1, &si, fence), "submit quality");
     scene_pending = true;
   }
-  std::uint64_t fxaa_passes{}, af_samplers{}, mip_levels_uploaded{};
+  std::uint64_t fxaa_passes{}, af_samplers{}, mip_levels_uploaded{}, menu_ripple_passes{};
+  void prepare_canvas_textures(const std::vector<TextureRef> &references) {
+      // No commands reference these allocations yet. Settle earlier GPU work
+      // before resizing shared staging storage or replacing an image.
+      if (!device)
+          init();
+      settle();
+      VkDeviceSize upload_bytes = 0;
+      for (const auto &reference : references)
+          upload_bytes += VkDeviceSize(reference.width) * reference.height * 4;
+      Buffer replacement;
+      std::vector<std::uint64_t> allocated_keys;
+      const auto release_buffer = [this](Buffer &buffer) {
+          if (buffer.buffer)
+              f.vkDestroyBuffer(device, buffer.buffer, nullptr);
+          if (buffer.memory)
+              release_memory(device, buffer.memory, nullptr);
+          buffer = {};
+      };
+      try {
+          // Keep the previous staging buffer usable if a larger optional upload fails.
+          if (texUpload.size < upload_bytes)
+              ensure(replacement, upload_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
+          for (const auto &reference : references) {
+              auto &texture = textures[reference.key];
+              if (texture.image && texture.width == reference.width &&
+                  texture.height == reference.height) {
+                  continue;
+              }
+              destroy(texture);
+              // Track before create(): a failed allocation can own partial resources.
+              allocated_keys.push_back(reference.key);
+              create(texture, reference.width, reference.height);
+          }
+      } catch (...) {
+          for (const auto key : allocated_keys)
+              destroy(textures.at(key));
+          release_buffer(replacement);
+          throw;
+      }
+      if (replacement.buffer) {
+          release_buffer(texUpload);
+          texUpload = replacement;
+      }
+  }
   std::uint64_t emission_draw_records{}, emission_payloads{};
   // Query the actual scene/presenter device, avoiding a throwaway render device
   // when enhanced texture banks need dimensions beyond the original 256 cap.
@@ -1015,7 +1261,14 @@ public:
   std::uint64_t retired_model_buffers{};
   std::uint64_t model_uploads{}, model_uploaded_bytes{}, model_draws{},
       world_gpu_draws{}, effect_light_peak{}, fixture_light_peak{};
+  // The last rendered scene's tiled-light bookkeeping (checks): views registered for
+  // tiled lists, draws shaded by every effect light (overflow or unusable view), and
+  // each draw's mode (0 no effect lights, 1 its tiled view, 2 every effect light).
+  std::uint64_t tiled_views_last{}, tiled_all_light_draws_last{};
+  std::vector<std::uint8_t> tiled_draw_modes_last;
   std::uint64_t normal_draws{};
+  std::uint64_t height_uploads{}, height_uploaded_bytes{}, height_cache_hits{},
+      height_retired_images{};
   std::uint64_t presents{};
   bool presentInFlight{};
   // True when the cached texture for this guest surface already holds content
@@ -1045,9 +1298,9 @@ public:
   // resources, so the game computes the next scene while the GPU renders this
   // one.
   bool scene_pending{};
-  const bool profile_cpu =
-      bridge_config.cpu_profile || sdlfe::cpu_profile_requested();
-  const bool profile_gpu = bridge_config.gpu_profile;
+  const bool profile_cpu;
+  const bool profile_gpu;
+  mw34::timing::GpuResourceTiming gpu_resource_timing_{};
   VkQueryPool profile_queries{};
   bool profile_queries_pending{};
   unsigned profile_timestamp_bits{};
@@ -1074,17 +1327,289 @@ public:
     if (!scene_pending)
       return;
     sdlfe::CpuInterval interval(profile_cpu ? &profile_wait_ticks : nullptr);
-    check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL),
-          "wait previous scene");
+    {
+      mw34::timing::ScopedDuration wait_timer(
+          preload_batch_inflight_ && gpu_resource_timing_.enabled
+              ? &preload_wait_nanoseconds_
+              : nullptr);
+      check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL),
+            "wait previous scene");
+    }
     collect_profile_queries();
     scene_pending = false;
+    if (preload_batch_inflight_)
+      complete_preload_batch();
   }
+    // Finish immutable uploads during loading so first-visible draws reuse the cache.
+    bool preload_model_geometry(const ModelGeometry &geometry) {
+        require_preload();
+        mw34::timing::ScopedDuration geometry_timer(
+            gpu_resource_timing_.enabled ? &preload_geometry_nanoseconds_ : nullptr);
+        if (preload_stopped_)
+            return false;
+        const auto existing = model_buffers.find(geometry.key);
+        if (existing != model_buffers.end() &&
+            (existing->second.uploaded || pending_model(geometry.key))) {
+            model_buffer(geometry); // Keep immutable identity validation.
+            return true;
+        }
+        const VkDeviceSize bytes = geometry.vertices.size() * sizeof(ModelVertex) +
+                                   geometry.indices.size() * sizeof(std::uint32_t);
+        if (!admit_preload_bytes(bytes))
+            return false;
+        try {
+            if (pending_preload_models_.size() == pending_preload_models_.capacity())
+                pending_preload_models_.reserve(
+                    std::max<std::size_t>(16, pending_preload_models_.size() * 2));
+            auto &buffer = model_buffer(geometry, true);
+            ensure(texUpload, preload_batch_cap_, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
+            auto *destination = static_cast<unsigned char *>(texUpload.mapped) + preload_texture_bytes_;
+            std::memcpy(destination, geometry.vertices.data(), size_t(buffer.local.size));
+            if (buffer.indices.buffer)
+                std::memcpy(destination + buffer.local.size, geometry.indices.data(),
+                            size_t(buffer.indices.size));
+            pending_preload_models_.push_back(geometry.key);
+            begin_preload_batch();
+            VkBufferCopy vertex_copy{preload_texture_bytes_, 0, buffer.local.size};
+            f.vkCmdCopyBuffer(cmd, texUpload.buffer, buffer.local.buffer,
+                             1, &vertex_copy);
+            if (buffer.indices.buffer) {
+                VkBufferCopy index_copy{preload_texture_bytes_ + buffer.local.size, 0,
+                                        buffer.indices.size};
+                f.vkCmdCopyBuffer(cmd, texUpload.buffer,
+                                 buffer.indices.buffer, 1, &index_copy);
+            }
+            VkMemoryBarrier memory_barrier{};
+            memory_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            memory_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            memory_barrier.dstAccessMask =
+                VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT;
+            f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                  VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1,
+                                  &memory_barrier, 0, nullptr, 0, nullptr);
+            preload_texture_bytes_ += bytes;
+            account_preload_bytes(bytes);
+            return true;
+        } catch (const PreloadBudgetFailure &) {
+            discard_model_buffer(geometry.key);
+            stop_preload(VK_SUCCESS);
+        } catch (const PreloadAllocationFailure &failure) {
+            discard_model_buffer(geometry.key);
+            stop_preload(failure.result);
+        } catch (const std::bad_alloc &) {
+            pending_preload_models_.erase(
+                std::remove(pending_preload_models_.begin(), pending_preload_models_.end(),
+                            geometry.key), pending_preload_models_.end());
+            discard_model_buffer(geometry.key);
+            stop_preload(VK_ERROR_OUT_OF_HOST_MEMORY);
+        }
+        return false;
+    }
+
+    // Warmup a single texture on the GPU before interactive gameplay without
+    // modifying render targets, camera history, or draw state.
+    bool preload_texture(const TextureRef &texture_ref) {
+        require_preload();
+        if (preload_stopped_)
+            return false;
+        if (!texture_ref.width || !texture_ref.height)
+            throw std::runtime_error(
+                "Vulkan scene renderer: preload texture requires nonzero dimensions");
+        for (const auto &pending : pending_preload_textures_) {
+            if (pending.key != texture_ref.key)
+                continue;
+            if (pending.hash == texture_ref.hash && pending.width == texture_ref.width &&
+                pending.height == texture_ref.height)
+                return true;
+            // A second version must not overwrite an image referenced by this batch.
+            flush_preload();
+            break;
+        }
+        if (texture_completed(texture_ref.key, texture_ref.hash,
+                              texture_ref.width, texture_ref.height))
+            return true;
+        const VkDeviceSize texture_bytes =
+            VkDeviceSize(texture_ref.width) * texture_ref.height * 4;
+        if (!admit_preload_bytes(texture_bytes))
+            return false;
+        try {
+            if (pending_preload_textures_.size() == pending_preload_textures_.capacity())
+                pending_preload_textures_.reserve(
+                    std::max<std::size_t>(16, pending_preload_textures_.size() * 2));
+            auto &cached_texture = textures[texture_ref.key];
+            const bool needs_image_allocation = !cached_texture.image ||
+                                                cached_texture.width != texture_ref.width ||
+                                                cached_texture.height != texture_ref.height;
+            const bool needs_upload = needs_image_allocation ||
+                                      cached_texture.hash != texture_ref.hash ||
+                                      !cached_texture.valid;
+            if (!needs_upload)
+                return true;
+
+            std::uint64_t next_source_rgb565_hash = 0;
+            std::uint64_t next_source_rgba8_hash = 0;
+            {
+                mw34::timing::ScopedDuration texture_allocation_timer(
+                    gpu_resource_timing_.texture_upload_target());
+                const std::size_t expected_pixel_count =
+                    std::size_t(texture_ref.width) * texture_ref.height;
+                if (texture_ref.format == TexFormat::rgba8888) {
+                    if (texture_ref.pixels32.size() != expected_pixel_count)
+                        throw std::runtime_error(
+                            "Vulkan scene renderer: changed texture without pixels");
+                } else if (texture_ref.format == TexFormat::rgb565 ||
+                           texture_ref.format == TexFormat::argb1555 ||
+                           texture_ref.format == TexFormat::argb4444) {
+                    if (texture_ref.pixels.size() != expected_pixel_count)
+                        throw std::runtime_error(
+                            "Vulkan scene renderer: changed texture without pixels");
+                } else {
+                    throw std::runtime_error(
+                        "Vulkan scene renderer: unsupported preload texture format");
+                }
+                mw34::timing::ScopedDuration hash_timer(
+                    gpu_resource_timing_.enabled ? &preload_hash_nanoseconds_ : nullptr);
+                if (bridge_config.parallax_materials) {
+                    if (texture_ref.format == TexFormat::rgba8888) {
+                        const auto *pixels = reinterpret_cast<const unsigned char *>(
+                            texture_ref.pixels32.data());
+                        next_source_rgb565_hash =
+                            mw34::materials::canonical_upload_key(
+                                texture_ref.width, texture_ref.height, pixels, 1)
+                                .hash;
+                        next_source_rgba8_hash = mw34::materials::normal_hash(
+                            pixels, texture_ref.pixels32.size() * 4);
+                    } else if (texture_ref.format == TexFormat::rgb565) {
+                        next_source_rgb565_hash = mw34::materials::normal_hash(
+                            texture_ref.pixels.data(), texture_ref.pixels.size() * 2);
+                    }
+                }
+            }
+            {
+                mw34::timing::ScopedDuration texture_allocation_timer(
+                    gpu_resource_timing_.texture_upload_target());
+                mw34::timing::ScopedDuration allocation_timer(
+                    gpu_resource_timing_.enabled ? &preload_image_nanoseconds_ : nullptr);
+                if (cached_texture.image && needs_image_allocation)
+                    destroy(cached_texture);
+                if (!cached_texture.image)
+                    create(cached_texture, texture_ref.width, texture_ref.height);
+            }
+
+            {
+                mw34::timing::ScopedDuration texture_staging_timer(
+                    gpu_resource_timing_.texture_upload_target());
+                mw34::timing::ScopedDuration staging_timer(
+                    gpu_resource_timing_.enabled ? &preload_staging_nanoseconds_ : nullptr);
+                // Allocate once, then reuse disjoint slices until the batch fence completes.
+                ensure(texUpload, preload_batch_cap_, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
+                auto *staging_destination =
+                    static_cast<unsigned char *>(texUpload.mapped) + preload_texture_bytes_;
+                if (texture_ref.format == TexFormat::rgba8888) {
+                    std::memcpy(staging_destination, texture_ref.pixels32.data(),
+                                texture_ref.pixels32.size() * 4);
+                } else {
+                    const bool staged = !bridge_config.texture_staging.empty() &&
+                                        bridge_config.texture_staging != "0";
+                    if (staged) {
+                        const unsigned format =
+                            texture_ref.format == TexFormat::rgb565     ? 0
+                            : texture_ref.format == TexFormat::argb1555 ? 1
+                                                                        : 2;
+                        mw34::texture_staging::copy(staging_destination,
+                                                    texture_ref.pixels.data(),
+                                                    texture_ref.pixels.size(), format);
+                    } else {
+                        for (std::size_t i = 0; i < texture_ref.pixels.size(); ++i) {
+                            const unsigned pixel = texture_ref.pixels[i];
+                            std::uint32_t red, green, blue, alpha;
+                            if (texture_ref.format == TexFormat::rgb565) {
+                                red = ((pixel >> 11) & 31) * 255 / 31;
+                                green = ((pixel >> 5) & 63) * 255 / 63;
+                                blue = (pixel & 31) * 255 / 31;
+                                alpha = 255;
+                            } else if (texture_ref.format == TexFormat::argb1555) {
+                                red = ((pixel >> 10) & 31) * 255 / 31;
+                                green = ((pixel >> 5) & 31) * 255 / 31;
+                                blue = (pixel & 31) * 255 / 31;
+                                alpha = (pixel & 0x8000) ? 255 : 0;
+                            } else {
+                                red = ((pixel >> 8) & 15) * 17;
+                                green = ((pixel >> 4) & 15) * 17;
+                                blue = (pixel & 15) * 17;
+                                alpha = ((pixel >> 12) & 15) * 17;
+                            }
+                            const std::uint32_t converted =
+                                red | green << 8 | blue << 16 | alpha << 24;
+                            std::memcpy(staging_destination + 4 * i, &converted, 4);
+                        }
+                    }
+                }
+            }
+
+            {
+                mw34::timing::ScopedDuration texture_record_timer(
+                    gpu_resource_timing_.texture_upload_target());
+                mw34::timing::ScopedDuration record_timer(
+                    gpu_resource_timing_.enabled ? &preload_record_nanoseconds_ : nullptr);
+                pending_preload_textures_.push_back(
+                    {texture_ref.key, texture_ref.hash, next_source_rgb565_hash,
+                     next_source_rgba8_hash, texture_ref.width, texture_ref.height});
+                begin_preload_batch();
+                barrier(cached_texture.image,
+                        cached_texture.valid
+                            ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                            : VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        cached_texture.valid ? VK_ACCESS_SHADER_READ_BIT : 0,
+                        VK_ACCESS_TRANSFER_WRITE_BIT,
+                        cached_texture.valid
+                            ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                            : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                        cached_texture.levels);
+                copyIn(texUpload.buffer, preload_texture_bytes_, cached_texture.image, texture_ref.width,
+                       texture_ref.height, VK_IMAGE_ASPECT_COLOR_BIT);
+                const auto previous_mip_uploads = mip_levels_uploaded;
+                generate_mips(cached_texture);
+                // generate_mips records commands; preload counters describe completion.
+                mip_levels_uploaded = previous_mip_uploads;
+            }
+            preload_texture_bytes_ += texture_bytes;
+            account_preload_bytes(texture_bytes);
+            return true;
+        } catch (const PreloadBudgetFailure &) {
+            stop_preload(VK_SUCCESS);
+        } catch (const PreloadAllocationFailure &failure) {
+            stop_preload(failure.result);
+        } catch (const std::bad_alloc &) {
+            pending_preload_textures_.erase(
+                std::remove_if(pending_preload_textures_.begin(), pending_preload_textures_.end(),
+                               [&](const PendingPreloadTexture &pending) {
+                                   return pending.key == texture_ref.key;
+                               }), pending_preload_textures_.end());
+            stop_preload(VK_ERROR_OUT_OF_HOST_MEMORY);
+        }
+        const auto failed = textures.find(texture_ref.key);
+        if (failed != textures.end()) {
+            destroy(failed->second);
+            textures.erase(failed);
+        }
+        // Earlier queued copies still own their staging slices until finalization.
+        if (pending_preload_textures_.empty() && pending_preload_models_.empty())
+            destroy_buffer(texUpload);
+        return false;
+    }
+
   // Record uploads, ordered clears/draws, and optional copy-back as one
   // submission. settle() protects the reusable staging buffers, descriptors and
   // command pool. With copy-back disabled, the GPU may still be working when
   // this call returns.
   void render(Scene &s, bool upload_in = true, bool readback_out = true) {
+    if (preload_active_ || preload_batch_recording_)
+      throw std::runtime_error("Vulkan scene renderer: rendering during preload");
     settle();
+    retire_height_images();
     // The previous GPU submission has completed. Indexed geometry owns no
     // live engine pointers and can retire once its source and packets expire.
     for (auto it = model_buffers.begin(); it != model_buffers.end();) {
@@ -1098,7 +1623,7 @@ public:
         if (allocation->buffer)
           f.vkDestroyBuffer(device, allocation->buffer, nullptr);
         if (allocation->memory)
-          f.vkFreeMemory(device, allocation->memory, nullptr);
+          release_memory(device, allocation->memory, nullptr);
       }
       sunChecked.erase(it->first);
       ++retired_model_buffers;
@@ -1109,6 +1634,14 @@ public:
     if (s.width != width || s.height != height || scale_req != scale ||
         s.frontend_canvas != target_frontend)
       target(s.width, s.height, s.frontend_canvas);
+    s.pom_rgba8.clear();
+    s.pom_depth32.clear();
+    if (s.pom_diagnostic_mode > 1 ||
+        (s.pom_diagnostic_mode && !s.pom_raw_readback) ||
+        (s.pom_raw_readback &&
+         (!readback_out || !require_rgba8 || !rgba || quality_settings.samples_x != 1 ||
+          quality_settings.samples_y != 1 || fxaa_enabled() || rw != width || rh != height)))
+      throw std::runtime_error("POM raw capture requires linear RGBA8, single sample and readback");
     if (bridge_config.temporal_inputs) {
       if (s.frontend_canvas)
         camera_history.invalidate(mw34::temporal::Reset::transition);
@@ -1162,6 +1695,8 @@ public:
         camera_history.observe(std::move(snapshot));
       }
     }
+    apply_atmosphere(s, lighting_settings);
+    capture_range_backdrops(s, upload_in);
     if (can_reconstruct_world(s, upload_in, readback_out))
       render_reconstructed_world(s);
     else
@@ -1176,7 +1711,7 @@ private:
     if (s.width != width || s.height != height || scale_req != scale ||
         s.frontend_canvas != target_frontend)
       target(s.width, s.height, s.frontend_canvas);
-    if (worldColor.image &&
+    if (!recording_backdrop && worldColor.image &&
         reconstruction_stage == ReconstructionStage::normal) {
       // A depth-only frame may retain full-resolution HUD color. Reduce
       // only when a full color clear replaces every retained pixel.
@@ -1237,10 +1772,24 @@ private:
     if (upload_in)
       mw34::depth::upload(up + depthOffset, s.depth.data(), size_t(pixels));
     const auto &environment = lighting_settings;
-    if (!world_scene_prepared)
-      apply_atmosphere(s, environment);
+
     if (!s.vertices.empty())
       std::memcpy(vertexBuffer.mapped, s.vertices.data(), s.vertices.size());
+    const auto vertex_count = s.vertices.size() / 32;
+    ensure(fogBuffer, std::max<VkDeviceSize>(vertex_count * 16, 16),
+           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    // Zero only what this submission can fetch: ensure() keeps the largest allocation, so clearing
+    // fogBuffer.size would rewrite a past peak on every small HUD or clear-only frame.
+    std::memset(fogBuffer.mapped, 0, size_t(std::max<VkDeviceSize>(vertex_count * 16, 16)));
+    for (const auto &draw : s.draws) {
+      if (!draw.raw_fog)
+        continue;
+      if (draw.raw_fog->size() != draw.count || draw.first > vertex_count ||
+          draw.count > vertex_count - draw.first)
+        throw std::runtime_error("Clipped raw-fog range mismatch");
+      std::memcpy(static_cast<unsigned char *>(fogBuffer.mapped) + size_t(draw.first) * 16,
+                  draw.raw_fog->data(), size_t(draw.count) * 16);
+    }
     if (lighting_settings.enabled) {
       const auto count = s.vertices.size() / 32;
       ensure(normalBuffer, std::max<VkDeviceSize>(count * 12, 12),
@@ -1289,6 +1838,12 @@ private:
     for (size_t i = 0; i < s.textures.size(); ++i) {
       const auto &t = s.textures[i];
       auto &c = textures[t.key];
+      const bool needs_upload = !c.image || c.width != t.width ||
+                                c.height != t.height || c.hash != t.hash ||
+                                !c.valid;
+      mw34::timing::ScopedDuration texture_allocation_timer(
+          needs_upload ? gpu_resource_timing_.texture_upload_target()
+                       : nullptr);
       if (c.image && (c.width != t.width || c.height != t.height))
         destroy(c);
       if (!c.image)
@@ -1299,14 +1854,32 @@ private:
                  : t.pixels.size()) != size_t(t.width) * t.height)
           throw std::runtime_error(
               "Vulkan scene renderer: changed texture without pixels");
+        if (bridge_config.parallax_materials) {
+          c.source_rgb565_hash = c.source_rgba8_hash = 0;
+          if (t.format == TexFormat::rgba8888) {
+            const auto *pixels = reinterpret_cast<const unsigned char *>(t.pixels32.data());
+            c.source_rgb565_hash =
+                mw34::materials::canonical_upload_key(t.width, t.height, pixels, 1).hash;
+            c.source_rgba8_hash =
+                mw34::materials::normal_hash(pixels, t.pixels32.size() * 4);
+          } else if (t.format == TexFormat::rgb565) {
+            c.source_rgb565_hash =
+                mw34::materials::normal_hash(t.pixels.data(), t.pixels.size() * 2);
+          }
+        }
         changed.push_back({&c, &t});
         texBytes += VkDeviceSize(t.width) * t.height * 4;
       }
       bound[i] = &c;
     }
-    ensure(texUpload, std::max<VkDeviceSize>(texBytes, 4),
-           VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    std::vector<HeightUpload> pending_heights;
+    const auto draw_heights = prepare_height_images(s, bound, pending_heights);
     {
+      mw34::timing::ScopedDuration texture_staging_timer(
+          !changed.empty() ? gpu_resource_timing_.texture_upload_target()
+                           : nullptr);
+      ensure(texUpload, std::max<VkDeviceSize>(texBytes, 4),
+             VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
       auto *tp = static_cast<unsigned char *>(texUpload.mapped);
       for (auto &[c, t] : changed) {
         if (t->format == TexFormat::rgba8888) {
@@ -1368,7 +1941,7 @@ private:
       }
       shadowFrame = &world_shadow_frame;
       fixtureLights = &world_fixture_lights;
-    } else {
+    } else if (!recording_backdrop) {
       localShadowFrame = prepare_shadow(s, environment);
       localFixtureLights = prepare_fixture_shadows(s, bound, s.vertices);
     }
@@ -1376,6 +1949,7 @@ private:
     mw34::submission::ExactUniformRuns<mw34::sun::Uniform> uniformRuns;
     std::vector<unsigned> sunUniformIds(s.draws.size());
     std::vector<mw34::tiled::View> tiledFrameViews;
+    constexpr unsigned allEffectLights = ~0u - 1;
     std::vector<unsigned> tiledDrawViews(s.draws.size(), ~0u);
     bool sunScene = false;
     if (lighting_settings.enabled) {
@@ -1392,29 +1966,92 @@ private:
       std::memcpy(effectBuffer.mapped, &fx, sizeof(fx));
       mw34::tiled::validate_lights(fx);
       if (effects_settings.enabled && fx.params[0] > 0) {
+        init_tiled();
+        mw34::tiled::ViewBudget budget{tiledRange, tiledListAlignment};
         for (size_t at = 0; at < s.draws.size(); ++at) {
           const auto &d = s.draws[at];
           if (s.hud || s.frontend_canvas || d.sky || !sun_lit(d))
             continue;
-          const auto camera =
-              d.model ? mw34::tiled::compose_affine(d.model->camera,
-                                                    mw34::tiled::inverse_affine(d.model->sun_world))
-                      : mw34::tiled::inverse_affine(d.sun_tl->camera_world);
+          mw34::tiled::Mat34 camera{};
+          const auto report_affine_fallback = [&](const char *reason) {
+            const auto &matrix = d.model ? d.model->sun_world : d.sun_tl->camera_world;
+            const auto matrix_scale = [&](unsigned row) {
+              const double x = matrix[row * 4], y = matrix[row * 4 + 1],
+                           z = matrix[row * 4 + 2];
+              return std::sqrt(x * x + y * y + z * z);
+            };
+            std::fprintf(stderr,
+                         "Tiled lights: affine all-light fallback draw=%zu source=%s "
+                         "model_id=",
+                         at, d.model ? "model" : "TL");
+            if (d.model)
+              std::fprintf(stderr, "%llu", static_cast<unsigned long long>(d.model->geometry->key));
+            else
+              std::fprintf(stderr, "none");
+            std::fprintf(stderr,
+                         " model_name=unavailable scale=(%.6g,%.6g,%.6g) "
+                         "translation=(%.6g,%.6g,%.6g) matrix=[",
+                         matrix_scale(0), matrix_scale(1), matrix_scale(2), matrix[3], matrix[7],
+                         matrix[11]);
+            for (unsigned element = 0; element < matrix.size(); ++element)
+              std::fprintf(stderr, "%s%.6g", element ? "," : "", matrix[element]);
+            if (d.model) {
+              std::fprintf(stderr, "] camera=[");
+              for (unsigned element = 0; element < d.model->camera.size(); ++element)
+                std::fprintf(stderr, "%s%.6g", element ? "," : "",
+                             d.model->camera[element]);
+            }
+            std::fprintf(stderr, "] reason=%s\n", reason);
+          };
+          if (!mw34::tiled::try_affine_camera_or_all_lights(
+                  camera, tiledDrawViews[at], allEffectLights, tiledAffineFallbackReported,
+                  [&] {
+                    if (d.model && d.model->has_world_to_camera &&
+                        mw34::tiled::matches_model_camera(d.model->world_to_camera,
+                                                         d.model->sun_world, d.model->camera))
+                      return d.model->world_to_camera;
+                    return d.model
+                               ? mw34::tiled::compose_affine(
+                                     d.model->camera,
+                                     mw34::tiled::inverse_affine(d.model->sun_world))
+                               : mw34::tiled::inverse_affine(d.sun_tl->camera_world);
+                  },
+                  report_affine_fallback))
+            continue;
           const auto &projection = d.model ? d.model->projection : d.sun_tl->projection;
-          const auto v = mw34::tiled::draw_view(camera, projection, width, height, rw, rh);
+          // Malformed per-draw projection: draw without local effect lights, bounded
+          // warning, never end the game. ~0u is the index every unlit draw uses.
+          mw34::tiled::View v{};
+          if (!mw34::tiled::try_draw_view_or_no_effect_lights(
+                  v, tiledDrawViews[at], ~0u, tiledProjectionFallbackReported,
+                  camera, projection, width, height, rw, rh))
+            continue;
           auto found =
               std::find_if(tiledFrameViews.begin(), tiledFrameViews.end(), [&](const auto &prior) {
                 return std::memcmp(&prior, &v, sizeof(v)) == 0;
               });
-          tiledDrawViews[at] = unsigned(found - tiledFrameViews.begin());
-          if (found == tiledFrameViews.end()) {
-            if (tiledFrameViews.size() == 64)
-              throw std::runtime_error("Too many tiled camera views");
+          if (found != tiledFrameViews.end()) {
+            tiledDrawViews[at] = unsigned(found - tiledFrameViews.begin());
+          } else if (budget.reserve(mw34::tiled::bytes(v))) {
+            tiledDrawViews[at] = unsigned(tiledFrameViews.size());
             tiledFrameViews.push_back(v);
+          } else {
+            // Preserve this exact draw's lighting when the tiled optimization is full.
+            tiledDrawViews[at] = allEffectLights;
+            if (!tiledOverflowReported) {
+              std::fprintf(stderr, "Tiled lights: GPU all-light overflow path; "
+                                   "views=%zu bytes=%llu range=%llu\n",
+                           budget.views, static_cast<unsigned long long>(budget.used),
+                           static_cast<unsigned long long>(budget.range));
+              tiledOverflowReported = true;
+            }
           }
         }
       }
       prepare_tiled(tiledFrameViews);
+      tiled_views_last = tiledFrameViews.size();
+      tiled_all_light_draws_last = 0;
+      tiled_draw_modes_last.assign(s.draws.size(), 0);
       effect_light_peak =
           std::max(effect_light_peak, std::uint64_t(fx.params[0]));
       fixture_light_peak =
@@ -1464,6 +2101,7 @@ private:
             u.surface_parameters = draw.surface_parameters;
             u.surface_eye = draw.surface_eye;
           }
+          height_uniform(s, draw, u);
           if (skyEyeValid) {
             const auto &e =
                 draw.sun_tl && !draw.sky ? draw.sun_tl->camera_world : skyEye;
@@ -1496,11 +2134,17 @@ private:
               ((draw.detail_role == 3 && draw.sky == 1) ||
                (draw.detail_role > 0 && draw.detail_role < 3 && !draw.sky &&
                 (draw.sun_tl || (draw.model && draw.model->world)))))
-            mw34::detail::uniform(u, draw.detail_role, s.detail_time);
+            mw34::detail::uniform(u, draw.detail_role, s.detail_settings,
+                                  s.detail_time);
           u.detail_motion[3] =
               draw.key.blend ? -1.f : environment.night_world_gain;
           s.emissions.apply(draw.emission_index, u);
-          if (tiledDrawViews[at] != ~0u) {
+          if (tiledDrawViews[at] == allEffectLights) {
+            u.tiled_lights = {0, 0, 0, 2};
+            ++tiled_all_light_draws_last;
+            tiled_draw_modes_last[at] = 2;
+          } else if (tiledDrawViews[at] != ~0u) {
+            tiled_draw_modes_last[at] = 1;
             const auto id = tiledDrawViews[at];
             u.tiled_lights = {tiledFrameViews[id].extent[2], tiledFrameViews[id].extent[3],
                               tiledOffsets[id], 1};
@@ -1515,15 +2159,25 @@ private:
     emission_draw_records += s.draws.size();
     emission_payloads += s.emissions.size();
     // Descriptor sets: one per distinct (texture, sampler).
-    if (descriptorCapacity < s.draws.size() + fixtureFrameCasters.size() + 1)
-      pool(unsigned(s.draws.size() + fixtureFrameCasters.size() + 64));
+    const auto descriptor_count = material_descriptor_capacity(s.draws.size(), fixtureFrameCasters.size());
+    if (descriptorCapacity < descriptor_count - 63)
+      pool(unsigned(descriptor_count));
     check(f.vkResetDescriptorPool(device, descriptorPool, 0),
           "reset descriptor pool");
-    std::map<std::pair<Tex *, unsigned>, VkDescriptorSet> sets;
+    std::array<std::map<std::pair<Tex *, unsigned>, VkDescriptorSet>, 3> material_sets;
     std::vector<VkDescriptorSet> drawSets(s.draws.size());
+    std::vector<unsigned> visibility_flags(s.draws.size());
     for (size_t i = 0; i < s.draws.size(); ++i) {
       const auto &d = s.draws[i];
+      if (d.texture >= 0 && size_t(d.texture) >= bound.size())
+        throw std::runtime_error(
+            "Scene albedo texture slot out of range: draw=" +
+            std::to_string(i) + " slot=" + std::to_string(d.texture) +
+            " textures=" + std::to_string(bound.size()));
       Tex *t = d.texture >= 0 ? bound[size_t(d.texture)] : &white;
+      const unsigned backdrop = range_backdrop(s, d);
+      if (backdrop) visibility_flags[i] = (1U << 15) | (range_backdrops[backdrop-1].resident ? (1U << 14) : 0U);
+      auto &sets = material_sets[backdrop];
       auto it = sets.find({t, d.sampler});
       if (it == sets.end()) {
         VkDescriptorSetAllocateInfo ai{};
@@ -1542,6 +2196,12 @@ private:
         w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w.pImageInfo = &info;
         f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+        VkDescriptorImageInfo sky{sampler(3U | (3U << 4) | (3U << 8)),
+            backdrop ? range_backdrops[backdrop - 1].color.view : white.view,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        w.dstBinding = 2;
+        w.pImageInfo = &sky;
+        f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
         if (reconstruction_stage == ReconstructionStage::coverage) {
           VkDescriptorImageInfo reconstructed{
               sampler(3U | (3U << 4) | (3U << 8)), reconstructedColor.view,
@@ -1554,8 +2214,8 @@ private:
       }
       drawSets[i] = it->second;
     }
-    fixture_shadow_sets(sets);
-    std::map<std::pair<Tex *, unsigned>, VkDescriptorSet> normalSets;
+    if (!recording_backdrop) fixture_shadow_sets(material_sets[0]);
+    std::map<MaterialDescriptorKey, VkDescriptorSet> normalSets;
     std::vector<VkDescriptorSet> drawNormalSets(s.draws.size());
     if (lighting_settings.enabled) {
       for (size_t i = 0; i < s.draws.size(); ++i) {
@@ -1565,14 +2225,40 @@ private:
             d.model && !d.model->world ? normal_settings.normal_strength
                                        : normal_settings.ground_normal_strength;
         const bool normal_active =
-            (normal_strength > 0 || mw34::detail::enabled(d.detail_role));
-        Tex *t = (normal_active && d.normal_texture >= 0 &&
-                  size_t(d.normal_texture) < bound.size())
+            (normal_strength > 0 ||
+             mw34::detail::enabled(d.detail_role, s.detail_settings));
+        if (normal_active && d.normal_texture >= 0 &&
+            size_t(d.normal_texture) >= bound.size())
+          throw std::runtime_error(
+              "Scene normal texture slot out of range: draw=" +
+              std::to_string(i) + " slot=" + std::to_string(d.normal_texture) +
+              " textures=" + std::to_string(bound.size()));
+        Tex *t = (normal_active && d.normal_texture >= 0)
                      ? bound[size_t(d.normal_texture)]
                      : &flatNormal;
         const unsigned normal_sampler =
             d.detail_role > 0 && d.detail_role < 3 ? 0x10113U : d.sampler;
-        auto it = normalSets.find({t, normal_sampler});
+        // A normal texture's cache hash is its immutable upload version. Height
+        // adds its full pack owner, source digests, image/version and sampler.
+        MaterialDescriptorKey material_key{};
+        material_key.normal_width = t->width;
+        material_key.normal_height = t->height;
+        material_key.normal_sampler = normal_sampler;
+        if (t != &flatNormal) {
+          const auto &normal_ref = s.textures[std::size_t(d.normal_texture)];
+          material_key.normal_key = normal_ref.key;
+          material_key.normal_version = normal_ref.hash;
+        }
+        Tex *height_texture = &white;
+        // Height sampling has fixed linear, clamp, level-zero policy. Declared
+        // wrap/mirror/clamp and atlas selection are applied in the shader.
+        material_key.height_sampler = 3U | (3U << 4) | (3U << 8);
+        if (draw_heights[i]) {
+          material_key.height = height_key(*d.height_binding);
+          material_key.normal_source_hash = d.height_binding->normal_hash;
+          height_texture = &draw_heights[i]->texture;
+        }
+        auto it = normalSets.find(material_key);
         if (it == normalSets.end()) {
           VkDescriptorSetAllocateInfo ai{};
           ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1591,7 +2277,13 @@ private:
           w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
           w.pImageInfo = &info;
           f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
-          it = normalSets.emplace(std::make_pair(t, normal_sampler), set).first;
+          VkDescriptorImageInfo height_info{sampler(material_key.height_sampler),
+                                             height_texture->view,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+          w.dstBinding = 1;
+          w.pImageInfo = &height_info;
+          f.vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+          it = normalSets.emplace(std::move(material_key), set).first;
         }
         drawNormalSets[i] = it->second;
       }
@@ -1642,6 +2334,7 @@ private:
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(f.vkBeginCommandBuffer(cmd, &bi), "begin");
+    record_height_uploads(pending_heights);
     record_tiled(tiledFrameViews);
     if (profile_queries) {
       f.vkCmdResetQueryPool(cmd, profile_queries, 0, 2);
@@ -1673,6 +2366,9 @@ private:
                              nullptr, 0, nullptr);
     }
     {
+      mw34::timing::ScopedDuration texture_record_timer(
+          !changed.empty() ? gpu_resource_timing_.texture_upload_target()
+                           : nullptr);
       VkDeviceSize off = 0;
       for (auto &[c, t] : changed) {
         barrier(c->image,
@@ -1694,7 +2390,18 @@ private:
         off += VkDeviceSize(t->width) * t->height * 4;
       }
     }
-    if (!upload_in) {
+    if (recording_backdrop) {
+      barrier(recording_backdrop->color.image, VK_IMAGE_LAYOUT_UNDEFINED,
+              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+              VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+              VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+              VK_IMAGE_ASPECT_COLOR_BIT);
+      barrier(range_backdrop_depth.image, VK_IMAGE_LAYOUT_UNDEFINED,
+              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0,
+              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+              VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+              VK_IMAGE_ASPECT_DEPTH_BIT);
+    } else if (!upload_in) {
       // Keep the resident content: from the layout the previous scene left
       // (attachment, or transfer source after a copy-out).
       const bool att = in_attachment_layout;
@@ -1756,7 +2463,7 @@ private:
     if ((s.hud || (s.guest_surface_write && worldColor.image)) &&
         quality_world_dirty && fxaa_enabled())
       record_fxaa();
-    if (!world_scene_prepared || !world_shadow_recorded) {
+    if (!recording_backdrop && (!world_scene_prepared || !world_shadow_recorded)) {
       if (shadowFrame->active && !shadowFrame->reused)
         record_shadow(*shadowFrame);
       record_fixture_shadows(*fixtureLights);
@@ -1766,7 +2473,7 @@ private:
     VkRenderPassBeginInfo rb{};
     rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rb.renderPass = renderPass;
-    rb.framebuffer = framebuffer;
+    rb.framebuffer = recording_backdrop ? recording_backdrop->framebuffer : framebuffer;
     rb.renderArea = {{0, 0}, {rw, rh}};
     f.vkCmdBeginRenderPass(cmd, &rb, VK_SUBPASS_CONTENTS_INLINE);
     VkViewport vp{0, 0, float(rw), float(rh), 0, 1};
@@ -1784,7 +2491,11 @@ private:
       if (left.model || right.model || left.key.points || right.key.points ||
           !left.count || !right.count || left.count % 3 || right.count % 3 ||
           left.key.packed() != right.key.packed() ||
+          left.native_sky != right.native_sky || left.sky != right.sky ||
+          left.depth_only != right.depth_only ||
+          !::platform::same_producer_view_bits(left.producer_view, right.producer_view) ||
           drawSets[a] != drawSets[b] ||
+          !mw34::materials::same_height_binding(left.height_binding, right.height_binding) ||
           std::memcmp(&left.push, &right.push, sizeof(Push)) != 0 ||
           std::memcmp(&left.scissor, &right.scissor, sizeof(VkRect2D)) != 0)
         return false;
@@ -1840,7 +2551,24 @@ private:
           ++orderAt;
         }
       }
+      if (producer_view_observer && !recording_backdrop) {
+        cc_mw3_re::testing::ProducerViewObservation observation{};
+        observation.stage = cc_mw3_re::testing::ProducerViewStage::backend_group;
+        observation.view = d.producer_view;
+        observation.first = d.first;
+        observation.count = vertexCount;
+        observation.logical_draws = logicalDraws;
+        observation.combined = logicalDraws > 1;
+        observation.tl_combine = combine;
+        producer_view_observer->backend(observation);
+      }
       const bool model = bool(d.model), lit = !s.hud && sun_lit(d);
+      const auto& view = d.producer_view;
+      // Opaque reduced shading supplies surface RGB. Its full-resolution replay
+      // makes the single coverage/depth decision for each output sample.
+      const unsigned radial_far = reconstruction_stage != ReconstructionStage::shading &&
+          uses_world_range(s, d) ? bridge_config.draw_distance : 0;
+
       const VkPipelineLayout layout =
           (model || lit) ? modelLayout : pipelineLayout;
       f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1891,6 +2619,10 @@ private:
         }
         ModelPush mp{};
         mp.base = d.push;
+        // mode.x low bits keep the legacy material flags. ModelPush already
+        // occupies Vulkan's guaranteed 128 bytes; its upper half-word carries metres.
+        mp.base.mode[0] |= radial_far << 16;
+        mp.base.mode[0] |= visibility_flags[o.index];
         mp.camera = i.camera;
         mp.base.target[2] = i.projection[0];
         mp.base.target[3] = i.projection[5];
@@ -1912,6 +2644,10 @@ private:
           ++world_gpu_draws;
       } else { // A model draw binds its own VBO; ordinary TL draws must restore
                // theirs.
+        // Every ordinary TL pipeline reads the raw fog at binding 2. Binding 0 is covered below:
+        // it holds vertexBuffer from the start of the pass, and boundVertices forces a rebind
+        // after any model draw replaced it, so only an already-bound vertexBuffer is skipped.
+        f.vkCmdBindVertexBuffers(cmd, 2, 1, &fogBuffer.buffer, &zero);
         if (lit) {
           const VkBuffer buffers[2]{vertexBuffer.buffer, normalBuffer.buffer};
           const VkDeviceSize offsets[2]{0, 0};
@@ -1921,10 +2657,27 @@ private:
           f.vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &zero);
           boundVertices = vertexBuffer.buffer;
         }
+        TlPush tl{d.push, {}};
+        tl.base.mode[0] |= visibility_flags[o.index];
+        tl.base.target[3] = 0;
+        if (radial_far && view.canvas_available) {
+          const auto& p = view.projection;
+          const auto& c = view.canvas;
+          if (c.width > 0 && c.height > 0 && p.fx_near > 0 && p.fy_near > 0 &&
+              p.near_z > 0 && std::isfinite(p.near_z) && std::isfinite(p.fx_near) &&
+              std::isfinite(p.fy_near) && std::isfinite(p.cx) && std::isfinite(p.cy)) {
+            const float sx = float(s.width) / float(c.width);
+            const float sy = float(s.height) / float(c.height);
+            tl.radial_projection = {1.f / (p.fx_near * sx * radial_far),
+                                    1.f / (p.fy_near * sy * radial_far),
+                                    (p.cx - c.x) * sx, (p.cy - c.y) * sy};
+            tl.base.target[3] = p.near_z / radial_far;
+          }
+        }
         f.vkCmdPushConstants(cmd, layout,
                              VK_SHADER_STAGE_VERTEX_BIT |
                                  VK_SHADER_STAGE_FRAGMENT_BIT,
-                             0, sizeof(Push), &d.push);
+                             0, sizeof(tl), &tl);
       }
       if (d.model && !d.model->geometry->indices.empty())
         f.vkCmdDrawIndexed(cmd, vertexCount, 1, d.first, 0, 0);
@@ -1933,13 +2686,18 @@ private:
                     d.model && d.model->world ? 0 : d.first, 0);
       if (reconstruction_stage == ReconstructionStage::coverage)
         coverage_draws += logicalDraws;
-      else {
+      else if (!recording_backdrop) {
         draws += logicalDraws;
         ++submitted_draws;
         combined_draws += logicalDraws - 1;
       }
     }
     f.vkCmdEndRenderPass(cmd);
+    if (recording_backdrop)
+      barrier(recording_backdrop->color.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+              VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
     const bool writes_color =
         std::any_of(s.draws.begin(), s.draws.end(),
                     [](const Draw &draw) { return !draw.depth_only; });
@@ -1980,20 +2738,42 @@ private:
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
     check(f.vkQueueSubmit(queue, 1, &si, fence), "submit");
+    // Keep retirement/reuse blocked even when a later readback wait fails.
+    scene_pending = true;
+    for (const auto &upload : pending_heights) {
+      upload.cached->texture.valid = true;
+      ++height_uploads;
+      height_uploaded_bytes += upload.cached->bytes;
+    }
     profile_queries_pending = profile_queries != VK_NULL_HANDLE;
-    fixture_atlas_submitted();
-    if (reconstruction_stage != ReconstructionStage::coverage)
+    if (!recording_backdrop) fixture_atlas_submitted();
+    if (reconstruction_stage != ReconstructionStage::coverage && !recording_backdrop)
       ++scenes;
     if (readback_out) {
       check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL),
             "wait");
       collect_profile_queries();
+      scene_pending = false;
       copy_back(s);
-    } else
-      scene_pending = true;
+    }
   }
 
 public:
+  struct TiledStorageLimits {
+    VkDeviceSize max_range;
+    VkDeviceSize offset_alignment;
+  };
+  // Query the selected GPU's hardware limits, independently of software budgets,
+  // so diagnostic fixtures can retain support for smaller-range devices.
+  TiledStorageLimits probe_tiled_storage_limits() {
+    if (!device)
+      init();
+    VkPhysicalDeviceProperties properties{};
+    f.vkGetPhysicalDeviceProperties(gpu, &properties);
+    return {properties.limits.maxStorageBufferRange,
+            properties.limits.minStorageBufferOffsetAlignment};
+  }
+  [[nodiscard]] bool tiled_lists_device_local() const { return tiledLists.device_local; }
   // The frontend drains its render worker before updating this CPU snapshot.
   // Diagnostic readback uses the same producer and synchronization as rendering.
   std::vector<std::vector<uint32_t>> probe_tiled_lists(const std::vector<mw34::tiled::View> &views,
@@ -2005,11 +2785,30 @@ public:
     ensure(effectBuffer, sizeof(lights), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     std::memcpy(effectBuffer.mapped, &lights, sizeof(lights));
     prepare_tiled(views);
+    VkDeviceSize total_readback_bytes = 0;
+    for (size_t i = 0; i < views.size(); ++i)
+      total_readback_bytes = std::max(total_readback_bytes,
+                                     VkDeviceSize(tiledOffsets[i]) * 4 + tiledLengths[i]);
+    if (total_readback_bytes)
+      ensure(tiledReadback, total_readback_bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
     check(f.vkResetCommandPool(device, commandPool, 0), "reset tiled probe pool");
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(f.vkBeginCommandBuffer(cmd, &bi), "begin tiled probe");
     record_tiled(views);
+    if (total_readback_bytes) {
+      const VkBufferCopy region{0, 0, total_readback_bytes};
+      f.vkCmdCopyBuffer(cmd, tiledLists.buffer, tiledReadback.buffer, 1, &region);
+      VkBufferMemoryBarrier barrier{};
+      barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+      barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+      barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier.buffer = tiledReadback.buffer;
+      barrier.size = total_readback_bytes;
+      f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                            0, 0, nullptr, 1, &barrier, 0, nullptr);
+    }
     check(f.vkEndCommandBuffer(cmd), "end tiled probe");
     check(f.vkResetFences(device, 1, &fence), "reset tiled probe fence");
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -2022,7 +2821,7 @@ public:
     for (size_t i = 0; i < views.size(); ++i) {
       result.emplace_back(size_t(tiledLengths[i] / 4));
       std::memcpy(result.back().data(),
-                  static_cast<char *>(tiledLists.mapped) + VkDeviceSize(tiledOffsets[i]) * 4,
+                  static_cast<char *>(tiledReadback.mapped) + VkDeviceSize(tiledOffsets[i]) * 4,
                   size_t(tiledLengths[i]));
     }
     return result;
@@ -2099,6 +2898,15 @@ public:
     const VkDeviceSize pixels = VkDeviceSize(width) * height,
                        colorBytes = pixels * (rgba ? 4 : 2);
     const auto *rd = static_cast<const unsigned char *>(readback.mapped);
+    if (s.pom_raw_readback) {
+      if (!require_rgba8 || !rgba || rw != width || rh != height ||
+          quality_settings.samples_x != 1 || quality_settings.samples_y != 1 || fxaa_enabled())
+        throw std::runtime_error("POM raw readback requires an unfiltered full-size RGBA8 target");
+      s.pom_rgba8.assign(rd, rd + std::size_t(pixels) * 4);
+      s.pom_depth32.resize(std::size_t(pixels));
+      std::memcpy(s.pom_depth32.data(), rd + mw34::depth::offset(std::size_t(colorBytes)),
+                  std::size_t(pixels) * sizeof(float));
+    }
     if (rgba) {
       for (VkDeviceSize i = 0; i < pixels; ++i) {
         const std::uint32_t r = rd[4 * i], g = rd[4 * i + 1], b = rd[4 * i + 2];
@@ -2207,9 +3015,9 @@ private:
     X(vkCreateImage) X(vkDestroyImage) X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateSampler) X(vkDestroySampler) X(vkCreateDescriptorSetLayout) \
     X(vkDestroyDescriptorSetLayout) X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool) X(vkResetDescriptorPool) X(vkAllocateDescriptorSets) \
     X(vkUpdateDescriptorSets) X(vkCreateRenderPass) X(vkDestroyRenderPass) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) X(vkCreateShaderModule) \
-    X(vkDestroyShaderModule) X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkDestroyPipeline) X(vkCreateCommandPool) \
+    X(vkDestroyShaderModule) X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) X(vkCreatePipelineCache) X(vkDestroyPipelineCache) X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkDestroyPipeline) X(vkCreateCommandPool) \
     X(vkDestroyCommandPool) X(vkResetCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdPipelineBarrier) \
-    X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
+    X(vkCmdCopyBuffer) X(vkCmdCopyImage) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
     X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdPushConstants) X(vkCmdDraw) X(vkCmdClearAttachments) X(vkCmdBindVertexBuffers) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCreateFence) \
     X(vkDestroyFence) X(vkResetFences) X(vkQueueSubmit) X(vkWaitForFences) \
     X(vkCreateQueryPool) X(vkDestroyQueryPool) X(vkGetQueryPoolResults) X(vkCmdResetQueryPool) X(vkCmdWriteTimestamp)
@@ -2226,6 +3034,8 @@ private:
     VkDeviceMemory memory{};
     VkDeviceSize size{};
     void *mapped{};
+    bool device_local{};
+    VkDeviceSize memory_offset{}, memory_size{}, memory_alignment{1};
   };
 #include "tiled_light_gpu.inc"
   struct Image {
@@ -2236,11 +3046,16 @@ private:
   struct Tex {
     VkImage image{};
     VkDeviceMemory memory{};
+    VkDeviceSize memory_offset{}, memory_size{}, memory_alignment{1};
     VkImageView view{};
     unsigned width{}, height{}, levels{1};
     std::uint64_t hash{};
+    // Authenticated source comparisons for relief; independent of upload hash,
+    // which is a monotonically assigned version in native frontend scenes.
+    std::uint64_t source_rgb565_hash{}, source_rgba8_hash{};
     bool valid{};
   };
+#include "parallax_gpu.inc"
   cc_mw3_re::platform::VulkanLoader loader;
   VkInstance instance{};
   VkPhysicalDevice gpu{};
@@ -2249,7 +3064,7 @@ private:
   VkQueue queue{};
   unsigned family{}, width{}, height{}, descriptorCapacity{};
   bool rgba{};
-  Buffer upload, readback, vertexBuffer, normalBuffer, texUpload, sunBuffer,
+  Buffer upload, readback, vertexBuffer, normalBuffer, fogBuffer, texUpload, sunBuffer,
       effectBuffer;
   VkDeviceSize sunStride{};
   VkDescriptorSetLayout sunSetLayout{}, normalSetLayout{};
@@ -2644,11 +3459,8 @@ private:
                             view[at] && !d.model && !d.sun_tl && d.count &&
                             (d.push.mode[0] & 16);
       if (sun.haze_active && (d.native_sky || (d.push.mode[0] & 16))) {
-        for (unsigned i = 0; i < 3; ++i)
-          d.push.fog[i] =
-              sun.haze_manual
-                  ? sun.haze_color[i]
-                  : std::fmin(1.f, d.push.fog[i] * sun.haze_scale[i]);
+        const auto color = mw34::sun::fog_color(sun, {d.push.fog[0], d.push.fog[1], d.push.fog[2]});
+        std::copy(color.begin(), color.end(), d.push.fog);
         ++haze_draws;
       }
       if (routable && d.key.blend && !d.native_sky) {
@@ -2657,7 +3469,11 @@ private:
         ++haze_routed;
         continue;
       }
-      if (d.model || (!d.native_sky && (d.sun_tl || d.key.blend)) || !d.count ||
+      const bool cloud_detail_draw =
+          d.detail_role == 3 && mw34::detail::enabled(3, s.detail_settings);
+      if (d.model ||
+          (!d.native_sky && (d.sun_tl || d.key.blend)) ||
+          !d.count ||
           (d.texture >= 0 && !sun.sky_active && !sun.sky_shading &&
            !sun.suppress_sky) ||
           (d.texture < 0 && !sun.haze_active && !sun.sky_shading &&
@@ -2678,7 +3494,7 @@ private:
         d.count = 0;
         continue;
       }
-      if (sun.sky_shading && view[at]) {
+      if ((sun.sky_shading || cloud_detail_draw) && view[at]) {
         d.sky = d.texture < 0 ? 2 : 1;
         d.sun_tl = view[at];
         if (d.sky_view)
@@ -2795,6 +3611,13 @@ private:
 #include "fixture_shadow_stage.inc"
   Image colorImage, depthImage;
   Image qualitySource;
+  Image menuRippleSource;
+  unsigned menu_ripple_rw{}, menu_ripple_rh{};
+  VkDescriptorPool menuRipplePool{};
+  VkDescriptorSet menuRippleSet{};
+  VkPipelineLayout menuRippleLayout{};
+  VkShaderModule menuRippleVert{}, menuRippleFrag{};
+  VkPipeline menuRipplePipeline{};
   VkDescriptorPool qualityPool{};
   VkDescriptorSet qualitySet{};
   VkPipelineLayout qualityLayout{};
@@ -2813,6 +3636,7 @@ private:
   Tex white, flatNormal;
   std::map<std::uint64_t, Tex> textures;
   std::map<std::uint64_t, VkPipeline> pipelines;
+  VkPipelineCache pipelineCache{};
   std::map<unsigned, VkSampler> samplers;
   VkRenderPass renderPass{};
   VkFramebuffer framebuffer{};
@@ -2834,6 +3658,7 @@ private:
   // acquired again; a render fence alone does not complete presentation waits.
   std::vector<VkSemaphore> swapRendered;
   VkExtent2D swapExtent{};
+  VkFormat swapFormat{VK_FORMAT_UNDEFINED};
   VkSemaphore acquired{};
   VkCommandPool presentPool{};
   VkCommandBuffer presentCmd{};
@@ -2841,7 +3666,521 @@ private:
   Image srcImage;
   unsigned srcWidth{}, srcHeight{};
   Buffer presentUpload;
+#if defined(_WIN32)
+#include "editor_overlay.inc"
+#endif
 
+  // Lazy draws throw this too, so it must stay a std::runtime_error like every
+  // other Vulkan failure: callers that report "rendering failed" catch that type.
+  // The message is formatted into a fixed buffer first, so the only host
+  // allocation during out-of-memory handling is runtime_error's one short copy.
+  struct PreloadAllocationFailure : std::runtime_error {
+    VkResult result;
+    PreloadAllocationFailure(VkResult value, const char *operation)
+        : std::runtime_error(format(value, operation).data()), result(value) {}
+
+  private:
+    static std::array<char, 160> format(VkResult value, const char *operation) {
+      std::array<char, 160> message{};
+      std::snprintf(message.data(), message.size(), "Vulkan scene renderer: %s failed (%d)",
+                    operation, int(value));
+      return message;
+    }
+  };
+  static_assert(std::is_base_of_v<std::runtime_error, PreloadAllocationFailure>,
+                "Allocation failures must reach std::runtime_error handlers");
+  struct PreloadBudgetFailure : std::exception {};
+  struct MemoryAllocation {
+    unsigned heap{};
+    VkDeviceSize bytes{};
+  };
+  std::map<VkDeviceMemory, MemoryAllocation> memory_allocations_;
+  struct PreloadMemoryBlock {
+    unsigned memory_type{};
+    bool optimal_image{};
+    VkDeviceSize capacity{}, next_offset{};
+    std::size_t references{};
+  };
+  // Linear buffers and optimal images never share blocks, avoiding the
+  // bufferImageGranularity aliasing rule. Slices are not reused while any
+  // resource in a block is alive; the final release returns the entire block.
+  std::map<VkDeviceMemory, PreloadMemoryBlock> preload_memory_blocks_;
+  static constexpr VkDeviceSize kPreloadMemoryBlockCap = 64ULL * 1024 * 1024;
+  VkDeviceSize preload_memory_block_cap_{kPreloadMemoryBlockCap};
+  PFN_vkGetImageMemoryRequirements2 image_memory_requirements2_{};
+  PFN_vkGetBufferMemoryRequirements2 buffer_memory_requirements2_{};
+  PFN_vkGetPhysicalDeviceMemoryProperties2 memory_properties2_{};
+  bool memory_budget_supported_{};
+  bool preload_active_{};
+  // Opt-in CPU scopes distinguish producer work, driver allocation, command
+  // recording and fence completion; allocation scopes nest inside resource scopes.
+  std::uint64_t preload_geometry_nanoseconds_{}, preload_hash_nanoseconds_{};
+  std::uint64_t preload_image_nanoseconds_{}, preload_staging_nanoseconds_{};
+  std::uint64_t preload_record_nanoseconds_{}, preload_flush_nanoseconds_{};
+  std::uint64_t preload_wait_nanoseconds_{}, preload_submit_nanoseconds_{};
+  std::uint64_t preload_budget_nanoseconds_{}, preload_allocate_nanoseconds_{};
+  bool preload_stopped_{};
+  PreloadStopInfo preload_stop_{};
+  PreloadFaultInjection preload_fault_{};
+  std::size_t preload_allocation_attempts_{}, preload_allocation_successes_{};
+  struct PendingPreloadTexture {
+    std::uint64_t key{}, hash{}, source_rgb565_hash{}, source_rgba8_hash{};
+    unsigned width{}, height{};
+  };
+  static constexpr VkDeviceSize kPreloadBatchCap = 64ULL * 1024 * 1024;
+  VkDeviceSize preload_batch_cap_{kPreloadBatchCap};
+  VkDeviceSize preload_batch_bytes_{}, preload_texture_bytes_{}, preload_peak_bytes_{};
+  bool preload_batch_recording_{}, preload_batch_inflight_{};
+  std::vector<PendingPreloadTexture> pending_preload_textures_;
+  std::vector<std::uint64_t> pending_preload_models_;
+  std::size_t preload_batch_submissions_{}, preload_peak_pending_{};
+
+  void require_preload() const {
+    if (!preload_active_)
+      throw std::runtime_error("Vulkan scene renderer: upload outside preload phase");
+  }
+  bool pending_model(std::uint64_t key) const {
+    return std::find(pending_preload_models_.begin(), pending_preload_models_.end(), key) !=
+           pending_preload_models_.end();
+  }
+  bool admit_preload_bytes(VkDeviceSize bytes) {
+    if (bytes > preload_batch_cap_) {
+      // Oversized optional uploads keep their lazy draw path. Record why the
+      // warmup stopped instead of reporting it as a failed allocation.
+      stop_preload_oversized(bytes);
+      return false;
+    }
+    if (bytes > preload_batch_cap_ - preload_batch_bytes_)
+      flush_preload();
+    return true;
+  }
+  void begin_preload_batch() {
+    if (preload_batch_recording_)
+      return;
+    settle();
+    check(f.vkResetCommandPool(device, commandPool, 0), "reset preload command pool");
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    check(f.vkBeginCommandBuffer(cmd, &begin_info), "begin preload batch");
+    preload_batch_recording_ = true;
+  }
+  void account_preload_bytes(VkDeviceSize bytes) noexcept {
+    preload_batch_bytes_ += bytes;
+    preload_peak_bytes_ = std::max(preload_peak_bytes_, preload_batch_bytes_);
+    preload_peak_pending_ = std::max(preload_peak_pending_, preload_pending_count());
+  }
+  void complete_preload_batch() noexcept {
+    // Called only after the actual submitted batch fence has completed.
+    for (const auto &pending : pending_preload_textures_) {
+      auto &texture = textures.find(pending.key)->second;
+      texture.hash = pending.hash;
+      texture.source_rgb565_hash = pending.source_rgb565_hash;
+      texture.source_rgba8_hash = pending.source_rgba8_hash;
+      texture.valid = true;
+      mip_levels_uploaded += texture.levels - 1;
+      ++uploads;
+    }
+    for (const auto key : pending_preload_models_) {
+      auto &buffer = model_buffers.find(key)->second;
+      buffer.uploaded = true;
+      ++model_uploads;
+      model_uploaded_bytes += buffer.local.size;
+      // Immutable geometry never uploads again after this fence. Release its
+      // temporary mapped copies so staging cannot accumulate across batches.
+      destroy_buffer(buffer.staging);
+      destroy_buffer(buffer.index_staging);
+    }
+    pending_preload_textures_.clear();
+    pending_preload_models_.clear();
+    preload_batch_inflight_ = false;
+    preload_batch_bytes_ = preload_texture_bytes_ = 0;
+  }
+
+
+  VkDeviceSize tracked_heap_bytes(unsigned heap) const {
+    VkDeviceSize bytes = 0;
+    for (const auto &entry : memory_allocations_)
+      if (entry.second.heap == heap)
+        bytes += entry.second.bytes;
+    return bytes;
+  }
+  VkResult allocate_memory(VkDevice selected_device, const VkMemoryAllocateInfo *info,
+                           const VkAllocationCallbacks *callbacks, VkDeviceMemory *output,
+                           PFN_vkAllocateMemory allocator = nullptr) {
+    const unsigned heap = memory.memoryTypes[info->memoryTypeIndex].heapIndex;
+    const VkDeviceSize tracked = tracked_heap_bytes(heap);
+    if (preload_active_) {
+      ++preload_allocation_attempts_;
+      VkDeviceSize budget = memory.memoryHeaps[heap].size;
+      VkDeviceSize usage = tracked;
+      if (memory_budget_supported_ && memory_properties2_) {
+        mw34::timing::ScopedDuration budget_timer(
+            gpu_resource_timing_.enabled ? &preload_budget_nanoseconds_ : nullptr);
+        VkPhysicalDeviceMemoryBudgetPropertiesEXT budgets{};
+        budgets.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+        VkPhysicalDeviceMemoryProperties2 properties{};
+        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+        properties.pNext = &budgets;
+        memory_properties2_(gpu, &properties);
+        budget = std::min(budget, budgets.heapBudget[heap]);
+        // The driver estimate can lag a burst of allocations. Our exact ledger
+        // provides a conservative lower bound until the next driver update.
+        usage = std::max(tracked, budgets.heapUsage[heap]);
+      }
+      if (preload_fault_.override_budget) {
+        budget = preload_fault_.synthetic_heap_budget_bytes;
+        const auto base = preload_fault_.synthetic_base_usage_bytes;
+        usage = base > ~VkDeviceSize{} - tracked ? ~VkDeviceSize{} : base + tracked;
+      }
+      const auto decision = evaluate_preload_budget(budget, usage, info->allocationSize);
+      preload_stop_ = {PreloadStopReason::none, VK_SUCCESS, heap, info->allocationSize,
+                       usage, budget, decision.headroom_bytes, tracked};
+      if ((memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
+          !decision.admitted) {
+        preload_stop_.reason = PreloadStopReason::budget_denied;
+        throw PreloadBudgetFailure{};
+      }
+      if (preload_fault_.fail_on_allocation_attempt == preload_allocation_attempts_)
+        return static_cast<VkResult>(preload_fault_.injected_result);
+    }
+    VkDeviceMemory allocation{};
+    VkResult result;
+    {
+      mw34::timing::ScopedDuration allocation_timer(
+          preload_active_ && gpu_resource_timing_.enabled ? &preload_allocate_nanoseconds_ : nullptr);
+      result = (allocator ? allocator : f.vkAllocateMemory)(
+          selected_device, info, callbacks, &allocation);
+    }
+    if (result != VK_SUCCESS)
+      return result;
+    try {
+      memory_allocations_.emplace(allocation, MemoryAllocation{heap, info->allocationSize});
+    } catch (...) {
+      f.vkFreeMemory(selected_device, allocation, callbacks);
+      throw;
+    }
+    *output = allocation;
+    if (preload_active_)
+      ++preload_allocation_successes_;
+    return result;
+  }
+  void release_memory(VkDevice selected_device, VkDeviceMemory allocation,
+                      const VkAllocationCallbacks *callbacks,
+                      PFN_vkFreeMemory releaser = nullptr) noexcept {
+    const auto pooled = preload_memory_blocks_.find(allocation);
+    if (pooled != preload_memory_blocks_.end()) {
+      if (--pooled->second.references)
+        return;
+      preload_memory_blocks_.erase(pooled);
+    }
+    memory_allocations_.erase(allocation);
+    (releaser ? releaser : f.vkFreeMemory)(selected_device, allocation, callbacks);
+  }
+  void allocate_preload_resource(const VkMemoryRequirements &requirements,
+                                 unsigned memory_type, VkImage image_handle,
+                                 VkBuffer buffer_handle, VkDeviceMemory &allocation,
+                                 VkDeviceSize &offset) {
+    VkMemoryDedicatedRequirements dedicated{};
+    dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
+    bool requirements_available = false;
+    if (image_handle && image_memory_requirements2_) {
+      VkImageMemoryRequirementsInfo2 info{};
+      info.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
+      info.image = image_handle;
+      VkMemoryRequirements2 result{};
+      result.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+      result.pNext = &dedicated;
+      image_memory_requirements2_(device, &info, &result);
+      requirements_available = true;
+    } else if (buffer_handle && buffer_memory_requirements2_) {
+      VkBufferMemoryRequirementsInfo2 info{};
+      info.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2;
+      info.buffer = buffer_handle;
+      VkMemoryRequirements2 result{};
+      result.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+      result.pNext = &dedicated;
+      buffer_memory_requirements2_(device, &info, &result);
+      requirements_available = true;
+    }
+    VkMemoryAllocateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    info.allocationSize = requirements.size;
+    info.memoryTypeIndex = memory_type;
+    const bool pool_allowed = preload_active_ && requirements_available &&
+                              !dedicated.requiresDedicatedAllocation &&
+                              !dedicated.prefersDedicatedAllocation &&
+                              requirements.size <= preload_memory_block_cap_;
+    if (!pool_allowed) {
+      VkMemoryDedicatedAllocateInfo dedicated_info{};
+      dedicated_info.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+      dedicated_info.image = image_handle;
+      dedicated_info.buffer = buffer_handle;
+      if (requirements_available && dedicated.requiresDedicatedAllocation)
+        info.pNext = &dedicated_info;
+      check_allocation(allocate_memory(device, &info, nullptr, &allocation),
+                       preload_active_ ? "dedicated preload resource memory"
+                                       : "immutable resource memory");
+      offset = 0;
+      return;
+    }
+    const bool optimal_image = image_handle != VK_NULL_HANDLE;
+    for (auto &entry : preload_memory_blocks_) {
+      auto &block = entry.second;
+      if (block.memory_type != memory_type || block.optimal_image != optimal_image)
+        continue;
+      const auto remainder = block.next_offset % requirements.alignment;
+      const auto padding = remainder ? requirements.alignment - remainder : 0;
+      if (padding > block.capacity - block.next_offset)
+        continue;
+      const auto next_offset = block.next_offset + padding;
+      if (requirements.size > block.capacity - next_offset)
+        continue;
+      offset = next_offset;
+      block.next_offset = next_offset + requirements.size;
+      ++block.references;
+      allocation = entry.first;
+      return;
+    }
+    // Admission accounts for the whole native block, including unused tail
+    // space, before allocating it. Existing slices require no extra residency.
+    info.allocationSize = preload_memory_block_cap_;
+    VkDeviceMemory acquired{};
+    check_allocation(allocate_memory(device, &info, nullptr, &acquired),
+                     "preload memory block");
+    try {
+      preload_memory_blocks_.emplace(
+          acquired, PreloadMemoryBlock{memory_type, optimal_image,
+                                       info.allocationSize, requirements.size, 1});
+    } catch (...) {
+      release_memory(device, acquired, nullptr);
+      throw;
+    }
+    allocation = acquired;
+    offset = 0;
+  }
+  static void check_allocation(VkResult result, const char *what) {
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY || result == VK_ERROR_OUT_OF_HOST_MEMORY ||
+        result == VK_ERROR_MEMORY_MAP_FAILED || result == VK_ERROR_TOO_MANY_OBJECTS)
+      throw PreloadAllocationFailure(result, what);
+    check(result, what);
+  }
+  void destroy_buffer(Buffer &buffer) noexcept {
+    if (buffer.memory && buffer.mapped)
+      f.vkUnmapMemory(device, buffer.memory);
+    if (buffer.buffer)
+      f.vkDestroyBuffer(device, buffer.buffer, nullptr);
+    if (buffer.memory)
+      release_memory(device, buffer.memory, nullptr);
+    buffer = {};
+  }
+  void discard_model_buffer(std::uint64_t key) noexcept {
+    const auto found = model_buffers.find(key);
+    if (found == model_buffers.end())
+      return;
+    for (Buffer *buffer : {&found->second.local, &found->second.staging,
+                           &found->second.indices, &found->second.index_staging})
+      destroy_buffer(*buffer);
+    model_buffers.erase(found);
+  }
+  void stop_preload_oversized(VkDeviceSize bytes) noexcept {
+    preload_stopped_ = true;
+    if (preload_stop_.reason == PreloadStopReason::none) {
+      preload_stop_.reason = PreloadStopReason::oversized_upload;
+      preload_stop_.requested_bytes = bytes;
+    }
+  }
+  void stop_preload(VkResult result) noexcept {
+    preload_stopped_ = true;
+    if (preload_stop_.reason != PreloadStopReason::budget_denied) {
+      preload_stop_.vk_result = result;
+      if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY)
+        preload_stop_.reason = PreloadStopReason::out_of_device_memory;
+      else if (result == VK_ERROR_OUT_OF_HOST_MEMORY)
+        preload_stop_.reason = PreloadStopReason::out_of_host_memory;
+      else
+        preload_stop_.reason = PreloadStopReason::allocation_failed;
+    }
+  }
+
+public:
+  void begin_preload() {
+    settle();
+    if (!device)
+      init(); // Required initialization is not an optional allocation attempt.
+    if (preload_active_)
+      throw std::runtime_error("Vulkan scene renderer: nested preload phase");
+    preload_geometry_nanoseconds_ = preload_hash_nanoseconds_ = 0;
+    preload_image_nanoseconds_ = preload_staging_nanoseconds_ = 0;
+    preload_record_nanoseconds_ = preload_flush_nanoseconds_ = 0;
+    preload_wait_nanoseconds_ = preload_submit_nanoseconds_ = 0;
+    preload_budget_nanoseconds_ = preload_allocate_nanoseconds_ = 0;
+    // A previous lazy scene may have grown the shared buffer beyond this
+    // phase's bound. Its fence is complete before releasing that allocation.
+    if (texUpload.size > preload_batch_cap_)
+      destroy_buffer(texUpload);
+    preload_active_ = true;
+  }
+  void flush_preload() {
+    mw34::timing::ScopedDuration flush_timer(
+        gpu_resource_timing_.enabled ? &preload_flush_nanoseconds_ : nullptr);
+    if (!preload_batch_recording_) {
+      settle();
+      return;
+    }
+    check(f.vkEndCommandBuffer(cmd), "end preload batch");
+    preload_batch_recording_ = false;
+    check(f.vkResetFences(device, 1, &fence), "reset preload batch fence");
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &cmd;
+    {
+      mw34::timing::ScopedDuration submit_timer(
+          gpu_resource_timing_.enabled ? &preload_submit_nanoseconds_ : nullptr);
+      check(f.vkQueueSubmit(queue, 1, &submit_info, fence), "submit preload batch");
+    }
+    ++preload_batch_submissions_;
+    preload_batch_inflight_ = true;
+    scene_pending = true;
+    settle();
+  }
+  void finalize_preload() {
+    require_preload();
+    flush_preload();
+    if (gpu_resource_timing_.enabled)
+      std::fprintf(stderr,
+                   "[PRELOAD_PROFILE] geometry_us=%llu hash_us=%llu image_us=%llu "
+                   "staging_us=%llu record_us=%llu flush_us=%llu budget_us=%llu allocate_us=%llu "
+                   "wait_us=%llu submit_us=%llu\n",
+                   (unsigned long long)(preload_geometry_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_hash_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_image_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_staging_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_record_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_flush_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_budget_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_allocate_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_wait_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_submit_nanoseconds_ / 1000));
+  }
+  void end_preload() noexcept {
+    preload_active_ = false;
+    // Exception cleanup never submits or waits. Submitted resources stay alive
+    // until settle() observes their fence; unsubmitted commands can be abandoned.
+    if (preload_batch_inflight_)
+      return;
+    for (const auto &pending : pending_preload_textures_) {
+      const auto found = textures.find(pending.key);
+      if (found != textures.end()) {
+        destroy(found->second);
+        textures.erase(found);
+      }
+    }
+    for (const auto key : pending_preload_models_)
+      discard_model_buffer(key);
+    pending_preload_textures_.clear();
+    pending_preload_models_.clear();
+    preload_batch_recording_ = false;
+    preload_batch_bytes_ = preload_texture_bytes_ = 0;
+  }
+  void reset_preload() noexcept {
+    preload_stopped_ = false;
+    preload_stop_ = {};
+    preload_allocation_attempts_ = preload_allocation_successes_ = 0;
+    preload_batch_submissions_ = preload_peak_pending_ = 0;
+    preload_peak_bytes_ = 0;
+  }
+  void set_preload_batch_cap_for_test(VkDeviceSize bytes) {
+    if (preload_active_ || preload_pending_count() || bytes < 4 || bytes > kPreloadBatchCap)
+      throw std::runtime_error("Invalid test preload batch cap");
+    settle();
+    preload_batch_cap_ = bytes;
+    if (texUpload.size > bytes)
+      destroy_buffer(texUpload);
+  }
+  void set_preload_memory_block_cap_for_test(VkDeviceSize bytes) {
+    if (preload_active_ || !preload_memory_blocks_.empty() || !bytes ||
+        bytes > kPreloadMemoryBlockCap)
+      throw std::runtime_error("Invalid test preload memory block cap");
+    preload_memory_block_cap_ = bytes;
+  }
+  std::size_t preload_memory_block_count() const { return preload_memory_blocks_.size(); }
+  bool texture_memory_shared_for_test(std::uint64_t first, std::uint64_t second) const {
+    return textures.at(first).memory == textures.at(second).memory;
+  }
+  bool model_texture_memory_separate_for_test(std::uint64_t model_key,
+                                             std::uint64_t texture_key) const {
+    return model_buffers.at(model_key).local.memory != textures.at(texture_key).memory;
+  }
+  std::array<VkDeviceSize, 4> model_memory_for_test(std::uint64_t key) const {
+    const auto &buffer = model_buffers.at(key).local;
+    const auto block = preload_memory_blocks_.find(buffer.memory);
+    return {buffer.memory_offset, buffer.memory_size, buffer.memory_alignment,
+            block == preload_memory_blocks_.end() ? 0 : block->second.capacity};
+  }
+  std::array<VkDeviceSize, 4> texture_memory_for_test(std::uint64_t key) const {
+    const auto &texture = textures.at(key);
+    const auto block = preload_memory_blocks_.find(texture.memory);
+    return {texture.memory_offset, texture.memory_size, texture.memory_alignment,
+            block == preload_memory_blocks_.end() ? 0 : block->second.capacity};
+  }
+  void discard_texture_for_test(std::uint64_t key) {
+    if (preload_active_ || preload_pending_count())
+      throw std::runtime_error("Discarding a texture during preload");
+    settle();
+    const auto found = textures.find(key);
+    if (found != textures.end()) {
+      destroy(found->second);
+      textures.erase(found);
+    }
+  }
+  std::size_t preload_batch_submissions() const { return preload_batch_submissions_; }
+  std::size_t preload_pending_count() const {
+    return pending_preload_textures_.size() + pending_preload_models_.size();
+  }
+  std::size_t preload_peak_pending() const { return preload_peak_pending_; }
+  VkDeviceSize preload_peak_bytes() const { return preload_peak_bytes_; }
+  bool texture_completed(std::uint64_t key, std::uint64_t hash,
+                         unsigned width, unsigned height) const {
+    const auto found = textures.find(key);
+    return found != textures.end() && found->second.valid && found->second.hash == hash &&
+           found->second.width == width && found->second.height == height;
+  }
+  bool preload_stopped() const noexcept { return preload_stopped_; }
+  const PreloadStopInfo &preload_stop_info() const noexcept { return preload_stop_; }
+  void stop_preload_host_allocation() noexcept { stop_preload(VK_ERROR_OUT_OF_HOST_MEMORY); }
+  void set_preload_fault(const PreloadFaultInjection &fault) { preload_fault_ = fault; }
+  std::size_t preload_allocation_attempts() const { return preload_allocation_attempts_; }
+  std::size_t preload_allocation_successes() const { return preload_allocation_successes_; }
+  std::size_t live_allocation_count() const { return memory_allocations_.size(); }
+  std::uint64_t tracked_device_local_bytes() const {
+    std::uint64_t total = 0;
+    for (unsigned heap = 0; heap < memory.memoryHeapCount; ++heap)
+      if (memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+        total += tracked_heap_bytes(heap);
+    return total;
+  }
+  bool texture_resident(std::uint64_t key) const {
+    const auto found = textures.find(key);
+    return found != textures.end() && found->second.valid;
+  }
+  bool partial_texture(std::uint64_t key) const {
+    const auto found = textures.find(key);
+    return found != textures.end() && !found->second.valid;
+  }
+  bool model_uploaded(std::uint64_t key) const {
+    const auto found = model_buffers.find(key);
+    return found != model_buffers.end() && found->second.uploaded;
+  }
+  bool partial_model(std::uint64_t key) const {
+    const auto found = model_buffers.find(key);
+    return found != model_buffers.end() && !found->second.uploaded;
+  }
+  VkDeviceSize texture_staging_size() const { return texUpload.size; }
+  bool texture_staging_mapped() const { return texUpload.mapped != nullptr; }
+
+private:
   static void check(VkResult r, const char *what) {
     if (r != VK_SUCCESS)
       throw std::runtime_error(std::string("Vulkan scene renderer: ") + what +
@@ -2927,6 +4266,11 @@ private:
     if (!instanceExtensions.empty()) {
       MW34_VK_WSI_FNS(MW34_VK_OPT)
     }
+    memory_properties2_ = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(
+        get(instance, "vkGetPhysicalDeviceMemoryProperties2"));
+    if (!memory_properties2_)
+      memory_properties2_ = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(
+          get(instance, "vkGetPhysicalDeviceMemoryProperties2KHR"));
     VkSurfaceKHR probe{};
     if (surface_source.create && forPresent) {
       windowSurface = surface_source.create(instance);
@@ -3091,6 +4435,10 @@ private:
         f.vkEnumerateDeviceExtensionProperties(gpu, nullptr, &n, props.data());
       }
       for (const auto &p : props) {
+        if (memory_properties2_ && !std::strcmp(p.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
+          memory_budget_supported_ = true;
+          deviceExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+        }
         if (!std::strcmp(p.extensionName, swapExt)) {
           bool native_surface_supported = false;
 #if defined(_WIN32)
@@ -3174,6 +4522,22 @@ private:
             "present fence");
     }
     f.vkGetDeviceQueue(device, family, 0, &queue);
+    VkPhysicalDeviceProperties allocation_properties{};
+    f.vkGetPhysicalDeviceProperties(gpu, &allocation_properties);
+    if (allocation_properties.apiVersion >= VK_API_VERSION_1_1) {
+      image_memory_requirements2_ = reinterpret_cast<PFN_vkGetImageMemoryRequirements2>(
+          f.vkGetDeviceProcAddr(device, "vkGetImageMemoryRequirements2"));
+      buffer_memory_requirements2_ = reinterpret_cast<PFN_vkGetBufferMemoryRequirements2>(
+          f.vkGetDeviceProcAddr(device, "vkGetBufferMemoryRequirements2"));
+    }
+    // In-memory pipeline cache owned by this device so the Vulkan driver can
+    // reuse compiled shader stages and state across lazy pipeline variants
+    // without disk serialization or pretending cold variants were precreated.
+    VkPipelineCacheCreateInfo pipeline_cache_info{};
+    pipeline_cache_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    check(f.vkCreatePipelineCache(device, &pipeline_cache_info, nullptr,
+                                  &pipelineCache),
+          "pipeline cache");
     if (bridge_requested) {
       const auto properties2 =
           reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
@@ -3278,20 +4642,22 @@ private:
       check(f.vkCreateQueryPool(device, &query, nullptr, &profile_queries),
             "scene timestamp query pool");
     }
-    const VkDescriptorSetLayoutBinding bindings[2]{
+    const VkDescriptorSetLayoutBinding bindings[scene_texture_bindings]{
         {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
          VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+         VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
          VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = world_scale_percent() < 100 ? 2 : 1;
+    li.bindingCount = scene_texture_bindings;
     li.pBindings = bindings;
     check(f.vkCreateDescriptorSetLayout(device, &li, nullptr, &setLayout),
           "descriptor set layout");
     VkPushConstantRange pr{VK_SHADER_STAGE_VERTEX_BIT |
                                VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(Push)};
+                           0, sizeof(TlPush)};
     VkPipelineLayoutCreateInfo pli{};
     pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pli.setLayoutCount = 1;
@@ -3339,13 +4705,20 @@ private:
         check(
             f.vkCreateDescriptorSetLayout(device, &si, nullptr, &sunSetLayout),
             "sun descriptor layout");
-        VkDescriptorSetLayoutBinding nb{
-            0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-            VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        if (p.limits.maxPerStageDescriptorSamplers < 7 ||
+            p.limits.maxPerStageDescriptorSampledImages < 7 ||
+            p.limits.maxDescriptorSetSamplers < 7 ||
+            p.limits.maxDescriptorSetSampledImages < 7)
+          throw std::runtime_error("GPU cannot provide the normal/height descriptor contract");
+        const std::array<VkDescriptorSetLayoutBinding, 2> nb{{
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}}};
         VkDescriptorSetLayoutCreateInfo ni{};
         ni.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        ni.bindingCount = 1;
-        ni.pBindings = &nb;
+        ni.bindingCount = unsigned(nb.size());
+        ni.pBindings = nb.data();
         check(f.vkCreateDescriptorSetLayout(device, &ni, nullptr,
                                             &normalSetLayout),
               "normal descriptor layout");
@@ -3452,11 +4825,16 @@ private:
       aa_name = "4-sample SSAA";
     else if (grid.x == 2)
       aa_name = "2-sample SSAA";
-    if (fxaa_enabled() || anisotropy() > 1 || grid.x > 1)
+    if (fxaa_enabled() || anisotropy() > 1 || grid.x > 1 ||
+        bridge_config.draw_distance != zcls::kDefaultVisualFar)
       std::fprintf(
           stderr,
-          "Remaster quality: %s, %ux AF, samplerAnisotropy %u, GPU %s\n",
+          "Remaster quality: %s, %ux AF, samplerAnisotropy %u, draw distance %u "
+          "(fog start %.0f), GPU %s\n",
           aa_name, anisotropy(), enabled.samplerAnisotropy,
+          bridge_config.draw_distance,
+          static_cast<double>(zcls::fog_start_for_view_distance(
+              static_cast<float>(bridge_config.draw_distance))),
           device_name.c_str());
     if (bridge_config.seh_log) {
       VkPhysicalDeviceProperties diagnostic_props{};
@@ -3550,89 +4928,120 @@ private:
               bool reserve_hint = true) {
     if (b.buffer && b.size >= size)
       return;
-    const auto requested = size;
-    const bool reserve = bridge_config.buffer_reserve;
-    if (b.buffer && reserve && reserve_hint)
+    const VkDeviceSize requested = size;
+    if (b.buffer && bridge_config.buffer_reserve && reserve_hint)
       size = mw34::allocation::stream_capacity(size);
-    if (b.buffer) {
-      const bool trace = bridge_config.buffer_growth_trace;
-      if (trace)
-        std::fprintf(stderr,
-                     "Buffer growth: present=%llu previous=%llu requested=%llu "
-                     "capacity=%llu\n",
-                     (unsigned long long)(presents + 1),
-                     (unsigned long long)b.size, (unsigned long long)requested,
-                     (unsigned long long)size);
-      f.vkDestroyBuffer(device, b.buffer, nullptr);
-      f.vkFreeMemory(device, b.memory, nullptr);
-      b = {};
-    }
-    VkBufferCreateInfo bi{};
-    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bi.size = size;
-    bi.usage = usage;
-    const auto created = f.vkCreateBuffer(device, &bi, nullptr, &b.buffer);
-    if (size != requested && (created == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
-                              created == VK_ERROR_OUT_OF_HOST_MEMORY)) {
-      b = {};
-      ensure(b, requested, usage, false);
-      return;
-    }
-    check(created, "buffer");
-    VkMemoryRequirements r{};
-    f.vkGetBufferMemoryRequirements(device, b.buffer, &r);
-    VkMemoryAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    // Readback buffers are read by the CPU every scene: prefer host-cached
-    // memory (uncached, write-combined memory makes those reads several times
-    // slower). Upload buffers take the first host-visible type.
-    const VkMemoryPropertyFlags visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    ai.allocationSize = r.size;
-    ai.memoryTypeIndex =
-        (usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) &&
-                has_type(r, visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
-            ? type(r, visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
-            : type(r, visible);
-    const auto allocated = f.vkAllocateMemory(device, &ai, nullptr, &b.memory);
-    if (size != requested && (allocated == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
-                              allocated == VK_ERROR_OUT_OF_HOST_MEMORY)) {
-      f.vkDestroyBuffer(device, b.buffer, nullptr);
-      b = {};
-      ensure(b, requested, usage, false);
-      return;
-    }
-    check(allocated, "buffer memory");
-    {
-      const auto result = f.vkBindBufferMemory(device, b.buffer, b.memory, 0);
-      if (size != requested && (result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
-                                result == VK_ERROR_OUT_OF_HOST_MEMORY)) {
-        f.vkDestroyBuffer(device, b.buffer, nullptr);
-        f.vkFreeMemory(device, b.memory, nullptr);
-        b = {};
+    if (b.buffer && bridge_config.buffer_growth_trace)
+      std::fprintf(stderr,
+                   "Buffer growth: present=%llu previous=%llu requested=%llu capacity=%llu\n",
+                   (unsigned long long)(presents + 1), (unsigned long long)b.size,
+                   (unsigned long long)requested,
+                   (unsigned long long)size);
+    // Lazy callers already settle earlier uses and refill this buffer. Preserve
+    // their original peak memory requirement; only optional warmup keeps the
+    // old allocation available when its replacement cannot be admitted.
+    if (!preload_active_)
+      destroy_buffer(b);
+    Buffer replacement{};
+    try {
+      VkBufferCreateInfo info{};
+      info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+      info.size = size;
+      info.usage = usage;
+      check_allocation(f.vkCreateBuffer(device, &info, nullptr, &replacement.buffer), "buffer");
+      VkMemoryRequirements requirements{};
+      f.vkGetBufferMemoryRequirements(device, replacement.buffer, &requirements);
+      VkMemoryAllocateInfo allocation{};
+      allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      allocation.allocationSize = requirements.size;
+      const VkMemoryPropertyFlags visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+      allocation.memoryTypeIndex =
+          (usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) &&
+                  has_type(requirements, visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+              ? type(requirements, visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+              : type(requirements, visible);
+      check_allocation(allocate_memory(device, &allocation, nullptr, &replacement.memory),
+                       "buffer memory");
+      check_allocation(f.vkBindBufferMemory(device, replacement.buffer, replacement.memory, 0),
+                       "bind buffer");
+      check_allocation(f.vkMapMemory(device, replacement.memory, 0, VK_WHOLE_SIZE, 0,
+                                     &replacement.mapped), "map buffer");
+      replacement.size = size;
+    } catch (const PreloadAllocationFailure &) {
+      destroy_buffer(replacement);
+      if (!preload_active_ && size != requested) {
         ensure(b, requested, usage, false);
         return;
       }
-      check(result, "bind buffer");
+      throw;
+    } catch (...) {
+      destroy_buffer(replacement);
+      throw;
     }
-    {
-      const auto result =
-          f.vkMapMemory(device, b.memory, 0, VK_WHOLE_SIZE, 0, &b.mapped);
-      if (size != requested && (result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
-                                result == VK_ERROR_OUT_OF_HOST_MEMORY ||
-                                result == VK_ERROR_MEMORY_MAP_FAILED)) {
-        f.vkDestroyBuffer(device, b.buffer, nullptr);
-        f.vkFreeMemory(device, b.memory, nullptr);
-        b = {};
-        ensure(b, requested, usage, false);
+    destroy_buffer(b);
+    b = replacement;
+  }
+  // GPU-only grow-only storage. Diagnostic CPU access uses a separate staging buffer.
+  void ensure_device_buffer(Buffer &b, VkDeviceSize size, VkBufferUsageFlags usage,
+              bool reserve_hint = false) {
+    if (b.buffer && b.size >= size)
+      return;
+    const VkDeviceSize requested = size;
+    if (b.buffer && bridge_config.buffer_reserve && reserve_hint)
+      size = mw34::allocation::stream_capacity(size);
+    if (b.buffer && bridge_config.buffer_growth_trace)
+      std::fprintf(stderr,
+                   "Buffer growth: present=%llu previous=%llu requested=%llu capacity=%llu\n",
+                   (unsigned long long)(presents + 1), (unsigned long long)b.size,
+                   (unsigned long long)requested,
+                   (unsigned long long)size);
+    // Lazy callers already settle earlier uses and refill this buffer. Preserve
+    // their original peak memory requirement; only optional warmup keeps the
+    // old allocation available when its replacement cannot be admitted.
+    if (!preload_active_)
+      destroy_buffer(b);
+    Buffer replacement{};
+    try {
+      VkBufferCreateInfo info{};
+      info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+      info.size = size;
+      info.usage = usage;
+      check_allocation(f.vkCreateBuffer(device, &info, nullptr, &replacement.buffer), "buffer");
+      VkMemoryRequirements requirements{};
+      f.vkGetBufferMemoryRequirements(device, replacement.buffer, &requirements);
+      VkMemoryAllocateInfo allocation{};
+      allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      allocation.allocationSize = requirements.size;
+      const VkMemoryPropertyFlags visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+      allocation.memoryTypeIndex = has_type(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+                                       ? type(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+                                       : type(requirements, visible);
+      replacement.device_local =
+          (memory.memoryTypes[allocation.memoryTypeIndex].propertyFlags &
+           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+      check_allocation(allocate_memory(device, &allocation, nullptr, &replacement.memory),
+                       "buffer memory");
+      check_allocation(f.vkBindBufferMemory(device, replacement.buffer, replacement.memory, 0),
+                       "bind buffer");
+      replacement.size = size;
+    } catch (const PreloadAllocationFailure &) {
+      destroy_buffer(replacement);
+      if (!preload_active_ && size != requested) {
+        ensure_device_buffer(b, requested, usage, false);
         return;
       }
-      check(result, "map buffer");
+      throw;
+    } catch (...) {
+      destroy_buffer(replacement);
+      throw;
     }
-    b.size = size;
+    destroy_buffer(b);
+    b = replacement;
   }
   // A cached immutable device-local model buffer and its one-time upload.
-  ModelBuffer &model_buffer(const ModelGeometry &g) {
+  ModelBuffer &model_buffer(const ModelGeometry &g, bool shared_staging = false) {
     if (g.vertices.empty() ||
         (g.indices.empty()
              ? (g.vertices.size() > 65535 || g.vertices.size() % 3)
@@ -3646,92 +5055,125 @@ private:
         throw std::runtime_error("GPU model geometry identity changed");
       return b;
     }
-    const VkDeviceSize bytes =
-        VkDeviceSize(g.vertices.size()) * sizeof(ModelVertex);
-    ensure(b.staging, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-    std::memcpy(b.staging.mapped, g.vertices.data(), size_t(bytes));
-    VkBufferCreateInfo ci{};
-    ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    ci.size = bytes;
-    ci.usage =
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    check(f.vkCreateBuffer(device, &ci, nullptr, &b.local.buffer),
-          "model vertex buffer");
-    VkMemoryRequirements r{};
-    f.vkGetBufferMemoryRequirements(device, b.local.buffer, &r);
-    VkMemoryAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ai.allocationSize = r.size;
-    ai.memoryTypeIndex = type(r, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    check(f.vkAllocateMemory(device, &ai, nullptr, &b.local.memory),
-          "model vertex memory");
-    check(f.vkBindBufferMemory(device, b.local.buffer, b.local.memory, 0),
-          "bind model vertex memory");
-    b.local.size = bytes;
-    b.hash = g.hash;
-    b.count = unsigned(g.vertices.size());
-    b.index_count = unsigned(g.indices.size());
-    b.source = g.source;
-    if (!g.indices.empty()) {
-      for (auto index : g.indices)
-        if (index >= g.vertices.size())
-          throw std::runtime_error("GPU geometry index outside vertices");
-      const VkDeviceSize index_bytes = g.indices.size() * sizeof(std::uint32_t);
-      ensure(b.index_staging, index_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-      std::memcpy(b.index_staging.mapped, g.indices.data(),
-                  size_t(index_bytes));
-      ci.size = index_bytes;
+    try {
+      const VkDeviceSize bytes =
+          VkDeviceSize(g.vertices.size()) * sizeof(ModelVertex);
+      if (!shared_staging) {
+        ensure(b.staging, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        std::memcpy(b.staging.mapped, g.vertices.data(), size_t(bytes));
+      }
+      VkBufferCreateInfo ci{};
+      ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+      ci.size = bytes;
       ci.usage =
-          VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-      check(f.vkCreateBuffer(device, &ci, nullptr, &b.indices.buffer),
-            "model index buffer");
-      f.vkGetBufferMemoryRequirements(device, b.indices.buffer, &r);
+          VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+      check_allocation(f.vkCreateBuffer(device, &ci, nullptr, &b.local.buffer),
+            "model vertex buffer");
+      VkMemoryRequirements r{};
+      f.vkGetBufferMemoryRequirements(device, b.local.buffer, &r);
+      VkMemoryAllocateInfo ai{};
+      ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
       ai.allocationSize = r.size;
       ai.memoryTypeIndex = type(r, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-      check(f.vkAllocateMemory(device, &ai, nullptr, &b.indices.memory),
-            "model index memory");
-      check(f.vkBindBufferMemory(device, b.indices.buffer, b.indices.memory, 0),
-            "bind model indices");
-      b.indices.size = index_bytes;
+      allocate_preload_resource(r, ai.memoryTypeIndex, VK_NULL_HANDLE, b.local.buffer,
+                                b.local.memory, b.local.memory_offset);
+      b.local.memory_size = r.size;
+      b.local.memory_alignment = r.alignment;
+      check_allocation(f.vkBindBufferMemory(device, b.local.buffer, b.local.memory,
+                                           b.local.memory_offset),
+            "bind model vertex memory");
+      b.local.size = bytes;
+      b.hash = g.hash;
+      b.count = unsigned(g.vertices.size());
+      b.index_count = unsigned(g.indices.size());
+      b.source = g.source;
+      if (!g.indices.empty()) {
+        for (auto index : g.indices)
+          if (index >= g.vertices.size())
+            throw std::runtime_error("GPU geometry index outside vertices");
+        const VkDeviceSize index_bytes = g.indices.size() * sizeof(std::uint32_t);
+        if (!shared_staging) {
+          ensure(b.index_staging, index_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+          std::memcpy(b.index_staging.mapped, g.indices.data(), size_t(index_bytes));
+        }
+        ci.size = index_bytes;
+        ci.usage =
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        check_allocation(f.vkCreateBuffer(device, &ci, nullptr, &b.indices.buffer),
+              "model index buffer");
+        f.vkGetBufferMemoryRequirements(device, b.indices.buffer, &r);
+        ai.allocationSize = r.size;
+        ai.memoryTypeIndex = type(r, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        allocate_preload_resource(r, ai.memoryTypeIndex, VK_NULL_HANDLE, b.indices.buffer,
+                                  b.indices.memory, b.indices.memory_offset);
+        b.indices.memory_size = r.size;
+        b.indices.memory_alignment = r.alignment;
+        check_allocation(f.vkBindBufferMemory(device, b.indices.buffer, b.indices.memory,
+                                             b.indices.memory_offset),
+              "bind model indices");
+        b.indices.size = index_bytes;
+      }
+      return b;
+    } catch (...) {
+      discard_model_buffer(g.key);
+      throw;
     }
-    return b;
   }
   // Transfer-only images need no view. Sampled/attachment images receive a view
   // spanning every requested mip; initial contents and layout remain undefined.
   void image(VkImage &img, VkDeviceMemory &mem, VkImageView &view, unsigned w,
              unsigned h, VkFormat format, VkImageUsageFlags usage,
-             VkImageAspectFlags aspect, unsigned levels = 1) {
-    VkImageCreateInfo ii{};
-    ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    ii.imageType = VK_IMAGE_TYPE_2D;
-    ii.format = format;
-    ii.extent = {w, h, 1};
-    ii.mipLevels = levels;
-    ii.arrayLayers = 1;
-    ii.samples = VK_SAMPLE_COUNT_1_BIT;
-    ii.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ii.usage = usage;
-    check(f.vkCreateImage(device, &ii, nullptr, &img), "image");
-    VkMemoryRequirements r{};
-    f.vkGetImageMemoryRequirements(device, img, &r);
-    VkMemoryAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ai.allocationSize = r.size;
-    ai.memoryTypeIndex = type(r, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    check(f.vkAllocateMemory(device, &ai, nullptr, &mem), "image memory");
-    check(f.vkBindImageMemory(device, img, mem, 0), "bind image");
-    if (!(usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
-                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                   VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                   VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)))
-      return;
-    VkImageViewCreateInfo vi{};
-    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    vi.image = img;
-    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vi.format = format;
-    vi.subresourceRange = {aspect, 0, levels, 0, 1};
-    check(f.vkCreateImageView(device, &vi, nullptr, &view), "image view");
+             VkImageAspectFlags aspect, unsigned levels = 1, Tex *preload_texture = nullptr) {
+    try {
+      VkImageCreateInfo ii{};
+      ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+      ii.imageType = VK_IMAGE_TYPE_2D;
+      ii.format = format;
+      ii.extent = {w, h, 1};
+      ii.mipLevels = levels;
+      ii.arrayLayers = 1;
+      ii.samples = VK_SAMPLE_COUNT_1_BIT;
+      ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+      ii.usage = usage;
+      check_allocation(f.vkCreateImage(device, &ii, nullptr, &img), "image");
+      VkMemoryRequirements r{};
+      f.vkGetImageMemoryRequirements(device, img, &r);
+      VkMemoryAllocateInfo ai{};
+      ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      ai.allocationSize = r.size;
+      ai.memoryTypeIndex = type(r, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+      VkDeviceSize memory_offset = 0;
+      if (preload_texture) {
+        allocate_preload_resource(r, ai.memoryTypeIndex, img, VK_NULL_HANDLE, mem, memory_offset);
+        preload_texture->memory_offset = memory_offset;
+        preload_texture->memory_size = r.size;
+        preload_texture->memory_alignment = r.alignment;
+      } else {
+        check_allocation(allocate_memory(device, &ai, nullptr, &mem), "image memory");
+      }
+      check_allocation(f.vkBindImageMemory(device, img, mem, memory_offset), "bind image");
+      if (!(usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                     VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)))
+        return;
+      VkImageViewCreateInfo vi{};
+      vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+      vi.image = img;
+      vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+      vi.format = format;
+      vi.subresourceRange = {aspect, 0, levels, 0, 1};
+      check_allocation(f.vkCreateImageView(device, &vi, nullptr, &view), "image view");
+    } catch (...) {
+      if (view)
+        f.vkDestroyImageView(device, view, nullptr);
+      if (img)
+        f.vkDestroyImage(device, img, nullptr);
+      if (mem)
+        release_memory(device, mem, nullptr);
+      img = {}; mem = {}; view = {};
+      throw;
+    }
   }
   void create(Tex &t, unsigned w, unsigned h) {
     t.levels = 1;
@@ -3741,7 +5183,7 @@ private:
     image(t.image, t.memory, t.view, w, h, VK_FORMAT_R8G8B8A8_UNORM,
           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
               VK_IMAGE_USAGE_SAMPLED_BIT,
-          VK_IMAGE_ASPECT_COLOR_BIT, t.levels);
+          VK_IMAGE_ASPECT_COLOR_BIT, t.levels, &t);
     t.width = w;
     t.height = h;
     t.valid = false;
@@ -3753,7 +5195,7 @@ private:
     if (t.image)
       f.vkDestroyImage(device, t.image, nullptr);
     if (t.memory)
-      f.vkFreeMemory(device, t.memory, nullptr);
+      release_memory(device, t.memory, nullptr);
     t = {};
   }
   // Target replacement waits for the whole device, including presentation
@@ -3768,14 +5210,14 @@ private:
     if (framebuffer)
       f.vkDestroyFramebuffer(device, framebuffer, nullptr);
     for (Image *i :
-         {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource}) {
-      if (i->view)
-        f.vkDestroyImageView(device, i->view, nullptr);
-      if (i->image)
-        f.vkDestroyImage(device, i->image, nullptr);
-      if (i->memory)
-        f.vkFreeMemory(device, i->memory, nullptr);
-      *i = {};
+         {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource, &menuRippleSource}) {
+        if (i->view)
+            f.vkDestroyImageView(device, i->view, nullptr);
+        if (i->image)
+            f.vkDestroyImage(device, i->image, nullptr);
+        if (i->memory)
+            release_memory(device, i->memory, nullptr);
+        *i = {};
     }
     scale = scale_req;
     if (scale != 1.f || widescreen()) { // scaling needs blits of both formats
@@ -3880,16 +5322,17 @@ private:
     create_world_target();
   }
   void pool(unsigned n) {
+    const auto counts = material_descriptor_counts(n);
     if (descriptorPool)
       f.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     const std::array<VkDescriptorPoolSize, 4> ps{
-        {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n * 3 + 2},
+        {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, counts[0]},
          {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
          {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}}};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = n * 2 + 1;
+    pi.maxSets = counts[1];
     pi.poolSizeCount = lighting_settings.enabled ? 4 : 1;
     pi.pPoolSizes = ps.data();
     check(f.vkCreateDescriptorPool(device, &pi, nullptr, &descriptorPool),
@@ -3944,6 +5387,8 @@ private:
     auto it = pipelines.find(key);
     if (it != pipelines.end())
       return it->second;
+    mw34::timing::ScopedDuration pipeline_miss_timer(
+        gpu_resource_timing_.pipeline_target());
     std::array<VkPipelineShaderStageCreateInfo, 2> st{};
     for (int i = 0; i < 2; ++i) {
       st[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -3966,6 +5411,10 @@ private:
          {1, 0, VK_FORMAT_R32_UINT, 16},
          {2, 0, VK_FORMAT_R32_UINT, 20},
          {3, 0, VK_FORMAT_R32G32_SFLOAT, 24}}};
+    const std::array<VkVertexInputBindingDescription, 2> fog_bindings{
+        {vb, {2, 16, VK_VERTEX_INPUT_RATE_VERTEX}}};
+    const std::array<VkVertexInputAttributeDescription, 5> fog_attributes{
+        {va[0], va[1], va[2], va[3], {5, 2, VK_FORMAT_R32G32B32A32_SFLOAT, 0}}};
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     const std::array<VkVertexInputAttributeDescription, 3> ma{
@@ -3981,24 +5430,32 @@ private:
          {2, 1, VK_FORMAT_R32_UINT, 20},
          {3, 1, VK_FORMAT_R32G32_SFLOAT, 24},
          {4, 0, VK_FORMAT_R32G32B32_SFLOAT, 12}}};
-    const std::array<VkVertexInputBindingDescription, 2> tb{
+    const std::array<VkVertexInputBindingDescription, 3> tb{
         {{0, 32, VK_VERTEX_INPUT_RATE_VERTEX},
-         {1, 12, VK_VERTEX_INPUT_RATE_VERTEX}}};
-    const std::array<VkVertexInputAttributeDescription, 5> ta{
-        {va[0], va[1], va[2], va[3], {4, 1, VK_FORMAT_R32G32B32_SFLOAT, 0}}};
+         {1, 12, VK_VERTEX_INPUT_RATE_VERTEX},
+         {2, 16, VK_VERTEX_INPUT_RATE_VERTEX}}};
+    const std::array<VkVertexInputAttributeDescription, 6> ta{
+        {va[0], va[1], va[2], va[3], {4, 1, VK_FORMAT_R32G32B32_SFLOAT, 0},
+         {5, 2, VK_FORMAT_R32G32B32A32_SFLOAT, 0}}};
     const bool lit_tl = lit && !model;
-    vi.vertexBindingDescriptionCount = world || lit_tl ? 2 : 1;
+    // The count must follow the SAME order as the pointer below, and come from the chosen array:
+    // a world draw can also be lit_tl, and its two-element array must not be read as three.
+    vi.vertexBindingDescriptionCount = world    ? uint32_t(wb.size())
+                                       : lit_tl ? uint32_t(tb.size())
+                                       : model  ? 1u
+                                                : uint32_t(fog_bindings.size());
     vi.pVertexBindingDescriptions = world    ? wb.data()
                                     : lit_tl ? tb.data()
-                                             : &vb;
-    vi.vertexAttributeDescriptionCount = world    ? (lit ? 5 : 4)
-                                         : model  ? 3
-                                         : lit_tl ? 5
-                                                  : 4;
+                                    : model  ? &vb
+                                             : fog_bindings.data();
+    vi.vertexAttributeDescriptionCount = world    ? (lit ? 5u : 4u)
+                                         : model  ? 3u
+                                         : lit_tl ? uint32_t(ta.size())
+                                                  : uint32_t(fog_attributes.size());
     vi.pVertexAttributeDescriptions = world    ? wa.data()
                                       : model  ? ma.data()
                                       : lit_tl ? ta.data()
-                                               : va.data();
+                                               : fog_attributes.data();
     VkPipelineInputAssemblyStateCreateInfo ia{};
     ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     ia.topology = k.points ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
@@ -4044,7 +5501,10 @@ private:
     cb.colorWriteMask = 15;
     cb.blendEnable = k.blend;
     unsigned src = k.src, dst = k.dst;
-    if (src == 12) {
+    if (src == kReverseSubtractBlend) {
+      src = dst = 2;
+      cb.colorBlendOp = VK_BLEND_OP_REVERSE_SUBTRACT;
+    } else if (src == 12) {
       src = 5;
       dst = 6;
     } else if (src == 13) {
@@ -4081,7 +5541,7 @@ private:
     pi.layout = (model || lit) ? modelLayout : pipelineLayout;
     pi.renderPass = renderPass;
     VkPipeline p{};
-    check(f.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pi, nullptr,
+    check(f.vkCreateGraphicsPipelines(device, pipelineCache, 1, &pi, nullptr,
                                       &p),
           "graphics pipeline");
     return pipelines[key] = p;
@@ -4246,6 +5706,9 @@ private:
     presentWindow = {};
   }
   void dropSwapchain() {
+#if defined(_WIN32)
+    retire_editor();
+#endif
     if (dxgi.active()) {
       dxgi.reset_window();
       return;
@@ -4260,6 +5723,7 @@ private:
     swapRendered.clear();
     swapchain = {};
     swapImages.clear();
+    swapFormat = VK_FORMAT_UNDEFINED;
   }
   // A zero-sized surface is a temporary no-present state. A changed extent
   // drains presentation and rebuilds both the swapchain and its per-image
@@ -4399,6 +5863,7 @@ private:
       check(f.vkCreateSemaphore(device, &semaphoreInfo, nullptr, &sem),
             "per-image presentation semaphore");
     swapExtent = e;
+    swapFormat = fmt.format;
     return syncExclusive();
   }
   cc_mw3_re::platform::ExclusiveFullscreenHandler exclusive_fullscreen_;
@@ -4416,7 +5881,7 @@ private:
     if (srcImage.image)
       f.vkDestroyImage(device, srcImage.image, nullptr);
     if (srcImage.memory)
-      f.vkFreeMemory(device, srcImage.memory, nullptr);
+      release_memory(device, srcImage.memory, nullptr);
     srcImage = {};
     image(srcImage.image, srcImage.memory, srcImage.view, w, h,
           rgba32 ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R5G6B5_UNORM_PACK16,
@@ -4430,6 +5895,9 @@ private:
   // image/buffer handles precede their backing memory; the loader is released
   // last.
   void shutdown() {
+#if defined(_WIN32)
+    editor_retire_for_shutdown();
+#endif
     if (!device) {
       dropSurface();
       if (instance && f.vkDestroyInstance)
@@ -4466,6 +5934,7 @@ private:
                  "adjacent TL draws combined\n",
                  (unsigned long long)draws, (unsigned long long)submitted_draws,
                  (unsigned long long)combined_draws);
+    destroy_menu_ripple_pipeline();
     if (qualityPipeline)
       f.vkDestroyPipeline(device, qualityPipeline, nullptr);
     if (qualityLayout)
@@ -4483,7 +5952,7 @@ private:
         if (p->buffer)
           f.vkDestroyBuffer(device, p->buffer, nullptr);
         if (p->memory)
-          f.vkFreeMemory(device, p->memory, nullptr);
+          release_memory(device, p->memory, nullptr);
       }
     model_buffers.clear();
     if (emission_draw_records)
@@ -4495,10 +5964,17 @@ private:
     destroy_tiled();
     for (auto &[k, t] : textures)
       destroy(t);
+    for (auto &[key, cached] : height_images)
+      destroy(cached.texture);
+    height_images.clear();
     destroy(white);
     destroy(flatNormal);
     for (auto &[k, p] : pipelines)
       f.vkDestroyPipeline(device, p, nullptr);
+    if (pipelineCache) {
+      f.vkDestroyPipelineCache(device, pipelineCache, nullptr);
+      pipelineCache = VK_NULL_HANDLE;
+    }
     for (auto &[k, s] : samplers)
       f.vkDestroySampler(device, s, nullptr);
     dxgi.detach();
@@ -4511,18 +5987,18 @@ private:
     if (srcImage.image)
       f.vkDestroyImage(device, srcImage.image, nullptr);
     if (srcImage.memory)
-      f.vkFreeMemory(device, srcImage.memory, nullptr);
+      release_memory(device, srcImage.memory, nullptr);
     if (acquired)
       f.vkDestroySemaphore(device, acquired, nullptr);
     if (presentFence)
       f.vkDestroyFence(device, presentFence, nullptr);
     if (presentPool)
       f.vkDestroyCommandPool(device, presentPool, nullptr);
-    for (Buffer *b : {&upload, &readback, &vertexBuffer, &normalBuffer,
-                      &texUpload, &presentUpload, &sunBuffer, &effectBuffer})
+    for (Buffer *b : {&upload, &readback, &vertexBuffer, &normalBuffer, &fogBuffer,
+                      &texUpload, &presentUpload, &sunBuffer, &effectBuffer, &height_upload})
       if (b->buffer) {
         f.vkDestroyBuffer(device, b->buffer, nullptr);
-        f.vkFreeMemory(device, b->memory, nullptr);
+        release_memory(device, b->memory, nullptr);
       }
     if (worldColor.image) {
       std::fprintf(stderr,
@@ -4534,13 +6010,13 @@ private:
     if (framebuffer)
       f.vkDestroyFramebuffer(device, framebuffer, nullptr);
     for (Image *i :
-         {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource}) {
-      if (i->view)
-        f.vkDestroyImageView(device, i->view, nullptr);
-      if (i->image)
-        f.vkDestroyImage(device, i->image, nullptr);
-      if (i->memory)
-        f.vkFreeMemory(device, i->memory, nullptr);
+         {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource, &menuRippleSource}) {
+        if (i->view)
+            f.vkDestroyImageView(device, i->view, nullptr);
+        if (i->image)
+            f.vkDestroyImage(device, i->image, nullptr);
+        if (i->memory)
+            release_memory(device, i->memory, nullptr);
     }
     f.vkDestroyRenderPass(device, renderPass, nullptr);
     f.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
@@ -4564,7 +6040,7 @@ private:
     if (shadowImage)
       f.vkDestroyImage(device, shadowImage, nullptr);
     if (shadowMemory)
-      f.vkFreeMemory(device, shadowMemory, nullptr);
+      release_memory(device, shadowMemory, nullptr);
     if (shadowVert)
       f.vkDestroyShaderModule(device, shadowVert, nullptr);
     if (sunSetLayout)
@@ -4594,7 +6070,9 @@ private:
     loader.unload();
     device = {};
   }
+#include "menu_ripple_stage.inc"
 #include "quality_stage.inc"
+#include "range_backdrop.inc"
 #include "world_resolution_stage.inc"
 };
 } // namespace mw34::vkscene

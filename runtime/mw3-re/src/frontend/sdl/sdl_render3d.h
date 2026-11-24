@@ -1,7 +1,9 @@
 #pragma once
 #include <SDL3/SDL.h>
 
+#include <functional>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -20,12 +22,22 @@ struct EnvironmentSelection;
 }
 
 namespace sdlfe {
+struct MenuRipplePass {
+    float center_x{}, center_y{};
+    float scale_x{1.f}, scale_y{1.f};
+    float inner{}, outer{}, amplitude{}, wavelength{}, phase{};
+    bool has_clip{};
+    float clip_left{}, clip_top{}, clip_right{}, clip_bottom{};
+};
+
+class EditorUiSource;
 
 enum class RendererBackend { sdl, core_critical_dxgi, core_critical_wsi };
 
 struct CoreCriticalQuality {
   std::string antialiasing = "off";
   std::string anisotropy = "1";
+  unsigned draw_distance = 800;
 };
 
 struct PreparedModelBinding {
@@ -37,23 +49,45 @@ struct PreparedNormalBinding {
 struct PreparedMaterialBinding {
   std::string chassis, lod, path;
 };
+struct PreparedSkinBinding {
+  std::string chassis, lod, path;
+  int32_t index{};
+};
 struct CoreCriticalAssets {
   std::vector<std::string> environment_packs;
+  bool environment_packs_explicit = false;
   std::shared_ptr<const platform::prepared::EnvironmentSelection> environment;
   bool render_thread = false;
+  std::string flare_style = "modern";
+  bool pom = false;
   std::string geometry = "legacy";
   bool geometry_debug_normals = false;
   std::string textures;
   std::vector<PreparedModelBinding> models;
   std::vector<PreparedNormalBinding> normals;
   std::vector<PreparedMaterialBinding> materials;
+  std::vector<PreparedSkinBinding> skins;
+  std::string skin_catalog;
   bool sun_explicit = false;
   std::string lighting = "off", sun_azimuth = "45", sun_elevation = "35";
+  bool sun_shadows_explicit = false, sun_shadows = false;
+  bool dynamic_lighting_explicit = false, dynamic_lighting = false;
+  bool water_detail_explicit = false, water_detail = false;
+  bool cloud_detail_explicit = false, cloud_detail = false;
+  bool effect_lights = false, fixture_lights = false, mech_headlights = false;
+  std::string effect_light_catalog, stock_headlights, headlight_bindings;
   bool empty() const {
-    return environment_packs.empty() && !environment && !sun_explicit &&
-           !render_thread && geometry == "legacy" && !geometry_debug_normals &&
+    return environment_packs.empty() && !environment_packs_explicit &&
+           !environment && !sun_explicit &&
+           !sun_shadows_explicit && !dynamic_lighting_explicit && !water_detail_explicit &&
+           !cloud_detail_explicit && !effect_lights && !fixture_lights &&
+           !mech_headlights && effect_light_catalog.empty() &&
+           stock_headlights.empty() && headlight_bindings.empty() &&
+           !render_thread && !pom && geometry == "legacy" && !geometry_debug_normals &&
+           flare_style == "modern" &&
            textures.empty() && models.empty() && normals.empty() &&
-           materials.empty() && lighting == "off" && sun_azimuth == "45" &&
+           materials.empty() && skins.empty() && skin_catalog.empty() &&
+           lighting == "off" && sun_azimuth == "45" &&
            sun_elevation == "35";
   }
 };
@@ -61,8 +95,22 @@ struct CoreCriticalAssets {
 class FrameRenderer : public platform::Render3D {
  public:
   virtual bool ok() const = 0;
+  // Unsupported recorders reject attachment explicitly. Null detach is safe.
+  virtual void attach_editor(EditorUiSource* source) {
+    if (source) throw std::invalid_argument("renderer: editor attachment unsupported");
+  }
+  virtual void detach_editor() { attach_editor(nullptr); }
+  // Frontend canvases can be presented before a mission has a world camera.
+  // Backends without world-light snapshots retain their existing scene behavior.
+  virtual void begin_canvas_scene() { begin_scene(); }
   virtual void capture_next(const char* bmp_path) = 0;
   virtual void flush() = 0;
+  // Optional canvases must discover deferred texture allocation failures before
+  // submitting draws, so their CPU fallback can still use the render worker.
+  virtual bool supports_gpu_menu_ripple() const { return false; }
+  virtual void prepare_menu_ripple() {}
+  virtual void apply_menu_ripple(const MenuRipplePass &) {}
+  virtual void prepare_canvas_textures(const std::vector<int32_t> &) {}
   virtual void viewport(int* x, int* y, int* w, int* h) const = 0;
   virtual void set_shape(const FrameShape* shape) = 0;
 };
@@ -71,12 +119,16 @@ class SdlRender3D : public FrameRenderer {
  public:
   SdlRender3D(SDL_GPUDevice* device, SDL_Window* window);
   ~SdlRender3D() override;
+  void attach_editor(EditorUiSource* source) override;
+  void detach_editor() override;
   bool ok() const override { return ok_; }
   const char* driver_name() const override;
 
   int32_t create_texture(int width, int height, const uint8_t* rgba, uint8_t type) override;
   void release_texture(int32_t handle) override;
   void update_texture(int32_t handle, int width, int height, const uint8_t* rgba) override;
+  // Tests only: make every texture staging map fail, as an exhausted device would.
+  static void fail_staging_for_test(bool fail);
   void set_viewport(int x, int y, int width, int height) override;
   void clear(bool color, uint8_t r, uint8_t g, uint8_t b) override;
   void begin_scene() override;
@@ -97,10 +149,16 @@ class SdlRender3D : public FrameRenderer {
     if (!runs_.empty()) end_scene();
   }
   void viewport(int* x, int* y, int* w, int* h) const override { *x = vx_, *y = vy_, *w = vw_, *h = vh_; }
+
   void set_shape(const FrameShape* s) override { shape_ = s; }
 
+  // Ours: drawn on the swapchain after the game's frame is put there (the game
+  // editor's ImGui, editor_imgui.h). Not in a capture: shots show the game alone.
+  std::function<void(SDL_GPUCommandBuffer*, SDL_GPUTexture*, Uint32, Uint32)> overlay;
+
  private:
-  void upload(SDL_GPUTexture* t, int width, int height, const uint8_t* rgba);
+  // False when the staging buffer could not be created or mapped; nothing was uploaded then.
+  bool upload(SDL_GPUTexture* t, int width, int height, const uint8_t* rgba);
   struct Run {
     platform::DrawState state;
     uint32_t first, count;
@@ -109,11 +167,14 @@ class SdlRender3D : public FrameRenderer {
     float fog[3];
   };
   SDL_GPUGraphicsPipeline* pipeline(const platform::DrawState& s, bool textured);
-  SDL_GPUSampler* sampler(uint8_t u, uint8_t v);
+  SDL_GPUSampler* sampler(uint8_t u, uint8_t v, bool nearest);
   void ensure_depth(uint32_t w, uint32_t h);
   void ensure_buffer(uint32_t bytes);
   bool ensure_frame();
 
+  // The main attachment guard clears this borrow before destroying its source.
+  EditorUiSource* editor_source_ = nullptr;
+  const SDL_ThreadID editor_thread_ = SDL_GetCurrentThreadID();
   SDL_GPUDevice* dev_;
   SDL_Window* window_;
   bool ok_ = false;

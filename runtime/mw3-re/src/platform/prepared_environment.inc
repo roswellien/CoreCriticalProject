@@ -2,6 +2,7 @@
 // integrity.
 #include "platform/prepared_environment_bank.hpp"
 #include "platform/sha256.hpp"
+#include "platform/verified_digest.hpp"
 #include <algorithm>
 #include <cfenv>
 #include <cmath>
@@ -24,6 +25,8 @@ constexpr std::uint64_t env_json_limit = 2ULL * 1024 * 1024;
 constexpr std::uint64_t env_total_limit = 16ULL * 1024 * 1024 * 1024;
 constexpr std::uint64_t env_world_limit = 4096ULL * 1024 * 1024;
 constexpr std::uint64_t env_page_limit = 16ULL * 1024 * 1024;
+constexpr std::size_t env_world_page_limit = 512;
+constexpr std::uint64_t env_target_limit = 4ULL * 1024 * 1024;
 [[noreturn]] void env_fail(const std::string &message) {
   throw std::runtime_error("Environment pack: " + message);
 }
@@ -48,31 +51,31 @@ std::string env_text(const EJson &j) {
     env_fail("empty/NUL string");
   return value;
 }
-std::string env_read_text(const efs::path &path) {
-  if (efs::file_size(path) > env_json_limit)
+std::string env_read_text(const efs::path &path, std::uint64_t limit = env_json_limit) {
+  if (efs::file_size(path) > limit)
     env_fail("metadata/text size limit");
   std::ifstream input(path, std::ios::binary);
   if (!input)
     env_fail("cannot open " + path.u8string());
   // Bound the read itself: a file may grow after file_size was checked.
-  std::string text(static_cast<std::size_t>(env_json_limit) + 1, '\0');
+  std::string text(static_cast<std::size_t>(limit) + 1, '\0');
   input.read(text.data(), static_cast<std::streamsize>(text.size()));
   const auto count = input.gcount();
   if (input.bad() || (input.fail() && !input.eof()))
     env_fail("text read failed");
-  if (count > static_cast<std::streamsize>(env_json_limit))
+  if (count > static_cast<std::streamsize>(limit))
     env_fail("text grew during read");
   text.resize(static_cast<std::size_t>(count));
   return text;
 }
-EJson env_json(const efs::path &path) {
-  const auto text = env_read_text(path);
+EJson env_json(const efs::path &path, std::uint64_t limit = env_json_limit) {
+  const auto text = env_read_text(path, limit);
   std::vector<std::set<std::string>> keys;
   std::size_t events = 0;
   try {
     return EJson::parse(
         text, [&](int depth, EJson::parse_event_t event, EJson &value) {
-          if (depth > 32 || ++events > 100000)
+          if (depth > 32 || ++events > (limit == env_target_limit ? 1000000U : 100000U))
             env_fail("JSON complexity limit");
           if (event == EJson::parse_event_t::object_start)
             keys.emplace_back();
@@ -177,6 +180,8 @@ struct EnvPack {
   std::string id, region, root, manifest_digest;
   EJson registry;
   std::map<std::string, EnvPin> pins;
+  bool material_targets_declared{};
+  bool surface_materials_declared{};
 };
 float env_float(const EJson &j, double min_val, double max_val) {
   if (j.is_boolean() || !j.is_number())
@@ -300,6 +305,9 @@ void env_header(const EnvPin &pin) {
     detail::validate_environment_bank(efs::u8path(pin.path), pin.bytes);
   } else if (pin.format == "MW34-lighting-v1") {
     env_lighting(efs::u8path(pin.path), {});
+  } else if (pin.format == "MW34-surface-targets-v1") {
+    if (pin.bytes > env_target_limit)
+      env_fail("material target metadata byte limit");
   } else {
     const auto it = magic.find(pin.format);
     if (it == magic.end() || count < 8 ||
@@ -311,6 +319,147 @@ void env_header(const EnvPin &pin) {
       (void)mw34::materials::read_surface_normal_header(input);
     }
   }
+}
+void env_fields(const EJson &value, const std::set<std::string> &fields) {
+  if (!value.is_object() || value.size() != fields.size())
+    env_fail("invalid material target fields");
+  for (const auto &item : value.items())
+    if (!fields.count(item.key()))
+      env_fail("unknown material target field");
+}
+std::uint64_t env_hex(const EJson &value, std::size_t digits) {
+  const auto text = env_text(value);
+  if (text.size() != digits ||
+      text.find_first_not_of("0123456789abcdef") != std::string::npos)
+    env_fail("invalid material target hash");
+  return std::stoull(text, nullptr, 16);
+}
+using EnvSurfaceCache = std::map<std::pair<std::string, std::string>,
+                                 std::weak_ptr<const mw34::materials::SurfaceMaterialPack>>;
+std::vector<MaterialTarget> env_material_targets(
+    const EnvPack &pack, std::set<std::string> &references,
+    std::uint64_t &encoded_bytes,
+    std::map<std::string, std::shared_ptr<const mw34::materials::SurfaceMaterialPack>> &cache,
+    EnvSurfaceCache &reusable, const std::shared_ptr<mw34::materials::SurfaceDecodedBudget> &budget) {
+  const auto member = env_text(pack.registry.at("material_targets"));
+  const auto pin = pack.pins.find(member);
+  if (pack.region == "shared-mechs" || pin == pack.pins.end() ||
+      pin->second.format != "MW34-surface-targets-v1")
+    env_fail("undeclared or out-of-region material targets");
+  references.insert(member);
+  const auto document = env_json(efs::u8path(pin->second.path), env_target_limit);
+  env_fields(document, {"schema_version", "targets"});
+  if (env_uint(document.at("schema_version")) != 1 ||
+      !document.at("targets").is_array() || document["targets"].empty() ||
+      document["targets"].size() > 4096)
+    env_fail("invalid material target document");
+  std::set<std::pair<std::string, std::uint32_t>> sources;
+  std::set<std::string> owned_members;
+  for (const auto &bank : env_banks(pack.region))
+    owned_members.insert(bank.substr(0, bank.find_last_of('/')) + "/gamez.zbd");
+  std::vector<MaterialTarget> result;
+  for (const auto &entry : document["targets"]) {
+    env_fields(entry, {"surface_materials", "asset_id", "source", "mesh_uv_hash",
+                       "polygon_materials", "surface_keys"});
+    MaterialTarget target;
+    target.asset_id = env_text(entry.at("asset_id"));
+    if (!mw34::materials::valid_surface_identifier(
+            target.asset_id, mw34::materials::max_surface_identifier_bytes, true))
+      env_fail("invalid material target asset ID");
+    const auto &source = entry.at("source");
+    env_fields(source, {"kind", "member", "sha256", "bytes", "model_slot"});
+    target.source.kind = env_text(source.at("kind"));
+    target.source.member = env_text(source.at("member"));
+    target.source.sha256 = env_text(source.at("sha256"));
+    target.source.bytes = env_uint(source.at("bytes"));
+    const auto slot = env_uint(source.at("model_slot"));
+    if (target.source.kind != "gamez-zbd-v27" || !owned_members.count(target.source.member) ||
+        target.source.sha256.size() != 64 ||
+        target.source.sha256.find_first_not_of("0123456789abcdef") != std::string::npos ||
+        !target.source.bytes || target.source.bytes > env_total_limit || slot >= 1048576)
+      env_fail("invalid/cross-region material source");
+    target.source.model_slot = std::uint32_t(slot);
+    if (!sources.emplace(target.source.member, target.source.model_slot).second)
+      env_fail("duplicate material source target");
+    target.mesh_uv_hash = env_hex(entry.at("mesh_uv_hash"), 16);
+    const auto &materials = entry.at("polygon_materials");
+    const auto &keys = entry.at("surface_keys");
+    if (!target.mesh_uv_hash || !materials.is_array() || materials.empty() ||
+        materials.size() > 4096 || !keys.is_array() || keys.size() != materials.size())
+      env_fail("invalid target polygon/material list");
+    for (std::size_t polygon = 0; polygon < materials.size(); ++polygon) {
+      const auto name = env_text(materials[polygon]);
+      if (!mw34::materials::valid_surface_identifier(name, 31, false))
+        env_fail("invalid target material name");
+      target.polygon_materials.push_back(name);
+      if (keys[polygon].is_null()) {
+        if (name != "untextured")
+          env_fail("missing target source image identity");
+        target.surface_keys.emplace_back();
+        continue;
+      }
+      const auto &image = keys[polygon];
+      env_fields(image, {"width", "height", "format", "hash"});
+      const auto width = env_uint(image.at("width")), height = env_uint(image.at("height")),
+                 format = env_uint(image.at("format")), hash = env_hex(image.at("hash"), 16);
+      if (!width || width > 4096 || !height || height > 4096 || format < 1 || format > 3 || !hash)
+        env_fail("invalid target source image identity");
+      target.surface_keys.push_back(mw34::materials::SurfaceKey{
+          std::uint32_t(width), std::uint32_t(height), std::uint32_t(format), hash});
+    }
+    const auto sidecar = env_text(entry.at("surface_materials"));
+    const auto image_pin = pack.pins.find(sidecar);
+    if (image_pin == pack.pins.end() || image_pin->second.format != "BWSFM1")
+      env_fail("undeclared target surface-material member");
+    references.insert(sidecar);
+    target.sidecar_path = image_pin->second.path;
+    target.sidecar_sha256 = image_pin->second.digest;
+    const auto found = cache.find(target.sidecar_path);
+    if (found == cache.end()) {
+      if (image_pin->second.bytes > mw34::materials::max_surface_sidecar_bytes - encoded_bytes)
+        env_fail("combined target sidecars exceed decoded budget");
+      encoded_bytes += image_pin->second.bytes;
+      const auto identity = std::make_pair(target.sidecar_path, target.sidecar_sha256);
+      const auto prior = reusable.find(identity);
+      if (prior != reusable.end())
+        target.pack = prior->second.lock();
+      if (!target.pack) {
+        std::ifstream input(efs::u8path(target.sidecar_path), std::ios::binary);
+        auto parsed = mw34::materials::read_surface_materials(
+            input, target.asset_id, target.mesh_uv_hash, target.polygon_materials,
+            image_pin->second.bytes, mw34::materials::max_surface_sidecar_bytes, budget);
+        target.pack = std::make_shared<const mw34::materials::SurfaceMaterialPack>(std::move(parsed));
+        // At most five non-shared regions can own 4096 targets each. Weak
+        // entries never extend pixel lifetime; expired entries are pruned on
+        // resolve, and declining an extra reuse entry cannot evade admission.
+        if (reusable.size() < 5 * mw34::materials::max_surface_records || prior != reusable.end())
+          reusable[identity] = target.pack;
+      }
+      cache.emplace(target.sidecar_path, target.pack);
+    } else {
+      target.pack = found->second;
+    }
+    const auto &parsed = *target.pack;
+    if (!parsed.decoded_reservation || parsed.decoded_reservation->budget() != budget)
+      env_fail("foreign cached surface ownership domain");
+    if (parsed.mesh_uv_hash != target.mesh_uv_hash ||
+        parsed.bindings.size() != target.polygon_materials.size())
+      env_fail("shared sidecar source identity mismatch");
+    for (const auto &record : parsed.records)
+      if (record->asset_id != target.asset_id)
+        env_fail("shared sidecar asset identity mismatch");
+    for (std::size_t polygon = 0; polygon < parsed.bindings.size(); ++polygon) {
+      const auto index = parsed.bindings[polygon];
+      if (index == mw34::materials::no_surface_material)
+        continue;
+      const auto &record = *parsed.records.at(index);
+      if (record.material_name != target.polygon_materials[polygon] ||
+          (!target.surface_keys[polygon] && record.height_image != mw34::materials::no_surface_image))
+        env_fail("shared sidecar polygon/image identity mismatch");
+    }
+    result.push_back(std::move(target));
+  }
+  return result;
 }
 void env_catalog(const EnvPack &pack, const char *role, const char *magic,
                  std::set<std::string> &references, std::uint64_t &bytes,
@@ -350,7 +499,7 @@ void env_catalog(const EnvPack &pack, const char *role, const char *magic,
     ++pages;
     const bool world = std::string(role) == "world";
     if ((world && (it->second.bytes > env_page_limit ||
-                   bytes > env_world_limit || pages > 256)) ||
+                   bytes > env_world_limit || pages > env_world_page_limit)) ||
         (!world && (bytes > 1536ULL * 1024 * 1024 || pages > 16)))
       env_fail("normal catalog budget exceeded");
   }
@@ -385,8 +534,10 @@ std::string environment_region(const std::string &mission) {
     return "operation4";
   env_fail("unknown stock mission region");
 }
-EnvironmentSelection
-load_environment_packs(const std::vector<std::string> &roots) {
+static EnvironmentSelection load_environment_packs_impl(
+    const std::vector<std::string> &roots,
+    const std::shared_ptr<mw34::materials::SurfaceDecodedBudget> &budget,
+    EnvSurfaceCache &reusable) {
   struct FloatScope {
     std::fenv_t saved{};
     FloatScope() {
@@ -438,12 +589,18 @@ load_environment_packs(const std::vector<std::string> &roots) {
             env_fail("unsupported required capability");
       const std::set<std::string> formats = {
           "ZBD-texture-v1", "BWSNR2",   "BWSNR3",   "BWSFM1",
-          "MWFX1",          "MW34SNA1", "MW34SNP1", "MW34-lighting-v1"};
+          "MWFX1",          "MW34SNA1", "MW34SNP1", "MW34-lighting-v1",
+          "MW34-surface-targets-v1"};
       if (!payload.at("required_formats").is_array())
         env_fail("required formats must be an array");
-      for (const auto &format : payload["required_formats"])
+      for (const auto &format : payload["required_formats"]) {
         if (!formats.count(env_text(format)))
           env_fail("unsupported required format");
+        if (format == "MW34-surface-targets-v1")
+          pack.material_targets_declared = true;
+        if (format == "BWSFM1")
+          pack.surface_materials_declared = true;
+      }
       const auto &files = manifest.at("files");
       if (!files.is_object() || files.empty() || files.size() > 10000)
         env_fail("invalid file table");
@@ -506,9 +663,12 @@ load_environment_packs(const std::vector<std::string> &roots) {
              std::find(env_regions.begin(), env_regions.end(), b.region);
     });
     EnvironmentSelection selected;
+    selected.surface_budget = budget;
     std::uint64_t world_bytes = 0, authored_bytes = 0;
     std::size_t world_pages = 0, authored_pages = 0;
     std::map<std::string, std::string> common;
+    std::uint64_t target_encoded_bytes{};
+    std::map<std::string, std::shared_ptr<const mw34::materials::SurfaceMaterialPack>> target_cache;
     for (const auto &pack : packs) {
       std::set<std::string> refs = {"environment/environment.json"}, banks;
       for (const auto &entry : pack.registry.at("banks").items()) {
@@ -530,25 +690,26 @@ load_environment_packs(const std::vector<std::string> &roots) {
         env_catalog(pack, "world", "MW34SNP1", refs, world_bytes, world_pages);
         selected.world_manifests.push_back(
             pack.pins.at(env_text(pack.registry["world_manifest"])).path);
-        const auto &detail = pack.registry.at("detail");
-        if (!detail.is_object() || detail.size() != 3 ||
-            !detail.contains("water") || !detail.contains("surf") ||
-            !detail.contains("cloud"))
-          env_fail("missing detail resources");
+        const auto detail = pack.registry.value("detail", EJson::object());
+        if (!detail.is_object() || detail.size() > 3)
+          env_fail("invalid detail resource table");
         for (const auto &entry : detail.items()) {
+          if (entry.key() != "water" && entry.key() != "surf" &&
+              entry.key() != "cloud")
+            env_fail("unknown detail role");
           const auto name = env_text(entry.value());
           if (!pack.pins.count(name) || pack.pins.at(name).format != "BWSNR2")
             env_fail("invalid detail role");
           refs.insert(name);
-          selected.resources[pack.region]
-                            [entry.key() == "water"  ? EnvironmentRole::water
-                             : entry.key() == "surf" ? EnvironmentRole::surf
-                                                     : EnvironmentRole::cloud] =
-              pack.pins.at(name).path;
+          const auto role = entry.key() == "water"  ? EnvironmentRole::water
+                            : entry.key() == "surf" ? EnvironmentRole::surf
+                                                    : EnvironmentRole::cloud;
+          selected.resources[pack.region][role] = pack.pins.at(name).path;
           const auto &digest = pack.pins.at(name).digest;
           if (common.count(entry.key()) && common[entry.key()] != digest)
             env_fail("conflicting shared detail resource");
           common[entry.key()] = digest;
+          selected.detail_digests[role] = digest;
         }
         const auto name = env_text(pack.registry.at("effects"));
         if (!pack.pins.count(name) || pack.pins.at(name).format != "MWFX1")
@@ -582,6 +743,20 @@ load_environment_packs(const std::vector<std::string> &roots) {
                                  : EnvironmentRole::surface_materials] =
               pack.pins.at(name).path;
         }
+      if (pack.registry.contains("material_targets")) {
+        const std::set<std::string> allowed = {
+            "schema_version", "payload_profile", "operation", "banks", "detail",
+            "authored", "authored_manifest", "world", "world_manifest", "effects",
+            "lighting", "ground_surface_materials", "surface_materials", "material_targets"};
+        for (const auto &field : pack.registry.items())
+          if (!allowed.count(field.key()))
+            env_fail("unknown material-target environment registry field");
+        if (!pack.material_targets_declared || !pack.surface_materials_declared)
+          env_fail("material target format is not declared");
+        selected.material_targets.emplace(
+            pack.region, env_material_targets(pack, refs, target_encoded_bytes, target_cache,
+                                               reusable, budget));
+      }
       if (refs.size() != pack.pins.size())
         env_fail("unused environment member");
       selected.regions.push_back(pack.region);
@@ -595,7 +770,7 @@ load_environment_packs(const std::vector<std::string> &roots) {
         const auto &pin = member.second;
         const auto path = efs::u8path(pin.path);
         if (efs::file_size(path) != pin.bytes ||
-            integrity::sha256_file(path) != pin.digest ||
+            verified_digest::sha256_file(path, pin.bytes) != pin.digest ||
             efs::file_size(path) != pin.bytes)
           env_fail("member integrity failure: " + member.first);
         fold(member.first);
@@ -609,10 +784,20 @@ load_environment_packs(const std::vector<std::string> &roots) {
              std::string(error.what()).substr(0, 512));
   }
 }
+EnvironmentSelection load_environment_packs(const std::vector<std::string> &roots) {
+  EnvSurfaceCache reusable;
+  return load_environment_packs_impl(
+      roots, std::make_shared<mw34::materials::SurfaceDecodedBudget>(), reusable);
+}
 const EnvironmentSelection &
 EnvironmentPackCache::resolve(const std::vector<std::string> &roots) {
   try {
-    auto candidate = load_environment_packs(roots);
+    for (auto entry = surface_cache_.begin(); entry != surface_cache_.end();)
+      if (entry->second.expired())
+        entry = surface_cache_.erase(entry);
+      else
+        ++entry;
+    auto candidate = load_environment_packs_impl(roots, surface_budget_, surface_cache_);
     if (candidate.identity == selection_.identity) {
       ++hits_;
       return selection_;
@@ -622,6 +807,7 @@ EnvironmentPackCache::resolve(const std::vector<std::string> &roots) {
     return selection_;
   } catch (...) {
     selection_ = {};
+    selection_.surface_budget = surface_budget_;
     ++generation_;
     throw;
   }

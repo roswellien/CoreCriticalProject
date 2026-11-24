@@ -1,3 +1,6 @@
+unsigned opaque_world_range() const override {
+  return scene_.frontend_canvas ? 0 : bridge_config_.draw_distance;
+}
 cc::geometry::Mode geometry_mode() const override { return geometry_mode_; }
 cc::geometry::Statistics geometry_statistics() const override {
   return geometry_statistics_;
@@ -12,6 +15,7 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
                       const std::vector<cc::geometry::Material> &materials,
                       const cc::geometry::Fog &fog) override {
   VisualFloatScope preserve;
+  validate_damage_tint(context);
   if (geometry_mode_ == cc::geometry::Mode::legacy)
     return cc::geometry::Submission::unsupported;
   // Prepared replacements must retain their selected visual until their
@@ -24,6 +28,7 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
       !context.model_to_camera || !(context.near_z > 0) ||
       !(context.far_z > std::max(context.near_z, context.clip_near)))
     return cc::geometry::Submission::unsupported;
+  const auto admissions = native_geometry_admissions(source, context, materials);
   ensure_extent();
   if (scene_.hud && !scene_.draws.empty()) {
     flush();
@@ -41,51 +46,33 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
   const auto camera = matrix(context.model_to_camera),
              world = matrix(context.model_to_world);
   if (geometry_mode_ == cc::geometry::Mode::cpu_reference) {
-    emit_reference_geometry(*source, materials, context, camera, world, fog);
+    emit_reference_geometry(*source, materials, context, camera, world, fog, admissions);
     ++geometry_statistics_.submitted_models;
     return cc::geometry::Submission::submitted;
   }
-  for (auto iterator = native_geometry_.begin();
-       iterator != native_geometry_.end();) {
-    if (iterator->second.source.expired())
-      iterator = native_geometry_.erase(iterator);
-    else
-      ++iterator;
-  }
-  auto &cached = native_geometry_[source->identity];
-  if (!cached.geometry) {
-    cached.source = source;
-    auto geometry = std::make_shared<vk::ModelGeometry>();
-    geometry->key = 0x4700000000000000ULL | source->identity;
-    geometry->vertices = source->vertices;
-    geometry->indices = source->indices;
-    geometry->source = source;
-    geometry->hash = 0xcbf29ce484222325ULL;
-    const auto hash = [&](const void *data, std::size_t bytes) {
-      const auto *input = static_cast<const unsigned char *>(data);
-      for (std::size_t i = 0; i < bytes; ++i) {
-        geometry->hash ^= input[i];
-        geometry->hash *= 0x100000001b3ULL;
-      }
-    };
-    hash(geometry->vertices.data(),
-         geometry->vertices.size() * sizeof(vk::ModelVertex));
-    hash(geometry->indices.data(),
-         geometry->indices.size() * sizeof(std::uint32_t));
-    cached.geometry = std::move(geometry);
-  }
+  std::array<float, 4> surface_eye{};
+  if (std::any_of(admissions.begin(), admissions.end(),
+                  [](const auto &admission) { return bool(admission.height_binding); }))
+    surface_eye = native_height_eye(
+        mw34::donor::product(world, mw34::donor::inverse(camera)));
+  const auto geometry = native_model_geometry(source);
   auto instance = std::make_shared<vk::ModelInstance>();
-  instance->geometry = cached.geometry;
+  instance->geometry = geometry;
   instance->source = source;
   instance->gpu_vertices = true;
   instance->camera = matrix_rows(camera);
   instance->sun_world = matrix_rows(world);
+  if (context.world_to_camera) {
+    instance->world_to_camera = matrix_rows(matrix(context.world_to_camera));
+    instance->has_world_to_camera = true;
+  }
   instance->sun_normal = mw34::sun::normal_matrix(world);
   instance->sun_eligible = true;
   instance->geometry_near = context.clip_near;
   instance->geometry_fog0 = {fog.near_range, fog.inverse_range,
                              fog.low_altitude, fog.inverse_altitude};
-  instance->geometry_fog1 = {0, 0, fog.enabled ? 1.f : 0.f, 0};
+  instance->geometry_fog1 = {fog.edge_start, fog.edge_inverse_range,
+                             fog.enabled ? 1.f : 0.f, 0};
   instance->projection = {
       context.near_z,
       context.fx_near * scene_.width / viewport_[2],
@@ -102,6 +89,7 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
     const auto &range = source->ranges[range_index];
     const auto &material = materials[range_index];
     vk::Draw draw{};
+    draw.producer_view = producer_view_;
     draw.geometry_debug_normals = geometry_debug_;
     auto material_instance = std::make_shared<vk::ModelInstance>(*instance);
     material_instance->color = material.color;
@@ -110,6 +98,9 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
     draw.count = range.count;
     draw.texture =
         material.texture < 0 ? -1 : int(bind_texture(material.texture, false));
+    apply_native_geometry_admission(draw, admissions[range_index]);
+    if (draw.height_binding)
+      draw.surface_eye = surface_eye;
     draw.sampler = 3U | unsigned(material.address_u) << 4 |
                    unsigned(material.address_v) << 8;
     draw.key = {0, 5, 6, 1, 7, 1, std::uint8_t(range.two_sided ? 1 : 3), 0};
@@ -117,11 +108,19 @@ submit_model_geometry(std::shared_ptr<const cc::geometry::Resource> source,
     draw.push.target[1] = float(scene_.height);
     std::copy(fog.color.begin(), fog.color.end(), draw.push.fog);
     draw.push.mode[0] = 2U | (material.texture >= 0 ? 4U : 0U) |
-                        (fog.enabled && !geometry_debug_ ? 16U : 0U);
+                        (fog.active() && !geometry_debug_ ? 16U : 0U);
     draw.push.mode[1] = material.texture >= 0 ? 4U | (2U << 8) : 2U;
     draw.push.mode[2] = material.texture >= 0 ? 2U | (2U << 8) : 2U;
+    if (context.damage_tint_weight > 0.f) {
+      draw.push.mode[0] |= 128U;
+      draw.push.mode[1] = pack_damage_tint_rgb(context.damage_tint_rgb);
+      draw.push.mode[2] = std::bit_cast<std::uint32_t>(context.damage_tint_weight);
+      if (material.texture >= 0)
+        draw.push.mode[0] |= 512U;
+    }
     draw.push.mode[3] = 0x80000000U; // Modern two-sided normal orientation.
-    draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+    draw.scissor = producer_scissor();
+    apply_fixture_observation(draw, capture_fixture_range(*source, context, range, material.texture));
     scene_.order.push_back({false, unsigned(scene_.draws.size())});
     scene_.draws.push_back(std::move(draw));
   }

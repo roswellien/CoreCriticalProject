@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,9 @@
 #include "mech3/cockpit_sound.h"
 #include "mech3/mech.h"
 #include "mech3/mech_collide.h"
+#include "mech3/mech_lib.h"
+#include "mech3/mech_names.h"
+#include "mech3/sound_extra.h"
 #include "mech3/mech_move.h"
 #include "mech3/mission_world.h"
 #include "mech3/mech_skis.h"
@@ -50,12 +54,14 @@ namespace {
 zcls::Node* zn(Handle h) { return static_cast<zcls::Node*>(h); }
 Mech* mech_of(Handle v) { return static_cast<Mech*>(v); }
 
-// The query record (0x504 bytes, 32 slots) into zWeapon's list (31 slots).
+// The query record (0x504 bytes, 32 slots) into zWeapon's list (as many). With 31 slots here a full query's
+// 32nd hit was counted and not copied, and splash damage read past the list: a crash where the exe only
+// reports "Database intersections array is full" (a splash among 32 or more objects).
 void to_hits(const zcls::LineHits& in, zwep::HitList* out) {
   out->count = in.count;
   out->total = in.total;
-  const int n = in.count < 31 ? in.count : 31;
-  const int t = in.total < 31 ? in.total : 31;
+  const int n = in.count < 32 ? in.count : 32;
+  const int t = in.total < 32 ? in.total : 32;
   const int k = n > t ? n : t;
   for (int i = 0; i < k; ++i) std::memcpy(&out->rec[i], &in.hit[i], sizeof(zwep::HitRecord));
 }
@@ -109,6 +115,10 @@ uint32_t mech_damage(zwep::Handle object, zwep::WeaponDef* def, zwep::HitRecord*
   Collision c;
   c.x20 = hit->material;
   c.node = hit->node;
+  c.point[0] = hit->point.x;
+  c.point[1] = hit->point.y;
+  c.point[2] = hit->point.z;
+  c.has_point = true;
   return static_cast<uint32_t>(static_cast<Mech*>(object)->take_damage(def, &c, damage));
 }
 
@@ -176,7 +186,11 @@ void wire_weapons(uint32_t (*log)(const char* key)) {
     for (Handle h : {name, destroyed})
       if (h) zsnd::play_fading(static_cast<zsnd::Object*>(h), nullptr, 1.0f, nullptr, -1.0f, 0);
   };
-  c.voice_destroyed = [](int32_t) { unported("0x004853d0"); };
+  // 0x004853d0: the weapon's family's "destroyed" voice (0x004853c0, [0x00609400 + 4 x family]; the
+  // LB-X family 0 has none) through 0x004e6d80 (no place, volume 1, no fade). A critical's (0x004b0de0).
+  c.voice_destroyed = [](int32_t index) {
+    if (Handle s = weapon_voice(weapon_family(index))) sound_play(static_cast<zsnd::Object*>(s), nullptr, 1.0f, nullptr, -1.0f);
+  };
   c.vehicle_entity = [](Handle v) { return v; };                                          // vt+0x2c: itself
   c.vehicle_velocity = [](Handle v) { return reinterpret_cast<const Vec3f*>(&mech_of(v)->velocity); };
   c.entity_node = [](Handle e) { return mech_of(e)->node; };                              // +0x04
@@ -199,15 +213,18 @@ void wire_weapons(uint32_t (*log)(const char* key)) {
   c.target_velocity = [](Handle t) { return reinterpret_cast<const zwep::Vec3f3*>(weapon_lock_velocity(t)); };
   c.ecm_count = [](Handle m) { return mech_of(m)->equipment[8]; };  // +0x3cc
   c.fcs_count = [](Handle m) { return mech_of(m)->equipment[3]; };  // +0x3b8
-  c.equipment_in_part = [](Handle m, int32_t kind, int32_t part) {   // 0x00460c10
-    MechPart* p = part_by_id(*mech_of(m), part);
-    return p && p->has_equipment(kind);
-  };
+  // 0x00460c10: the config's part number as it stands; the torso's sides have no MechPart of their own.
+  c.equipment_in_part = [](Handle m, int32_t kind, int32_t part) { return mech_equipment_in_part(*mech_of(m), kind, part); };
   c.lock_notice = [](Handle m, Handle, WeaponDef* d) {  // 0x0041abd0: no sound without the def
     if (d) mech_lock_warning(m);
   };
   c.entity_enemies = [](Handle e) { return mech_of(e)->enemies; };                         // +0xc8
-  c.player_team = [] { return mech3::world().mission_player ? mech3::world().mission_player->team : 0u; };
+  // Ours (#287): with no player, an arena match's side A team (0 elsewhere,
+  // as stock), so a shot is tagged by whether it is hostile to side A.
+  c.player_team = [] {
+    const World& w = mech3::world();
+    return w.mission_player ? w.mission_player->team : w.arena_side_a_team;
+  };
   c.part_by_id = [](Handle owner, int32_t id) -> Handle { return part_by_id(*mech_of(owner), id); };
   c.part_node = [](Handle part) { return static_cast<MechPart*>(part)->node; };          // +0x08
   c.part_mech = [](Handle part) -> Handle { return static_cast<MechPart*>(part)->mech; };
@@ -469,6 +486,15 @@ void wire_weapons(uint32_t (*log)(const char* key)) {
     return zcls::node_find(static_cast<zcls::Node*>(node), name);
   };
   wc.node_by_name = [](Handle node, const char* name) -> Handle { return node_find_prefix(node, name); };  // 0x004abb60
+  // A weapon built on a node (Weapon's second constructor, 0x004b28d0; a mech's TAG): its part by the node
+  // (0x0040ef30, the build's +0x28 mark and +0x40 owner), the part's mech (0x00460000) and the node's name, so it
+  // finds its firepoint. Unset, TAG kept no part or firepoint and fired from the world's origin, its beam out of sight.
+  wc.node_part = [](Handle n) -> Handle {
+    zcls::Node* z = zn(n);
+    return z && (z->get<uint32_t>(0x28) & 0xff) ? static_cast<Handle>(z->owner) : nullptr;
+  };
+  wc.part_mech = [](Handle part) -> Handle { return part ? static_cast<MechPart*>(part)->mech : nullptr; };
+  wc.node_name = [](Handle n) -> const char* { return n ? zn(n)->name() : ""; };
   // The aim's view test (0x0041bc20): [0x005f4c8c] +0x64 is the mech and its
   // camera (+0x58) +4 is 1, the cockpit.
   aim_calls().cockpit_view = [](Mech& m) {
@@ -485,6 +511,14 @@ void wire_weapons(uint32_t (*log)(const char* key)) {
   };
   d.node_owner = node_owner;
   d.attacker = [] { return node_entity(zwep::hit_state().attacker); };  // 0x0040eee0 on [0x009a0edc]
+  // 0x00485390 / 0x00485370: the player's callouts for a destroyed piece of equipment (its kind's voice,
+  // equip_voice_index) and the engine hit (voice 6), through 0x004e6d80 (no place, volume 1, no fade).
+  d.equip_voice = [](int kind) {
+    if (Handle s = equipment_voice(equip_voice_index(kind))) sound_play(static_cast<zsnd::Object*>(s), nullptr, 1.0f, nullptr, -1.0f);
+  };
+  d.voice = [](int index) {
+    if (Handle s = equipment_voice(index)) sound_play(static_cast<zsnd::Object*>(s), nullptr, 1.0f, nullptr, -1.0f);
+  };
 
   UpdateCalls& u = update_calls();
   u.key = [](int cmd) { return zin::command(cmd); };  // 0x0051d300: the view key (CMD 0x17), torso and free look
@@ -549,6 +583,126 @@ int32_t program_fire_at(void* mech, const char* weapon, int32_t n, float dist) {
   return fired;
 }
 
+int32_t weapons_query_flood(const float at[3], float radius, int32_t* matched) {
+  zcls::LineHits r;
+  zcls::Node* w = qworld();
+  *matched = 0;
+  if (!w || zcls::sphere_query(w, at, radius, nullptr, 1, 1, &r) != 0) return 0;
+  zwep::HitList list;
+  const zwep::Vec3f3 p{at[0], at[1], at[2]};
+  zwep::hit_hooks().query(nullptr, &p, radius, &list);  // zWeapon's (0x004f0ac0 through to_hits)
+  for (int i = 0; i < list.count; ++i) *matched += list.rec[i].node == r.hit[i].node ? 1 : 0;
+  return list.count;
+}
+
+bool weapons_burst(const char* name, const float at[3]) {
+  zwep::WeaponDef* d = zwep::find_def(name);
+  if (!d) return false;
+  const zwep::Vec3f3 p{at[0], at[1], at[2]};
+  zwep::burst_at(d, &p);  // as a mission anim's detonation (0x005822c0)
+  return true;
+}
+
+namespace {
+int32_t g_splash_damaged = 0;
+uint32_t (*g_splash_handler)(uintptr_t, zwep::WeaponDef*, zwep::HitRecord*, float) = nullptr;
+}  // namespace
+
+bool weapons_splash_copy(const char* name, float proximity, const float at[3], int32_t* counted, int32_t* listed,
+                         int32_t* damaged) {
+  const zwep::WeaponDef* base = zwep::find_def(name);
+  if (!base) return false;
+  zwep::WeaponDef def = *base;  // a mod's change, on a copy
+  def.impact_proximity = proximity;
+  def.impact_proximity_sq = proximity * proximity;
+  auto p = std::make_unique<zwep::Projectile>();
+  p->position = {at[0], at[1], at[2]};
+  zwep::HitList list;
+  const bool ran = zwep::splash_query(&def, p.get(), 1, &list) != 0;
+  *counted = list.count;  // a sphere query's count, 32 at most (zClass stops adding past 0x1f)
+  *listed = 0;
+  for (int32_t i = 0; i < list.count && i < 32; ++i) *listed += list.rec[i].node ? 1 : 0;
+  zwep::HitHooks& h = zwep::hit_hooks();
+  g_splash_handler = h.call_handler;
+  g_splash_damaged = 0;
+  h.call_handler = [](uintptr_t hd, zwep::WeaponDef* d, zwep::HitRecord* r, float dmg) {
+    ++g_splash_damaged;
+    return g_splash_handler ? g_splash_handler(hd, d, r, dmg) : 0u;
+  };
+  if (ran) zwep::splash(&def, p.get(), &list, 0);
+  h.call_handler = g_splash_handler;
+  *damaged = g_splash_damaged;
+  return true;
+}
+
+int32_t weapons_query_points(const float at[3], float radius, float out[32][3]) {
+  zwep::HitList list;
+  const zwep::Vec3f3 p{at[0], at[1], at[2]};
+  zwep::hit_hooks().query(nullptr, &p, radius, &list);
+  const int32_t n = list.count < 32 ? list.count : 32;
+  for (int32_t i = 0; i < n; ++i) out[i][0] = list.rec[i].point.x, out[i][1] = list.rec[i].point.y, out[i][2] = list.rec[i].point.z;
+  return n;
+}
+
+void mech_command(void* mech, int32_t cmd) { static_cast<Mech*>(mech)->command(cmd); }
+bool mech_torso_pitch(void* mech, float pitch, float range[2]) {
+  Torso* t = static_cast<Mech*>(mech)->torso;
+  if (!t) return false;
+  t->pitch = pitch;
+  range[0] = t->min_pitch, range[1] = t->max_pitch;
+  return true;
+}
+
+int mech_trigger_lock_on(void* mech, bool* locked) {
+  auto* me = static_cast<Mech*>(mech);
+  auto* wm = static_cast<WeaponManager*>(me->ammo);
+  me->heat = 0.0f;
+  for (uint32_t i = 0; wm && i < wm->count; ++i) {
+    Weapon* w = wm->weapons[i];
+    if (!w || !w->def || !(w->def->flags & zwep::kLockOn)) continue;
+    w->reload = 0.0f;
+    const int r = w->can_fire() && w->trigger() ? 1 : 0;
+    *locked = w->locked;
+    return r;
+  }
+  return -1;
+}
+
+int mech_lock_on_shot(void* mech, float at[3], bool* has_lock) {
+  auto* wm = static_cast<WeaponManager*>(static_cast<Mech*>(mech)->ammo);
+  for (uint32_t i = 0; wm && i < wm->count; ++i) {
+    Weapon* w = wm->weapons[i];
+    if (!w || !w->def || !(w->def->flags & zwep::kLockOn)) continue;
+    // The mech's own (its node the shooter's): another mech's of the same weapon can be the newest.
+    zwep::Projectile* p = w->def->active;
+    while (p && p->owner != static_cast<Mech*>(mech)->node) p = p->next;
+    if (!p) return 0;
+    at[0] = p->position.x, at[1] = p->position.y, at[2] = p->position.z;
+    // What it homes on (set only when locked, cleared at every spawn); +0x6c (lock_entity) is left from the
+    // pooled slot's last shot, another mech's maybe.
+    *has_lock = p->target_at != nullptr;
+    return 1;
+  }
+  return 0;
+}
+
+int32_t mech_weapon_gone_case(void* mech, bool* picked) {
+  auto* wm = static_cast<WeaponManager*>(program_mech_weapons(mech));
+  *picked = false;
+  if (!wm) return -1;
+  std::vector<Weapon*> order;
+  for (WeaponGroup* g : wm->groups)
+    if (g)
+      for (uint32_t i = 0; i < g->count; ++i) order.push_back(g->weapons[i]);
+  if (order.size() < 3) return -1;
+  Weapon* a = order[0];
+  if (wm->select_group(a->group)) wm->group_ptr()->select(a);
+  *picked = wm->current() == a;
+  order[1]->destroy();
+  a->destroy();
+  return !wm->current() || wm->current()->damage == 1.0f ? 1 : 0;
+}
+
 // What F1..F5 select (CMD_WEPGRP_1..5 through the mech's command handler,
 // not ported): the first group holding a weapon that heats its mech; -1 none.
 std::string mech_group_names(void* mech, int32_t g) {
@@ -580,6 +734,35 @@ bool mech_group_muzzle(void* mech, int32_t g, float muzzle[3], float dir[3]) {
   dir[0] = w->direction.x, dir[1] = w->direction.y, dir[2] = w->direction.z;
   return true;
 }
+// Tests only: TAG added to `mech` as its build adds it (configure_weapons: by the first firepoint's name under the
+// mech's node; a node of that name made under the torso when the model has none, marked as the build marks a part's
+// subtree), aimed 100 m ahead: its muzzle's distance from the torso, -1 when it can't be added or aimed, and whether
+// it found its part and firepoint.
+float mech_tag_muzzle(void* mech, bool* mounted) {
+  auto* me = static_cast<Mech*>(mech);
+  auto* wm = me ? static_cast<WeaponManager*>(me->ammo) : nullptr;
+  *mounted = false;
+  const std::vector<Firepoint*>* fps = wm && weapon_calls().firepoints ? weapon_calls().firepoints(me) : nullptr;
+  if (!fps || fps->empty() || !me->torso) return -1.0f;
+  auto* torso = static_cast<zcls::Node*>(me->torso->node);
+  if (!node_find_prefix(me->node, (*fps)[0]->name)) {
+    zcls::Node* fp = zcls::object3d_create();
+    zcls::node_set_name(fp, (*fps)[0]->name);
+    fp->put<uint32_t>(0x28, fp->get<uint32_t>(0x28) | 1u);
+    fp->owner = me->torso;
+    zcls::node_add_child(torso, fp);
+  }
+  Weapon* t = wm->add(0x20, me->node, (*fps)[0]->name, 4);
+  if (!t) return -1.0f;
+  *mounted = t->part && t->firepoint;
+  float p[3] = {};
+  mech_world_position(me, p);
+  Vec3f to{p[0] + 100.0f, p[1], p[2]}, mz{}, dir{};
+  if (!t->aim(&to, &mz, &dir, nullptr)) return -1.0f;
+  const float d[3] = {mz.x - p[0], mz.y - p[1], mz.z - p[2]};
+  return std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+}
+
 bool mech_group_beam(void* mech, int32_t g, BeamProbe* out) {
   auto* wm = mech ? static_cast<WeaponManager*>(static_cast<Mech*>(mech)->ammo) : nullptr;
   if (!wm || g < 0 || g > 4 || !wm->groups[g] || wm->groups[g]->count == 0 || !wm->groups[g]->weapons[0]) return false;
@@ -653,6 +836,8 @@ void unwire_weapons() {
   damage_calls().node_part = nullptr;
   damage_calls().node_owner = nullptr;
   damage_calls().attacker = nullptr;
+  damage_calls().equip_voice = nullptr;
+  damage_calls().voice = nullptr;
 }
 
 // Mech3.exe 1.2 @ 0x005833b0(mech, node, 1, 0x004161a0): the mech's node

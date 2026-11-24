@@ -73,6 +73,12 @@ class Window {
     (void)width, (void)height;
     return false;
   }
+  // FIX (B) layer: the frame size the launcher chose for this run (--window on a play run);
+  // false when none was chosen (fullscreen at the desktop, checks, shots).
+  virtual bool launch_size(int* width, int* height) {
+    (void)width, (void)height;
+    return false;
+  }
 };
 
 // Stands in for the DirectDraw primary surface the menus' 16-bit back buffer
@@ -83,6 +89,9 @@ class Screen2D {
   virtual ~Screen2D() = default;
   virtual void begin_overlay_16(const uint16_t*, int, int, int) {}
   virtual void cancel_overlay_16() {}
+  virtual void begin_menu_observation(const uint16_t*, int, int, int) {}
+  virtual void cancel_menu_observation() noexcept {}
+  virtual void finish_menu_observation() noexcept {}
   virtual void present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) = 0;
   // FIX (A): the back buffer locked over a Direct3D frame (0x00576d00 /
   // 0x00576d60): what the 2D code drew into the 16-bit layer goes over the
@@ -138,6 +147,17 @@ class Input {
   virtual int32_t keyboard_data(KeyEvent* out, uint32_t* count) = 0;
   virtual int32_t mouse_state(MouseState* out) = 0;    // GetDeviceState(0x10)
   virtual int32_t joystick_state(JoyState* out) = 0;   // Poll, then GetDeviceState(0x110)
+  // Additional profile buttons/triggers share the command state queried by
+  // keyboard and joystick bindings. Most input backends have no overlay.
+  virtual uint32_t command_state(int32_t) { return 0; }
+  // Snapshot extended inputs before the legacy reads consume buffered events.
+  virtual void begin_poll(bool /*text_entry*/, bool /*commands_enabled*/) {}
+  virtual bool key_suppressed(uint32_t /*key*/) const { return false; }
+  virtual bool mouse_suppressed(int32_t /*button*/) const { return false; }
+  virtual bool extended_command_pressed(int32_t /*command*/) const { return false; }
+  virtual bool mouse_input_down(int32_t /*mouse_id*/) const { return false; }
+  virtual void set_headlight_wheel(uint32_t /*mask*/) {}
+  virtual bool command_has_extended_binding(int32_t /*command*/) const { return false; }
 
   // SetCooperativeLevel's DISCL_ flags (1 exclusive, 2 non-exclusive, 4
   // foreground, 8 background): the keyboard 10, the mouse the game's input

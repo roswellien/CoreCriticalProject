@@ -24,12 +24,15 @@ public partial class GraphicsPreferencesPanel : UserControl
             Select(ComboAA, settings.AntiAliasing == "1" ? "off" : settings.AntiAliasing);
             Select(ComboAF, settings.AnisotropicFiltering.ToString());
             Select(ComboDrawDist, settings.DrawDistance.ToString());
-            Select(ComboFog, settings.FogDistance.ToString());
+            Select(ComboFlareStyle, settings.FlareStyle);
             ChkDynamicLighting.IsChecked = settings.DynamicLighting;
             ChkHeadlights.IsChecked = settings.Headlights;
             ChkHeadlights.IsEnabled = settings.DynamicLighting;
             ChkShadows.IsChecked = settings.Shadows;
             ChkShadows.IsEnabled = settings.DynamicLighting;
+            ChkWaterDetail.IsChecked = settings.WaterDetail;
+            ChkCloudDetail.IsChecked = settings.CloudDetail;
+            ChkLoadCache.IsChecked = settings.LoadCache;
         }
         finally { _loading = false; }
     }
@@ -40,8 +43,10 @@ public partial class GraphicsPreferencesPanel : UserControl
         if (parts.Length != 2 || !int.TryParse(parts[0], out var width) || !int.TryParse(parts[1], out var height))
             throw new InvalidOperationException("Choose a display resolution.");
         var result = new GraphicsPreferences(width, height, Value(ComboWindowMode), Value(ComboAA),
-            int.Parse(Value(ComboAF)), int.Parse(Value(ComboDrawDist)), int.Parse(Value(ComboFog)),
-            ChkDynamicLighting.IsChecked == true, ChkShadows.IsChecked == true, ChkHeadlights.IsChecked == true);
+            int.Parse(Value(ComboAF)), int.Parse(Value(ComboDrawDist)),
+            ChkDynamicLighting.IsChecked == true, ChkShadows.IsChecked == true,
+            ChkHeadlights.IsChecked == true, ChkWaterDetail.IsChecked == true,
+            ChkCloudDetail.IsChecked == true, Value(ComboFlareStyle), ChkLoadCache.IsChecked == true);
         result.Validate();
         return result;
     }

@@ -44,9 +44,16 @@ if(MSVC)
   target_compile_options(cc_geometry_resources PRIVATE /EHsc)
 endif()
 add_library(mw3core STATIC
+  src/mech3/world_mesh.cpp  # ours: mw3view's world loader, shared with the replay viewer (#289)
+  src/mech3/replay_log.cpp  # ours (#289): an arena match log read for replay
+  src/mech3/replay_terrain.cpp  # ours (#289): an arena map seen from above
+  src/mech3/replay_puppet.cpp  # ours (#289): a logged mech posed by the game's own animation
+  src/mech3/replay_run.cpp  # ours (#289): mw3 --replay3d's log, map checks and session
+  src/mech3/replay_hooks.cpp  # ours (#289): what a 3D replay changes in the game's frame
   src/gamez/zmodel/gmod_geometry.cpp
   src/platform/prepared_visuals.cpp
   src/platform/prepared_hud.cpp
+  src/platform/prepared_menu_background.cpp
   src/crt/msvc_math.cpp
   src/crt/msvc_rand.cpp
   src/crt/msvc_string.cpp
@@ -61,11 +68,13 @@ add_library(mw3core STATIC
   src/gamez/zinput/zin_cmdmap.cpp
   src/gamez/zinput/zin_joy.cpp
   src/gamez/znetwork/znet_object.cpp
+  src/gamez/znetwork/znet_view.cpp
   src/gamez/znetwork/znet_session.cpp
   src/gamez/znetwork/znet_dplay.cpp
   src/gamez/zutil/zutl_msg.cpp
   src/gamez/zutil/zutl_msgdll.cpp
   src/gamez/zutil/zutl_path.cpp
+  src/gamez/zutil/zutl_winnames.cpp
   src/gamez/zutil/zutl_reg.cpp
   src/platform/reg_file.cpp
   src/platform/cue_audio.cpp
@@ -86,15 +95,19 @@ add_library(mw3core STATIC
   src/mech3/game_setup.cpp
   third_party/miniz/miniz_tinfl.c
   src/gamez/zutil/zutl_zar.cpp
+  src/gamez/zutil/zutl_zip.cpp
+  src/gamez/zutil/zutl_json.cpp
   src/gamez/zsave/zsave.cpp
   src/gamez/zclass/camera.cpp
   src/gamez/zclass/class.cpp
   src/gamez/zclass/cls_di.cpp
   src/gamez/zclass/cls_mechlib.cpp
+  src/gamez/zclass/cls_mechlib_json.cpp
   src/gamez/zclass/cls_node.cpp
   src/gamez/zclass/cls_util.cpp
   src/gamez/zclass/cls_world.cpp
   src/gamez/zclass/cls_zbd.cpp
+  src/upgrades/json/gamez_json.cpp
   src/gamez/zclass/display.cpp
   src/gamez/zclass/light.cpp
   src/gamez/zclass/lod.cpp
@@ -110,6 +123,7 @@ add_library(mw3core STATIC
   src/gamez/zgeometry/zgeo_weiler.cpp
   src/gamez/zgeometry/zgeo_convexify.cpp
   src/gamez/zeffect/zeff_anim_init.cpp
+  src/gamez/zeffect/zeff_anim_json.cpp
   src/gamez/zentity/zent_init.cpp
   src/gamez/zentity/zent_manager.cpp
   src/gamez/zeffect/zeff_anim_puffer.cpp
@@ -136,9 +150,12 @@ add_library(mw3core STATIC
   src/gamez/zmodel/gmod_light.cpp
   src/gamez/zmodel/gmod_matl.cpp
   src/gamez/zmodel/gmod_puff.cpp
+  src/gamez/zmodel/gmod_strip.cpp
   src/gamez/zmodel/gmod_screen.cpp
   src/gamez/zreader/zreader.cpp
+  src/gamez/zreader/zreader_json.cpp
   src/gamez/zsiscript/si_script.cpp
+  src/gamez/zsiscript/si_script_json.cpp
   src/gamez/zgame/zgameapp.cpp
   src/gamez/zsound/zsnd_cd.cpp
   src/gamez/zrender/zrndr_draw.cpp
@@ -210,6 +227,7 @@ add_library(mw3core STATIC
   src/mech3/mech_shade.cpp
   src/mech3/veh_basic.cpp
   src/mech3/turret.cpp
+  src/mech3/teleport.cpp
   src/mech3/veh_basic_object.cpp
   src/mech3/mech_fieldbase.cpp
   src/mech3/mech_fieldbase_dock.cpp
@@ -219,6 +237,24 @@ add_library(mw3core STATIC
   src/mech3/veh_move.cpp
   src/mech3/veh_stealth.cpp
   src/mech3/game_editor.cpp
+  src/mech3/game_editor_net.cpp
+  src/mech3/game_editor_tree.cpp
+  src/mech3/game_editor_vehicles.cpp
+  src/upgrades/editor/ddx.cpp
+  src/upgrades/editor/form.cpp
+  src/upgrades/editor/help.cpp
+  src/upgrades/editor/help_menus.cpp
+  src/upgrades/editor/help_nets.cpp
+  src/upgrades/editor/help_vehicles.cpp
+  src/upgrades/editor/help_weapons.cpp
+  src/upgrades/editor/mods_edit.cpp
+  src/upgrades/editor/save_as.cpp
+  src/upgrades/editor/node_params.cpp
+  src/upgrades/editor/add_vehicle.cpp
+  src/upgrades/editor/new_weapon.cpp
+  src/upgrades/editor/teleport.cpp
+  src/upgrades/editor/mission_settings.cpp
+  src/upgrades/editor/aiv_save.cpp
   src/mech3/mech_anim.cpp
   src/mech3/mech_net.cpp
   src/mech3/mech_reader.cpp
@@ -262,15 +298,22 @@ add_library(mw3core STATIC
   src/mech3/zai_firing.cpp
   src/mech3/zai_attack.cpp
   src/mech3/zai_nav.cpp
+  src/mech3/zai_hunt.cpp
+  src/mech3/arena_setup.cpp
+  src/mech3/arena_catalog.cpp
+  src/mech3/arena.cpp
+  src/mech3/arena_log.cpp
   src/mech3/zai_repair.cpp
   src/mech3/zai_node.cpp
   src/mech3/zai_path.cpp
   src/mech3/zainet.cpp
   src/mech3/zainetedit.cpp
   src/mech3/zainet_inout.cpp
+  src/mech3/zainet_inout_view.cpp
   src/mech3/zainet_region.cpp
   src/mech3/zainet_node.cpp
   src/mech3/zrdrainet.cpp
+  src/mech3/net_save.cpp
   src/mech3/zrdraiv.cpp
   src/mech3/zrdrvalve.cpp
   src/mech3/app.cpp
@@ -284,9 +327,12 @@ add_library(mw3core STATIC
   src/mech3/force_feedback.cpp
   src/mech3/app_fmv.cpp
   src/mech3/app_movie.cpp
+  src/mech3/load_watch.cpp
   src/mech3/movie_shape.cpp
   src/mech3/movie_shape_table.cpp
   src/mech3/mods.cpp
+  src/mech3/mod_rows_file.cpp
+  src/mech3/mod_campaign.cpp
   third_party/pl_mpeg/pl_mpeg.c
   src/mech3/app_mission.cpp
   src/mech3/app_hook_census.cpp
@@ -303,6 +349,46 @@ add_library(mw3core STATIC
   src/mech3/menu_states.cpp
   src/mech3/credits.cpp
   src/mech3/options_menu.cpp
+  src/mech3/mods_menu.cpp
+  src/mech3/mod_install.cpp
+  src/upgrades/mods/mod_export.cpp
+  src/upgrades/mods/anim_defs.cpp
+  src/upgrades/mods/save_mods.cpp
+  src/upgrades/mods/import_folder.cpp
+  src/upgrades/mods/import_texts.cpp
+  src/upgrades/mods/import_loadout.cpp
+  src/upgrades/mods/salvage_chance.cpp
+  src/upgrades/mods/loadout_fallback.cpp
+  src/upgrades/mods/entry_archives.cpp
+  src/upgrades/mods/bz2_read.cpp
+  src/upgrades/mods/installer_read.cpp
+  src/upgrades/settings/upgrades.cpp
+  src/upgrades/valve_map/valve_map.cpp
+  src/upgrades/mods/mod_report.cpp
+  src/upgrades/mods/found_worlds.cpp
+  src/upgrades/mods/mod_test.cpp
+  src/upgrades/mods/mod_needs.cpp
+  src/upgrades/mods/campaign_entries.cpp
+  src/upgrades/mods/entry_pilot_copy.cpp
+  src/upgrades/mods/entry_run.cpp
+  src/upgrades/mods/mods_delete.cpp
+  src/upgrades/mods/marked_remove.cpp
+  src/upgrades/mods/entry_pilots.cpp
+  src/upgrades/mods/mods_tick_list.cpp
+  src/upgrades/mods/screen_fit.cpp
+  src/upgrades/mods/ia_mods_menu.cpp
+  src/upgrades/mods/mp_mods.cpp
+  src/upgrades/mods/starter_mods.cpp
+  src/upgrades/update/update.cpp
+  src/upgrades/reference/reference.cpp
+  src/upgrades/reference/reference_mods.cpp
+  src/upgrades/reference/reference_weapons.cpp
+  src/upgrades/reference/reference_dfn.cpp
+  src/upgrades/reference/reference_mission.cpp
+  src/upgrades/reference/reference_interp.cpp
+  src/upgrades/reference/reference_others.cpp
+  src/upgrades/reference/reference_dialogs.cpp
+  src/upgrades/reference/reference_json.cpp
   src/mech3/pause_menu.cpp
   src/mech3/quit_box.cpp
   src/mech3/lab_items.cpp
@@ -418,6 +504,7 @@ add_library(mw3probe SHARED
   tests/probe_drawtable.cpp
   tests/probe_matrix.cpp
   tests/probe_screen.cpp
+  tests/probe_strips.cpp
   tests/probe_ripple.cpp
   tests/probe_cycle.cpp
   tests/probe_cockpit_sound.cpp
@@ -490,6 +577,15 @@ add_library(mw3probe SHARED
   tests/probe_sound_extra.cpp
   tests/probe_deaths.cpp
   tests/probe_ai_net.cpp
+  tests/probe_ai_netwrite.cpp
+  tests/probe_net_view.cpp
+  tests/probe_net_cache.cpp
+  tests/probe_aiv_edit.cpp
+  tests/probe_vehicle_ddx.cpp
+  tests/probe_inout_view.cpp
+  tests/probe_aiv_save.cpp
+  tests/probe_new_weapon.cpp
+  tests/probe_aiv_add.cpp
   tests/probe_zinput.cpp
   tests/probe_settings.cpp
   tests/probe_mission.cpp
@@ -500,6 +596,7 @@ add_library(mw3probe SHARED
   tests/probe_veh_stealth.cpp
   tests/probe_veh_dock.cpp
   tests/probe_veh_waynet.cpp
+  tests/probe_bz2.cpp
   tests/probe_mech_repair.cpp
   tests/probe_mech_repair_store.cpp
   tests/probe_field_cut.cpp
@@ -546,6 +643,14 @@ if(MSVC)
 endif()
 add_test(NAME mw3render_worker_checks COMMAND mw3render_worker_checks)
 set_tests_properties(mw3render_worker_checks PROPERTIES TIMEOUT 15)
+add_executable(mw3derived_cache_checks tests/test_derived_cache.cpp)
+target_include_directories(mw3derived_cache_checks PRIVATE src)
+target_link_libraries(mw3derived_cache_checks PRIVATE Threads::Threads)
+if(MSVC)
+  target_compile_options(mw3derived_cache_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3derived_cache_checks COMMAND mw3derived_cache_checks)
+set_tests_properties(mw3derived_cache_checks PROPERTIES TIMEOUT 30)
 add_executable(mw3prepared_checks tests/test_prepared_visuals.cpp)
 target_include_directories(mw3prepared_checks PRIVATE third_party)
 target_link_libraries(mw3prepared_checks PRIVATE mw3core)
@@ -553,8 +658,22 @@ if(MSVC)
   target_compile_options(mw3prepared_checks PRIVATE /EHsc)
 endif()
 add_test(NAME mw3prepared_checks COMMAND mw3prepared_checks)
+add_executable(mw3menu_background_checks tests/test_prepared_menu_background.cpp)
+target_link_libraries(mw3menu_background_checks PRIVATE mw3core)
+if(MSVC)
+  target_compile_options(mw3menu_background_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3menu_background_checks COMMAND mw3menu_background_checks)
+# Measured local runtime is about 0.04 s; leave headroom for slow and debug CI runners.
+set_tests_properties(mw3menu_background_checks PROPERTIES TIMEOUT 120)
+add_library(mw3ground_export STATIC tools/analysis/ground_targets.cpp)
+target_include_directories(mw3ground_export PRIVATE third_party)
+target_link_libraries(mw3ground_export PUBLIC mw3core)
+add_executable(mw3ground_targets tools/analysis/export_ground_targets.cpp)
+target_link_libraries(mw3ground_targets PRIVATE mw3ground_export)
 add_executable(mw3tests
   tests/main.cpp
+  tests/test_fixture_source_lifetime.cpp
   tests/test_znet.cpp
   tests/test_cue.cpp
   tests/test_mech.cpp
@@ -568,9 +687,17 @@ add_executable(mw3tests
   tests/test_zsnd_cd.cpp
   tests/test_zrndr_span.cpp
   tests/test_fixes.cpp
+  tests/test_visual_distance.cpp
+  tests/test_camera_visual_far.cpp
   tests/test_lance.cpp
   tests/test_nav.cpp
+  tests/test_hunt.cpp
+  tests/test_arena.cpp
+  tests/test_replay.cpp
+  tests/test_replay_game.cpp
+  tests/test_arena_game.cpp
   tests/test_setup_sources.cpp
+  tests/test_update.cpp
   tests/test_data_folder.cpp
   tests/test_patch12.cpp
   tests/test_video_device.cpp
@@ -580,15 +707,41 @@ add_executable(mw3tests
   tests/test_pilot_names.cpp
   tests/test_program.cpp
   tests/test_editor.cpp
+  tests/test_load_watch.cpp
   tests/test_movie_shape.cpp
   tests/test_fmv_stream.cpp
   tests/test_mods.cpp
+  tests/test_mod_install.cpp
+  tests/test_import_folder.cpp
+  tests/test_found_worlds.cpp
+  tests/test_mod_export_world.cpp
+  tests/test_entry_archives.cpp
+  tests/test_installer_read.cpp
+  tests/test_reference.cpp
+  tests/test_mod_campaign_pilots.cpp
+  tests/test_campaign_entries.cpp
+  tests/test_mods_delete.cpp
+  tests/test_entry_pilot_copy.cpp
+  tests/test_mod_copy_report.cpp
+  tests/test_net_save.cpp
+  tests/test_save_entry.cpp
+  tests/test_new_weapon.cpp
+  tests/test_salvage_chance.cpp
+  tests/test_loadout_fallback.cpp
+  tests/test_teleport.cpp
   tests/test_bounded_readers.cpp
+  tests/test_anim_events.cpp
   tests/test_bounded_media.cpp
   tests/test_hooks.cpp
   tests/place_survey.cpp
+  tests/producer_view_header_contract.cpp
+  tests/test_producer_view.cpp
 )
-target_link_libraries(mw3tests PRIVATE mw3core)
+if(WIN32)
+  target_sources(mw3tests PRIVATE tools/windows/utf8.manifest)
+endif()
+target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export)
+target_include_directories(mw3tests PRIVATE third_party)  # nlohmann-json, among others the arena log's records (#287)
 # Tests that read the player's install skip themselves when it is not there.
 target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
                                           MW3_TEST_TMP_ROOT="${CMAKE_BINARY_DIR}"
@@ -624,20 +777,48 @@ if(SDL3_FOUND)
     src/frontend/sdl/sdl_install.cpp
     src/frontend/sdl/sdl_music.cpp
     src/frontend/sdl/sdl_platform.cpp
+    src/frontend/sdl/sdl_loading.cpp
     src/frontend/sdl/gpu_hud.cpp
+    src/frontend/sdl/gpu_hud_menu_sprites.cpp
+    src/frontend/sdl/sdl_mods.cpp
+    src/frontend/sdl/editor_context.cpp
+    src/frontend/sdl/editor_forms_imgui.cpp
     src/frontend/sdl/sdl_render3d.cpp
     src/frontend/sdl/sdl_sound.cpp
     src/frontend/sdl/sdl_vfw.cpp
     src/frontend/sdl/net_enet.cpp
     src/frontend/sdl/net_upnp.cpp
     src/frontend/sdl/sdl_child.cpp
+    src/frontend/sdl/sdl_focus.cpp
+    src/frontend/sdl/log_start.cpp
+    src/frontend/sdl/editor_imgui.cpp
   )
   target_link_libraries(mw3sdl PUBLIC mw3core SDL3::SDL3 enet miniupnpc)
   if(MSVC)
     target_compile_options(mw3sdl PRIVATE /EHsc)
   endif()
+  # Dear ImGui (third_party/imgui, VERSION.txt): the game editor's dialogs only
+  # (docs/editor.md); in the programs through mw3sdl, never in mw3core or the probes.
+  add_library(mw3imgui STATIC
+    third_party/imgui/imgui.cpp
+    third_party/imgui/imgui_draw.cpp
+    third_party/imgui/imgui_tables.cpp
+    third_party/imgui/imgui_widgets.cpp
+    third_party/imgui/backends/imgui_impl_sdl3.cpp
+    third_party/imgui/backends/imgui_impl_sdlgpu3.cpp
+  )
+  target_include_directories(mw3imgui PUBLIC third_party/imgui)
+  target_link_libraries(mw3imgui PUBLIC SDL3::SDL3)
+  target_compile_options(mw3imgui PRIVATE "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")
+  target_link_libraries(mw3sdl PUBLIC mw3imgui)
   if(MW3_CORE_CRITICAL_VULKAN)
+    find_path(MW3_VULKAN_HEADERS vulkan/vulkan_core.h REQUIRED
+      HINTS ENV VULKAN_SDK PATH_SUFFIXES Include include)
+    target_sources(mw3imgui PRIVATE third_party/imgui/backends/imgui_impl_vulkan.cpp)
+    target_include_directories(mw3imgui PRIVATE "${MW3_VULKAN_HEADERS}")
+    target_compile_definitions(mw3imgui PRIVATE IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
     add_subdirectory(src/frontend/core_critical)
+    target_link_libraries(mw3ccvulkan PRIVATE mw3imgui)
     target_link_libraries(mw3sdl PRIVATE mw3ccvulkan)
     target_compile_definitions(mw3sdl PRIVATE CC_MW3_RE_ADAPTER=1)
   endif()
@@ -702,23 +883,50 @@ if(SDL3_FOUND)
   # The game, and its front end's tests: the 2D text needs SDL3_ttf.
   find_package(SDL3_ttf CONFIG QUIET)
   if(SDL3_ttf_FOUND)
-    add_library(mw3text STATIC src/frontend/sdl/sdl_twod_host.cpp src/frontend/sdl/gdi_font_size.cpp
+    add_library(mw3text STATIC src/frontend/sdl/sdl_twod_host.cpp src/frontend/sdl/font_search.cpp
+                src/frontend/sdl/gdi_font_size.cpp
                 src/frontend/sdl/text_fit.cpp src/frontend/sdl/launcher_notes.cpp src/frontend/sdl/movie_import.cpp)
     target_link_libraries(mw3text PUBLIC mw3sdl SDL3_ttf::SDL3_ttf)
+    if(NOT MW3_PACKAGE)
+      target_compile_definitions(mw3text PRIVATE MW3_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets")
+    endif()
     add_executable(mw3
       src/frontend/sdl/mw3_main.cpp
+      src/frontend/sdl/sdl_restart.cpp
+      src/frontend/sdl/win_cmdline.cpp
       src/frontend/sdl/run_log.cpp
       src/frontend/sdl/crash_report.cpp
       src/frontend/sdl/launcher.cpp
+      src/frontend/sdl/sdl_update.cpp
       src/frontend/sdl/debug_states.cpp
       src/frontend/sdl/campaign_chain.cpp
       src/frontend/sdl/modes_chain.cpp
       src/frontend/sdl/first_run_import.cpp
+      src/frontend/sdl/replay_view.cpp
+      src/frontend/sdl/replay_ui.cpp
+      src/frontend/sdl/replay3d_view.cpp
+      src/frontend/sdl/watch_launch.cpp
     )
     target_link_libraries(mw3 PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
     if(MSVC)
       target_compile_options(mw3text PRIVATE /EHsc)
       target_compile_options(mw3 PRIVATE /EHsc)
+      if(WIN32)
+        # Preserve optimized code generation while keeping a PDB for crash RVA symbolization.
+        target_compile_options(mw3core PRIVATE /Zi)
+        target_compile_options(cc_geometry_resources PRIVATE /Zi)
+        target_compile_options(mw3sdl PRIVATE /Zi)
+        target_compile_options(enet PRIVATE /Zi)
+        target_compile_options(miniupnpc PRIVATE /Zi)
+        target_compile_options(mw3imgui PRIVATE /Zi)
+        target_compile_options(mw3text PRIVATE /Zi)
+        target_compile_options(mw3 PRIVATE /Zi)
+        if(MW3_CORE_CRITICAL_VULKAN)
+          target_compile_options(mw3ccvulkan PRIVATE /Zi)
+        endif()
+        target_link_options(mw3 PRIVATE /DEBUG /OPT:REF /OPT:ICF
+                            "/PDB:$<TARGET_FILE_DIR:mw3>/mw3.pdb")
+      endif()
     endif()
     if(MW3_CORE_CRITICAL_VULKAN)
       target_compile_definitions(mw3 PRIVATE CC_MW3_RE_ADAPTER=1)
@@ -738,6 +946,7 @@ if(SDL3_FOUND)
       set(MW3_RC_ICON "ICON_MAIN ICON \"${CMAKE_SOURCE_DIR}/tools/windows/mw3.ico\"")
       configure_file(tools/windows/version.rc.in ${CMAKE_BINARY_DIR}/mw3.rc)
       target_sources(mw3 PRIVATE ${CMAKE_BINARY_DIR}/mw3.rc)
+      target_sources(mw3 PRIVATE tools/windows/utf8.manifest)
     endif()
     # A package build is a Windows GUI program: no console window beside the
     # game, its output in the write dir's mw3.log (mw3_main.cpp); `main` stays
@@ -760,6 +969,7 @@ if(SDL3_FOUND)
     add_executable(mw3launcher
       src/frontend/sdl/launcher_main.cpp
       src/frontend/sdl/launcher.cpp
+      src/frontend/sdl/sdl_update.cpp
       src/frontend/sdl/run_log.cpp
       src/frontend/sdl/crash_report.cpp
     )
@@ -776,6 +986,7 @@ if(SDL3_FOUND)
       set(MW3_RC_ICON "ICON_MAIN ICON \"${CMAKE_SOURCE_DIR}/tools/windows/mw3.ico\"")
       configure_file(tools/windows/version.rc.in ${CMAKE_BINARY_DIR}/mw3launcher.rc)
       target_sources(mw3launcher PRIVATE ${CMAKE_BINARY_DIR}/mw3launcher.rc)
+      target_sources(mw3launcher PRIVATE tools/windows/utf8.manifest)
       # No console, in every build: it is only ever a window (its log is
       # mw3launcher.log in the write dir).
       if(MSVC)
@@ -796,10 +1007,32 @@ if(SDL3_FOUND)
     add_executable(mw3sdltests
       tests/main.cpp
       tests/test_sdl_frontend.cpp
+      tests/test_input_bindings.cpp
+      tests/test_loading.cpp
+      tests/test_sdl_new_world.cpp
+      tests/test_win_cmdline.cpp
+      tests/test_log_start.cpp
+      src/frontend/sdl/sdl_update.cpp
+      src/frontend/sdl/sdl_restart.cpp
+      src/frontend/sdl/crash_report.cpp
+      src/frontend/sdl/win_cmdline.cpp
       tests/test_net_enet.cpp
       tests/test_net_upnp.cpp
     )
     target_link_libraries(mw3sdltests PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    add_executable(mw3frontend_lifetime_checks tests/test_frontend_lifetime.cpp)
+    target_link_libraries(mw3frontend_lifetime_checks PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    target_compile_definitions(mw3frontend_lifetime_checks PRIVATE
+      MW3_LIFETIME_TEST_ROOT="${CMAKE_CURRENT_BINARY_DIR}")
+    if(MSVC)
+      target_compile_options(mw3frontend_lifetime_checks PRIVATE /EHsc)
+    endif()
+    add_test(NAME mw3frontend_lifetime_checks COMMAND mw3frontend_lifetime_checks)
+    if(WIN32 AND NOT CMAKE_VERSION VERSION_LESS 3.21)
+      add_custom_command(TARGET mw3frontend_lifetime_checks POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:mw3frontend_lifetime_checks> $<TARGET_FILE_DIR:mw3frontend_lifetime_checks>
+        COMMAND_EXPAND_LISTS)
+    endif()
     add_executable(mw3hud_checks tests/test_gpu_hud.cpp)
     target_link_libraries(mw3hud_checks PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
     if(MSVC)
@@ -811,10 +1044,23 @@ if(SDL3_FOUND)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:mw3hud_checks> $<TARGET_FILE_DIR:mw3hud_checks>
         COMMAND_EXPAND_LISTS)
     endif()
+    # HD menu stage D: menu text and sprites at output resolution (menu_sprites.h).
+    add_executable(mw3menu_sprite_checks tests/test_menu_sprites.cpp)
+    target_link_libraries(mw3menu_sprite_checks PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    if(MSVC)
+      target_compile_options(mw3menu_sprite_checks PRIVATE /EHsc)
+    endif()
+    add_test(NAME mw3menu_sprite_checks COMMAND mw3menu_sprite_checks)
+    if(WIN32 AND NOT CMAKE_VERSION VERSION_LESS 3.21)
+      add_custom_command(TARGET mw3menu_sprite_checks POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:mw3menu_sprite_checks> $<TARGET_FILE_DIR:mw3menu_sprite_checks>
+        COMMAND_EXPAND_LISTS)
+    endif()
     target_compile_definitions(mw3sdltests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
                                                  MW3_TEST_TMP_ROOT="${CMAKE_BINARY_DIR}"
                                                  MW3_BIN="$<TARGET_FILE:mw3>"
                                                  MW3_LAUNCHER_BIN="$<TARGET_FILE:mw3launcher>"
+                                                 MW3_ASSETS_FOR_TESTS="${CMAKE_SOURCE_DIR}/assets"
                                                  MW3_FAKE_INDEO="$<TARGET_FILE:mw3indeo_fake>"
                                                  MW3_IMPORT_BIN="$<TARGET_FILE_DIR:mw3>/mw3import")
     add_dependencies(mw3sdltests mw3indeo_fake)
@@ -825,9 +1071,8 @@ if(SDL3_FOUND)
     message(STATUS "SDL3_ttf not found: mw3 is not built (brew install sdl3_ttf)")
   endif()
   # Development tools (not part of the port): the world viewer.
-  add_executable(mw3view tools/viewer/viewer.cpp tools/viewer/scene.cpp)
+  add_executable(mw3view tools/viewer/viewer.cpp)
   target_link_libraries(mw3view PRIVATE mw3core mw3sdl SDL3::SDL3)
-  target_include_directories(mw3view PRIVATE tools/viewer)
   target_compile_definitions(mw3view PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}")
   # The importer's movies (docs/fmv.md, The imported movies): only with FFmpeg's
   # libraries (Indeo 5 decoding, the MPEG-1 encoder); not needed to build the game.
@@ -860,6 +1105,9 @@ if(SDL3_FOUND)
   endif()
   if(MW3_FFMPEG)
     add_executable(mw3import tools/import/mw3import.cpp)
+    if(WIN32)
+      target_sources(mw3import PRIVATE tools/windows/utf8.manifest)
+    endif()
     target_link_libraries(mw3import PRIVATE mw3core ${MW3_FFMPEG} SDL3::SDL3)
     # FFmpeg's headers by -I, not -isystem: a stray FFmpeg in /usr/local/include
     # (another major version) otherwise wins over them and the structs disagree.

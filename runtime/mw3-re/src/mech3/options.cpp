@@ -17,6 +17,14 @@ Options g_options;
 OptionsHooks g_default_hooks;
 OptionsHooks* g_hooks = &g_default_hooks;
 
+// Ours (#289): the saved mission mode a 3D replay replaced, put back to save.
+struct SavedScreen {
+  bool replaced = false;
+  int32_t mode = 0, w = 0, h = 0;
+};
+SavedScreen g_saved_screen;
+bool g_replay_screen = false;  // set_replay_screen
+
 uint32_t& word() { return g_options.game_options; }
 void set_bit(uint32_t bit, bool on) { word() = on ? (word() | bit) : (word() & ~bit); }
 
@@ -37,7 +45,19 @@ bool node_float(const zrdr::Node* n, float* out) {
 }  // namespace
 
 Options& options() { return g_options; }
+void set_replay_screen(bool on) { g_replay_screen = on; }
 void set_options_hooks(OptionsHooks* hooks) { g_hooks = hooks ? hooks : &g_default_hooks; }
+
+namespace {
+// The launcher's size for this run and the saved values it replaced (load_options).
+struct LaunchScreen {
+  bool active = false;
+  int32_t vmode = 0, width = 0, height = 0;
+  int32_t saved_vmode = 0, saved_width = 0, saved_height = 0;
+  bool player_chose = false;  // note_player_screen_choice during the run
+};
+LaunchScreen g_launch_screen;
+}  // namespace
 OptionsHooks& options_hooks() { return *g_hooks; }
 
 // Mech3.exe 1.2 @ 0x0040d4c0
@@ -92,6 +112,8 @@ void set_game_intensity(int32_t level) {
 }
 // Mech3.exe 1.2 @ 0x0040cdf0
 int32_t game_intensity() { return g_options.game_intensity; }
+float& difficulty_scale() { return g_options.intensity[2]; }
+uint8_t& no_heat_haze() { return g_options.intensity_flag[1]; }
 
 // Mech3.exe 1.2 @ 0x0040ce00
 void set_game_options(uint32_t bits) { word() = bits; }
@@ -761,6 +783,25 @@ int32_t load_options(const char* path) {
   g_hooks->controls_set_defaults();
   o.default_cmd_map = zreg::find("DefaultCmdMap");
   zreg::read_all();
+  // FIX (B): the launcher's resolution is the mission's and the menus' frame for this run. Without
+  // this a saved size (the first start's desktop, 3440x1440) won over a 1920x1080 launch, and the
+  // 1920x1080 window showed a 21:9 frame letterboxed inside it.
+  g_launch_screen = {};
+  int32_t launch_width = 0, launch_height = 0;
+  if (zfix::options().any_resolution && g_hooks->launch_screen(&launch_width, &launch_height)) {
+    g_launch_screen = {true, kCustomVMode, launch_width, launch_height,
+                       o.in_game_vmode, o.screen_w, o.screen_h};
+    o.in_game_vmode = kCustomVMode, o.screen_w = launch_width, o.screen_h = launch_height;
+  } else if (g_replay_screen) {
+    // Ours (#289): the 3D replay plays at the screen's shape, whatever mode a
+    // player or an earlier hidden run saved; the saved mode is put back before
+    // the save (save_options), so watching a replay changes no setting.
+    int32_t w = 0, h = 0;
+    if (zfix::options().any_resolution && g_hooks->first_start_screen(&w, &h)) {
+      g_saved_screen = {true, o.in_game_vmode, o.screen_w, o.screen_h};
+      o.in_game_vmode = kCustomVMode, o.screen_w = w, o.screen_h = h;
+    }
+  }
   // FIX (bug): a saved name without its 0 ran past the buffer (fixes.md).
   const std::string ctl(o.active_ctl_cfg, strnlen(o.active_ctl_cfg, sizeof o.active_ctl_cfg));
   g_hooks->controls_load(ctl.c_str());
@@ -773,8 +814,33 @@ int32_t load_options(const char* path) {
   return 1;
 }
 
+void note_player_screen_choice() { g_launch_screen.player_chose = true; }
+
+void launch_screen_for_save(bool saved) {
+  Options& o = g_options;
+  LaunchScreen& launch = g_launch_screen;
+  if (!launch.active) return;
+  if (saved) {
+    // A mode the player chose in the game is saved as it stands, even when it equals the
+    // launcher's: the choice, not the value, decides (note_player_screen_choice).
+    if (launch.player_chose) {
+      launch.active = false;
+      return;
+    }
+    o.in_game_vmode = launch.saved_vmode, o.screen_w = launch.saved_width;
+    o.screen_h = launch.saved_height;
+  } else {
+    o.in_game_vmode = launch.vmode, o.screen_w = launch.width, o.screen_h = launch.height;
+  }
+}
+
 // Mech3.exe 1.2 @ 0x0040cb20, from the app's destructor 0x0047fab0.
 void save_options() {
+  if (g_saved_screen.replaced) {
+    Options& o = options();
+    o.in_game_vmode = g_saved_screen.mode, o.screen_w = g_saved_screen.w, o.screen_h = g_saved_screen.h;
+    g_saved_screen = SavedScreen{};  // put back once; a later load starts fresh
+  }
   controls_write_settings();  // FIX (bug), W40: zreg::write_all with the kept map
   g_hooks->controls_free();
 }

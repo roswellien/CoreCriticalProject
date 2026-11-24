@@ -143,6 +143,139 @@ static class PlaytestSupportChecks
             using var quick = Process.Start(new ProcessStartInfo("cmd.exe", "/d /c exit 7") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })!;
             quick.WaitForExit();
             Check(GameRunner.WaitForCompletionAsync(quick).GetAwaiter().GetResult() == 7, "Already-exited launch was missed");
+
+            // Windows 10 vs 11 vs Server OS edition and public launcher version checks
+            Check(PlaytestDiagnostics.FormatWindowsDescription(22631, 4317, "Client", "23H2") == "Windows 11 23H2 (OS Build 10.0.22631.4317)",
+                "Windows 11 client build was not distinguished from Windows 10");
+            Check(PlaytestDiagnostics.FormatWindowsDescription(19045, 5011, "Client", "22H2") == "Windows 10 22H2 (OS Build 10.0.19045.5011)",
+                "Windows 10 client build was not formatted accurately");
+            Check(PlaytestDiagnostics.FormatWindowsDescription(20348, 2520, "Server", "21H2") == "Windows Server 2022 21H2 (OS Build 10.0.20348.2520)",
+                "Windows Server installation type was not distinguished from Windows client");
+            var publicVersion = PlaytestDiagnostics.LauncherVersionString();
+            Check(!string.IsNullOrWhiteSpace(publicVersion) && !publicVersion.Contains('+') && !publicVersion.EndsWith(".0", StringComparison.Ordinal),
+                "Launcher version string did not drop build metadata or trailing .0 assembly revision: " + publicVersion);
+            Check(PlaytestDiagnostics.FormatExitCode(-1073741819) == "-1073741819 (0xC0000005)" &&
+                PlaytestDiagnostics.FormatExitCode(7) == "7 (0x00000007)",
+                "Exit code formatter did not include signed decimal and 8-digit hexadecimal status");
+
+            // Redaction of native crash paths while preserving fault module, hex offset and access metadata
+            var faultLineWithPath = PlaytestDiagnostics.Redact(
+                @"HOST EXCEPTION c0000005 at C:\Games\Core Critical\NativePreview\bin\mw3.exe +0x45678 (access 0 address 0000000000000018)" + "\n" +
+                @"HOST EXCEPTION c0000005 at \\nas01\share\NativePreview\bin\mw3.exe+0x45678" + "\n" +
+                @"mw3: minidump: C:\Users\Jane Doe\crash.dmp" + "\n" +
+                @"Regular diagnostic: C:\Games\Core Critical\private-name.exe +0x1234",
+                @"C:\Users\Jane Doe", @"C:\Games\Core Critical");
+            Check(!faultLineWithPath.Contains("Jane Doe", StringComparison.OrdinalIgnoreCase) &&
+                !faultLineWithPath.Contains("Core Critical", StringComparison.OrdinalIgnoreCase) &&
+                !faultLineWithPath.Contains("nas01", StringComparison.OrdinalIgnoreCase) &&
+                !faultLineWithPath.Contains("private-name", StringComparison.OrdinalIgnoreCase) &&
+                faultLineWithPath.Contains("<local-path>/mw3.exe +0x45678 (access 0 address 0000000000000018)", StringComparison.Ordinal) &&
+                faultLineWithPath.Contains("<network-path>/mw3.exe+0x45678", StringComparison.Ordinal) &&
+                faultLineWithPath.Contains("mw3: minidump: <local-path>", StringComparison.Ordinal),
+                "Path redaction discarded native fault module/offset/access suffix or leaked user path");
+
+            // Stale mw3.log vs current mw3.log and appended crash.txt collection checks
+            var profileDir = Path.Combine(root, "mw3-re-profile");
+            Directory.CreateDirectory(profileDir);
+            var staleLogPath = Path.Combine(profileDir, "mw3.log");
+            var crashTxtPath = Path.Combine(profileDir, "crash.txt");
+            var dumpPath = Path.Combine(profileDir, "crash.dmp");
+            File.WriteAllText(staleLogPath, "mw3: fatal error from stale previous run\n");
+            var staleTimestamp = DateTime.UtcNow;
+            File.SetCreationTimeUtc(staleLogPath, staleTimestamp);
+            File.SetLastWriteTimeUtc(staleLogPath, staleTimestamp);
+            File.WriteAllText(crashTxtPath, "mw3: crashed: exception 0xc0000094 at 0x00401000 module base 0x00400000 RVA 0x1000\n");
+            File.WriteAllText(dumpPath, "DO_NOT_COLLECT_MINIDUMP_BYTES");
+
+            var staleBaseline = PlaytestDiagnostics.CaptureNativeBaseline(profileDir);
+            var staleSessionDir = Path.Combine(root, "session-stale");
+            Directory.CreateDirectory(staleSessionDir);
+            var staleLauncherLog = Path.Combine(staleSessionDir, "mw3-re.log");
+            File.WriteAllText(staleLauncherLog, "MW3-RE, launcher " + publicVersion + "\nStartup: Checking game files... [launcher elapsed 12 ms]\n");
+            PlaytestDiagnostics.CollectNativeSessionArtifacts(staleBaseline, staleSessionDir);
+            Check(!File.Exists(Path.Combine(staleSessionDir, "native", "mw3.log")) &&
+                !File.Exists(Path.Combine(staleSessionDir, "native", "crash.txt")) &&
+                !File.Exists(Path.Combine(staleSessionDir, "native", "crash.dmp")),
+                "Stale mw3.log, unappended crash.txt, or minidump was collected into a new session");
+            Check(PlaytestDiagnostics.FailureSummary(staleLauncherLog) == "No specific failure was recorded.",
+                "Routine startup output without specific failure evidence did not produce the exact fallback summary");
+
+            // Fresh mw3.log and newly appended crash.txt in active session
+            var activeBaseline = PlaytestDiagnostics.CaptureNativeBaseline(profileDir);
+            File.WriteAllText(staleLogPath,
+                "mw3: crash details, if any, are written to " + crashTxtPath + "\n" +
+                "mw3: window 1920x1080 on Vulkan device\n" +
+                "mw3: could not load mission archive from " + settings.Current.GamePath + "\\zbd\\missions.zbd\n");
+            File.SetLastWriteTimeUtc(staleLogPath, DateTime.UtcNow.AddSeconds(2));
+            File.AppendAllText(crashTxtPath,
+                "mw3: crashed: exception 0xc0000005 at 0x00007ff600451234 module base 0x00007ff600400000 RVA 0x51234\n" +
+                "mw3: access violation: read (0) target 0x0000000000000000\n" +
+                "mw3: registers: RIP=0x00007ff600451234 RAX=0x0000000000000000 RBX=0x0000000000000001 RCX=0x0000000000000002 RDX=0x0000000000000003\n" +
+                "mw3: minidump: " + dumpPath + "\n");
+
+            var activeSessionDir = Path.Combine(root, "session-active");
+            Directory.CreateDirectory(activeSessionDir);
+            var activeLauncherLog = Path.Combine(activeSessionDir, "mw3-re.log");
+            File.WriteAllText(activeLauncherLog, "MW3-RE, launcher " + publicVersion + "\nStarting MW3-RE: 1920x1080\n");
+            PlaytestDiagnostics.CollectNativeSessionArtifacts(activeBaseline, activeSessionDir);
+
+            Check(File.Exists(Path.Combine(activeSessionDir, "native", "crash.txt")) &&
+                File.Exists(Path.Combine(activeSessionDir, "native", "mw3.log")) &&
+                !File.Exists(Path.Combine(activeSessionDir, "native", "crash.dmp")),
+                "Active session did not collect crash.txt and mw3.log or collected a dump");
+            var collectedCrash = File.ReadAllText(Path.Combine(activeSessionDir, "native", "crash.txt"));
+            Check(!collectedCrash.Contains("0xc0000094", StringComparison.Ordinal) &&
+                collectedCrash.Contains("0xc0000005", StringComparison.Ordinal) &&
+                collectedCrash.Contains("RVA 0x51234", StringComparison.Ordinal),
+                "Appended crash.txt capture included prior crash bytes or lost new exception details");
+            var activeSummary = PlaytestDiagnostics.FailureSummary(activeLauncherLog);
+            Check(activeSummary == "mw3: crashed: exception 0xc0000005 at 0x00007ff600451234 module base 0x00007ff600400000 RVA 0x51234 (access violation: read (0) target 0x0000000000000000)",
+                "Native crash fault summary was not preferred over routine output: " + activeSummary);
+
+            var activeCrashReport = PlaytestDiagnostics.CreateCrashReport(
+                settings.Current,
+                new[] { new PackManifest { Id = "test.mech", Version = "1.2.3", SchemaVersion = 2, IsEnabled = true, Priority = 1, DirectoryPath = root } },
+                activeLauncherLog,
+                app,
+                "mw3-re-2026.11 (abcdef123456)",
+                unchecked((int)0xC0000005));
+            var activeReportBytes = JsonSerializer.SerializeToUtf8Bytes(activeCrashReport, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Check(activeReportBytes.Length <= PlaytestDiagnostics.MaxRequestBytes, "Serialized crash report exceeded 256 KiB request cap");
+            using (var activeDoc = JsonDocument.Parse(activeReportBytes))
+            {
+                var rootEl = activeDoc.RootElement;
+                Check(rootEl.GetProperty("exit_code").GetInt32() == unchecked((int)0xC0000005) &&
+                    rootEl.GetProperty("runtime_version").GetString() == "mw3-re-2026.11 (abcdef123456)" &&
+                    rootEl.GetProperty("launcher_version").GetString() == publicVersion,
+                    "Active crash report did not preserve signed exit code, runtime build ID or launcher version");
+                var logsEl = rootEl.GetProperty("logs");
+                Check(logsEl.TryGetProperty("native_crash", out var nativeCrashLog) &&
+                    nativeCrashLog.GetString()!.Contains("RVA 0x51234", StringComparison.Ordinal) &&
+                    !nativeCrashLog.GetString()!.Contains("0xc0000094", StringComparison.Ordinal) &&
+                    logsEl.TryGetProperty("native_run", out var nativeRunLog) &&
+                    nativeRunLog.GetString()!.Contains("window 1920x1080 on Vulkan device", StringComparison.Ordinal) &&
+                    !nativeRunLog.GetString()!.Contains(root, StringComparison.OrdinalIgnoreCase),
+                    "Active crash report logs omitted native_crash/native_run or leaked private paths");
+            }
+
+            var activeZip = Path.Combine(root, "active-report.zip");
+            PlaytestDiagnostics.Export(activeZip, settings.Current,
+                new[] { new PackManifest { Id = "test.mech", Version = "1.2.3", DirectoryPath = root } },
+                activeLauncherLog, app, runtimeVersion: "mw3-re-2026.11 (abcdef123456)", exitCode: unchecked((int)0xC0000005));
+            using (var zip = ZipFile.OpenRead(activeZip))
+            {
+                Check(zip.Entries.Select(entry => entry.FullName).Order().SequenceEqual(
+                    new[] { "launcher.log", "native-crash.txt", "native-mw3.log", "report.json" }),
+                    "Active native export ZIP did not include the expected allowlisted log files");
+                foreach (var entry in zip.Entries)
+                {
+                    using var reader = new StreamReader(entry.Open());
+                    var text = reader.ReadToEnd();
+                    Check(!text.Contains(root, StringComparison.OrdinalIgnoreCase) &&
+                        !text.Contains("DO_NOT_COLLECT_MINIDUMP_BYTES", StringComparison.Ordinal),
+                        "Active native export ZIP leaked private path or dump content in " + entry.FullName);
+                }
+            }
             Console.WriteLine("Settings migration/recovery, update preservation, bounded/redacted diagnostics and fast-exit checks passed.");
         }
         finally { PackStorage.DeleteOwnedTree(root); }

@@ -9,7 +9,10 @@ export default {
                 headers: { ...headers, Allow: "GET, HEAD" },
             });
         const path = new URL(request.url).pathname;
-        const allowed = JSON.parse(env.PUBLIC_OBJECTS);
+        let allowed = JSON.parse(env.PUBLIC_OBJECTS);
+        // Keep the original routes authoritative and allow new ones in a second binding.
+        if (!Object.hasOwn(allowed, path) && env.PUBLIC_OBJECTS_EXTRA)
+            allowed = JSON.parse(env.PUBLIC_OBJECTS_EXTRA);
         const entry = Object.hasOwn(allowed, path) ? allowed[path] : null;
         if (!entry) return new Response("Update not found", { status: 404, headers });
         // Configuration must fail closed even if a publication script supplies an unintended object.

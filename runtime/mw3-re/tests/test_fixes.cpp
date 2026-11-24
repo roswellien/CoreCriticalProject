@@ -6,23 +6,46 @@
 #include <cstring>
 #include <string>
 #include <tuple>
+#include <map>
+#include <memory>
+#include <fstream>
+#include <filesystem>
+#include <vector>
 #if !defined(_WIN32)
 #include <unistd.h>
 #endif
 
+#include "gamez/zinterp/zinterp.h"
+#include "gamez/zclass/light.h"
+#include "gamez/zclass/cls_data.h"
+#include "gamez/zclass/cls_world.h"
+#include "gamez/zclass/list.h"
+#include "gamez/zclass/camera.h"
+#include "gamez/zclass/cls_zbd.h"
+#include "gamez/zmodel/gmod_const.h"
+#include "mech3/mech3_interp.h"
 #include "check.h"
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zrender/zrndr_prim2d.h"
 #include "gamez/zrender/zrndr_span.h"
 #include "gamez/zrender/zrndr_tint.h"
 #include "gamez/zmodel/gmod_puff.h"
+#include "gamez/zmodel/gmod_clip2d.h"
+#include "gamez/zmodel/gmod_light.h"
+#include "gamez/zrender/zrndr_fog.h"
 #include "gamez/zrender/zrndr_blit.h"
 #include "gamez/zreader/zreader.h"
 #include "gamez/zsound/zsnd.h"
+#include "gamez/znetwork/znet_object.h"
+#include "mech3/zainet_region.h"
 #include "gamez/zutil/zfix.h"
+#include "gamez/zweapon/zwep_init.h"
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zvideo/zvid_dd.h"
 #include "mech3/hud.h"
+#include "upgrades/settings/upgrades.h"
+#include "mech3/mech_config.h"
+#include "mech3/mech_reader.h"
 #include "mech3/message_panel.h"
 #include "mech3/mech_hud.h"
 #include "mech3/lance_orders.h"
@@ -46,6 +69,7 @@
 #include "mech3/mech_place.h"
 #include "mech3/mission_world.h"
 #include "mech3/turret.h"
+#include "mech3/mech_names.h"
 #include "mech3/weapon.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "mech3/veh_controls.h"
@@ -102,6 +126,127 @@ TEST(fix_smoke_drag_per_second) {
   EXPECT(smoke_speed(144, false) == 10.0f);  // the exe's table: no drag at all
 }
 
+// The Small fixes list shows exactly what the switch turns off (the lead's rule,
+// 2026-11-10): each of the page's lines has its gates here, by file, and every
+// `options().small_fixes` in src is some line's. A line with no gate fails, and
+// so does a gate with no line (list it, or make the fix always on).
+TEST(small_fixes_list_matches_its_gates) {
+  struct Gate { const char* file; int count; };
+  struct Line { const char* text; std::vector<Gate> gates; };
+  const std::vector<Line> table = {
+      {"A turret's charge or glow goes out when it dies.", {{"mech3/turret.cpp", 1}}},
+      {"Two c4 enemies follow their scripted orders.", {{"mech3/zrdraiv.cpp", 1}}},
+      {"Tripod turrets aim when facing straight up or down.", {{"mech3/turret.cpp", 1}}},
+      {"A vehicle's gun stops at its true aiming limit.", {{"mech3/veh_controls.cpp", 1}}},
+      {"A vehicle file with pitch and no roll keeps its pitch.", {{"mech3/veh_controls.cpp", 1}}},
+      {"The reticle locks and reads past 800 m when weapons reach.", {{"mech3/hud.cpp", 2}}},
+      {"The mech lab offers the plain PPC the data defines.", {{"mech3/mech_names.cpp", 2}}},
+      {"TAG's strike lands where the target is, not was.", {{"mech3/weapon.cpp", 1}}},
+      {"A held beam stays on a moving mech after release.", {{"mech3/weapon.cpp", 1}}},
+      {"A destroyed weapon's selection moves to a working one.", {{"mech3/weapon.cpp", 1}}},
+      {"A mech re-placed where it stands keeps to its ground.", {{"mech3/mech_place.cpp", 1}}},
+      {"A mission's last animation can be waited for.", {{"gamez/zeffect/zeff_anim_init.cpp", 1}}},
+      {"An animation whose object is missing waits its turn.", {{"gamez/zeffect/zeff_anim_init.cpp", 1}}},
+      {"Leaving c4b mission 5's or 6's area fails it.", {{"mech3/zrdraiv.cpp", 1}}},
+      {"c2 mission 3's objective waits for its two Fireflies.", {{"mech3/mech_objective.cpp", 1}}},
+      {"The Sunder Alternate B loads all 360 LRM 20 missiles.", {{"mech3/mech_reader.cpp", 1}}},
+      {"The Strider has its recoil slide (a number typed as text).", {{"mech3/mech_reader.cpp", 1}}},
+  };
+  // The page's list and the table, line for line.
+  const std::vector<const char*>& list = upgrades::small_fixes_list();
+  EXPECT(list.size() == table.size());
+  for (size_t i = 0; i < list.size() && i < table.size(); ++i) {
+    if (std::strcmp(list[i], table[i].text) != 0) std::printf("  line %zu: \"%s\" has no entry in the table\n", i, list[i]);
+    EXPECT(std::strcmp(list[i], table[i].text) == 0);
+    EXPECT(!table[i].gates.empty());
+  }
+  // Every gate in src, by file, against the table's.
+  std::map<std::string, int> want, have;
+  for (const Line& l : table)
+    for (const Gate& g : l.gates) want[g.file] += g.count;
+  namespace fs = std::filesystem;
+  const fs::path src = fs::path(MW3_SOURCE_DIR) / "src";
+  std::error_code ec;
+  for (fs::recursive_directory_iterator it(src, ec), end; !ec && it != end; it.increment(ec)) {
+    const std::string ext = it->path().extension().string();
+    if (!it->is_regular_file(ec) || (ext != ".cpp" && ext != ".h")) continue;
+    const std::string rel = fs::relative(it->path(), src, ec).generic_string();
+    if (rel.rfind("upgrades/settings/", 0) == 0 || rel == "gamez/zutil/zfix.h") continue;  // the switch itself
+    std::ifstream f(it->path());
+    int n = 0;
+    for (std::string line; std::getline(f, line);)
+      for (size_t at = 0; (at = line.find("options().small_fixes", at)) != std::string::npos; ++at) ++n;
+    if (n) have[rel] = n;
+  }
+  EXPECT(!have.empty());  // the sources are where the build left them
+  for (const auto& [file, n] : have)
+    if (!want.count(file) || want[file] != n) std::printf("  %s: %d gates in the code, %d in the table\n", file.c_str(), n, want.count(file) ? want[file] : 0);
+  for (const auto& [file, n] : want)
+    if (!have.count(file)) std::printf("  %s: %d gates in the table, none in the code\n", file.c_str(), n);
+  EXPECT(have == want);
+}
+
+// Four data typos read as meant (fixes.md; upgrades-sort.md): the Firefly's
+// fifth skin's label (always on), the Sunder Alternate B's LRM 20 extras and
+// the Strider's recoil slide (Small fixes). Off, each reads as the exe does.
+TEST(mech_data_typos_read_as_meant) {
+  const std::string path = std::string(MW3_GAME_DIR) + "/zbd/reader.zbd";
+  if (std::FILE* f = std::fopen(path.c_str(), "rb")) {
+    std::fclose(f);
+  } else {
+    std::printf("  (skipped: no %s)\n", path.c_str());
+    return;
+  }
+  const zfix::Options saved = zfix::options();
+  mech3::set_load_saved(nullptr), mech3::set_save_all(nullptr);  // no player's loadouts read or written
+  zrdr::init();
+  EXPECT(zrdr::open_archive(path.c_str(), true));
+  const int32_t lrm20 = mech3::weapon_index("LRM20");
+  for (const int mode : {0, 1, 2}) {  // all on; the small fixes off; the always-on ones off too
+    zfix::set_all(true);
+    if (mode >= 1) zfix::options().small_fixes = false;
+    if (mode == 2) zfix::options().fixed = false;
+    mech3::SkinSet* set = mech3::read_skins(zrdr::load("dfn_firefly.zrd"));
+    EXPECT(set && set->skins.size() == 8);  // primary, _b to _h
+    if (set && set->skins.size() == 8) {
+      const bool two_the_same = std::strcmp(set->skins[3]->name, set->skins[4]->name) == 0;
+      EXPECT(two_the_same == (mode == 2));
+    }
+    delete set;
+    int missiles = 0;
+    {
+      mech3::MechDfn d(mech3::mech_index("sunder"), zrdr::load("dfn_sunder.zrd"));
+      EXPECT(mech3::read_dfn(d) && d.configs);
+      for (mech3::Config* c : d.configs ? d.configs->configs : std::vector<mech3::Config*>{}) {
+        double items = 0;  // every item's weight: with the extras Alternate B weighs what the others do
+        for (const mech3::ConfigItem* it : c->items) items += it->weight(-1);
+        c->recount();
+        std::printf("    %s: items %.2f t, armour %.1f t, free slots %d\n", c->name ? c->name : "?", items, c->armor_tons, c->free_slots);
+        if (c->name && std::strstr(c->name, "ALTERNATE_B"))
+          for (const mech3::ConfigItem* it : c->items)
+            if (it->kind() == 2 && it->id() == lrm20) missiles += it->count;
+      }
+    }
+    float slide = -1, cauldron = -1;
+    {
+      mech3::MechDfn d(mech3::mech_index("strider"), zrdr::load("dfn_strider.zrd"));
+      EXPECT(mech3::read_dfn(d));
+      slide = d.get<float>(0x184);
+      mech3::MechDfn c(mech3::mech_index("cauldron"), zrdr::load("dfn_cauldron.zrd"));
+      EXPECT(mech3::read_dfn(c));
+      cauldron = c.get<float>(0x184);
+    }
+    std::printf("  mode %d: Sunder Alternate B's LRM 20 missiles %d; the Strider's recoil slide %g (the Cauldron's %g)\n", mode,
+                missiles, slide, cauldron);
+    EXPECT(missiles == (mode == 0 ? 360 : 120));
+    EXPECT(cauldron == 1.5f && slide == (mode == 0 ? 1.5f : 0.0f));
+  }
+  zrdr::close_archives(true);
+  mech3::set_load_saved([](mech3::ConfigList* c) { c->load_saved(); });
+  mech3::set_save_all([](mech3::ConfigList* c) { c->save_all(); });
+  zfix::options() = saved;
+}
+
 // The Mad Cat's and Supernova's damage masks land on their damage textures
 // (mcat_d01.., supern_d01..) with the fix, and two / one slots early without.
 TEST(fix_damage_lists_line_up) {
@@ -117,7 +262,7 @@ TEST(fix_damage_lists_line_up) {
   struct Case { const char* file; int first_d; };  // index of the first _d texture
   for (const Case& c : {Case{"dfn_madcat.zrd", 17}, Case{"dfn_supernova.zrd", 15}}) {
     for (bool fix : {true, false}) {
-      zfix::options().bugs = fix;
+      zfix::set_all(fix);
       mech3::SkinSet* set = mech3::read_skins(zrdr::load(c.file));
       EXPECT(set && set->damage);
       if (!set || !set->damage) continue;
@@ -129,7 +274,7 @@ TEST(fix_damage_lists_line_up) {
       delete set;
     }
   }
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   zrdr::close_archives(true);
 }
 
@@ -163,7 +308,7 @@ struct CountingOutput : platform::SoundOutput {
 
 // A fade from 0 to -30 dB, a second of 30 fps steps: ended or still running.
 bool fade_ends(bool fix) {
-  zfix::options().bugs = fix;
+  zfix::set_all(fix);
   CountingOutput out;
   zsnd::hooks().output = &out;
   zsnd::Sound s;
@@ -176,14 +321,14 @@ bool fade_ends(bool fix) {
   for (zsnd::Fade* x : zsnd::state().free_fades) delete x;
   zsnd::state().free_fades.clear();
   zsnd::hooks().output = nullptr;
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   return ended;
 }
 
 // Pause kept one voice of a sound that also has a quieter duplicate: how many
 // plays the unpause asks for.
 int unpause_plays(bool fix) {
-  zfix::options().bugs = fix;
+  zfix::set_all(fix);
   CountingOutput out;
   zsnd::hooks().output = &out;
   zsnd::Sound s;
@@ -201,7 +346,7 @@ int unpause_plays(bool fix) {
   snap.push_back(r);  // the exe's snapshot repeats a record for a voice it skips
   zsnd::resume_snapshot(&snap);
   zsnd::hooks().output = nullptr;
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   return out.plays;
 }
 }  // namespace
@@ -231,7 +376,7 @@ TEST(fix_ammo_groups_keep_their_names) {
   EXPECT(groups != nullptr);
   int found = 0, named_play_count = 0;
   for (bool fix : {true, false}) {
-    zfix::options().bugs = fix;
+    zfix::set_all(fix);
     for (int32_t i = 1; groups && i < groups->list[0].i; ++i) {
       zsnd::Group* g = zsnd::read_group(&groups->list[i], nullptr);
       if (!g) continue;
@@ -243,7 +388,7 @@ TEST(fix_ammo_groups_keep_their_names) {
       delete g;
     }
   }
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   EXPECT(found == 1);
   EXPECT(named_play_count == 6);
   zrdr::close_archives(true);
@@ -364,8 +509,8 @@ float touch_damage(float fps, bool per_second) {
 }
 
 float wading_speed(float depth, bool fixed) {
-  const bool bugs = zfix::options().bugs;
-  zfix::options().bugs = fixed;
+  const bool bugs = zfix::all();
+  zfix::set_all(fixed);
   mech3::Mech& m = *bare_mech();
   m.foot(0)->water_depth = depth, m.foot(1)->water_depth = depth;
   m.anim_state = 1;
@@ -373,7 +518,7 @@ float wading_speed(float depth, bool fixed) {
   mech3::move_calls().move = [](mech3::Mech&, float, mech3::MechAnim*, float) {};
   m.select_gait(1.0f / 30);
   mech3::move_calls() = mech3::MoveCalls{};
-  zfix::options().bugs = bugs;
+  zfix::set_all(bugs);
   return m.speed_target;
 }
 
@@ -485,8 +630,8 @@ TEST(fix_touch_damage_the_same_a_hit_at_any_rate) {
 TEST(fix_heat_sink_critical_is_called_out) {
   static int voiced = 0;
   auto crit = [](bool fixed) {
-    const bool bugs = zfix::options().bugs;
-    zfix::options().bugs = fixed;
+    const bool bugs = zfix::all();
+    zfix::set_all(fixed);
     mech3::Mech& m = *bare_mech();
     m.active = true;
     m.heat_sinks.count = 10;
@@ -501,7 +646,7 @@ TEST(fix_heat_sink_critical_is_called_out) {
     mech3::heat_calls().screen = nullptr;
     mech3::damage_calls().equip_voice = nullptr;
     mech3::world().player = was;
-    zfix::options().bugs = bugs;
+    zfix::set_all(bugs);
     return std::make_tuple(ok, voiced, left);
   };
   const auto [ok_off, voiced_off, left_off] = crit(false);
@@ -530,7 +675,7 @@ TEST(fix_deep_water_curve) {
 TEST(fix_lone_delayed_update_keeps_the_next) {
   using namespace mech3::ai;
   for (const bool bugs : {false, true}) {
-    zfix::options().bugs = bugs;
+    zfix::set_all(bugs);
     valves_end();
     Valve* a = valve_get("a");
     Valve* b = valve_get("b");
@@ -544,7 +689,7 @@ TEST(fix_lone_delayed_update_keeps_the_next) {
     EXPECT(c->get() == (bugs ? 1 : 0));
     valves_end();
   }
-  zfix::options().bugs = true;
+  zfix::set_all(true);
 }
 
 // Valves that update themselves (FIX (bug), fixes.md, ai.md section 8): an
@@ -596,10 +741,10 @@ TEST(fix_foot_uses_its_middle_probe) {
   EXPECT(hit == &s.contact[1] && s.water_at(0, 1.4f, &surface));
   s.height_at(0, 1.6f, &hit);
   EXPECT(hit == &s.contact[2] && !s.water_at(0, 1.6f, &surface));
-  zfix::options().bugs = false;
+  zfix::set_all(false);
   s.height_at(0, 1.0f, &hit);
   EXPECT(hit == &s.contact[2] && !s.water_at(0, 1.0f, &surface));
-  zfix::options().bugs = true;
+  zfix::set_all(true);
 }
 
 namespace {
@@ -609,17 +754,22 @@ mech3::ai::AivRecord* aiv_record(const char* archive, const char* name, bool fix
   const std::string path = std::string(MW3_GAME_DIR) + "/zbd/" + archive;
   if (std::FILE* f = std::fopen(path.c_str(), "rb")) std::fclose(f);
   else return nullptr;
-  zfix::options().bugs = fix;
+  zfix::set_all(fix);
   zrdr::init();
   zrdr::open_archive(path.c_str(), true);
   auto* r = new mech3::ai::AivRecord;
   r->parse(zrdr::find(zrdr::load("aiv.zrd"), name), name);
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   return r;
 }
+// What the record's read made goes with it, as a mission's end frees it: its nets (znet::clear) and its
+// regions (0x004c5fa0; ids from 10000, which znet::clear keeps). Left in the registry they were listed among
+// the editor's own nets in a whole run (game_editor_net_dialog_and_menu, vehicle_editor_pages_show_and_take_back).
 void close_aiv(mech3::ai::AivRecord* r) {
   delete r;
   mech3::ai::aiv_file_reset();
+  znet::clear();
+  mech3::ai::regions_clear();
   zrdr::close_archives(true);
 }
 }  // namespace
@@ -663,7 +813,7 @@ TEST(fix_zaps_hud_reads_its_hold) {
     if (b->list[i].type == zrdr::String && std::strcmp(b->list[i].s, "ERPPC") == 0) erppc = &b->list[i + 1];
   EXPECT(erppc != nullptr);
   for (bool fix : {true, false}) {
-    zfix::options().bugs = fix;
+    zfix::set_all(fix);
     zwep::WeaponDef d;
     d.name = "ERPPC";
     d.period = 1.0f;
@@ -671,7 +821,7 @@ TEST(fix_zaps_hud_reads_its_hold) {
     EXPECT(d.type && d.type->zaps_hud == 0.5f && d.type->zaps_hud_2 == (fix ? 2.0f : 0.5f));
     mech3::free_weapon_type(&d);
   }
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   zrdr::close_archives(true);
 }
 
@@ -712,7 +862,7 @@ TEST(fix_beam_recharge_per_second) {
 // in the constructor; here the HUD is built over garbage and the set-up runs
 // with no block (the exe would read through 0xcdcdcdcd).
 TEST(fix_hud_block_cleared) {
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   void* storage = ::operator new(sizeof(mech3::Hud));
   std::memset(storage, 0xcd, sizeof(mech3::Hud));
   auto* hud = new (storage) mech3::Hud(nullptr);  // the default hooks: no hud.zrd, video mode 0
@@ -837,15 +987,15 @@ float mouse_y_accel(float current, bool inverted);  // options_menu.h (its Handl
 // The game options' invert box (0x00438100): the exe writes -1.3 or 1.3
 // over MouseAccelY; fixed, the player's sensitivity keeps its size.
 TEST(fix_inverted_mouse_keeps_sensitivity) {
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   EXPECT(mech3::mouse_y_accel(2.5f, true) == -2.5f);
   EXPECT(mech3::mouse_y_accel(-2.5f, false) == 2.5f);
   EXPECT(mech3::mouse_y_accel(-0.7f, true) == -0.7f);
   EXPECT(mech3::mouse_y_accel(0.0f, true) == -1.3f);
-  zfix::options().bugs = false;
+  zfix::set_all(false);
   EXPECT(mech3::mouse_y_accel(2.5f, true) == -1.3f);
   EXPECT(mech3::mouse_y_accel(-2.5f, false) == 1.3f);
-  zfix::options().bugs = true;
+  zfix::set_all(true);
 }
 
 namespace mech3 {
@@ -865,14 +1015,14 @@ TEST(fix_credits_other_voices_offset) {
   zrdr::Node node;
   node.type = zrdr::List, node.list = line;
   int32_t off[2] = {30, 0};
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   mech3::credit_line_offset(&node, off);
   EXPECT(off[0] == 20 && off[1] == 20);
-  zfix::options().bugs = false;
+  zfix::set_all(false);
   off[0] = 30, off[1] = 0;
   mech3::credit_line_offset(&node, off);
   EXPECT(off[0] == 30 && off[1] == 0);
-  zfix::options().bugs = true;
+  zfix::set_all(true);
 }
 
 // TARGET's distance past 1 km (0x00441850): the exe runs "1.50km" straight
@@ -895,13 +1045,13 @@ TEST(fix_target_distance_km_spaced) {
   hud->mech = reinterpret_cast<mech3::Mech*>(&hooks);  // only passed back to the hooks
   hud->target.hud = hud;
   hooks.ready = true;
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   hud->target.data_text();
   EXPECT(std::strcmp(hud->target.texts[1].text, "Turret (1.50km)") == 0);
-  zfix::options().bugs = false;
+  zfix::set_all(false);
   hud->target.data_text();
   EXPECT(std::strcmp(hud->target.texts[1].text, "Turret1.50km") == 0);
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   hud->mech = nullptr;
   hud->~Hud();
   ::operator delete(storage);
@@ -957,7 +1107,7 @@ TEST(fix_hud_timer_past_an_hour) {
   struct Clock : mech3::HudHooks {
     float mission_time(bool) override { return 3700.25f; }
   } hooks;
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   mech3::set_hud_hooks(&hooks);
   void* storage = ::operator new(sizeof(mech3::Hud));
   std::memset(storage, 0, sizeof(mech3::Hud));
@@ -967,10 +1117,10 @@ TEST(fix_hud_timer_past_an_hour) {
   hud->target.hide();  // no tracking
   hud->data_update(0.033f);
   EXPECT(std::strcmp(hud->timer.text, "01:01:40") == 0);
-  zfix::options().bugs = false;
+  zfix::set_all(false);
   hud->data_update(0.033f);
   EXPECT(std::strcmp(hud->timer.text, "01:01:3640") == 0);
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   hud->mech = nullptr;
   hud->~Hud();
   ::operator delete(storage);
@@ -981,7 +1131,7 @@ TEST(fix_hud_timer_past_an_hour) {
 // step of y + 10 reaches only -90, so it takes the floor; the fixed step of
 // 10 keeps it on the bridge (0x004161c0, mission-start.md section 11).
 static float place_on_bridge(bool fix) {
-  zfix::options().bugs = fix;
+  zfix::set_all(fix);
   static mech3::Mech m;
   static mech3::PlayerControls c;
   static mech3::Skis s;
@@ -1003,7 +1153,7 @@ static float place_on_bridge(bool fix) {
   mech3::place_calls() = mech3::PlaceCalls{};
   mech3::collide_calls().set_position = nullptr;
   mech3::update_calls().moved = nullptr;
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   return placed_y;
 }
 
@@ -1016,12 +1166,12 @@ TEST(fix_place_steps_ten_above) {
 // needs on the target at a frame rate: the exe's float sum takes 61 at 60
 // fps and 145 at 144; in whole milliseconds, one second exactly.
 static int tag_hold_frames(int fps, bool fix) {
-  zfix::options().bugs = fix;
+  zfix::set_all(fix);
   float t = 0;
   int n = 0;
   do t = static_cast<float>(1.0 / fps) + t, ++n;
   while (!zwep::designate_held(t, 1.0f));
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   return n;
 }
 
@@ -1029,7 +1179,7 @@ static int tag_hold_frames(int fps, bool fix) {
 // and each update until the one that stops it): the exe's 32 / 62 / 146 at
 // 30 / 60 / 144 fps; fixed, 1.067 s at any rate.
 static int tag_beam_frames(int fps, bool fix) {
-  zfix::options().bugs = fix;
+  zfix::set_all(fix);
   static mech3::WeaponType t;
   static mech3::WeaponManager m(nullptr);
   zwep::WeaponDef def{};
@@ -1048,7 +1198,7 @@ static int tag_beam_frames(int fps, bool fix) {
     }
   }
   mech3::weapon_calls().beam_stop = nullptr;
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   return frames;
 }
 
@@ -1089,13 +1239,13 @@ TEST(fix_tag_strike_homes_on_the_unit) {
   t.strike_weapon = &missile;
   const zwep::Vec3f3 dir{0, 0, -1}, at{0, 0, -300};
   for (int fix = 0; fix < 2; ++fix) {
-    zfix::options().bugs = fix != 0;
+    zfix::set_all(fix != 0);
     seen_at = seen_vel = nullptr;
     t.strike(nullptr, dir, at, reinterpret_cast<mech3::Handle>(0x99));
     if (fix) EXPECT(seen_at == &unit_at && seen_vel == &unit_vel);
     else EXPECT(seen_at == &t.strike_point && seen_vel == nullptr);
   }
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   c.strike_target = nullptr, c.spawn = nullptr;
 }
 
@@ -1297,9 +1447,9 @@ TEST(fix_vehicle_motion_chas_roll_and_missing_lists) {
   items[2].type = zrdr::List, items[2].list = values;
   zrdr::Node mode{};
   mode.type = zrdr::List, mode.list = items;
-  const bool bugs = zfix::options().bugs;
+  const bool bugs = zfix::all();
   for (bool on : {false, true}) {
-    zfix::options().bugs = on;
+    zfix::set_all(on);
     VehicleControls c;
     int32_t count = 7;
     vehicle_motion_read(c, nullptr, &mode, "veh", "type", &count);
@@ -1311,7 +1461,7 @@ TEST(fix_vehicle_motion_chas_roll_and_missing_lists) {
       EXPECT(c.motion.chas_pitch.x == 0 && c.motion.chas_pitch.z == 0);  // as the exe
     }
   }
-  zfix::options().bugs = bugs;
+  zfix::set_all(bugs);
   items[1].s = nullptr;  // not the reader's to free
   zrdr::free_contents(&mode);
 }
@@ -1320,16 +1470,16 @@ TEST(fix_vehicle_gun_clamp) {
   using namespace mech3;
   TurretLimits lim(-0.2588f, 0.5f);
   const float d[3] = {0.0f, 0.64278764f, -0.76604444f};  // 40 degrees up, ahead
-  const bool bugs = zfix::options().bugs;
+  const bool bugs = zfix::all();
   for (bool on : {false, true}) {
-    zfix::options().bugs = on;
+    zfix::set_all(on);
     float out[3];
     EXPECT(!lim.clamp(d, out));
     const double pitch = std::atan2(double{out[1]}, std::hypot(double{out[0]}, double{out[2]}));
     if (on) EXPECT(std::fabs(pitch - 0.5) < 1e-5);
     else EXPECT(std::fabs(pitch - 0.5) > 0.05);  // as the exe: about 24.6 degrees
   }
-  zfix::options().bugs = bugs;
+  zfix::set_all(bugs);
 }
 
 TEST(fix_vehicle_collision_fire_floor) {
@@ -1512,10 +1662,10 @@ TEST(fix_waynet_arrow_lets_go_of_released_images) {
     Handle image_get(const char*) override { return new zimg::Texture(); }
     void image_release(Handle image) override { ++released, delete static_cast<zimg::Texture*>(image); }
   } hooks;
-  const bool saved_bugs = zfix::options().bugs;
+  const bool saved_bugs = zfix::all();
   set_waynet_hooks(&hooks);
   for (int fix = 0; fix < 2; ++fix) {
-    zfix::options().bugs = fix != 0;
+    zfix::set_all(fix != 0);
     waynet_icons_ref();
     zimg::Texture* shown = new zimg::Texture();  // the arrow's image this mission (one the hooks do not free)
     shown->width = 24, shown->height = 16;
@@ -1535,7 +1685,7 @@ TEST(fix_waynet_arrow_lets_go_of_released_images) {
     delete shown;
   }
   set_waynet_hooks(nullptr);
-  zfix::options().bugs = saved_bugs;
+  zfix::set_all(saved_bugs);
 }
 
 // Artemis IV's double tracking (FIX (bug); weapons.md, Homing): a shot fired
@@ -1577,13 +1727,13 @@ TEST(fix_artemis_fcs_doubles_the_turn_rate) {
     }
     return miss;
   };
-  const bool bugs = zfix::options().bugs;
+  const bool bugs = zfix::all();
   float turn_plain = 0, turn_fcs = 0;
-  zfix::options().bugs = false;  // the original: the shot's 2 never read
+  zfix::set_all(false);  // the original: the shot's 2 never read
   const float off_plain = salvo(1.0f, nullptr), off_fcs = salvo(2.0f, nullptr);
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   const float on_plain = salvo(1.0f, &turn_plain), on_fcs = salvo(2.0f, &turn_fcs);
-  zfix::options().bugs = bugs;
+  zfix::set_all(bugs);
   std::printf("  salvo's mean closest pass: original %.2f / %.2f m, fixed %.2f (plain) / %.2f m (FCS); first turn %.4f / %.4f\n",
               off_plain, off_fcs, on_plain, on_fcs, turn_plain, turn_fcs);
   EXPECT(off_plain == off_fcs);
@@ -1622,7 +1772,7 @@ TEST(fix_aim_cone_widens_with_the_view) {
   fp.model_part = 3;
   // Whether a target `deg` degrees off the arm gets the beam (else the arm's line).
   auto follows = [&](float deg, float w, bool bugs) {
-    zfix::options().bugs = bugs;
+    zfix::set_all(bugs);
     width = w;
     mech3::BeamWeapon b(&def, nullptr, &m);
     b.part = reinterpret_cast<mech3::Handle>(0x2000), b.firepoint = &fp;
@@ -1636,7 +1786,7 @@ TEST(fix_aim_cone_widens_with_the_view) {
   EXPECT(!follows(32, 1, true) && !follows(32, 1, false));  // 4:3: the exe's snap
   EXPECT(follows(32, wide, true) && !follows(32, wide, false));
   EXPECT(!follows(40, wide, true));  // past 16:9's cone (about 34 degrees)
-  zfix::options().bugs = true;
+  zfix::set_all(true);
   mech3::weapon_world().player = player_was;
   c = kept;
 }
@@ -1764,9 +1914,9 @@ TEST(fix_throttle_lever_reaches_reverse) {
   zfix::options().throttle_reverse = false;
   EXPECT(near(lever_target(z, 0, 1000), 0.0f) && near(lever_target(z, 0, -1000), 1.0f));
   zfix::options().throttle_reverse = true;
-  zfix::options().bugs = false;
+  zfix::set_all(false);
   EXPECT(near(lever_target(z, 0, 1000), 0.0f) && near(lever_target(z, 0, -1000), 1.0f));
-  zfix::options().bugs = true;
+  zfix::set_all(true);
 }
 
 // W59 (Owen's v1.0 crash, zmth::load+0x1d in c4b's last fight): an unbalanced
@@ -1819,4 +1969,585 @@ TEST(fix_matrix_stack_imbalance_is_refused_and_logged) {
 #endif
   zmth::reset_stack();
   zmth::stack_faults() = {};
+}
+
+// An FCS shot low over the ground with a clear line to its target: the query found nothing, so there's no record to
+// ask about (0x00585900 tests the answer first, 0x005a77ba on PM). The port read the empty record's node and crashed.
+TEST(fcs_shot_low_with_a_clear_line_reads_no_record) {
+  zwep::RunHooks& run = zwep::run_hooks();
+  zwep::HitHooks& hit = zwep::hit_hooks();
+  const zwep::RunHooks keep_run = run;
+  const zwep::HitHooks keep_hit = hit;
+  static int asked, answer;
+  static int ground_node;
+  asked = 0;
+  run = zwep::RunHooks{};
+  hit = zwep::HitHooks{};
+  run.ground = [](const zwep::Vec3f3*, zwep::HitList* out) { out->count = 1, out->rec[0].point.y = 0.0f; };
+  run.segment = [](const zwep::Vec3f3*, const zwep::Vec3f3*, zwep::HitList* out) {
+    out->count = 0, out->rec[0].node = answer == 0 ? &ground_node : nullptr;
+    return answer;
+  };
+  hit.node_handler = [](zwep::Handle n) {
+    ++asked;
+    EXPECT(n != nullptr);
+    return uintptr_t{0};
+  };
+  zwep::WeaponDef def{};
+  def.turn_rate = 1.0f, def.lock_on = 1.0f, def.pitch_rate = 1.0f;
+  const zwep::Vec3f3 target{100.0f, 5.0f, 0.0f};
+  zwep::Projectile p;
+  p.target_at = &target, p.position = {0.0f, 5.0f, 0.0f}, p.direction = {1.0f, 0.0f, 0.0f}, p.speed = 50.0f, p.terrain_follow = 1;
+  answer = 1;  // clear
+  zwep::home(&def, &p);
+  EXPECT(asked == 0);
+  answer = 0;  // blocked: the node's asked
+  zwep::home(&def, &p);
+  EXPECT(asked == 1);
+  run = keep_run, hit = keep_hit;
+}
+
+// A 17th weapon, which the exe writes over the manager's owner: a mod's mech, or a peer's
+// config, which validate() lets through by weight alone (docs/weapons.md, Sixteen weapons).
+TEST(weapon_manager_refuses_a_seventeenth) {
+  static mech3::WeaponType type;
+  type.salvo_truecount = 1;  // the firepoint spread needs a mech
+  zwep::State& st = zwep::state();
+  const std::vector<zwep::WeaponDef> kept = st.defs;
+  st.defs.assign(1, zwep::WeaponDef{});
+  st.defs[0].key = mech3::weapon_name(0), st.defs[0].type = &type;
+  int marker = 0;
+  auto* m = new mech3::WeaponManager(nullptr);
+  m->owner = &marker;
+  std::vector<mech3::WeaponItem> items(20);
+  int added = 0;
+  for (mech3::WeaponItem& it : items) {
+    it.weapon = 0, it.group = 0;
+    if (m->add(&it)) ++added;
+  }
+  EXPECT(added == 16);
+  EXPECT(m->count == 16);
+  EXPECT(m->owner == &marker);  // the array's next field
+  EXPECT(m->weapons[15] != nullptr);
+  st.defs = kept;
+  // A peer's packed config with 20 weapons comes through unpacked with all 20.
+  std::vector<uint32_t> packed(13 + 3 * 20, 0);
+  packed[0] = static_cast<uint32_t>(1) << 16 | (0x34 + 20 * 0xc);
+  for (int k = 0; k < 20; ++k) packed[13 + 3 * k] = 1u;
+  mech3::Config* c = mech3::Config::unpacked(packed.data(), packed.size());
+  int weapons = 0;
+  for (mech3::ConfigItem* it : c->items) weapons += it->kind() == 1;
+  EXPECT(weapons == 20);
+  delete c;
+}
+
+// The mission cleanup with a beam firing (Owen, PM mission 2, REPLAY on the debriefing): the
+// cleanup's kill ran on the BEAM defs and read a beam's list as shots, a null node at +0x54.
+TEST(fix_cleanup_leaves_a_firing_beam) {
+  zwep::State& st = zwep::state();
+  const std::vector<zwep::WeaponDef> kept = st.defs;
+  zwep::RunHooks& rh = zwep::run_hooks();
+  const zwep::RunHooks kept_hooks = rh;
+  rh.parent_count = [](zwep::Handle n) { return *static_cast<const int32_t*>(n); };  // reads the node, as the program's
+  static zwep::Projectile beam_as_shot;  // what a beam looks like through the projectile's fields
+  beam_as_shot = zwep::Projectile{};
+  st.defs.assign(1, zwep::WeaponDef{});
+  st.defs[0].flags = zwep::kBeam;
+  st.defs[0].active = &beam_as_shot;
+  zwep::kill_every_shot();
+  EXPECT(st.defs[0].active == &beam_as_shot);  // left to its weapon
+  st.defs = kept;
+  rh = kept_hooks;
+}
+
+// FIX (bug), 0x584b40: a laser turret freed while its beam fires (the mission's end, its turret not stopped) frees
+// the beam still on its def's list; with the cleanup's kill skipping BEAM defs, the next mission on the same world
+// walked it. The free takes it off first, as Pirate's Moon's 0x005a6650 does.
+TEST(fix_beam_freed_while_firing_leaves_the_list) {
+  zwep::WeaponDef def{};
+  def.flags = zwep::kBeam;
+  zwep::Beam* a = new zwep::Beam{};
+  zwep::Beam* b = new zwep::Beam{};
+  zwep::Beam* c = new zwep::Beam{};
+  for (zwep::Beam* x : {a, b, c}) x->def = &def;
+  def.beams = a, a->next = b, b->prev = a, b->next = c, c->prev = b;  // as beam_start links them, newest first
+  zwep::beam_free(b);
+  EXPECT(def.beams == a && a->next == c && c->prev == a);
+  zwep::beam_free(a);  // the head
+  EXPECT(def.beams == c && c->prev == nullptr);
+  zwep::beam_free(c);
+  EXPECT(def.beams == nullptr);
+  zwep::Beam* d = new zwep::Beam{};  // stopped first (off the list): untouched
+  d->def = &def;
+  zwep::beam_free(d);
+  EXPECT(def.beams == nullptr);
+}
+
+// The damage reads the shot line the weapons write (0x009a0ec4): a second copy the game never filled sent every
+// torso hit to the centre front and pushed no mech (docs/damage.md, Front or rear).
+TEST(damage_reads_the_weapons_shot_line) {
+  zwep::HitState& h = zwep::hit_state();
+  const zwep::Vec3f3 from = h.shot_from, to = h.shot_to;
+  h.shot_from = {1.0f, 2.0f, 3.0f};
+  h.shot_to = {4.0f, 5.0f, 6.0f};
+  const mech3::Vec3* s = mech3::hit_shot();
+  EXPECT(s[0].x == 1.0f && s[0].y == 2.0f && s[0].z == 3.0f);
+  EXPECT(s[1].x == 4.0f && s[1].y == 5.0f && s[1].z == 6.0f);
+  h.shot_from = from, h.shot_to = to;
+}
+
+// FIX (bug), 0x543d90: a light's intensities go to work record i, for every
+// light up to 128, but the draw's buffer holds 64 records (they end at the
+// shadow sets, 0x7489a8). 100 lights reaching: the 36 past the records keep
+// theirs apart, and nothing after the 64 records changes.
+TEST(fix_light_records_bounded_at_64) {
+  constexpr int n = 100;
+  static zcls::Light data[n];
+  static zcls::Node nodes[n];
+  zcls::Light* dp[n];
+  zcls::Node* np[n];
+  for (int i = 0; i < n; ++i) {
+    std::memset(data[i].raw, 0, sizeof data[i].raw);
+    std::memset(nodes[i].raw, 0, sizeof nodes[i].raw);
+    nodes[i].set_flags(4);                       // active
+    data[i].put<uint32_t>(0xb0, 0x200);          // on, not ranged: full and reaching
+    data[i].put<float>(0x9c, 0.25f + i * 0.001f);  // diffuse
+    data[i].put<float>(0xa0, 0.125f);            // ambient
+    dp[i] = &data[i], np[i] = &nodes[i];
+  }
+  zrndr::device_fog().active = 1;
+  zmod::build_light_list(np, dp, n);
+  EXPECT(zmod::light_list().count == n);
+  zmod::Clip2D& c = zmod::clip2d();
+  zmod::Lighting& G = zmod::lighting();
+  G.rec = reinterpret_cast<float (*)[8]>(c.work);  // as the model draw sets it
+  G.rec_slots = zmod::kClipVerts;
+  static uint8_t after[sizeof c.tl_tmp];
+  std::memset(after, 0x5a, sizeof after);
+  std::memcpy(c.tl_tmp, after, sizeof after);
+  const float centre[3] = {0, 0, 10};
+  EXPECT(zmod::lights_reaching(centre, 1.0f) == n);
+  EXPECT(std::memcmp(c.tl_tmp, after, sizeof after) == 0);
+  EXPECT(G.rec[63][1] == 0.25f + 63 * 0.001f + 0.125f);
+  EXPECT(G.rec_extra[99][1] == 0.25f + 99 * 0.001f + 0.125f);
+  zmod::build_light_list(np, dp, 0);
+}
+
+// The script's model pointers (0x00730c14..1c). With no current node the model's getter 0x004eb420 writes
+// nothing and the exe's Object3D commands go on with the last command's model, a freed mission's after a
+// mission's end: its flags (+8) and its morph weight (+0x24) written, its polygons' priority set. Fixed: no node,
+// no model; and a mission's end forgets the three. `gone` stands for the freed model.
+TEST(fix_script_model_pointers_do_not_outlive_their_node_or_mission) {
+  const zfix::Options saved = zfix::options();
+  const zint::Engine keep = zint::engine();
+  zint::Engine e = keep;
+  e.get_model = [](zcls::Node* n, zmod::Model** out) {  // as 0x004eb420
+    if (!n) return 5;
+    if (out) *out = n->model;
+    return 0;
+  };
+  e.model_set_priority = zmod::model_set_priority;
+  zint::engine() = e;
+  zint::Globals& g = zint::globals();
+  zint::Interp in;
+  mech3::interp_create(in);
+  auto line = [&](const std::string& text) {
+    std::vector<char> buf(text.begin(), text.end());
+    buf.push_back('\n');
+    buf.resize(buf.size() + 0x400, 0);
+    zint::exec_line(in, buf.data());
+  };
+  for (const bool fixed : {true, false}) {
+    zfix::set_all(true);
+    zfix::options().fixed = fixed;
+    zmod::Model gone{};
+    std::memset(gone.header, 0, sizeof gone.header);
+    uint32_t flags = 0;
+    float weight = 0;
+    g.object_model = g.cycle_model = nullptr;
+    g.model_out = &gone;
+    in.current = nullptr;
+    for (const char* c : {"Object3DRegisterTexturesToWorld ON", "Object3DSetMorphVertex 1", "Object3DSetPriority 3", "Object3DSetColor 1"}) line(c);
+    std::memcpy(&flags, gone.header + 8, 4), std::memcpy(&weight, gone.header + 0x24, 4);
+    std::printf("  fixed %d: the old model's flags %#x, weight %g; the script's models %s %s %s\n", fixed, flags, static_cast<double>(weight),
+                g.object_model ? "kept" : "none", g.cycle_model ? "kept" : "none", g.model_out ? "kept" : "none");
+    if (fixed) {
+      EXPECT(flags == 0 && weight == 0.0f && !g.object_model && !g.cycle_model && !g.model_out);
+    } else {  // the exe's way, which the differential test runs: written through
+      EXPECT(flags == 4 && weight == 1.0f && g.object_model == &gone && g.cycle_model == &gone && g.model_out == &gone);
+    }
+    // A mission's end (Missions::unload's 0x005964c0(1)).
+    g.object_model = g.cycle_model = g.model_out = &gone;
+    zint::scroll_list_clear(true);
+    EXPECT(fixed ? (!g.object_model && !g.cycle_model && !g.model_out) : (g.object_model == &gone && g.cycle_model == &gone && g.model_out == &gone));
+    g.object_model = g.cycle_model = g.model_out = nullptr;
+  }
+  zint::destroy(in);
+  zint::engine() = keep;
+  zfix::options() = saved;
+}
+
+// Playtest W12: the script's light setters were left null in the engine table, so each world script's sun
+// (c1.gs: LightNew sunlight, LightSetColor 1 1 1, LightSetRanges 750, LightSetDirectedSource, ..., LightSetSaturated
+// off, LightSetStatic) kept a new light's state: a point light (0x10), ambient only (0x20).
+// Wired to the ported Light.c setters by address, the script's commands now set it as the exe's do.
+TEST(fix_script_light_setters_set_the_suns_light) {
+  zint::Interp in;
+  mech3::interp_create(in);
+  auto line = [&](const std::string& text) {
+    std::vector<char> buf(text.begin(), text.end());
+    buf.push_back('\n');
+    buf.resize(buf.size() + 0x400, 0);
+    zint::exec_line(in, buf.data());
+  };
+  line("LightNew w12_sun");
+  zcls::Node* sun = in.current;
+  EXPECT(sun != nullptr);
+  if (!sun) return zint::destroy(in);
+  auto* l = static_cast<zcls::Light*>(sun->data);
+  const uint32_t before = l->get<uint32_t>(0xb0);
+  for (const char* c : {"LightSetColor 0.5 0.25 0.75", "LightSetRanges 750", "LightSetDirectedSource", "LightSetOrientation -20.0 45.0",
+                        "LightSetDiffuse 1.0", "LightSetAmbient 0.4", "LightSetSaturated off", "LightSetStatic"})
+    line(c);
+  const uint32_t after = l->get<uint32_t>(0xb0);
+  float r = 0, g = 0, b = 0;
+  zcls::light_get_color(sun, &r, &g, &b);
+  float nr = 0, fr = 0;
+  zcls::light_get_range(sun, &nr, &fr);
+  std::printf("  flags %#x -> %#x, colour %g %g %g, range %g..%g, ambient %g\n", before, after, static_cast<double>(r), static_cast<double>(g),
+              static_cast<double>(b), static_cast<double>(nr), static_cast<double>(fr), static_cast<double>(l->get<float>(0xa0)));
+  EXPECT((before & 0x10) && (before & 0x20) && !(before & 0x08));                   // a new light: a point light, ambient only
+  // The script's: directed, not ambient only. A bare "LightSetStatic" reads as off (the exe's arg_bool default),
+  // so the sun is not static though the script's author likely meant it: the exe's reading, kept.
+  EXPECT((after & 0x08) && !(after & 0x10) && !(after & 0x20) && !(after & 0x80));
+  EXPECT(r == 0.5f && g == 0.25f && b == 0.75f && fr == 750.0f && l->get<float>(0xa0) == 0.4f);
+  zint::destroy(in);
+}
+
+// A material table read over another without the models' free between (0x005363d0 twice): the exe reads
+// over the blocks it has, so its last-made material (0x0063fbd0) stays that slot; the port's blocks are new
+// ones, and the pointer went on into the freed ones (material_add then read freed memory). It follows the
+// slot now, or is none when the new table is too short to have it.
+TEST(fix_material_table_read_again_keeps_no_pointer_into_the_old_blocks) {
+  zmod::MaterialTable keep = std::move(zmod::materials());
+  zmod::materials() = zmod::MaterialTable{};
+  const std::string dir = std::string(MW3_TEST_TMP) + "/material_last";
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  auto file = [&](const char* name, int32_t size) {  // `size` materials, all used, in a chain
+    const std::string path = dir + "/" + name;
+    std::FILE* f = std::fopen(path.c_str(), "wb");
+    const int32_t head[4] = {size, size, -1, 0};
+    std::fwrite(head, 4, 4, f);
+    for (int32_t i = 0; i < size; ++i) {
+      uint8_t raw[0x2c] = {};
+      raw[0] = 0xff;
+      const int16_t prev = static_cast<int16_t>(i - 1), next = static_cast<int16_t>(i + 1 < size ? i + 1 : -1);
+      std::memcpy(raw + 0x10, &i, 4);  // a texture index of its own: no two alike
+      std::memcpy(raw + 0x28, &prev, 2), std::memcpy(raw + 0x2a, &next, 2);
+      std::fwrite(raw, sizeof raw, 1, f);
+    }
+    std::fclose(f);
+    return path;
+  };
+  auto read = [](const std::string& path) {
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    const int r = zmod::read_materials(f);
+    std::fclose(f);
+    return r;
+  };
+  const std::string small = file("small", 3), big = file("big", zmod::kMaterialBlock + 3);
+  zmod::MaterialTable& t = zmod::materials();
+  zmod::Material m{};
+  zmod::material_init(m);
+  m.texture_index = 0x7777;  // like none in the files: a new one is made
+  // The same size again: the pointer is the same slot of the new blocks.
+  EXPECT(read(small) >= 3);  // the capacity, whole blocks
+  zmod::Material* made = zmod::material_add(m);
+  const int32_t slot = t.index_of(made);
+  EXPECT(made && made == t.last && slot >= 3);
+  EXPECT(read(small) >= 3);  // the capacity, whole blocks
+  std::printf("  read again: the last material's slot %d -> %d\n", slot, t.index_of(t.last));
+  EXPECT(t.last && t.index_of(t.last) == slot);
+  // A longer table, the last material made in its second block; then the short one: no such slot, none.
+  EXPECT(read(big) >= zmod::kMaterialBlock + 3);
+  made = zmod::material_add(m);
+  const int32_t far = t.index_of(made);
+  EXPECT(made == t.last && far >= zmod::kMaterialBlock);
+  EXPECT(read(small) >= 3);  // the capacity, whole blocks
+  std::printf("  read shorter: the last material's slot %d -> %s\n", far, t.last ? "kept" : "none");
+  EXPECT(t.last == nullptr);
+  EXPECT(zmod::material_add(m) != nullptr);  // and the next add reads nothing freed
+  zmod::materials() = std::move(keep);
+  std::filesystem::remove_all(dir, ec);
+}
+
+namespace {
+
+// These are native pool nodes and owned class allocations, but no mission assets.
+// Isolate their lists as well as the pool so a failed EXPECT still releases every
+// allocation without purging another test's nodes.
+struct NativeLightLifetimeFixture {
+  zcls::NodePool saved_nodes = std::move(zcls::nodes());
+  zcls::Lists saved_lists = std::move(zcls::lists());
+  zcls::Frames saved_frames = zcls::frames();
+  int32_t saved_immediate = zcls::immediate_delete();
+  zmod::LightList saved_lights = zmod::light_list();
+  std::vector<zcls::Node*> owned;
+
+  NativeLightLifetimeFixture() {
+    zcls::nodes() = zcls::NodePool{};
+    zcls::nodes().block_size = 16;
+    zcls::lists() = zcls::Lists{};
+    zcls::lists().chunk_size = 16;
+    zcls::frames() = {};
+    zcls::immediate_delete() = 1;
+    zmod::build_light_list(nullptr, nullptr, 0);
+  }
+
+  ~NativeLightLifetimeFixture() {
+    // Clear the borrowed cache before releasing any remaining fixture storage,
+    // including when the old implementation failed a retirement assertion.
+    zmod::build_light_list(nullptr, nullptr, 0);
+    for (zcls::Node* node : owned) {
+      if (!node) continue;
+      while (node->child_count() > 0) zcls::node_unlink(node, node->children[0]);
+    }
+    for (zcls::Node* node : owned)
+      if (node) EXPECT(zcls::node_release(node) == 0);
+    EXPECT(zcls::node_live() == 0);
+    zcls::lists() = std::move(saved_lists);
+    zcls::nodes() = std::move(saved_nodes);
+    zcls::frames() = saved_frames;
+    zcls::immediate_delete() = saved_immediate;
+    zmod::light_list() = saved_lights;
+  }
+
+  zcls::Node* light() {
+    zcls::Node* node = zcls::light_create();
+    owned.push_back(node);
+    return node;
+  }
+
+  zcls::Node* world(zcls::Node* light) {
+    zcls::Node* node = zcls::world_create();
+    owned.push_back(node);
+    auto* data = static_cast<zcls::World*>(node->data);
+    // The world owns these arrays; the lights have independent native lifetimes.
+    data->lights = new zcls::Node*[1]{light};
+    data->light_data = new void*[1]{light->data};
+    data->put<int32_t>(0xa0, 1);
+    return node;
+  }
+
+  void forget(zcls::Node* node) {
+    for (zcls::Node*& item : owned)
+      if (item == node) item = nullptr;
+  }
+
+  void retire_world(zcls::Node* node, bool direct) {
+    const int32_t before = zcls::node_live();
+    if (direct) {
+      // node_free's caller owns unlisting. The class-2 deletion itself must
+      // invalidate the cache even without world_delete's early array release.
+      EXPECT(zcls::node_unlist(node) == 0);
+      EXPECT(zcls::purge_lists() == 0);
+      EXPECT(zcls::node_free(node) == 0);
+    } else {
+      EXPECT(zcls::world_delete(node) == 0);
+    }
+    EXPECT(zcls::node_live() == before - 1);
+    if (zcls::node_live() == before - 1) forget(node);
+  }
+
+  void retire_light(zcls::Node* node) {
+    const int32_t before = zcls::node_live();
+    EXPECT(zcls::node_release(node) == 0);
+    EXPECT(zcls::node_live() == before - 1);
+    if (zcls::node_live() == before - 1) forget(node);
+  }
+};
+
+void expect_native_light_cache_empty() {
+  const zmod::LightList& list = zmod::light_list();
+  // Only inspect the cache's values. Its old source arrays and class data may
+  // already be freed; dereferencing them would turn the regression into a UAF.
+  EXPECT(list.count == 0);
+  EXPECT(list.in_count == 0);
+  EXPECT(list.any == 0);
+  EXPECT(list.directed == -1);
+  EXPECT(list.nodes == nullptr);
+  EXPECT(list.data == nullptr);
+}
+
+void expect_native_light_cache_for(zcls::Node* world, zcls::Node* light) {
+  const auto* data = static_cast<const zcls::World*>(world->data);
+  const zmod::LightList& list = zmod::light_list();
+  EXPECT(list.count == 1 && list.in_count == 1 && list.any == 1);
+  EXPECT(list.nodes == data->lights);
+  EXPECT(list.data == reinterpret_cast<zcls::Light**>(data->light_data));
+  EXPECT(list.list[0].node == light);
+  EXPECT(list.list[0].data == light->data);
+}
+
+}  // namespace
+
+TEST(native_light_lifetime_world_retirement_clears_borrowed_arrays) {
+  for (const bool direct : {false, true}) {
+    NativeLightLifetimeFixture fixture;
+    zcls::Node* old_light = fixture.light();
+    zcls::Node* old_world = fixture.world(old_light);
+    EXPECT(zmod::world_build_lights(old_world, 0) == 0);
+    expect_native_light_cache_for(old_world, old_light);
+    fixture.retire_world(old_world, direct);
+    expect_native_light_cache_empty();
+
+    // Retirement must not disable lighting for the next mission. Build a fresh
+    // owner's native arrays and verify its actual enabled light is selected.
+    zcls::Node* fresh_light = fixture.light();
+    zcls::Node* fresh_world = fixture.world(fresh_light);
+    EXPECT(zmod::world_build_lights(fresh_world, 0) == 0);
+    expect_native_light_cache_for(fresh_world, fresh_light);
+  }
+}
+
+TEST(native_light_lifetime_unrelated_world_retirement_preserves_active_owner) {
+  for (const bool direct : {false, true}) {
+    NativeLightLifetimeFixture fixture;
+    zcls::Node* active_light = fixture.light();
+    zcls::Node* active_world = fixture.world(active_light);
+    zcls::Node* other_world = fixture.world(fixture.light());
+    EXPECT(zmod::world_build_lights(active_world, 0) == 0);
+    fixture.retire_world(other_world, direct);
+    expect_native_light_cache_for(active_world, active_light);
+  }
+}
+
+TEST(native_light_lifetime_soft_world_delete_keeps_live_arrays) {
+  NativeLightLifetimeFixture fixture;
+  zcls::Node* light = fixture.light();
+  zcls::Node* world = fixture.world(light);
+  EXPECT(zcls::node_link(world, light) == 0);
+  EXPECT(zmod::world_build_lights(world, 0) == 0);
+  auto* data = static_cast<zcls::World*>(world->data);
+  zcls::Node** nodes = data->lights;
+  void** lights = data->light_data;
+  const int32_t before = zcls::node_live();
+  EXPECT(zcls::world_delete(world) == 0);
+  EXPECT(zcls::node_live() == before);
+  EXPECT(world->data == data && world->cls() == 2);
+  EXPECT(data->lights == nodes && data->light_data == lights);
+  expect_native_light_cache_for(world, light);
+  EXPECT(zcls::node_unlink(world, light) == 0);
+  fixture.retire_world(world, true);
+  expect_native_light_cache_empty();
+}
+
+TEST(native_light_lifetime_light_retirement_clears_node_or_data_references) {
+  // Borrowers can identify a light by either pointer. Exercise each identity
+  // independently as well as the ordinary matching pair, without stale reads.
+  for (const int identity : {0, 1, 2}) {
+    NativeLightLifetimeFixture fixture;
+    zcls::Node* light = fixture.light();
+    zcls::Node* other_light = fixture.light();
+    zcls::Node* world = fixture.world(light);
+    EXPECT(zmod::world_build_lights(world, 0) == 0);
+    expect_native_light_cache_for(world, light);
+    if (identity == 1)
+      zmod::light_list().list[0].data = static_cast<zcls::Light*>(other_light->data);
+    if (identity == 2) zmod::light_list().list[0].node = other_light;
+    fixture.retire_light(light);
+    expect_native_light_cache_empty();
+  }
+}
+
+TEST(native_light_lifetime_unrelated_light_retirement_preserves_cache) {
+  NativeLightLifetimeFixture fixture;
+  zcls::Node* active_light = fixture.light();
+  zcls::Node* active_world = fixture.world(active_light);
+  zcls::Node* other_light = fixture.light();
+  EXPECT(zmod::world_build_lights(active_world, 0) == 0);
+  fixture.retire_light(other_light);
+  expect_native_light_cache_for(active_world, active_light);
+}
+
+TEST(native_light_lifetime_direct_build_replaces_world_owner) {
+  NativeLightLifetimeFixture fixture;
+  zcls::Node* old_world = fixture.world(fixture.light());
+  EXPECT(zmod::world_build_lights(old_world, 0) == 0);
+  zcls::Node* light = fixture.light();
+  zcls::Node* nodes[] = {light};
+  zcls::Light* data[] = {static_cast<zcls::Light*>(light->data)};
+  zmod::build_light_list(nodes, data, 1);
+  fixture.retire_world(old_world, false);
+  const zmod::LightList& list = zmod::light_list();
+  EXPECT(list.nodes == nodes && list.data == data);
+  EXPECT(list.count == 1 && list.in_count == 1 && list.any == 1);
+  EXPECT(list.list[0].node == light && list.list[0].data == light->data);
+  fixture.retire_light(light);
+  expect_native_light_cache_empty();
+}
+
+TEST(native_light_lifetime_classes_reset_retires_pool_cache) {
+  NativeLightLifetimeFixture fixture;
+  // classes_reset also clears these globals; retain the unrelated caller's
+  // callbacks and remembered path even if a cache assertion fails.
+  struct RestoreResetGlobals {
+    std::unique_ptr<zcls::SceneWalk> walk =
+        std::make_unique<zcls::SceneWalk>(zcls::scene_walk());
+    char path_first = zcls::zbd_path()[0];
+    ~RestoreResetGlobals() {
+      zcls::scene_walk() = *walk;
+      zcls::zbd_path()[0] = path_first;
+    }
+  } restore;
+  zcls::Node* light = fixture.light();
+  zcls::Node* nodes[] = {light};
+  zcls::Light* data[] = {static_cast<zcls::Light*>(light->data)};
+  zmod::build_light_list(nodes, data, 1);
+  EXPECT(zmod::light_list().count == 1 && zmod::light_list().any == 1);
+  EXPECT(zmod::light_list().list[0].node == light);
+  EXPECT(zmod::light_list().list[0].data == light->data);
+  EXPECT(zcls::node_live() == 1 && !zcls::nodes().blocks.empty());
+  EXPECT(zcls::classes_reset() == 0);
+  // The actual reset freed the node blocks; the fixture must not attempt to
+  // release their former slots again, even on the failing old implementation.
+  fixture.owned.clear();
+  EXPECT(zcls::nodes().blocks.empty() && zcls::node_live() == 0);
+  expect_native_light_cache_empty();
+}
+
+TEST(native_light_lifetime_node_destroy_retained_world_clears_borrowed_arrays) {
+  NativeLightLifetimeFixture fixture;
+  zcls::Node* light = fixture.light();
+  zcls::Node* world = zcls::world_create();
+  fixture.owned.push_back(world);
+  zcls::Node* parent = zcls::world_create();
+  fixture.owned.push_back(parent);
+  EXPECT(zcls::world_add_light(world, light) == 0);
+  EXPECT(zcls::node_link(parent, world) == 0);
+  EXPECT(world->parent_count() == 1 && world->parents[0] == parent);
+  EXPECT(zmod::world_build_lights(world, 0) == 0);
+  expect_native_light_cache_for(world, light);
+  auto* data = static_cast<zcls::World*>(world->data);
+  const int32_t before = zcls::node_live();
+
+  // node_destroy releases this world's light arrays before it discovers that
+  // the native parent still retains the world. No world_delete follows yet.
+  EXPECT(zcls::node_destroy(world) == 1);
+  EXPECT(zcls::node_live() == before);
+  EXPECT(world->cls() == 2 && world->data == data);
+  EXPECT(world->parent_count() == 1 && world->parents[0] == parent);
+  EXPECT(data->lights == nullptr && data->light_data == nullptr);
+  EXPECT(data->get<int32_t>(0xa0) == 0);
+  expect_native_light_cache_empty();
+
+  EXPECT(zcls::node_unlink(parent, world) == 0);
+  fixture.retire_world(world, false);
+  // world_add_light also allocated the light's back-list. Use its actual class
+  // delete to release that allocation after world_remove_light emptied it.
+  const int32_t before_light = zcls::node_live();
+  EXPECT(zcls::light_delete(light) == 0);
+  EXPECT(zcls::node_live() == before_light - 1);
+  if (zcls::node_live() == before_light - 1) fixture.forget(light);
 }
