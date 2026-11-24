@@ -380,11 +380,20 @@ static class PlaytestSupportChecks
             Check(SummaryFor("mw3: game loop failed with an empty exception\n") ==
                 "mw3: game loop failed with an empty exception",
                 "Empty game loop exception line was not the failure summary");
-            Check(SummaryFor(gameLoopLine + "\nmw3: rendering failed: authored render failure\n") == gameLoopLine,
-                "Rendering failed line beat the game loop exception line");
+            Check(SummaryFor(gameLoopLine + "\nmw3: rendering failed: authored render failure\n") ==
+                gameLoopLine,
+                "Game loop exception line did not win over a rendering failed line");
+            Check(SummaryFor(gameLoopLine + "\n", "mw3: rendering failed: authored render failure\n") ==
+                gameLoopLine,
+                "Rendering failed line in stderr won over a game loop line in the launch log");
+            Check(SummaryFor(gameLoopLine + " [launcher elapsed 1234 ms]\n") == gameLoopLine,
+                "Launcher elapsed suffix was kept on the game loop summary");
+            Check(SummaryFor(gameLoopLine + "\n", "ERROR: authored stderr error\n") == gameLoopLine,
+                "ERROR line in stderr won over a game loop line in the launch log");
             Check(SummaryFor(nativeFaultLine + "\n", gameLoopLine + "\n") == nativeFaultLine,
                 "Game loop line in stderr beat a native fault in the launch log");
-            Check(SummaryFor(nativeFaultLine + "\n", "ERROR: authored stderr error\n") == nativeFaultLine,
+            Check(SummaryFor(nativeFaultLine + "\n", "ERROR: authored stderr error\n") ==
+                nativeFaultLine,
                 "Generic stderr line beat a native fault in the launch log");
             using (var hangReport = JsonSerializer.SerializeToDocument(PlaytestDiagnostics.CreateCrashReport(
                 settings.Current, Array.Empty<PackManifest>(), staleLauncherLog, app, "1.2.3", hang)))

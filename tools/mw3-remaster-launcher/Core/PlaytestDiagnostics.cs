@@ -481,12 +481,17 @@ public static class PlaytestDiagnostics
         }
 
         // 3. The runtime's own exit-on-error line names what stopped the game, so it beats
-        // earlier generic errors that may have been harmless.
+        // earlier generic errors that may have been harmless. The game loop line names the
+        // first failure; "rendering failed" repeats it on the way out, so it's the fallback.
         foreach (var lines in logs)
         {
-            var gameCrash = lines.LastOrDefault(IsGameLoopFailureLine) ??
-                lines.LastOrDefault(IsRenderingFailedLine);
-            if (gameCrash != null) return CleanSummaryLine(gameCrash);
+            var gameLoopFailure = lines.LastOrDefault(IsGameLoopFailureLine);
+            if (gameLoopFailure != null) return CleanSummaryLine(gameLoopFailure);
+        }
+        foreach (var lines in logs)
+        {
+            var renderingFailure = lines.LastOrDefault(IsRenderingFailedLine);
+            if (renderingFailure != null) return CleanSummaryLine(renderingFailure);
         }
 
         // 4. Otherwise the last generic error line.
