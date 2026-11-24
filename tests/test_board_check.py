@@ -277,7 +277,12 @@ class ParsingTests(unittest.TestCase):
                     "closingIssuesReferences": [
                         {
                             "number": 21,
-                            "url": "https://github.com/roswellien/MW3Recomp-Private/issues/21",
+                            "url": "https://github.com/roswellien/CoreCriticalProject/issues/21",
+                        },
+                        # A former repository URL must not pass for the canonical repository.
+                        {
+                            "number": 22,
+                            "url": "https://github.com/roswellien/MW3Recomp-Private/issues/22",
                         },
                         # Another repository's issue, which must not pass for our #1.
                         {"number": 1, "url": "https://github.com/other/project/issues/1"},
@@ -289,7 +294,7 @@ class ParsingTests(unittest.TestCase):
         self.assertIsNone(pulls[0].merged_at)
 
     def test_only_this_repositorys_issue_cards_are_kept(self):
-        ours = "https://github.com/roswellien/MW3Recomp-Private"
+        ours = "https://github.com/roswellien/CoreCriticalProject"
         cards = board.parse_cards(
             {
                 "items": [
@@ -302,6 +307,11 @@ class ParsingTests(unittest.TestCase):
                     {
                         "content": {"type": "Issue", "number": 22},
                         "repository": "https://github.com/roswellien/MW3Recomp",
+                        "status": "Ready",
+                    },
+                    {
+                        "content": {"type": "Issue", "number": 23},
+                        "repository": "https://github.com/roswellien/MW3Recomp-Private",
                         "status": "Ready",
                     },
                     {
