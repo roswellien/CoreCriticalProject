@@ -530,3 +530,48 @@ TEST(resolution_hud_zoom_window_maps_to_render_and_projection) {
   EXPECT(zcls::node_delete(main_camera_node) == 0);
   EXPECT(zcls::node_delete(main_window) == 0);
 }
+
+// Issue 467: as the zoom opens or closes, its window is held at its 2-pixel
+// minimum. At a screen edge, set_view_rect's clamp moved only one edge and
+// left it 0 wide or 0 high, which crashed the Core Critical renderer. With the
+// bug fixes on it keeps its size; with them off it plays as the exe did.
+TEST(resolution_hud_zoom_window_keeps_size_at_edges) {
+  ResolutionStateGuard state;
+  zfix::options().any_resolution = true;
+  mech3::options().screen_w = 3440;
+  mech3::options().screen_h = 1440;
+  mech3::set_vmode(mech3::kCustomVMode);
+
+  HudZoomProjectionHooks hooks;
+  HudZoomProjectionHost host;
+  mech3::set_hud_hooks(&hooks);
+  ztwod::set_host(&host);
+
+  struct ReticlePoint {
+    int32_t x, y;
+  };
+  // The reticle's extremes on the 1147 x 480 canvas: left, right, top, bottom.
+  constexpr ReticlePoint edges[] = {{0, 240}, {1146, 240}, {573, 0}, {573, 480}};
+  for (const bool fixes_on : {true, false}) {
+    zfix::options().fixed = fixes_on;
+    int collapsed_edges = 0;
+    for (const ReticlePoint& edge : edges) {
+      mech3::HudZoomWindow zoom(10, 0x172, 0x5a, 0x5a);
+      zoom.zoom = 0.01f;  // 90 x 0.01 rounds below 2, so the window is held at 2 x 2
+      zoom.follow(edge.x, edge.y);
+      const int32_t rect_width = zoom.rect.right - zoom.rect.left;
+      const int32_t rect_height = zoom.rect.bottom - zoom.rect.top;
+      int32_t x = 0, y = 0, width = 0, height = 0;
+      hooks.camera_window_rect(zoom.view.camera, &x, &y, &width, &height);
+      if (fixes_on) {
+        EXPECT(rect_width == 2 && rect_height == 2);
+        EXPECT(width > 0 && height > 0);
+      }
+      if (rect_width <= 0 || rect_height <= 0) ++collapsed_edges;
+    }
+    // Every edge collapses as in the exe with the fixes off.
+    if (!fixes_on) EXPECT(collapsed_edges == 4);
+  }
+  for (auto it = hooks.nodes.rbegin(); it != hooks.nodes.rend(); ++it)
+    EXPECT(zcls::node_delete(*it) == 0);
+}
