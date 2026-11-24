@@ -53,7 +53,7 @@ const TRAILING_WORD_STOP_CHARS = new Set([
     '"',
     "`",
 ]);
-const CONTINUATION_AFTER_CHARS = new Set([" ", "\t", ".", ",", ";", "!", "?", ")", "]"]);
+const CONTINUATION_AFTER_CHARS = new Set([" ", ".", ",", ";", "!", "?", ")", "]"]);
 const EXT_DISALLOWED_FOLLOWERS = new Set(["'", "=", ":", ")", "]", "}", '"', "`", ">"]);
 
 function isWhiteSpace(c) {

@@ -1170,7 +1170,7 @@ test("preserves trailing error text after single-quoted Process.Start paths and 
 
     const firstFingerprint = archivedReports[0][6];
     assert.ok(firstFingerprint);
-    githubResponder({
+    const duplicateCalls = githubResponder({
         matches: [
             {
                 id: "I_existing",
@@ -1197,6 +1197,8 @@ test("preserves trailing error text after single-quoted Process.Start paths and 
     });
     assert.equal(archivedReports[1][6], firstFingerprint);
     assert.ok(calls.some((query) => query.includes("createIssue")));
+    assert.ok(duplicateCalls.some((query) => query.includes("addComment")));
+    assert.ok(!duplicateCalls.some((query) => query.includes("createIssue")));
 });
 
 test("preserves internal apostrophes, mixed separators, delimiters, and prose boundaries in single-quoted paths", async () => {
