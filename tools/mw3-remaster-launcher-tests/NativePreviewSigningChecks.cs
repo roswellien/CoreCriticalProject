@@ -50,7 +50,8 @@ static class NativePreviewSigningChecks
                 signedPeSource, unsignedPeSource, stubFailTool, stubDlib, stubMetadata, work);
 
             CheckBuildInstallerHelpersAndGate(powerShell, buildInstallerScript,
-                signedPreviewOutput, signedPeSource, unsignedPeSource, work);
+                signedPreviewOutput, signedPeSource, unsignedPeSource,
+                stubFailTool, stubDlib, stubMetadata, work);
 
             Console.WriteLine("Native preview signing, re-pinning and installer PE gate checks passed.");
         }
@@ -322,6 +323,9 @@ static class NativePreviewSigningChecks
         string signedPreviewOutput,
         string signedPeSource,
         string unsignedPeSource,
+        string stubFailTool,
+        string stubDlib,
+        string stubMetadata,
         string work)
     {
         // Direct execution without -Compiler/-OutputDirectory must fail non-zero.
@@ -331,6 +335,31 @@ static class NativePreviewSigningChecks
 
         var helperDir = Path.Combine(work, "installer-helper-checks");
         Directory.CreateDirectory(helperDir);
+
+        var paramPreservationOut = Path.Combine(helperDir, "param-preservation-out");
+        var missingCompilerRun = RunPowerShellFile(powerShell, buildInstallerScript,
+            "-Compiler", Path.Combine(helperDir, "missing-iscc.exe"),
+            "-OutputDirectory", paramPreservationOut);
+        var missingCompilerOutput = missingCompilerRun.FormatOutput();
+        Check(missingCompilerRun.ExitCode != 0 &&
+              missingCompilerOutput.Contains("Select an installed Inno Setup ISCC.exe compiler", StringComparison.Ordinal) &&
+              !missingCompilerOutput.Contains("Specify -Compiler and -OutputDirectory", StringComparison.Ordinal) &&
+              !Directory.Exists(paramPreservationOut),
+            "build_installer.ps1 lost -Compiler/-OutputDirectory parameters after loading helpers: " + missingCompilerOutput);
+
+        var stubCompiler = Path.Combine(helperDir, "stub-iscc.exe");
+        File.WriteAllText(stubCompiler, "stub compiler", Encoding.ASCII);
+        var signingParamRun = RunPowerShellFile(powerShell, buildInstallerScript,
+            "-Compiler", stubCompiler,
+            "-OutputDirectory", paramPreservationOut,
+            "-WindowsSignTool", stubFailTool,
+            "-SigningDlib", stubDlib,
+            "-SigningMetadata", Path.Combine(helperDir, "missing-metadata.json"));
+        var signingParamOutput = signingParamRun.FormatOutput();
+        Check(signingParamRun.ExitCode != 0 &&
+              signingParamOutput.Contains("Provide all three Windows signing inputs", StringComparison.Ordinal) &&
+              !Directory.Exists(paramPreservationOut),
+            "build_installer.ps1 lost Windows signing parameters after loading helpers: " + signingParamOutput);
 
         var staleBuildIdDir = Path.Combine(helperDir, "stale-build-id");
         CopyDirectoryRecursive(signedPreviewOutput, staleBuildIdDir);
