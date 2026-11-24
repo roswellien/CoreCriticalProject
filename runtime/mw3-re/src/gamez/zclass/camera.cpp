@@ -1495,9 +1495,21 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw) {
   return render_subtree(camera_node, node, hw, false);
 }
 
+// FIX (bug), ours (issue 467): a camera whose window has no area (the zoom
+// window, clamped at a screen edge for a frame) draws nothing. Drawing it would
+// write a zero focal length into the shared projection before any scene opens.
+// The check runs before the draw changes any state, so nothing needs undoing.
+static bool skip_camera_with_empty_window(Node* camera_node) {
+  int32_t width = 0, height = 0;
+  if (window_has_area(cam_of(camera_node)->nodes[1], &width, &height)) return false;
+  log_skipped_empty_window(width, height);
+  return true;
+}
+
 int render_subtree(Node* camera_node, Node* node, int32_t hw,
                    bool use_requested_producer_purpose) {
   if (!node || !camera_node) return 1;
+  if (skip_camera_with_empty_window(camera_node)) return 0;
   zvid::ProducerWorldScope producer_view(!use_requested_producer_purpose);
   struct EmissionScope {
     zvid::ProducerWorldScope* producer_view = nullptr;
@@ -1585,6 +1597,7 @@ int camera_draw_flares(Camera* cam, int32_t from) {
 // The Direct3D frame's 3D part: LoD scale, lights, camera, horizon,
 // viewport, zones, then the scene walk between BeginScene and EndScene.
 int render_world(Node* camera_node, int32_t after) {
+  if (skip_camera_with_empty_window(camera_node)) return 0;
   zvid::ProducerWorldScope producer_view;
   zmth::check_stack_at_frame();  // FIX (bug), ours (W59): one imbalance cannot carry
   zmth::Mat34 local;
