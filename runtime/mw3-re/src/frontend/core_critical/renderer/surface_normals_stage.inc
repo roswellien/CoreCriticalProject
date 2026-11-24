@@ -391,7 +391,7 @@ native_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
         input.texture_version = input.current_texture_version = slot.version;
         input.normal_index = surface_normal_index(key, true, texture);
         if (input.normal_index >= 0) {
-          const auto &normal = surface_normal_image(input.normal_index);
+          const auto &normal = surface_normals_.cache.normal_record(input.normal_index);
           input.normal_width = normal.width;
           input.normal_height = normal.height;
           input.normal_hash = normal.hash;
@@ -414,18 +414,13 @@ void preload_surface_normal(const mw34::materials::SurfaceKey &key) {
     return;
   }
   surface_normals_load();
-  // Decode the matching world page at texture admission so the first visible
-  // turn does not stall on disk IO and decompression. Do not create a renderer
-  // texture handle here because create_texture reads the thread-local active
-  // surface key. Mark preload_pending so the post-load mission callback knows
-  // authentic source textures were admitted and can upload their GPU normal
-  // textures once source admission finishes.
+  // Only mark the mission preload pending here. Decoding each texture's world
+  // page as the texture arrives read pages in arrival order, and once a
+  // mission's pages outgrew the resident limit that re-read the same pages
+  // many times (issue 461: 806 page reads for c1m1's 52 pages). The post-load
+  // mission preload reads each page once, grouped, before the first visible
+  // turn, so the first turn still doesn't stall on disk reads.
   surface_normals_.preload_pending = true;
-  mw34::timing::ScopedDuration decode_timer(
-      producer_resource_timing_.page_decode_target());
-  surface_normals_.cache.preload_surface(key, true);
-  surface_normals_.peak_decoded_bytes = std::max(
-      surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
 }
 
 int surface_normal_index(const mw34::materials::SurfaceKey &input_key,
@@ -449,7 +444,9 @@ int surface_normal_index(const mw34::materials::SurfaceKey &input_key,
     return -1;
   mw34::timing::ScopedDuration decode_timer(
       producer_resource_timing_.page_decode_target());
-  const int index = surface_normals_.cache.surface_normal_index(key, enabled);
+  // Draws need only the index; the GPU copy is uploaded once per index by
+  // surface_normal_texture(), so an evicted page must not be read again here.
+  const int index = surface_normals_.cache.resident_normal_index(key, enabled);
   surface_normals_.peak_decoded_bytes = std::max(
       surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
   return index;
@@ -496,7 +493,7 @@ validated_deferred_binding(const mw34::materials::SurfaceKey &key, int texture,
   if (require_height && binding->height_binding && bridge_config_.parallax_materials && lighting_.normals) {
     if (binding->normal_index < 0)
       throw std::runtime_error("Deferred native ground normal identity is missing");
-    const auto &normal = surface_normal_image(binding->normal_index);
+    const auto &normal = surface_normals_.cache.normal_record(binding->normal_index);
     const auto &height = *binding->height_binding;
     if (normal.width != height.normal_width || normal.height != height.normal_height ||
         normal.hash != height.normal_hash)
