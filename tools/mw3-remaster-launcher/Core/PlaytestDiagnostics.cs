@@ -468,22 +468,47 @@ public static class PlaytestDiagnostics
             if (faultLine != null) return faultLine;
         }
 
-        // 2. Check native/stderr.txt, native/mw3.log, and the launcher log for specific errors.
+        // native/stderr.txt, native/mw3.log, then the launcher log, each read once.
         var runFile = Path.Combine(directory, "native", NativeRunFileName);
         var stderrFile = Path.Combine(directory, "native", "stderr.txt");
-        foreach (var file in new[] { stderrFile, runFile, launchLog })
-        {
-            var lines = SafeReadLines(file);
-            if (lines.Length == 0) continue;
+        var logs = new[] { stderrFile, runFile, launchLog }.Select(SafeReadLines).ToArray();
 
+        // 2. A native fault in any log beats every other line.
+        foreach (var lines in logs)
+        {
             var nativeFault = FindNativeCrashFaultLine(lines);
             if (nativeFault != null) return nativeFault;
+        }
 
+        // 3. The runtime's own exit-on-error line names what stopped the game, so it beats
+        // earlier generic errors that may have been harmless.
+        foreach (var lines in logs)
+        {
+            var gameCrash = lines.LastOrDefault(IsGameLoopFailureLine) ??
+                lines.LastOrDefault(IsRenderingFailedLine);
+            if (gameCrash != null) return CleanSummaryLine(gameCrash);
+        }
+
+        // 4. Otherwise the last generic error line.
+        foreach (var lines in logs)
+        {
             var error = lines.LastOrDefault(IsSpecificErrorLine);
             if (error != null) return CleanSummaryLine(error);
         }
         return null;
     }
+
+    // These strings are printed by runtime/mw3-re/src/frontend/sdl/mw3_main.cpp when the game
+    // loop throws (log_loop_exception) and when an exception escapes it (main's catch).
+    private static bool IsGameLoopFailureLine(string line)
+    {
+        var trimmed = line.Trim();
+        return trimmed.StartsWith("mw3: game loop exception", StringComparison.Ordinal) ||
+            trimmed.StartsWith("mw3: game loop failed with", StringComparison.Ordinal);
+    }
+
+    private static bool IsRenderingFailedLine(string line) =>
+        line.Trim().StartsWith("mw3: rendering failed:", StringComparison.Ordinal);
 
     /// <summary>The graphics settings that apply to the session's engine.</summary>
     private static object ReportSettings(LauncherSettings settings) => settings.EngineMode == "d7vk"
