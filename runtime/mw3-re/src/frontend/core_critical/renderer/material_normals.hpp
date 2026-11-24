@@ -343,6 +343,10 @@ class WorldNormalCache {
     std::uint64_t world_bytes{0};
     std::uint64_t world_package_bytes{0};
     std::uint64_t world_clock{0};
+    // Pages actually read and decoded from disk (not already-resident hits).
+    // Large missions need more decoded pages than the resident limit holds,
+    // so this is the number that shows whether pages are being re-decoded.
+    std::uint64_t page_loads{0};
 
     bool normal_maps_enabled{true};
 
@@ -427,6 +431,7 @@ class WorldNormalCache {
             return;
         }
 
+        ++page_loads;
         std::ifstream input(page.path, std::ios::binary);
         if (!input)
             throw std::runtime_error("World-normal page disappeared");
@@ -555,6 +560,70 @@ class WorldNormalCache {
         const auto found = world_images.find(index);
         if (found != world_images.end())
             load_page(found->second, pixel_budget);
+    }
+
+    // Like surface_normal_index(), but never reloads an evicted page. Draws only
+    // need the index (their GPU texture is uploaded once per index), and
+    // reloading here evicted other pages on every draw once a mission's pages
+    // outgrew the resident limit. A page that was never read is still loaded
+    // once, because that first read is what creates its index records.
+    int resident_normal_index(const SurfaceKey &key, bool enabled = true) {
+        if (!enabled || !normal_maps_enabled)
+            return -1;
+        const auto existing_binding = bindings.find(key);
+        if (existing_binding != bindings.end())
+            return existing_binding->second;
+        const auto world_binding = world_bindings.find(key);
+        if (world_binding == world_bindings.end())
+            return -1;
+        if (!pages.at(world_binding->second).initialized)
+            load_page(world_binding->second);
+        const auto loaded_binding = bindings.find(key);
+        return loaded_binding != bindings.end() ? loaded_binding->second : -1;
+    }
+
+    // Name, size and hash of a normal image. These stay valid after its page is
+    // evicted (only pixels32 is released), and the hash was checked when the
+    // page was read, so identity checks don't need the page resident.
+    const TextureRecord &normal_record(int index) const {
+        return textures.at(static_cast<std::size_t>(index));
+    }
+
+    // Resolves many keys while reading each world page at most once. Keys are
+    // grouped by page, pages keep the order of their first key, and
+    // on_resolved(index) runs for each key while its page is still resident, so
+    // the caller can upload the pixels without a reload. Excluded and unknown
+    // keys are skipped; authored keys resolve at once with no page read.
+    template <class OnResolved>
+    void preload_keys_grouped(const std::vector<SurfaceKey> &keys, OnResolved on_resolved,
+                              std::uint64_t pixel_budget = world_normal_lru_resident_limit) {
+        if (!normal_maps_enabled)
+            return;
+        std::vector<std::size_t> page_order;
+        std::map<std::size_t, std::vector<SurfaceKey>> keys_by_page;
+        for (const auto &key : keys) {
+            if (authored.count(key)) {
+                const auto binding = bindings.find(key);
+                if (binding != bindings.end() && binding->second >= 0)
+                    on_resolved(binding->second);
+                continue;
+            }
+            const auto world_binding = world_bindings.find(key);
+            if (world_binding == world_bindings.end())
+                continue;
+            auto &page_keys = keys_by_page[world_binding->second];
+            if (page_keys.empty())
+                page_order.push_back(world_binding->second);
+            page_keys.push_back(key);
+        }
+        for (const auto page_index : page_order) {
+            load_page(page_index, pixel_budget);
+            for (const auto &key : keys_by_page[page_index]) {
+                const auto binding = bindings.find(key);
+                if (binding != bindings.end() && binding->second >= 0)
+                    on_resolved(binding->second);
+            }
+        }
     }
 };
 

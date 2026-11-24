@@ -820,6 +820,57 @@ void check_world_normals_lru_and_precedence() {
             require(cache.pages[0].loaded && cache.surface_normal_index(key0) == initial_index0,
                     "Reloaded page 0 via preload_surface changed its normal index");
         }
+
+        // E) Issue 461: an evicted page's index and identity are readable without
+        // reading the page again; a never-read page is read exactly once.
+        {
+            WorldNormalCache cache(true);
+            cache.load_world_manifest(preload_manifest);
+            const std::uint64_t one_page_budget = 4;
+            const int index0 = cache.resident_normal_index(key0);
+            require(index0 >= 0 && cache.page_loads == 1,
+                    "First resident lookup did not read its never-read page once");
+            const auto hash0 = cache.normal_record(index0).hash;
+            cache.load_page(1, one_page_budget);
+            require(!cache.pages[0].loaded && cache.page_loads == 2,
+                    "Page 0 was not evicted under a one-page budget");
+            require(cache.resident_normal_index(key0) == index0 && cache.page_loads == 2,
+                    "Resident lookup reloaded an evicted page");
+            require(cache.normal_record(index0).hash == hash0 &&
+                        cache.normal_record(index0).width == 1 && cache.page_loads == 2,
+                    "Normal record identity needed its evicted page");
+        }
+
+        // F) Issue 461: grouped preload reads each page once even when keys
+        // alternate between pages under a one-page budget, and every key's
+        // pixels are resident when its callback runs.
+        {
+            const std::vector<SurfaceKey> mixed{key0, key1, key0, key2, key1};
+            const std::uint64_t one_page_budget = 4;
+
+            WorldNormalCache ungrouped(true);
+            ungrouped.load_world_manifest(preload_manifest);
+            for (const auto &key : mixed)
+                ungrouped.preload_surface(key, true, one_page_budget);
+            require(ungrouped.page_loads == 5,
+                    "Baseline arrival-order preload no longer re-reads pages");
+
+            WorldNormalCache grouped(true);
+            grouped.load_world_manifest(preload_manifest);
+            std::vector<int> resolved;
+            bool pixels_resident = true;
+            grouped.preload_keys_grouped(
+                mixed,
+                [&](int index) {
+                    resolved.push_back(index);
+                    pixels_resident = pixels_resident &&
+                                      !grouped.normal_record(index).pixels32.empty();
+                },
+                one_page_budget);
+            require(grouped.page_loads == 3, "Grouped preload read a page more than once");
+            require(resolved.size() == mixed.size() && pixels_resident,
+                    "Grouped preload resolved a key without its page resident");
+        }
     }
 }
 
