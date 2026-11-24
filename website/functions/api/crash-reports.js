@@ -238,19 +238,11 @@ function findSingleQuotedPathClose(
     scannedNoCloseUntil,
 ) {
     const scanLimit = Math.min(text.length, pathStart + MAX_QUOTED_PATH_CHARS);
-    let sawClosingBoundary = false;
     let index = Math.max(initialScanIndex, scannedNoCloseUntil);
     while (index < scanLimit) {
         const c = text[index];
         if (DISALLOWED_PATH_CHARS.has(c)) {
-            return {
-                closeQuote: -1,
-                noCloseBefore: sawClosingBoundary ? -1 : index,
-                scannedNoCloseUntil: sawClosingBoundary ? -1 : index,
-            };
-        }
-        if (c === ":") {
-            return { closeQuote: -1, noCloseBefore: -1, scannedNoCloseUntil: -1 };
+            return { closeQuote: -1, noCloseBefore: index, scannedNoCloseUntil: index };
         }
         if (c !== "'") {
             index++;
@@ -262,29 +254,29 @@ function findSingleQuotedPathClose(
             continue;
         }
 
-        sawClosingBoundary = true;
-        const continuedQuote = continuePastInternalApostrophe(
-            text,
-            index,
-            expectedSeparator,
-            scanLimit,
-        );
-        if (continuedQuote >= 0) {
-            index = continuedQuote;
-            continue;
+        // Extend continuation lookahead past scanLimit so an apostrophe near the
+        // 4096-char boundary cannot truncate a following valid quoted path mid-segment.
+        let closeQuote = index;
+        while (true) {
+            const continuationLimit = Math.min(text.length, closeQuote + MAX_QUOTED_PATH_CHARS);
+            const continuedQuote = continuePastInternalApostrophe(
+                text,
+                closeQuote,
+                expectedSeparator,
+                continuationLimit,
+            );
+            if (continuedQuote < 0) {
+                return { closeQuote, noCloseBefore: -1, scannedNoCloseUntil: -1 };
+            }
+            closeQuote = continuedQuote;
         }
-
-        return { closeQuote: index, noCloseBefore: -1, scannedNoCloseUntil: -1 };
     }
 
-    if (!sawClosingBoundary) {
-        return {
-            closeQuote: -1,
-            noCloseBefore: scanLimit === text.length ? text.length : -1,
-            scannedNoCloseUntil: scanLimit,
-        };
-    }
-    return { closeQuote: -1, noCloseBefore: -1, scannedNoCloseUntil: -1 };
+    return {
+        closeQuote: -1,
+        noCloseBefore: scanLimit === text.length ? text.length : -1,
+        scannedNoCloseUntil: scanLimit,
+    };
 }
 
 function scrubSingleQuotedPaths(text) {

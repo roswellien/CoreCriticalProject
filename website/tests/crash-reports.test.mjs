@@ -1256,6 +1256,21 @@ test("preserves internal apostrophes, mixed separators, delimiters, and prose bo
             '"C:\\Users\\James\' Folder\\mw3.exe" was blocked.',
             '"<local-path>" was blocked.',
         ],
+        [
+            "Extended Win32 single-quoted path containing drive colon",
+            "ERROR: Failed to open '\\\\?\\C:\\Users\\Alice\\mw3.exe' because access is denied.",
+            "ERROR: Failed to open '<network-path>' because access is denied.",
+        ],
+        [
+            "Unclosed single-quoted path before colon and closed path",
+            "ERROR: Unclosed 'C:\\Users\\Alice\\secret failed: 'D:\\Users\\Bob\\mw3.exe' done.",
+            "ERROR: Unclosed '<local-path>' done.",
+        ],
+        [
+            "Apostrophe continuation spanning past 4096-char limit of an earlier unclosed quote",
+            `ERROR: '\\\\nas01\\share ${"a".repeat(4070)} '\\\\nas02\\O' Connor\\mw3.exe' done.`,
+            "ERROR: '<network-path>' done.",
+        ],
     ];
 
     githubResponder();
@@ -1302,4 +1317,26 @@ test("bounds scanning time on adversarial repeated unclosed single-quoted paths 
             "'<local-path>' failed: James' policy '<local-path>' done.",
         ),
     );
+
+    const colonUncChunk = `${" '\\\\".repeat(1020)}:`;
+    const colonUncLog = `${colonUncChunk.repeat(16)}\n'\\\\nas01\\secret\\mw3.exe' failed.`;
+    assert.ok(colonUncLog.length <= 64 * 1024);
+    const colonStarted = performance.now();
+    const colonResponse = await onRequestPost({
+        request: crashRequest({
+            report_id: "adversarial-bounded-2",
+            logs: { launcher: colonUncLog, native_crash: colonUncLog },
+        }),
+        env: environment,
+    });
+    const colonElapsedMs = performance.now() - colonStarted;
+
+    assert.equal(colonResponse.status, 200);
+    assert.ok(
+        colonElapsedMs < 150,
+        `Expected colon-terminated UNC redaction under 150ms, got ${colonElapsedMs}ms`,
+    );
+    const colonArchived = JSON.parse(archivedReports[1][7]);
+    assert.ok(!colonArchived.logs.launcher.includes("nas01"));
+    assert.ok(colonArchived.logs.launcher.endsWith("'<network-path>' failed."));
 });
