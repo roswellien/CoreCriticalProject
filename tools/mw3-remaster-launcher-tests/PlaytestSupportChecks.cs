@@ -37,6 +37,28 @@ static class PlaytestSupportChecks
             var nestedPath = PlaytestDiagnostics.Redact(
                 @"C:\Users\jcbla\AppData\Local\Packages\Launcher\sessions\profile.json", @"C:\Users\jcbla");
             Check(nestedPath == "<local-path>", "Crash-report path scrubbing exposed the suffix after a known local root");
+            var quotedStartError = PlaytestDiagnostics.Redact(
+                "ERROR: An error occurred trying to start process 'C:\\Games\\Core Critical\\Launcher\\NativePreview\\bin\\mw3.exe' with working directory 'C:\\Games\\Core Critical\\Launcher\\NativePreview\\bin'. An Application Control policy has blocked this file.",
+                @"C:\Games\Core Critical\Launcher");
+            Check(quotedStartError ==
+                    "ERROR: An error occurred trying to start process '<local-path>' with working directory '<local-path>'. An Application Control policy has blocked this file." &&
+                !quotedStartError.Contains("Core Critical", StringComparison.OrdinalIgnoreCase),
+                "Single-quoted Windows paths in launch errors truncated trailing details or leaked paths: " + quotedStartError);
+            var apostropheQuotedError = PlaytestDiagnostics.Redact(
+                "ERROR: Failed to start 'C:\\Users\\O'Connor\\Core Critical\\mw3.exe' with working directory 'C:\\Users\\O'Connor\\Core Critical'. Access is denied.",
+                @"C:\Users\O'Connor");
+            Check(apostropheQuotedError ==
+                    "ERROR: Failed to start '<local-path>' with working directory '<local-path>'. Access is denied." &&
+                !apostropheQuotedError.Contains("O'Connor", StringComparison.OrdinalIgnoreCase) &&
+                !apostropheQuotedError.Contains("Core Critical", StringComparison.OrdinalIgnoreCase),
+                "Single-quoted path containing an apostrophe leaked or truncated trailing error details: " + apostropheQuotedError);
+            var quotedUncError = PlaytestDiagnostics.Redact(
+                "'\\\\nas01\\users\\Jane Doe\\mw3.exe' was blocked by policy.",
+                @"\\nas01\users\Jane Doe");
+            Check(quotedUncError == "'<network-path>' was blocked by policy." &&
+                !quotedUncError.Contains("nas01", StringComparison.OrdinalIgnoreCase) &&
+                !quotedUncError.Contains("Jane Doe", StringComparison.OrdinalIgnoreCase),
+                "Single-quoted UNC path truncated trailing details or leaked host/user: " + quotedUncError);
             var crashReport = PlaytestDiagnostics.CreateCrashReport(
                 new LauncherSettings { EngineMode = "d7vk", Width = 3840, D7VkResolution = "1920x1080" },
                 Array.Empty<PackManifest>(), null, app, "1.2.3", 7,

@@ -555,6 +555,9 @@ public static class PlaytestDiagnostics
 
         // Replace complete path tokens before substituting known roots, or a
         // replaced root prefix could leave the remainder of a path visible.
+        // Scrub single-quoted paths first so trailing text (such as .NET Process.Start errors) is preserved.
+        text = Regex.Replace(text, @"(?<=[ \t(=\[,;:]|^)'[A-Za-z]:[\\/][^\r\n\t""<>|]{0,1024}?'(?=\s|[.,;:!?\)\]]|$)", "'<local-path>'");
+        text = Regex.Replace(text, @"(?<=[ \t(=\[,;:]|^)'\\\\[^\r\n\t""<>|]{1,1024}?'(?=\s|[.,;:!?\)\]]|$)", "'<network-path>'");
         text = Regex.Replace(text, @"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n\t\""<>|]*", "<local-path>");
         text = Regex.Replace(text, @"\\\\[^\r\n\t""<>|]+", "<network-path>");
         foreach (var root in privateRoots.Where(root => !string.IsNullOrWhiteSpace(root)).OrderByDescending(root => root.Length))
