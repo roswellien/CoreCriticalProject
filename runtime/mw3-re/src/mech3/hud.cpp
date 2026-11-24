@@ -1542,9 +1542,9 @@ void HudZoomWindow::set_rect(int32_t px, int32_t py, int32_t w, int32_t h) {
 // window held at its 2-pixel minimum (the zoom opening or closing) that sits on
 // the inset border ends 0 wide or 0 high, and the Core Critical renderer then
 // crashed drawing it. Only when the clamp leaves an axis empty, the whole
-// window is moved inside the border at its own size instead; if the border
-// range is smaller than the window, it starts at the border's low edge and runs
-// past the high edge. Larger windows clamp as the exe did.
+// window is moved inside the border at its own size instead; a window wider
+// than the border's span is cut to that span, so it never overhangs. Windows
+// the clamp leaves non-empty clamp as the exe did.
 static void keep_axis_size(int32_t* start, int32_t* end, int32_t size, int32_t lowest,
                            int32_t highest) {
   const bool axis_left_empty = *end - *start < 1;
