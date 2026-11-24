@@ -21,7 +21,7 @@ foreach ($name in $File) {
     }
     $before=(Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant()
     $signature=Get-AuthenticodeSignature -LiteralPath $path
-    $existing=$signature.Status -eq 'Valid'
+    $existing=$signature.Status -eq 'Valid' -and [bool]$signature.TimeStamperCertificate
     if (!$existing) {
         & $SignTool sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $Dlib /dmdf $Metadata $path
         if ($LASTEXITCODE) { throw "Windows signing failed: $path" }

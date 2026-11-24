@@ -64,6 +64,13 @@ if (args.Length == 2 && args[0] == "--verify-media-tools")
     return;
 }
 
+if (args.Length == 2 && args[0] == "--verify-native-preview")
+{
+    var contract = Mw3ReRuntimeContract.ReadStructure(Path.GetFullPath(args[1]));
+    Console.WriteLine($"Verified MW3-RE native preview closure: {contract.BuildId}");
+    return;
+}
+
 if (args.Length == 4 && args[0] == "--prepare-installed-renderer")
 {
     var path = Path.GetFullPath(args[3]);
