@@ -15,7 +15,7 @@ param(
     [string]$InstallerId = '6B5D7A9E-3D8B-4C2E-99F1-23F7E5A4B101'
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'sign_native_preview.ps1')
+. (Join-Path $PSScriptRoot 'native_preview_helpers.ps1')
 
 if ($MyInvocation.InvocationName -ne '.') {
     if ([string]::IsNullOrWhiteSpace($Compiler) -or [string]::IsNullOrWhiteSpace($OutputDirectory)) {
