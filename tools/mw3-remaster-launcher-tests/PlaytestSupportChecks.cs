@@ -133,6 +133,24 @@ static class PlaytestSupportChecks
                     "HOST EXCEPTION c0000005 at C:\\Games\\Core Critical\\mw3.exe +0x45678 (access 0 address 0000000000000018)\nERROR: Process 'C:\\Games\\Core Critical\\mw3.exe' blocked.",
                     new[] { @"C:\Games\Core Critical" },
                     "HOST EXCEPTION c0000005 at <local-path>/mw3.exe +0x45678 (access 0 address 0000000000000018)\nERROR: Process '<local-path>' blocked."
+                ),
+                (
+                    "Trailing-separator privateRoots match bare and nested single-quoted apostrophe paths",
+                    "Starting 'D:\\Users\\James' New Folder\\mw3.exe' in 'D:\\Users\\James' New Folder' and '\\\\nas01\\share\\James' New Folder'.",
+                    new[] { @"D:\Users\James' New Folder\", @"\\nas01\share\James' New Folder\" },
+                    "Starting '<local-path>' in '<local-path>' and '<network-path>'."
+                ),
+                (
+                    "Mixed-separator single-quoted paths with apostrophe and space",
+                    "Failed 'D:\\Users\\Players' Choice/mw3.exe' in 'D:\\Users\\Players' Choice/NativePreview/bin' and 'D:/Users/Players' Choice\\bin'.",
+                    Array.Empty<string>(),
+                    "Failed '<local-path>' in '<local-path>' and '<local-path>'."
+                ),
+                (
+                    "Prose slashes before possessive plurals are not swallowed",
+                    "ERROR: 'C:\\Games\\b.exe' read/users' policy and 'C:\\Games\\c.exe' read/write/execute because users' policy blocked it.",
+                    Array.Empty<string>(),
+                    "ERROR: '<local-path>' read/users' policy and '<local-path>' read/write/execute because users' policy blocked it."
                 )
             };
             foreach (var (name, input, roots, expected) in redactionCases)

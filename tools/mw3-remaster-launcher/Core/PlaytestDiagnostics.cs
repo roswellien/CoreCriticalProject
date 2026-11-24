@@ -560,7 +560,8 @@ public static class PlaytestDiagnostics
 
         // Replace complete path tokens before substituting known roots, or a
         // replaced root prefix could leave the remainder of a path visible.
-        // Scrub single-quoted paths first so trailing text (such as .NET Process.Start errors) is preserved.
+        // Scrub single-quoted paths first so trailing text (such as .NET
+        // Process.Start errors) is preserved.
         text = ScrubSingleQuotedPaths(text, orderedRoots);
         text = Regex.Replace(text, @"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n\t\""<>|]*", "<local-path>");
         text = Regex.Replace(text, @"\\\\[^\r\n\t""<>|]+", "<network-path>");
@@ -604,7 +605,8 @@ public static class PlaytestDiagnostics
                 continue;
             }
 
-            var closeQuote = FindSingleQuotedPathClose(text, pathStart, pathStart + 3, expectedSeparator, orderedRoots);
+            var closeQuote = FindSingleQuotedPathClose(
+                text, pathStart, pathStart + 3, expectedSeparator, orderedRoots);
             if (closeQuote < 0)
             {
                 index++;
@@ -641,14 +643,16 @@ public static class PlaytestDiagnostics
         IsOpeningQuoteDelimiter(text[quoteIndex - 1]);
 
     private static bool IsOpeningQuoteDelimiter(char c) =>
-        char.IsWhiteSpace(c) || c is '(' or '[' or '{' or '=' or ',' or ';' or ':' or '"' or '`' or '<';
+        char.IsWhiteSpace(c) ||
+        c is '(' or '[' or '{' or '=' or ',' or ';' or ':' or '"' or '`' or '<';
 
     private static bool IsQuotedPathClosingBoundary(string text, int quoteIndex) =>
         quoteIndex + 1 >= text.Length ||
         IsClosingQuoteDelimiter(text[quoteIndex + 1]);
 
     private static bool IsClosingQuoteDelimiter(char c) =>
-        char.IsWhiteSpace(c) || c is '.' or ',' or ';' or ':' or '!' or '?' or ')' or ']' or '}' or '"' or '`' or '>';
+        char.IsWhiteSpace(c) ||
+        c is '.' or ',' or ';' or ':' or '!' or '?' or ')' or ']' or '}' or '"' or '`' or '>';
 
     private static bool IsDisallowedPathChar(char c) =>
         c is '\r' or '\n' or '\t' or '"' or '<' or '>' or '|';
@@ -690,20 +694,41 @@ public static class PlaytestDiagnostics
         return -1;
     }
 
-    private static int AdvancePastKnownRoot(string text, int pathStart, string[] orderedRoots)
+    private static int AdvancePastKnownRoot(
+        string text,
+        int pathStart,
+        string[] orderedRoots)
     {
+        var bestAdvance = pathStart;
         foreach (var root in orderedRoots)
         {
-            if (MatchesRootAt(text, pathStart, root))
-                return pathStart + root.Length;
+            var rootLength = GetMatchableRootLength(root);
+            var advance = pathStart + rootLength;
+            if (advance > bestAdvance && MatchesRootAt(text, pathStart, root, rootLength))
+                bestAdvance = advance;
         }
-        return pathStart;
+        return bestAdvance;
     }
 
-    private static bool MatchesRootAt(string text, int pathStart, string root)
+    private static int GetMatchableRootLength(string root)
     {
-        if (pathStart + root.Length > text.Length) return false;
-        for (var i = 0; i < root.Length; i++)
+        var minLength = IsDrivePathStart(root, 0) ? 3
+            : root.StartsWith(@"\\", StringComparison.Ordinal) ? 2
+            : 1;
+        var length = root.Length;
+        while (length > minLength && root[length - 1] is '\\' or '/')
+            length--;
+        return length;
+    }
+
+    private static bool MatchesRootAt(
+        string text,
+        int pathStart,
+        string root,
+        int rootLength)
+    {
+        if (rootLength == 0 || pathStart + rootLength > text.Length) return false;
+        for (var i = 0; i < rootLength; i++)
         {
             var actual = text[pathStart + i];
             var expected = root[i];
@@ -712,14 +737,17 @@ public static class PlaytestDiagnostics
             if (char.ToUpperInvariant(actual) == char.ToUpperInvariant(expected)) continue;
             return false;
         }
-        if (root.EndsWith('\\') || root.EndsWith('/')) return true;
-        var after = pathStart + root.Length;
+        if (root[rootLength - 1] is '\\' or '/') return true;
+        var after = pathStart + rootLength;
         return after < text.Length && text[after] is '\\' or '/' or '\'';
     }
 
     // Keep scanning past apostrophes followed by whitespace or punctuation inside a path
     // (such as "Players' Choice\mw3.exe" or "v1'.txt") without crossing into another quoted token.
-    private static int ContinuePastInternalApostrophe(string text, int quoteIndex, char expectedSeparator)
+    private static int ContinuePastInternalApostrophe(
+        string text,
+        int quoteIndex,
+        char expectedSeparator)
     {
         if (quoteIndex + 1 >= text.Length) return -1;
 
@@ -727,17 +755,26 @@ public static class PlaytestDiagnostics
         if (after is ' ' or '\t' or '.' or ',' or ';' or '!' or '?' or ')' or ']')
         {
             var candidate = FindContinuationClosingQuote(
-                text, quoteIndex + 1, expectedSeparator, requirePathSeparator: true, allowWhitespace: true);
+                text,
+                quoteIndex + 1,
+                expectedSeparator,
+                requirePathSeparator: true,
+                allowWhitespace: true);
             if (candidate >= 0) return candidate;
         }
 
         if (after is '.' or ',' &&
             quoteIndex + 2 < text.Length &&
             !char.IsWhiteSpace(text[quoteIndex + 2]) &&
-            text[quoteIndex + 2] is not ('\'' or '=' or ':' or ')' or ']' or '}' or '"' or '`' or '>'))
+            text[quoteIndex + 2] is not (
+                '\'' or '=' or ':' or ')' or ']' or '}' or '"' or '`' or '>'))
         {
             var candidate = FindContinuationClosingQuote(
-                text, quoteIndex + 2, expectedSeparator, requirePathSeparator: false, allowWhitespace: false);
+                text,
+                quoteIndex + 2,
+                expectedSeparator,
+                requirePathSeparator: false,
+                allowWhitespace: false);
             if (candidate >= 0) return candidate;
         }
 
@@ -758,22 +795,78 @@ public static class PlaytestDiagnostics
         bool allowWhitespace)
     {
         var sawSeparator = false;
+        var forwardSlashCount = 0;
+        var lastForwardSlash = -1;
         for (var i = start; i < text.Length; i++)
         {
             var c = text[i];
             if (IsDisallowedPathChar(c) || c == ':') return -1;
             if (!allowWhitespace && char.IsWhiteSpace(c)) return -1;
-            if (c == expectedSeparator) sawSeparator = true;
+            if (c == expectedSeparator || c == '\\')
+            {
+                sawSeparator = true;
+            }
+            else if (c == '/')
+            {
+                forwardSlashCount++;
+                lastForwardSlash = i;
+            }
             if (c != '\'') continue;
 
             if (IsQuotedPathClosingBoundary(text, i))
-                return !requirePathSeparator || sawSeparator ? i : -1;
+            {
+                if (!requirePathSeparator || sawSeparator)
+                    return i;
+                return IsMixedForwardSlashContinuation(
+                    text, lastForwardSlash, i, forwardSlashCount) ? i : -1;
+            }
 
-            // An opening quote after a delimiter starts a separate quoted token, not a continuation.
+            // An opening quote after a delimiter starts a separate quoted token,
+            // not a continuation.
             if (IsQuotedPathOpeningBoundary(text, i))
                 return -1;
         }
         return -1;
+    }
+
+    private static bool IsMixedForwardSlashContinuation(
+        string text,
+        int lastSlash,
+        int end,
+        int slashCount)
+    {
+        if (slashCount <= 0 || lastSlash + 1 >= end)
+            return false;
+        if (HasFileExtension(text, lastSlash + 1, end))
+            return true;
+        if (slashCount < 2)
+            return false;
+        for (var i = lastSlash + 1; i < end; i++)
+        {
+            if (char.IsWhiteSpace(text[i]))
+                return false;
+        }
+        return true;
+    }
+
+    private static bool HasFileExtension(string text, int segmentStart, int segmentEnd)
+    {
+        var lastDot = text.LastIndexOf('.', segmentEnd - 1, segmentEnd - segmentStart);
+        if (lastDot <= segmentStart || lastDot >= segmentEnd - 1)
+            return false;
+        var extLength = segmentEnd - lastDot - 1;
+        if (extLength > 8)
+            return false;
+        var hasLetter = false;
+        for (var i = lastDot + 1; i < segmentEnd; i++)
+        {
+            var c = text[i];
+            if (!char.IsAsciiLetterOrDigit(c))
+                return false;
+            if (char.IsAsciiLetter(c))
+                hasLetter = true;
+        }
+        return hasLetter;
     }
 
     private static int ScanSingleTrailingWordQuote(string text, int start)
@@ -784,7 +877,9 @@ public static class PlaytestDiagnostics
         {
             var c = text[i];
             if (IsDisallowedPathChar(c) || char.IsWhiteSpace(c)) return -1;
-            if (c is ':' or '=' or '(' or '[' or '{' or ',' or ';' or '!' or '?' or '"' or '`') return -1;
+            if (c is '/' or '\\' or ':' or '=' or '(' or '[' or '{' or
+                ',' or ';' or '!' or '?' or '"' or '`')
+                return -1;
             if (c == '\'')
             {
                 if (!IsQuotedPathClosingBoundary(text, i))
