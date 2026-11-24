@@ -258,6 +258,8 @@ static class PlaytestSupportChecks
                     {
                         using var document = JsonDocument.Parse(text);
                         Check(!document.RootElement.GetProperty("settings").TryGetProperty("GamePath", out _), "Report included game path");
+                        Check(document.RootElement.GetProperty("exit_code").ValueKind == JsonValueKind.Null,
+                            "Export without a matching session reported an exit code");
                     }
                 }
             }
@@ -278,6 +280,18 @@ static class PlaytestSupportChecks
             Check(PlaytestDiagnostics.FormatExitCode(-1073741819) == "-1073741819 (0xC0000005)" &&
                 PlaytestDiagnostics.FormatExitCode(7) == "7 (0x00000007)",
                 "Exit code formatter did not include signed decimal and 8-digit hexadecimal status");
+
+            // Shipped build ids are "mw3-re-" plus a 64-character hash; the commit must survive.
+            const string shippedBuildId = "mw3-re-25ba696081f05063729121e27b7c1f5062fec13a08e5db7ba2d14697d86607a1";
+            const string sourceCommit = "9b519d05c23b8f5fc417b4d889e9240ef0d11589";
+            var shippedVersion = PlaytestDiagnostics.FormatRuntimeVersion(shippedBuildId, sourceCommit);
+            Check(shippedVersion == "mw3-re-25ba696081f05063729121e27b7c1f5062fec13a08e5db7ba2d14697d8 (9b519d05c23b)" &&
+                shippedVersion.Length == 80,
+                "Runtime version dropped the source commit for a shipped-length build id: " + shippedVersion);
+            Check(PlaytestDiagnostics.FormatRuntimeVersion("mw3-re-test", sourceCommit) == "mw3-re-test (9b519d05c23b)" &&
+                PlaytestDiagnostics.FormatRuntimeVersion("mw3-re-test", null) == "mw3-re-test" &&
+                PlaytestDiagnostics.FormatRuntimeVersion("mw3-re-test", "abc") == "mw3-re-test",
+                "Runtime version changed for a short build id or a missing commit");
 
             // Redaction of native crash paths while preserving fault module, hex offset and access metadata
             var faultLineWithPath = PlaytestDiagnostics.Redact(
@@ -320,6 +334,53 @@ static class PlaytestSupportChecks
                 "Stale mw3.log, unappended crash.txt, or minidump was collected into a new session");
             Check(PlaytestDiagnostics.FailureSummary(staleLauncherLog) == "No specific failure was recorded.",
                 "Routine startup output without specific failure evidence did not produce the exact fallback summary");
+
+            // A hang that Windows ends with 0xCFFFFFFF usually leaves no error line.
+            var hang = PlaytestDiagnostics.ApplicationHangExitCode;
+            Check(hang == -805306369 &&
+                PlaytestDiagnostics.FailureSummary(staleLauncherLog, hang) == PlaytestDiagnostics.ApplicationHangSummary &&
+                PlaytestDiagnostics.FailureSummary(null, hang) == PlaytestDiagnostics.ApplicationHangSummary &&
+                PlaytestDiagnostics.FailureSummary(staleLauncherLog, 7) == PlaytestDiagnostics.GenericFailureSummary,
+                "Hang exit code without error evidence was not explained, or another exit code was");
+            var hangErrorSessionDir = Path.Combine(root, "session-hang-error");
+            Directory.CreateDirectory(hangErrorSessionDir);
+            var hangErrorLog = Path.Combine(hangErrorSessionDir, "mw3-re.log");
+            File.WriteAllText(hangErrorLog, "Startup: Checking game files...\nERROR: authored hang fixture failure\n");
+            Check(PlaytestDiagnostics.FailureSummary(hangErrorLog, hang).Contains("authored hang fixture failure"),
+                "Hang text replaced a specific error line");
+            using (var hangReport = JsonSerializer.SerializeToDocument(PlaytestDiagnostics.CreateCrashReport(
+                settings.Current, Array.Empty<PackManifest>(), staleLauncherLog, app, "1.2.3", hang)))
+            {
+                Check(hangReport.RootElement.GetProperty("exit_code").GetInt32() == hang &&
+                    hangReport.RootElement.GetProperty("failure_summary").GetString() == PlaytestDiagnostics.ApplicationHangSummary,
+                    "Sent crash report did not explain the hang exit code");
+            }
+            var hangExport = Path.Combine(root, "hang-report.zip");
+            PlaytestDiagnostics.Export(hangExport, settings.Current, Array.Empty<PackManifest>(), staleLauncherLog, app,
+                exitCode: hang);
+            var d7vkExport = Path.Combine(root, "d7vk-report.zip");
+            PlaytestDiagnostics.Export(d7vkExport,
+                new LauncherSettings { EngineMode = "d7vk", Width = 3840, D7VkResolution = "1920x1080" },
+                Array.Empty<PackManifest>(), staleLauncherLog, app);
+            JsonDocument ReadExportedReport(string zipPath)
+            {
+                using var zip = ZipFile.OpenRead(zipPath);
+                using var reader = new StreamReader(zip.GetEntry("report.json")!.Open());
+                return JsonDocument.Parse(reader.ReadToEnd());
+            }
+            using (var exported = ReadExportedReport(hangExport))
+            {
+                Check(exported.RootElement.GetProperty("exit_code").GetInt32() == hang &&
+                    exported.RootElement.GetProperty("failure_summary").GetString() == PlaytestDiagnostics.ApplicationHangSummary,
+                    "Exported report dropped the session exit code or the hang explanation");
+            }
+            using (var exported = ReadExportedReport(d7vkExport))
+            {
+                var exportedSettings = exported.RootElement.GetProperty("settings");
+                Check(exportedSettings.GetProperty("D7VkResolution").GetString() == "1920x1080" &&
+                    !exportedSettings.TryGetProperty("Width", out _),
+                    "Exported D7VK report used native graphics settings");
+            }
 
             // Fresh mw3.log and newly appended crash.txt in active session
             var activeBaseline = PlaytestDiagnostics.CaptureNativeBaseline(profileDir);
