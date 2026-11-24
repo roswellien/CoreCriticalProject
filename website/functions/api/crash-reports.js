@@ -2,6 +2,7 @@ const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_ISSUE_BODY_CHARS = 48_000;
 const MAX_ISSUE_REPORT_CHARS = 20_000;
 const MAX_FULL_LOG_REPEATS = 3;
+const MAX_QUOTED_PATH_CHARS = 4096;
 const DEFAULT_DAILY_ISSUE_LIMIT = 20;
 const ARCHIVE_SAVE_FAILED_LOG =
     "Crash report archive save to table crash_report_archive failed; check that website/migrations/0002_crash_report_archive.sql is applied:";
@@ -21,17 +22,341 @@ const LOG_ORDER = ["native_crash", "native_run", "native_stderr", "launcher", "n
 const NATIVE_MODULE_SUFFIX_LINE =
     /^(HOST EXCEPTION (?:0x)?[0-9a-f]{1,8} at )((?:[A-Z]:[\\/]|\\\\)[^\r\n\t"<>|:]{1,1024}?)(\.(?:exe|dll)[ \t]*\+0x[0-9a-f]{1,16}(?: \(access [0-9]+ address (?:0x)?[0-9a-f]{1,16}\))?)(?=\r?$)/gim;
 
-function redactPaths(value) {
-    return value
-        .replace(NATIVE_MODULE_SUFFIX_LINE, (_full, prefix, pathPart, suffix) => {
-            const token = pathPart.startsWith("\\\\") ? "<network-path>" : "<local-path>";
-            const lastSep = Math.max(pathPart.lastIndexOf("\\"), pathPart.lastIndexOf("/"));
-            const stem = lastSep >= 0 ? pathPart.slice(lastSep + 1) : pathPart;
-            if (/^[A-Za-z0-9._-]{1,64}$/.test(stem)) {
-                return `${prefix}${token}/${stem}${suffix}`;
+const OPENING_QUOTE_DELIMITERS = new Set(["(", "[", "{", "=", ",", ";", ":", '"', "`", "<"]);
+const CLOSING_QUOTE_DELIMITERS = new Set([
+    ".",
+    ",",
+    ";",
+    ":",
+    "!",
+    "?",
+    ")",
+    "]",
+    "}",
+    '"',
+    "`",
+    ">",
+]);
+const DISALLOWED_PATH_CHARS = new Set(["\r", "\n", "\t", '"', "<", ">", "|"]);
+const TRAILING_WORD_STOP_CHARS = new Set([
+    "/",
+    "\\",
+    ":",
+    "=",
+    "(",
+    "[",
+    "{",
+    ",",
+    ";",
+    "!",
+    "?",
+    '"',
+    "`",
+]);
+const CONTINUATION_AFTER_CHARS = new Set([" ", "\t", ".", ",", ";", "!", "?", ")", "]"]);
+const EXT_DISALLOWED_FOLLOWERS = new Set(["'", "=", ":", ")", "]", "}", '"', "`", ">"]);
+
+function isWhiteSpace(c) {
+    return /\s/.test(c);
+}
+
+function isAsciiLetter(c) {
+    const code = c.charCodeAt(0);
+    return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function isAsciiLetterOrDigit(c) {
+    const code = c.charCodeAt(0);
+    return (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57);
+}
+
+function isDrivePathStart(text, start) {
+    return (
+        start + 2 < text.length &&
+        isAsciiLetter(text[start]) &&
+        text[start + 1] === ":" &&
+        (text[start + 2] === "\\" || text[start + 2] === "/")
+    );
+}
+
+function isUncPathStart(text, start) {
+    return (
+        start + 2 < text.length &&
+        text[start] === "\\" &&
+        text[start + 1] === "\\" &&
+        !DISALLOWED_PATH_CHARS.has(text[start + 2]) &&
+        text[start + 2] !== "'"
+    );
+}
+
+function isQuotedPathOpeningBoundary(text, quoteIndex) {
+    if (quoteIndex === 0) return true;
+    const prev = text[quoteIndex - 1];
+    return isWhiteSpace(prev) || OPENING_QUOTE_DELIMITERS.has(prev);
+}
+
+function isQuotedPathClosingBoundary(text, quoteIndex) {
+    if (quoteIndex + 1 >= text.length) return true;
+    const next = text[quoteIndex + 1];
+    return isWhiteSpace(next) || CLOSING_QUOTE_DELIMITERS.has(next);
+}
+
+function hasFileExtension(text, segmentStart, segmentEnd) {
+    let lastDot = -1;
+    for (let i = segmentEnd - 1; i >= segmentStart; i--) {
+        if (text[i] === ".") {
+            lastDot = i;
+            break;
+        }
+    }
+    if (lastDot <= segmentStart || lastDot >= segmentEnd - 1) return false;
+    const extLength = segmentEnd - lastDot - 1;
+    if (extLength > 8) return false;
+    let hasLetter = false;
+    for (let i = lastDot + 1; i < segmentEnd; i++) {
+        const c = text[i];
+        if (!isAsciiLetterOrDigit(c)) return false;
+        if (isAsciiLetter(c)) hasLetter = true;
+    }
+    return hasLetter;
+}
+
+function isMixedForwardSlashContinuation(text, lastSlash, end, slashCount) {
+    if (slashCount <= 0 || lastSlash + 1 >= end) return false;
+    if (hasFileExtension(text, lastSlash + 1, end)) return true;
+    if (slashCount < 2) return false;
+    for (let i = lastSlash + 1; i < end; i++) {
+        if (isWhiteSpace(text[i])) return false;
+    }
+    return true;
+}
+
+function findContinuationClosingQuote(
+    text,
+    start,
+    expectedSeparator,
+    requirePathSeparator,
+    allowWhitespace,
+    scanLimit,
+) {
+    let sawSeparator = false;
+    let forwardSlashCount = 0;
+    let lastForwardSlash = -1;
+    for (let i = start; i < scanLimit; i++) {
+        const c = text[i];
+        if (DISALLOWED_PATH_CHARS.has(c) || c === ":") return -1;
+        if (!allowWhitespace && isWhiteSpace(c)) return -1;
+        if (c === expectedSeparator || c === "\\") {
+            sawSeparator = true;
+        } else if (c === "/") {
+            forwardSlashCount++;
+            lastForwardSlash = i;
+        }
+        if (c !== "'") continue;
+
+        if (isQuotedPathClosingBoundary(text, i)) {
+            if (!requirePathSeparator || sawSeparator) return i;
+            return isMixedForwardSlashContinuation(text, lastForwardSlash, i, forwardSlashCount)
+                ? i
+                : -1;
+        }
+
+        // An opening quote after a delimiter starts a separate quoted token,
+        // not a continuation.
+        if (isQuotedPathOpeningBoundary(text, i)) return -1;
+    }
+    return -1;
+}
+
+function scanSingleTrailingWordQuote(text, start, scanLimit) {
+    if (start >= scanLimit) return -1;
+    let length = 0;
+    for (let i = start; i < scanLimit; i++) {
+        const c = text[i];
+        if (DISALLOWED_PATH_CHARS.has(c) || isWhiteSpace(c)) return -1;
+        if (TRAILING_WORD_STOP_CHARS.has(c)) return -1;
+        if (c === "'") {
+            if (!isQuotedPathClosingBoundary(text, i)) {
+                length++;
+                continue;
             }
-            return `${prefix}${token}${suffix}`;
-        })
+            return length > 0 ? i : -1;
+        }
+        length++;
+    }
+    return -1;
+}
+
+// Keep scanning past apostrophes followed by whitespace or punctuation inside a path
+// (such as "Players' Choice\mw3.exe" or "v1'.txt") without crossing into another quoted token.
+function continuePastInternalApostrophe(text, quoteIndex, expectedSeparator, scanLimit) {
+    if (quoteIndex + 1 >= scanLimit) return -1;
+
+    const after = text[quoteIndex + 1];
+    if (CONTINUATION_AFTER_CHARS.has(after)) {
+        const candidate = findContinuationClosingQuote(
+            text,
+            quoteIndex + 1,
+            expectedSeparator,
+            true,
+            true,
+            scanLimit,
+        );
+        if (candidate >= 0) return candidate;
+    }
+
+    if (
+        (after === "." || after === ",") &&
+        quoteIndex + 2 < scanLimit &&
+        !isWhiteSpace(text[quoteIndex + 2]) &&
+        !EXT_DISALLOWED_FOLLOWERS.has(text[quoteIndex + 2])
+    ) {
+        const candidate = findContinuationClosingQuote(
+            text,
+            quoteIndex + 2,
+            expectedSeparator,
+            false,
+            false,
+            scanLimit,
+        );
+        if (candidate >= 0) return candidate;
+    }
+
+    if (after === " ") {
+        const componentEnd = scanSingleTrailingWordQuote(text, quoteIndex + 2, scanLimit);
+        if (componentEnd >= 0) return componentEnd;
+    }
+
+    return -1;
+}
+
+function findSingleQuotedPathClose(
+    text,
+    pathStart,
+    initialScanIndex,
+    expectedSeparator,
+    scannedNoCloseUntil,
+) {
+    const scanLimit = Math.min(text.length, pathStart + MAX_QUOTED_PATH_CHARS);
+    let sawClosingBoundary = false;
+    let index = Math.max(initialScanIndex, scannedNoCloseUntil);
+    while (index < scanLimit) {
+        const c = text[index];
+        if (DISALLOWED_PATH_CHARS.has(c)) {
+            return {
+                closeQuote: -1,
+                noCloseBefore: sawClosingBoundary ? -1 : index,
+                scannedNoCloseUntil: sawClosingBoundary ? -1 : index,
+            };
+        }
+        if (c === ":") {
+            return { closeQuote: -1, noCloseBefore: -1, scannedNoCloseUntil: -1 };
+        }
+        if (c !== "'") {
+            index++;
+            continue;
+        }
+
+        if (!isQuotedPathClosingBoundary(text, index)) {
+            index++;
+            continue;
+        }
+
+        sawClosingBoundary = true;
+        const continuedQuote = continuePastInternalApostrophe(
+            text,
+            index,
+            expectedSeparator,
+            scanLimit,
+        );
+        if (continuedQuote >= 0) {
+            index = continuedQuote;
+            continue;
+        }
+
+        return { closeQuote: index, noCloseBefore: -1, scannedNoCloseUntil: -1 };
+    }
+
+    if (!sawClosingBoundary) {
+        return {
+            closeQuote: -1,
+            noCloseBefore: scanLimit === text.length ? text.length : -1,
+            scannedNoCloseUntil: scanLimit,
+        };
+    }
+    return { closeQuote: -1, noCloseBefore: -1, scannedNoCloseUntil: -1 };
+}
+
+function scrubSingleQuotedPaths(text) {
+    const parts = [];
+    let copyFrom = 0;
+    let index = 0;
+    let noCloseBefore = -1;
+    let scannedNoCloseUntil = -1;
+    while (index < text.length) {
+        if (text[index] !== "'" || !isQuotedPathOpeningBoundary(text, index)) {
+            index++;
+            continue;
+        }
+
+        const pathStart = index + 1;
+        let replacement = null;
+        let expectedSeparator = "\\";
+        if (isDrivePathStart(text, pathStart)) {
+            replacement = "'<local-path>'";
+            expectedSeparator = text[pathStart + 2] === "/" ? "/" : "\\";
+        } else if (isUncPathStart(text, pathStart)) {
+            replacement = "'<network-path>'";
+        }
+
+        if (replacement === null) {
+            index++;
+            continue;
+        }
+
+        if (pathStart < noCloseBefore) {
+            index++;
+            continue;
+        }
+
+        const result = findSingleQuotedPathClose(
+            text,
+            pathStart,
+            pathStart + 3,
+            expectedSeparator,
+            scannedNoCloseUntil,
+        );
+        if (result.closeQuote < 0) {
+            if (result.noCloseBefore > noCloseBefore) noCloseBefore = result.noCloseBefore;
+            if (result.scannedNoCloseUntil > scannedNoCloseUntil) {
+                scannedNoCloseUntil = result.scannedNoCloseUntil;
+            }
+            index++;
+            continue;
+        }
+
+        parts.push(text.slice(copyFrom, index), replacement);
+        copyFrom = result.closeQuote + 1;
+        index = copyFrom;
+    }
+
+    if (parts.length === 0) return text;
+    parts.push(text.slice(copyFrom));
+    return parts.join("");
+}
+
+function redactPaths(value) {
+    let text = value.replace(NATIVE_MODULE_SUFFIX_LINE, (_full, prefix, pathPart, suffix) => {
+        const token = pathPart.startsWith("\\\\") ? "<network-path>" : "<local-path>";
+        const lastSep = Math.max(pathPart.lastIndexOf("\\"), pathPart.lastIndexOf("/"));
+        const stem = lastSep >= 0 ? pathPart.slice(lastSep + 1) : pathPart;
+        if (/^[A-Za-z0-9._-]{1,64}$/.test(stem)) {
+            return `${prefix}${token}/${stem}${suffix}`;
+        }
+        return `${prefix}${token}${suffix}`;
+    });
+    text = scrubSingleQuotedPaths(text);
+    return text
         .replace(/(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n\t"<>|]*/g, "<local-path>")
         .replace(/\\\\[^\r\n\t"<>|]+/g, "<network-path>");
 }
