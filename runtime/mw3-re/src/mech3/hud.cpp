@@ -3239,7 +3239,9 @@ void HudTarget::track(float dt) {
   h.camera_set_position(view->view.camera, cam);
   h.camera_set_angles(view->view.camera, angles);
   HudZoomWindow& z = hd->reticle.zoom;
-  bool zoomed = !(z.flags & ztwod::kHidden);
+  // FIX (bug), ours (issue 467): an empty zoom window can't be projected
+  // through (its camera is never set), so the marker takes the main-view path.
+  bool zoomed = !(z.flags & ztwod::kHidden) && z.has_view_area();
   bool on_main = false;  // projected through the player's view
   float sp[3], zp[3];
   int32_t code;

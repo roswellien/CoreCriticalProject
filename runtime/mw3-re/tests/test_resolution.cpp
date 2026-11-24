@@ -567,7 +567,10 @@ TEST(resolution_hud_zoom_window_keeps_size_at_edges) {
         EXPECT(rect_width == 2 && rect_height == 2);
         EXPECT(width > 0 && height > 0);
       }
-      if (rect_width <= 0 || rect_height <= 0) ++collapsed_edges;
+      const bool collapsed = rect_width <= 0 || rect_height <= 0;
+      // The target marker projects through the zoom view only when it has area.
+      EXPECT(zoom.has_view_area() == !collapsed);
+      if (collapsed) ++collapsed_edges;
     }
     // Every edge collapses as in the exe with the fixes off.
     if (!fixes_on) EXPECT(collapsed_edges == 4);
