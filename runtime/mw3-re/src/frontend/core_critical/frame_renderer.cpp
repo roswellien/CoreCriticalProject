@@ -2781,17 +2781,20 @@ private:
         }
         // Each page is read once and its images upload while it is resident, so
         // surface_normal_texture() never has to read the page again.
+        // Page reads are timed where they happen (surface_normal_image() for
+        // uploads); this loop is not wrapped so upload time isn't counted as decode.
         std::set<int> seen;
-        mw34::timing::ScopedDuration timer(producer_resource_timing_.page_decode_target());
-        surface_normals_.cache.preload_keys_grouped(keys, [&](int index) {
-          surface_normals_.peak_decoded_bytes = std::max(
-              surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
-          if (renderer_->preload_stopped() || !seen.insert(index).second)
-            return;
-          preload_texture_handle(surface_normal_texture(index), PreloadTextureStage::world,
-                                 pending_receipts);
-          preload_checkpoint();
-        });
+        surface_normals_.cache.preload_keys_grouped(
+            keys,
+            [&](int index) {
+              surface_normals_.peak_decoded_bytes = std::max(
+                  surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
+              if (renderer_->preload_stopped() || !seen.insert(index).second)
+                return;
+              preload_texture_handle(surface_normal_texture(index), PreloadTextureStage::world,
+                                     pending_receipts);
+            },
+            [&] { return renderer_->preload_stopped(); });
       }
       preload_native_model_geometry(nodes);
       for (const auto handle : native_handles) {

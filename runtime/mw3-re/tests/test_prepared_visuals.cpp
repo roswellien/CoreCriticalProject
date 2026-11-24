@@ -883,10 +883,17 @@ void check_world_normals_lru_and_precedence() {
                     pixels_resident = pixels_resident &&
                                       !grouped.normal_record(index).pixels32.empty();
                 },
-                one_page_budget);
+                [] { return false; }, one_page_budget);
             require(grouped.page_loads == 3, "Grouped preload read a page more than once");
             require(resolved.size() == mixed.size() && pixels_resident,
                     "Grouped preload resolved a key without its page resident");
+
+            // A stopped preload reads no further pages.
+            WorldNormalCache stopped(true);
+            stopped.load_world_manifest(preload_manifest);
+            stopped.preload_keys_grouped(
+                mixed, [](int) {}, [&] { return stopped.page_loads >= 1; }, one_page_budget);
+            require(stopped.page_loads == 1, "Stopped grouped preload kept reading pages");
         }
     }
 }

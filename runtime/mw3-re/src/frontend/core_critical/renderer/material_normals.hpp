@@ -602,8 +602,11 @@ class WorldNormalCache {
     // on_resolved(index) runs for each key while its page is still resident, so
     // the caller can upload the pixels without a reload. Excluded and unknown
     // keys are skipped; authored keys resolve at once with no page read.
-    template <class OnResolved>
+    // should_stop() is checked before each page read, so a preload stopped for
+    // lack of memory doesn't go on decoding pages nobody will upload.
+    template <class OnResolved, class ShouldStop>
     void preload_keys_grouped(const std::vector<SurfaceKey> &keys, OnResolved on_resolved,
+                              ShouldStop should_stop,
                               std::uint64_t pixel_budget = world_normal_lru_resident_limit) {
         if (!normal_maps_enabled)
             return;
@@ -625,6 +628,8 @@ class WorldNormalCache {
             page_keys.push_back(key);
         }
         for (const auto page_index : page_order) {
+            if (should_stop())
+                return;
             load_page(page_index, pixel_budget);
             for (const auto &key : keys_by_page[page_index]) {
                 const auto binding = bindings.find(key);
