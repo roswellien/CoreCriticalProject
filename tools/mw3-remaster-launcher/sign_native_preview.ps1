@@ -206,7 +206,7 @@ function Test-NativePreviewPins {
     }
     Assert-UnlinkedPath -Path $manifestPath
 
-    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $manifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
     if ($manifest.schema_version -ne 2 -or $manifest.engine -ne 'mw3-re') {
         throw 'The Native preview needs an MW3-RE schema 2 runtime.json'
     }
@@ -241,7 +241,7 @@ function Test-NativePreviewPins {
         if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
             throw "Native preview pinned file is missing: $rel"
         }
-        Assert-UnlinkedPath -Path $filePath
+        Assert-UnlinkedPath -Path $filePath -IncludeParents
 
         $expectedBytes = [long]$entry.Value.bytes
         $expectedSha = ([string]$entry.Value.sha256).ToLowerInvariant()
@@ -298,7 +298,7 @@ function Test-NativePreviewSignedState {
         }
     }
 
-    $manifest = Get-Content -LiteralPath (Join-Path $fullRoot 'runtime.json') -Raw | ConvertFrom-Json
+    $manifest = [System.IO.File]::ReadAllText((Join-Path $fullRoot 'runtime.json')) | ConvertFrom-Json
     if (-not $manifest.provenance -or -not $manifest.provenance.build_id) {
         return $false
     }
@@ -406,6 +406,7 @@ if ($MyInvocation.InvocationName -ne '.') {
         throw 'RuntimeDirectory, OutputDirectory, and ReceiptPath must not overlap'
     }
 
+    $checksOutFull = ''
     if ($ChecksOutputDirectory) {
         $checksOutFull = [IO.Path]::GetFullPath($ChecksOutputDirectory)
         Assert-UnlinkedPath -Path $checksOutFull -IncludeParents
@@ -421,10 +422,7 @@ if ($MyInvocation.InvocationName -ne '.') {
 
     $allocatedChecksDir = ''
     try {
-        if ($ChecksOutputDirectory) {
-            $checksOutFull = [IO.Path]::GetFullPath($ChecksOutputDirectory)
-        }
-        else {
+        if (-not $checksOutFull) {
             $allocatedChecksDir = Join-Path ([IO.Path]::GetTempPath()) ('mw3-preview-checks-' + [Guid]::NewGuid().ToString('N'))
             New-Item -ItemType Directory -Path $allocatedChecksDir | Out-Null
             $checksOutFull = $allocatedChecksDir
@@ -434,7 +432,7 @@ if ($MyInvocation.InvocationName -ne '.') {
         Invoke-NativePreviewVerifier -ProjectPath $checksProjFull -BaseOutputPathNormalized $checksOutNorm -RuntimeDirectory $runtimeFull
 
         $inputManifestPath = Join-Path $runtimeFull 'runtime.json'
-        $inputManifest = Get-Content -LiteralPath $inputManifestPath -Raw | ConvertFrom-Json
+        $inputManifest = [System.IO.File]::ReadAllText($inputManifestPath) | ConvertFrom-Json
         $obsRel = 'metadata/build-observation.json'
         $obsSourcePath = Join-Path $runtimeFull ($obsRel.Replace('/', '\'))
         $obsHasSource = $false
@@ -463,8 +461,9 @@ if ($MyInvocation.InvocationName -ne '.') {
             [IO.Directory]::CreateDirectory($receiptDir) | Out-Null
         }
 
+        $global:LASTEXITCODE = 0
         & (Join-Path $PSScriptRoot 'sign_windows.ps1') -File $peFiles -SignTool $signToolFull -Dlib $dlibFull -Metadata $metadataFull -ReceiptPath $receiptFull
-        if ($LASTEXITCODE -ne 0) {
+        if ($LASTEXITCODE) {
             throw "sign_windows.ps1 failed for $outputFull"
         }
 
@@ -480,7 +479,7 @@ if ($MyInvocation.InvocationName -ne '.') {
         }
 
         $outManifestPath = Join-Path $outputFull 'runtime.json'
-        $signedManifest = Get-Content -LiteralPath $outManifestPath -Raw | ConvertFrom-Json
+        $signedManifest = [System.IO.File]::ReadAllText($outManifestPath) | ConvertFrom-Json
 
         $rolesOut = [ordered]@{}
         $roleKeys = [string[]]@($signedManifest.roles.PSObject.Properties | ForEach-Object { [string]$_.Name })

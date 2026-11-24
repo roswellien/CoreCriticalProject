@@ -46,6 +46,7 @@ try {
 New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
 $checksOutput = (Join-Path $OutputDirectory 'checks-bin') + '/'
 $signedNativePreview = Join-Path $OutputDirectory 'NativePreviewSigned'
+$global:LASTEXITCODE = 0
 & (Join-Path $PSScriptRoot 'sign_native_preview.ps1') -RuntimeDirectory $NativePreviewDirectory -OutputDirectory $signedNativePreview -WindowsSignTool $WindowsSignTool -SigningDlib $SigningDlib -SigningMetadata $SigningMetadata -ReceiptPath (Join-Path $OutputDirectory 'native-preview-signatures.json') -ChecksOutputDirectory $checksOutput
 if ($LASTEXITCODE) { throw 'MW3-RE native runtime signing failed' }
 $common = @{

@@ -43,10 +43,13 @@ static class NativePreviewSigningChecks
             var signedPreviewOutput = CheckSignNativePreviewPositive(powerShell, signPreviewScript, checksProject,
                 signedPeSource, stubFailTool, stubDlib, stubMetadata, work);
 
+            CheckSignNativePreviewDefaultReceiptWithoutObservation(powerShell, signPreviewScript, checksProject,
+                signedPeSource, stubFailTool, stubDlib, stubMetadata, work);
+
             CheckSignNativePreviewRejections(powerShell, signPreviewScript, checksProject,
                 signedPeSource, unsignedPeSource, stubFailTool, stubDlib, stubMetadata, work);
 
-            CheckBuildInstallerHelpersAndGate(powerShell, buildInstallerScript, signPreviewScript,
+            CheckBuildInstallerHelpersAndGate(powerShell, buildInstallerScript,
                 signedPreviewOutput, signedPeSource, unsignedPeSource, work);
 
             Console.WriteLine("Native preview signing, re-pinning and installer PE gate checks passed.");
@@ -88,6 +91,19 @@ static class NativePreviewSigningChecks
               firstFile["timestamped"]!.GetValue<bool>() &&
               firstFile["before_sha256"]!.GetValue<string>() == firstFile["sha256"]!.GetValue<string>(),
             "sign_windows.ps1 receipt did not record retained timestamped signature identity.");
+
+        var hiddenCopy = Path.Combine(dir, "hidden-signed.exe");
+        File.Copy(signedPeSource, hiddenCopy);
+        File.SetAttributes(hiddenCopy, File.GetAttributes(hiddenCopy) | FileAttributes.Hidden);
+        var hiddenReceipt = Path.Combine(dir, "hidden-receipt.json");
+        var hiddenRun = RunPowerShellFile(powerShell, signWindowsScript,
+            "-File", hiddenCopy,
+            "-SignTool", stubFailTool,
+            "-Dlib", stubDlib,
+            "-Metadata", stubMetadata,
+            "-ReceiptPath", hiddenReceipt);
+        Check(hiddenRun.ExitCode == 0 && File.Exists(hiddenReceipt),
+            "sign_windows.ps1 failed on hidden PE binary: " + hiddenRun.FormatOutput());
 
         var unsignedCopy = Path.Combine(dir, "unsigned.exe");
         File.Copy(unsignedPeSource, unsignedCopy);
@@ -170,6 +186,48 @@ static class NativePreviewSigningChecks
         }
 
         return outputDir;
+    }
+
+    private static void CheckSignNativePreviewDefaultReceiptWithoutObservation(
+        string powerShell,
+        string signPreviewScript,
+        string checksProject,
+        string signedPeSource,
+        string stubFailTool,
+        string stubDlib,
+        string stubMetadata,
+        string work)
+    {
+        var caseWork = Path.Combine(work, "preview-no-obs");
+        var inputDir = Path.Combine(caseWork, "in");
+        CreateAuthoredRuntimeFixture(inputDir, signedPeSource, staleBuildId: true, out _, includeObservation: false);
+
+        var outputDir = Path.Combine(caseWork, "out");
+        var expectedReceipt = outputDir + ".signatures.json";
+        var checksOut = Path.Combine(work, "default-receipt-checks-bin") + "/";
+        var run = RunPowerShellFile(powerShell, signPreviewScript,
+            "-RuntimeDirectory", inputDir,
+            "-OutputDirectory", outputDir,
+            "-WindowsSignTool", stubFailTool,
+            "-SigningDlib", stubDlib,
+            "-SigningMetadata", stubMetadata,
+            "-LauncherChecksProject", checksProject,
+            "-ChecksOutputDirectory", checksOut);
+
+        Check(run.ExitCode == 0,
+            "sign_native_preview.ps1 failed without build-observation.json and -ReceiptPath: " + run.FormatOutput());
+        Check(!File.Exists(Path.Combine(outputDir, ".incomplete")),
+            "sign_native_preview.ps1 left .incomplete marker when using default receipt path.");
+        Check(File.Exists(expectedReceipt) &&
+              !File.Exists(Path.Combine(outputDir, Path.GetFileName(expectedReceipt))),
+            "Default external signing receipt was missing or written inside OutputDirectory.");
+
+        var outJson = JsonNode.Parse(File.ReadAllText(Path.Combine(outputDir, "runtime.json"), Encoding.UTF8))!.AsObject();
+        var expectedBuildId = "mw3-re-" + ComputeLowerSha256(Path.Combine(outputDir, "bin", "mw3.exe"));
+        Check(outJson["dependencies"] is JsonArray emptyDeps && emptyDeps.Count == 0,
+            "Updated runtime.json altered empty dependencies array when build-observation.json was omitted.");
+        Check(Mw3ReRuntimeContract.ReadStructure(outputDir).BuildId == expectedBuildId,
+            "Mw3ReRuntimeContract.ReadStructure did not match updated build_id without build-observation.json.");
     }
 
     private static void CheckSignNativePreviewRejections(
@@ -261,7 +319,6 @@ static class NativePreviewSigningChecks
     private static void CheckBuildInstallerHelpersAndGate(
         string powerShell,
         string buildInstallerScript,
-        string signPreviewScript,
         string signedPreviewOutput,
         string signedPeSource,
         string unsignedPeSource,
@@ -285,6 +342,17 @@ static class NativePreviewSigningChecks
         var repinnedUnsignedDir = Path.Combine(helperDir, "repinned-unsigned");
         CreateAuthoredRuntimeFixture(repinnedUnsignedDir, unsignedPeSource, staleBuildId: false, out _);
 
+        var intermediateJunctionDir = Path.Combine(helperDir, "intermediate-junction");
+        Directory.CreateDirectory(intermediateJunctionDir);
+        var junctionBinTarget = Path.Combine(helperDir, "junction-bin-target");
+        Directory.CreateDirectory(junctionBinTarget);
+        File.Copy(signedPeSource, Path.Combine(junctionBinTarget, "mw3.exe"));
+        CreateDirectoryJunction(Path.Combine(intermediateJunctionDir, "bin"), junctionBinTarget);
+        File.WriteAllText(Path.Combine(intermediateJunctionDir, "profile.json"), """{"authored":true}""",
+            new UTF8Encoding(false));
+        WriteAuthoredRuntimeManifest(intermediateJunctionDir,
+            new[] { "bin/mw3.exe", "profile.json" }, Array.Empty<string>(), staleBuildId: false);
+
         var signedStateHarness = Path.Combine(helperDir, "check-signed-state.ps1");
         File.WriteAllText(signedStateHarness, $$"""
 $ErrorActionPreference = 'Stop'
@@ -297,6 +365,15 @@ if (Test-NativePreviewSignedState -Root '{{EscapeSingleQuoted(staleBuildIdDir)}}
 }
 if (Test-NativePreviewSignedState -Root '{{EscapeSingleQuoted(repinnedUnsignedDir)}}') {
     throw 'Expected Test-NativePreviewSignedState to reject unsigned PE'
+}
+$junctionThrew = $false
+try {
+    Test-NativePreviewPins -Root '{{EscapeSingleQuoted(intermediateJunctionDir)}}'
+} catch {
+    $junctionThrew = $true
+}
+if (-not $junctionThrew) {
+    throw 'Expected Test-NativePreviewPins without -RequireExactClosure to reject an intermediate directory junction'
 }
 """, Encoding.UTF8);
 
@@ -388,12 +465,11 @@ Assert-AllBinariesSigned -Root '{{EscapeSingleQuoted(publishRoot)}}'
         string root,
         string peSource,
         bool staleBuildId,
-        out byte[] observationBytes)
+        out byte[] observationBytes,
+        bool includeObservation = true)
     {
         var binDir = Path.Combine(root, "bin");
-        var metadataDir = Path.Combine(root, "metadata");
         Directory.CreateDirectory(binDir);
-        Directory.CreateDirectory(metadataDir);
 
         var exePath = Path.Combine(binDir, "mw3.exe");
         File.Copy(peSource, exePath, overwrite: true);
@@ -401,12 +477,36 @@ Assert-AllBinariesSigned -Root '{{EscapeSingleQuoted(publishRoot)}}'
         var profilePath = Path.Combine(root, "profile.json");
         File.WriteAllText(profilePath, """{"authored":true}""", new UTF8Encoding(false));
 
-        var obsPath = Path.Combine(metadataDir, "build-observation.json");
-        observationBytes = Encoding.UTF8.GetBytes("""{"kind":"mw3-re-local-observation","note":"authored-witness"}""");
-        File.WriteAllBytes(obsPath, observationBytes);
+        string[] relativeFiles;
+        string[] dependencies;
+        if (includeObservation)
+        {
+            var metadataDir = Path.Combine(root, "metadata");
+            Directory.CreateDirectory(metadataDir);
+            var obsPath = Path.Combine(metadataDir, "build-observation.json");
+            observationBytes = Encoding.UTF8.GetBytes("""{"kind":"mw3-re-local-observation","note":"authored-witness"}""");
+            File.WriteAllBytes(obsPath, observationBytes);
+            relativeFiles = new[] { "bin/mw3.exe", "metadata/build-observation.json", "profile.json" };
+            dependencies = new[] { "metadata/build-observation.json" };
+        }
+        else
+        {
+            observationBytes = Array.Empty<byte>();
+            relativeFiles = new[] { "bin/mw3.exe", "profile.json" };
+            dependencies = Array.Empty<string>();
+        }
 
+        WriteAuthoredRuntimeManifest(root, relativeFiles, dependencies, staleBuildId);
+    }
+
+    private static void WriteAuthoredRuntimeManifest(
+        string root,
+        IReadOnlyList<string> relativeFiles,
+        IReadOnlyList<string> dependencies,
+        bool staleBuildId)
+    {
         var files = new JsonObject();
-        foreach (var rel in new[] { "bin/mw3.exe", "metadata/build-observation.json", "profile.json" })
+        foreach (var rel in relativeFiles)
         {
             var full = Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));
             var bytes = File.ReadAllBytes(full);
@@ -417,7 +517,13 @@ Assert-AllBinariesSigned -Root '{{EscapeSingleQuoted(publishRoot)}}'
             };
         }
 
-        var exeHash = ComputeLowerSha256(exePath);
+        var depArray = new JsonArray();
+        foreach (var dep in dependencies)
+        {
+            depArray.Add(dep);
+        }
+
+        var exeHash = ComputeLowerSha256(Path.Combine(root, "bin", "mw3.exe"));
         var manifest = new JsonObject
         {
             ["schema_version"] = 2,
@@ -427,7 +533,7 @@ Assert-AllBinariesSigned -Root '{{EscapeSingleQuoted(publishRoot)}}'
                 ["executable"] = "bin/mw3.exe",
                 ["profile"] = "profile.json"
             },
-            ["dependencies"] = new JsonArray("metadata/build-observation.json"),
+            ["dependencies"] = depArray,
             ["files"] = files,
             ["provenance"] = new JsonObject
             {

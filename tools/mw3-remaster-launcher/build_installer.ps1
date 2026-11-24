@@ -153,7 +153,7 @@ if ($MyInvocation.InvocationName -ne '.') {
         }
     }
     $publishedPreviewManifest = $(if ($NativePreviewDirectory) {
-            Get-Content -LiteralPath (Join-Path $PublishDirectory 'NativePreview/runtime.json') -Raw | ConvertFrom-Json
+            [System.IO.File]::ReadAllText((Join-Path $PublishDirectory 'NativePreview/runtime.json')) | ConvertFrom-Json
         } else { $null })
     @{
         kind                         = $(if ($NativePreviewUpgradeOnly) { 'mw3-re-in-place-update' } elseif ($NativePreviewDirectory) { 'mw3-re-playtest-preview' } elseif ($PreparationBundle) { 'private-source-preparation-playtest-preview' } else { 'local-launcher-preview-not-playable-release' })

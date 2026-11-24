@@ -117,13 +117,13 @@ inputs and release artifacts outside Git.
    staged publication (including `NativePreview\`, `Tools\PlannerPython\` and
    `Tools\Unshield\`, which `build_installer.ps1` enforces before invoking
    `ISCC.exe`); inspect the installer contents and confirm the original game
-   media and signing material are absent. On an isolated Windows test account or VM, install the signed
-   setup with user-supplied original game files, upgrade an existing supported
-   install using the signed `.ccupdate` and matching ZIP, confirm settings,
-   saves, packs and the precompiled runtime are preserved as expected, then
-   test runtime update/rollback when the release changes the runtime. Record
-   results and clean up only the isolated test installation. Do not publish
-   until these checks pass.
+   media and signing material are absent. On an isolated Windows test account
+   or VM, install the signed setup with user-supplied original game files,
+   upgrade an existing supported install using the signed `.ccupdate` and
+   matching ZIP, confirm settings, saves, packs and the precompiled runtime are
+   preserved as expected, then test runtime update/rollback when the release
+   changes the runtime. Record results and clean up only the isolated test
+   installation. Do not publish until these checks pass.
 
 6. **Prepare the signed online catalog.** Use the committed
    `tools/update-service/build_catalog.py` with the new launcher metadata and
