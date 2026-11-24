@@ -87,9 +87,15 @@ if (args.Length == 4 && args[0] == "--prepare-controller-launch")
     File.WriteAllText(path, GameRunner.SerializeLaunchProfile(launch)); return;
 }
 
+if (args.Length == 1 && args[0] == "--native-preview-signing-only")
+{
+    NativePreviewSigningChecks.Run();
+    return;
+}
 if (args.Length == 1 && args[0] == "--runtime-layout-only")
 {
     NativeRuntimeLayoutChecks.Run();
+    NativePreviewSigningChecks.Run();
     return;
 }
 if (args.Length == 1 && args[0] == "--mw3-re-contract-only")
@@ -434,6 +440,7 @@ ControllerChecks.Run();
 JoystickSelectionChecks.Run();
 SaveBackupChecks.Run();
 NativeRuntimeLayoutChecks.Run();
+NativePreviewSigningChecks.Run();
 await RuntimeUpdateChecks.Run();
 }
 
