@@ -996,19 +996,22 @@ void check_terrain_surface_normals(SDL_Window *window,
   const auto tex =
       renderer->create_named_texture("ggter1", 128, 128, green_data.data(), 1);
   mw34::materials::clear_active_surface_key();
-  require(renderer->asset_statistics().world_normal_decoded_bytes == 4 &&
-              renderer->asset_statistics().world_normal_peak_decoded_bytes == 4 &&
-              renderer->asset_statistics().world_normal_loaded_pages == 1,
-          "Authenticated texture admission did not preload its matching world normal page");
+  // Issue 461: admission only marks the mission preload pending; reading pages
+  // in texture arrival order re-read pages once a mission outgrew the limit.
+  require(renderer->asset_statistics().world_normal_decoded_bytes == 0 &&
+              renderer->asset_statistics().world_normal_loaded_pages == 0 &&
+              renderer->asset_statistics().world_normal_page_loads == 0,
+          "Authenticated texture admission read its world normal page before the mission preload");
 
-  // Preload matching GPU normal textures at the post-load mission callback
-  // boundary (empty MissionIdentity covers Instant Action as well) before the
-  // first draw without altering decoded bytes, normal binding, or output pixels.
+  // The post-load mission callback (empty MissionIdentity covers Instant Action
+  // as well) reads the matching page once and uploads its GPU normal texture
+  // before the first draw.
   renderer->mission_changed(platform::MissionIdentity{});
   require(renderer->asset_statistics().world_normal_decoded_bytes == 4 &&
               renderer->asset_statistics().world_normal_peak_decoded_bytes == 4 &&
-              renderer->asset_statistics().world_normal_loaded_pages == 1,
-          "Mission normal GPU preload altered world normal cache accounting");
+              renderer->asset_statistics().world_normal_loaded_pages == 1 &&
+              renderer->asset_statistics().world_normal_page_loads == 1,
+          "Mission normal preload did not read the matching world normal page exactly once");
   renderer->clear(true, 0, 0, 0);
 
   platform::DrawState state{};
@@ -1027,6 +1030,10 @@ void check_terrain_surface_normals(SDL_Window *window,
               stats.world_normal_peak_decoded_bytes == 4 &&
               stats.world_normal_loaded_pages == 1,
           "World page decoded-byte/loaded-page accounting is incorrect");
+  // Issue 461: the first world scene and its draws reuse the normal uploaded by
+  // the mission preload instead of reading the page again.
+  require(stats.world_normal_page_loads == 1,
+          "First world scene or draw re-read an already-uploaded world normal page");
 
   // Test3: reject stale bindings on same-handle texture updates
   const auto base_draws = stats.normal_draws;

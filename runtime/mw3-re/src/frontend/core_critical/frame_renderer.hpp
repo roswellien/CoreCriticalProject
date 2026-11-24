@@ -33,8 +33,10 @@ struct AssetStatistics {
   std::uint64_t gpu_prepared_vertices{}, early_prepared_models{},
       prepared_cpu_fallback_batches{};
   // Decoded world-page pixels only; excludes authored catalogs and GPU copies.
+  // loaded_pages is how many pages are resident now; page_loads is how many
+  // page reads from disk happened, so repeated reads of one page show up.
   std::uint64_t world_normal_decoded_bytes{}, world_normal_peak_decoded_bytes{},
-      world_normal_loaded_pages{};
+      world_normal_loaded_pages{}, world_normal_page_loads{};
   std::uint64_t binding_rejected_mismatch{}, native_fingerprint_evaluations{};
   // Draw-time deferred receipt checks, independent of whether sun lighting runs.
   std::uint64_t deferred_material_admissions{};

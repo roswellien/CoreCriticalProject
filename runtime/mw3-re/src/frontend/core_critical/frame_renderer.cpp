@@ -660,6 +660,7 @@ public:
                 std::count_if(surface_normals_.cache.pages.begin(),
                               surface_normals_.cache.pages.end(),
                               [](const auto &page) { return page.loaded; })),
+            surface_normals_.cache.page_loads,
             binding_rejected_mismatch_,
             native_fingerprint_evaluations_,
             deferred_material_admissions_,
@@ -1094,10 +1095,11 @@ public:
       std::fprintf(
           stderr,
           "World normal pages: %llu decoded bytes, %llu peak decoded bytes, "
-          "%llu loaded pages (536870912-byte limit)\n",
+          "%llu loaded pages, %llu page reads (536870912-byte limit)\n",
           (unsigned long long)assets.world_normal_decoded_bytes,
           (unsigned long long)assets.world_normal_peak_decoded_bytes,
-          (unsigned long long)assets.world_normal_loaded_pages);
+          (unsigned long long)assets.world_normal_loaded_pages,
+          (unsigned long long)assets.world_normal_page_loads);
     const auto &cache = prepared_draw_cache_.statistics();
     if (cache.hits || cache.misses || cache.bypasses)
       std::fprintf(stderr,
@@ -2764,26 +2766,32 @@ private:
       }
       if (world_normals && !renderer_->preload_stopped()) {
         surface_normals_load();
-        std::set<int> seen;
+        // Copy the keys first: creating a normal handle can reallocate textures_.
+        // Normals already uploaded keep their GPU handle, so skip them; this is
+        // what stops the first world scene from re-reading every page (issue 461).
+        std::vector<mw34::materials::SurfaceKey> keys;
+        keys.reserve(normal_handles.size());
         for (const auto handle : normal_handles) {
-          if (renderer_->preload_stopped())
-            break;
-          // Copy before creating a normal handle can reallocate textures_.
           const auto key = textures_[std::size_t(handle)].surface_key;
-          const auto authored = surface_normals_.cache.bindings.find(key);
-          if (authored != surface_normals_.cache.bindings.end() && authored->second < 0)
+          const auto known = surface_normals_.cache.bindings.find(key);
+          if (known != surface_normals_.cache.bindings.end() &&
+              (known->second < 0 || surface_normal_textures_.count(known->second)))
             continue;
-          int index;
-          {
-            mw34::timing::ScopedDuration timer(producer_resource_timing_.page_decode_target());
-            index = surface_normals_.cache.surface_normal_index(key, true);
-          }
+          keys.push_back(key);
+        }
+        // Each page is read once and its images upload while it is resident, so
+        // surface_normal_texture() never has to read the page again.
+        std::set<int> seen;
+        mw34::timing::ScopedDuration timer(producer_resource_timing_.page_decode_target());
+        surface_normals_.cache.preload_keys_grouped(keys, [&](int index) {
           surface_normals_.peak_decoded_bytes = std::max(
               surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
-          if (index >= 0 && seen.insert(index).second)
-            preload_texture_handle(surface_normal_texture(index), PreloadTextureStage::world,
-                                   pending_receipts);
-        }
+          if (renderer_->preload_stopped() || !seen.insert(index).second)
+            return;
+          preload_texture_handle(surface_normal_texture(index), PreloadTextureStage::world,
+                                 pending_receipts);
+          preload_checkpoint();
+        });
       }
       preload_native_model_geometry(nodes);
       for (const auto handle : native_handles) {
