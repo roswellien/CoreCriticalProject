@@ -64,6 +64,13 @@ if (args.Length == 2 && args[0] == "--verify-media-tools")
     return;
 }
 
+if (args.Length == 2 && args[0] == "--verify-native-preview")
+{
+    var contract = Mw3ReRuntimeContract.ReadStructure(Path.GetFullPath(args[1]));
+    Console.WriteLine($"Verified MW3-RE native preview closure: {contract.BuildId}");
+    return;
+}
+
 if (args.Length == 4 && args[0] == "--prepare-installed-renderer")
 {
     var path = Path.GetFullPath(args[3]);
@@ -80,9 +87,15 @@ if (args.Length == 4 && args[0] == "--prepare-controller-launch")
     File.WriteAllText(path, GameRunner.SerializeLaunchProfile(launch)); return;
 }
 
+if (args.Length == 1 && args[0] == "--native-preview-signing-only")
+{
+    NativePreviewSigningChecks.Run();
+    return;
+}
 if (args.Length == 1 && args[0] == "--runtime-layout-only")
 {
     NativeRuntimeLayoutChecks.Run();
+    NativePreviewSigningChecks.Run();
     return;
 }
 if (args.Length == 1 && args[0] == "--mw3-re-contract-only")
@@ -427,6 +440,7 @@ ControllerChecks.Run();
 JoystickSelectionChecks.Run();
 SaveBackupChecks.Run();
 NativeRuntimeLayoutChecks.Run();
+NativePreviewSigningChecks.Run();
 await RuntimeUpdateChecks.Run();
 }
 
