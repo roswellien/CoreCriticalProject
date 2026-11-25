@@ -2489,6 +2489,32 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                   caster_texture.fixture_casters_using_texture_for_test(131) == 0,
               "A freed texture left a shadow caster pointing at it");
 
+      // #496: the same whole-block rule for preloaded models.
+      Renderer shared_models(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
+      auto first_model = geometry, second_model = geometry;
+      first_model.key = 0x4960000000000001ULL;
+      second_model.key = 0x4960000000000002ULL;
+      shared_models.begin_preload();
+      require(shared_models.preload_model_geometry(first_model) &&
+                  shared_models.preload_model_geometry(second_model),
+              "Could not queue the shared-block model fixture");
+      shared_models.finalize_preload();
+      shared_models.end_preload();
+      require(shared_models.preload_memory_block_count() == 1,
+              "Shared-block model fixture did not share one block");
+      shared_models.advance_render_frames_for_test(301);
+      shared_models.mark_model_used_for_test(second_model.key);
+      shared_models.free_unused_model_buffers_for_test(300);
+      require(shared_models.model_uploaded(first_model.key) &&
+                  shared_models.model_uploaded(second_model.key),
+              "An old model was freed from a block another model still uses");
+      shared_models.advance_render_frames_for_test(301);
+      shared_models.free_unused_model_buffers_for_test(300);
+      require(!shared_models.model_uploaded(first_model.key) &&
+                  !shared_models.model_uploaded(second_model.key) &&
+                  shared_models.preload_memory_block_count() == 0,
+              "A shared block whose models were all old was not freed whole");
+
       // Size the test block from the actual driver requirements, rather than
       // assuming an image has a fixed allocation size or alignment on all GPUs.
       const auto stride = ((first_memory[1] + first_memory[2] - 1) / first_memory[2]) * first_memory[2];

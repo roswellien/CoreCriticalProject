@@ -3946,7 +3946,33 @@ private:
       if (old_enough && !held_by_preload)
         old_keys.push_back(key);
     }
+    // As for textures: a shared preload block goes back to the card only when
+    // its last buffer is released, so free a model only if every block its
+    // buffers sit in holds nothing but old models' buffers.
+    auto pooled_buffers = [](ModelBuffer &model) {
+      return std::array<Buffer *, 4>{&model.local, &model.staging, &model.indices,
+                                     &model.index_staging};
+    };
+    std::map<VkDeviceMemory, std::size_t> old_in_block;
     for (const auto key : old_keys)
+      for (const Buffer *buffer : pooled_buffers(model_buffers.at(key)))
+        if (buffer->memory && preload_memory_blocks_.count(buffer->memory))
+          ++old_in_block[buffer->memory];
+    // Decide every key before freeing any: each free lowers its block's count.
+    std::vector<std::uint64_t> freeable_keys;
+    for (const auto key : old_keys) {
+      bool whole_blocks_old = true;
+      for (const Buffer *buffer : pooled_buffers(model_buffers.at(key))) {
+        const auto block = buffer->memory ? preload_memory_blocks_.find(buffer->memory)
+                                          : preload_memory_blocks_.end();
+        if (block != preload_memory_blocks_.end() &&
+            old_in_block[block->first] != block->second.references)
+          whole_blocks_old = false;
+      }
+      if (whole_blocks_old)
+        freeable_keys.push_back(key);
+    }
+    for (const auto key : freeable_keys)
       discard_model_buffer(key);
   }
   // The model's GPU buffer for this frame, or nullptr when video memory stays
@@ -3957,7 +3983,8 @@ private:
   ModelBuffer *model_buffer_or_skip(const ModelGeometry &g) {
     const auto retry = model_retry_at_.find(g.key);
     if (retry != model_retry_at_.end()) {
-      if (render_frame_ < retry->second)
+      // A model already resident again (a mission preload) needs no back-off.
+      if (render_frame_ < retry->second && !model_buffers.count(g.key))
         return nullptr;
       model_retry_at_.erase(retry);
     }
@@ -4509,6 +4536,9 @@ public:
   void advance_render_frames_for_test(std::uint64_t frames) { render_frame_ += frames; }
   void mark_texture_used_for_test(std::uint64_t key) {
     textures.at(key).last_used_frame = render_frame_;
+  }
+  void mark_model_used_for_test(std::uint64_t key) {
+    model_buffers.at(key).last_used_frame = render_frame_;
   }
   // A retained shadow caster drawn with this texture, also in this frame's list.
   void plant_fixture_caster_for_test(std::uint64_t texture_key) {
