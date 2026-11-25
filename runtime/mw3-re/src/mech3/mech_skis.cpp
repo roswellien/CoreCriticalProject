@@ -158,6 +158,7 @@ void Skis::reset() {
 // Mech3.exe 1.2 @ 0x00476590
 void Skis::set_vy(float v) {
   for (float& x : vy) x = v;
+  for (bool& climbing : jet_climb) climbing = false;
 }
 
 // Mech3.exe 1.2 @ 0x00477820. The highest polygon no more than `step` above
@@ -198,10 +199,12 @@ bool Skis::integrate(float* y, float* vy, float dt, float ground, float gravity,
   const X y1 = X(dt) * v0 + *y;  // v0 and y1 stay on the x87; the test reads them there
   if (y1 > X(ground)) {
     *y = y1.f();
-    if (jet_climb && jetting) *jet_climb = true;
+    if (jet_climb) {
+      if (!zfix::options().per_second || *vy <= 0.0f) *jet_climb = false;
+      else if (jetting) *jet_climb = true;
+    }
     return false;
   }
-  if (jet_climb) *jet_climb = false;
   const double span = dt < 0.0333 ? 0.0333 : dt;  // 0x005c3790
   const X gap = -(X(*y) - ground);
   const X floored = gap / X(span);
@@ -209,9 +212,11 @@ bool Skis::integrate(float* y, float* vy, float dt, float ground, float gravity,
   if (zfix::options().per_second) {
     const float catch_up = capped_catch_up(gap, dt, floored).f();
     // Keep active thrust so jets can lift uphill (W31).
+    if (jet_climb) *jet_climb = jetting && *vy > catch_up;
     *vy = jetting ? std::max(catch_up, *vy) : catch_up;
   } else {
     *vy = v;
+    if (jet_climb) *jet_climb = false;
   }
   *y = ground;
   return v > kMaxCatchUp;
@@ -292,7 +297,10 @@ bool Skis::update(float dt) {
   const float step = m.blocked[2] && air ? 0.0f : 0.0f - m.height * kStep;
   for (int j = 6; j >= start; --j) {
     surface[j] = 0.0f;
-    if (landed[j] && !air && vy[j] > 0.0f) vy[j] = 0.0f;
+    if (landed[j] && !air && vy[j] > 0.0f) {
+      vy[j] = 0.0f;
+      jet_climb[j] = false;
+    }
     vy[j] = m.impulse.y + vy[j];
     in_water[j] = 0;
     int best = 0;
@@ -320,7 +328,10 @@ bool Skis::update(float dt) {
       jet_climb[j] = false;
     }
     if (!air) slid = slope_slide(contact[j], &m.push, dt) || slid;
-    if (vy[j] < 0.0f && vy[j] < vy[6]) vy[j] = vy[6];
+    if (vy[j] < 0.0f && vy[j] < vy[6]) {
+      vy[j] = vy[6];
+      jet_climb[j] = jet_climb[6];
+    }
   }
   if (simple) {
     for (int k = 0; k < start; ++k) {
@@ -346,10 +357,12 @@ bool Skis::update(float dt) {
     if (abs(front) - abs(back) < X(kIrregular)) {
       t = ((X(ground[i + 1]) - ground[i]) / (X(local[i + 1].z) - local[i].z)).f();
       vy[i + 2] = vy[i + 1];
+      jet_climb[i + 2] = jet_climb[i + 1];
       if (!(clearance[i + 2] > 0.0f) && ground[i + 2] - ground[i + 1] > kStepUp) kick = 1.0f;
     } else {
       t = (back / (X(local[i + 2].z) - local[i + 1].z)).f();
       vy[i] = vy[i + 1];
+      jet_climb[i] = jet_climb[i + 1];
       if (!(clearance[i] > 0.0f) && ground[i] - ground[i + 1] > kStepUp) kick = -1.0f;
     }
     const float mid = clearance[i + 1];
@@ -419,8 +432,10 @@ bool Skis::update(float dt) {
   set_ski(0, pitch0, lift[0]);
   set_ski(1, pitch1, lift[1]);
   m.vec_3c.y = body_vy;
-  if (down[0] && down[1] && !air)
+  if (down[0] && down[1] && !air) {
     for (float& x : vy) x = kStopOnGround ? 0.0f : body_vy;
+    for (bool& climbing : jet_climb) climbing = false;
+  }
   zone_update(contact[6].zone);
   if (m.impulse.y > 0.0f) return true;
   const float c6 = clearance[6];

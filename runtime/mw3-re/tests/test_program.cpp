@@ -18448,10 +18448,9 @@ TEST(mission_c1m4_dominic_fires_on_a_target_headless) {
     // Since the probes land in the frame's own step above 30 fps (W31,
     // Skis::integrate) his walk differs: longer aiming, fewer firing frames.
     // Since the firing's real waits (W34, 3/6/1 s for the port's zeros) he
-    // keeps a plan to its end and rests between bursts: his first pick is
-    // ghsD5 (was ghsD2), his walk and contacts differ, the hut still falls.
-    // Collision responses scaled to 1/30 s steps (#484) change his walk again:
-    // his first pick is ghsD3 and he aims and fires for different spans.
+    // keeps a plan to its end and rests between bursts, so his walk and
+    // contacts differ and the hut still falls. Collision responses scaled to
+    // 1/30 s steps (#484) change his walk again: his first pick is ghsD3.
     std::printf("  dominic's target: contacts %d, first %s, on target %d, aiming %d, firing %d, health %.5f\n",
                 seen.target_contacts, seen.first_target.c_str(), seen.on_target, seen.aiming, seen.firing, seen.health);
     EXPECT(seen.hut != 0 && seen.health0 == 30.0f && seen.on_target > 0 && seen.firing > 0 && seen.health < seen.health0);

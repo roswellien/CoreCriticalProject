@@ -521,8 +521,9 @@ struct MovementTestGuard {
   mech3::UpdateCalls update_calls;
   zent::Budget budget;
   mech3::Environment environment;
-  mech3::Mech* mission_player = nullptr;  // (port)
-  bool force_feedback = false;  // (port)
+  // Wall and landing tests change these globals; restore them for later tests.
+  mech3::Mech* mission_player = nullptr;
+  bool force_feedback = false;
 
   MovementTestGuard() {
     options = zfix::options();
@@ -532,8 +533,8 @@ struct MovementTestGuard {
     update_calls = mech3::update_calls();
     budget = zent::budget();
     environment = mech3::environment();
-    mission_player = mech3::world().mission_player;  // (port)
-    force_feedback = mech3::world().force_feedback;  // (port)
+    mission_player = mech3::world().mission_player;
+    force_feedback = mech3::world().force_feedback;
   }
 
   ~MovementTestGuard() {
@@ -544,8 +545,8 @@ struct MovementTestGuard {
     mech3::update_calls() = update_calls;
     zent::budget() = budget;
     mech3::environment() = environment;
-    mech3::world().mission_player = mission_player;  // (port)
-    mech3::world().force_feedback = force_feedback;  // (port)
+    mech3::world().mission_player = mission_player;
+    mech3::world().force_feedback = force_feedback;
   }
 };
 
@@ -580,6 +581,31 @@ mech3::Skis& bare_skis(float ground_height) {
     }
   };
   skis.reset();
+  return skis;
+}
+
+// Full-detail queries need separate heights to exercise ledges and ski velocity copies.
+float skis_test_probe_ground[7] = {};
+
+mech3::Skis& full_detail_skis() {
+  mech3::Skis& skis = bare_skis(0.0f);
+  skis.mech->detail = 0x10;
+  static float ski_matrix[2][12];
+  for (int side = 0; side < 2; ++side) {
+    std::memcpy(ski_matrix[side], skis.mech->transform, sizeof ski_matrix[side]);
+    skis.ski[side] = ski_matrix[side];
+  }
+  for (float& height : skis_test_probe_ground) height = 0.0f;
+  mech3::skis_calls().node_matrix = [](mech3::Handle node) {
+    return static_cast<float*>(node);
+  };
+  mech3::skis_calls().query = [](mech3::Vec3*, int count, float, mech3::GroundHits* hits) {
+    for (int probe = 0; probe < count; ++probe) {
+      hits[probe].count = 1;
+      hits[probe].hit[0].height = skis_test_probe_ground[probe];
+      hits[probe].hit[0].normal = {0.0f, 1.0f, 0.0f};
+    }
+  };
   return skis;
 }
 
@@ -681,6 +707,149 @@ TEST(fix_skis_snap_preserves_terrain_climb) {
   EXPECT(skis.clearance[6] == 0.0f);
   EXPECT(skis.mech->vec_3c.y > 0.0f);
   EXPECT(std::fabs(skis.mech->vec_3c.y - (terrain_speed - 20.0f)) < 0.001f);
+}
+
+TEST(fix_skis_full_detail_copy_cancels_jet_climb_after_release) {
+  MovementTestGuard guard;
+  zfix::options().per_second = true;
+  mech3::environment() = mech3::Environment{};
+  mech3::environment().gravity = 0.0f;
+  constexpr float dt = 1.0f / 240.0f;
+  for (const int copied_probe : {0, 2}) {
+    mech3::Skis& skis = full_detail_skis();
+    skis_test_probe_ground[copied_probe] = 0.3f;
+    skis.vy[1] = 29.0f;
+    skis.mech->impulse.y = 1.0f;
+
+    EXPECT(skis.update(dt));
+    EXPECT(skis.clearance[copied_probe] == 0.0f);
+    EXPECT(skis.clearance[1] > 0.0f);
+    EXPECT(skis.vy[copied_probe] == skis.vy[1]);
+    EXPECT(skis.jet_climb[copied_probe]);
+
+    // Select the other copy branch on release, so this probe must cancel its own thrust.
+    skis_test_probe_ground[0] = copied_probe == 2 ? 0.3f : 0.0f;
+    skis_test_probe_ground[2] = 0.0f;
+    skis.mech->impulse.y = 0.0f;
+    skis.mech->vec_3c.y = 0.0f;
+    EXPECT(!skis.update(dt));
+    // The centre's 1 m/s snap limits every downward correction. A missed flag instead
+    // leaves 10 m/s at the copied probe after subtracting the 20 m/s cap from 30.
+    EXPECT(std::fabs(skis.mech->vec_3c.y + 1.0f) < 0.001f);
+  }
+}
+
+TEST(fix_skis_landing_retires_jet_climb_before_terrain_climb) {
+  MovementTestGuard guard;
+  zfix::options().per_second = true;
+  mech3::environment() = mech3::Environment{};
+  mech3::environment().gravity = 0.0f;
+  constexpr float dt = 1.0f / 240.0f;
+  mech3::Skis& skis = full_detail_skis();
+  // Both ends overhang the ledge; the back receives the middle's velocity copy.
+  skis_test_probe_ground[0] = -4.0f;
+  skis_test_probe_ground[2] = -5.0f;
+  skis.vy[0] = 1.0f;
+  skis.jet_climb[0] = true;
+  EXPECT(!skis.update(dt));
+  EXPECT(skis.clearance[0] > 3.0f);
+  EXPECT(skis.down[0] && skis.down[1]);
+  for (int probe = 0; probe < 7; ++probe) {
+    EXPECT(skis.vy[probe] == 0.0f);
+    EXPECT(!skis.jet_climb[probe]);
+  }
+
+  // Supply terrain catch-up after landing; no thrust is involved in this new rise.
+  float probe_height = -0.8f;
+  EXPECT(mech3::Skis::integrate(&probe_height, &skis.vy[0], dt, 0.0f, 0.0f));
+  const float terrain_speed = skis.vy[0];
+  skis_test_probe_ground[0] = skis_test_probe_ground[2] = 0.0f;
+  for (int side = 0; side < 2; ++side) skis.set_ski(side, 0.0f, 0.0f);
+  skis.mech->vec_3c.y = 0.0f;
+  EXPECT(!skis.update(dt));
+  EXPECT(skis.mech->vec_3c.y > 0.0f);
+  EXPECT(std::fabs(skis.mech->vec_3c.y - (terrain_speed - 20.0f) / 7.0f) < 0.001f);
+}
+
+TEST(fix_skis_jetting_contact_keeps_climb_at_240_fps) {
+  MovementTestGuard guard;
+  zfix::options().per_second = true;
+  mech3::environment() = mech3::Environment{};
+  mech3::environment().gravity = 9.8f;
+  constexpr float dt = 1.0f / 240.0f;
+  mech3::Skis& skis = bare_skis(0.1f);
+  float probe_height = 0.0f;
+  skis.vy[6] = 22.0f;
+  EXPECT(!mech3::Skis::integrate(&probe_height, &skis.vy[6], dt, 0.1f, 9.8f,
+                                true, &skis.jet_climb[6]));
+  EXPECT(probe_height == 0.1f);
+  EXPECT(skis.vy[6] > 20.0f);
+  EXPECT(skis.jet_climb[6]);
+
+  // Release immediately above the contacted surface, while the grounded snap still applies.
+  skis.mech->transform[10] = probe_height;
+  EXPECT(!skis.update(dt));
+  EXPECT(skis.clearance[6] == 0.0f);
+  EXPECT(skis.mech->vec_3c.y == -20.0f);
+  EXPECT(!skis.jet_climb[6]);
+}
+
+TEST(fix_skis_centre_velocity_copy_keeps_jet_climb) {
+  MovementTestGuard guard;
+  zfix::options().per_second = true;
+  mech3::environment() = mech3::Environment{};
+  mech3::environment().gravity = 0.0f;
+  mech3::Skis& skis = full_detail_skis();
+  for (float& height : skis_test_probe_ground) height = -10.0f;
+  skis.down[0] = skis.down[1] = false;
+  skis.clearance[6] = 4.0f;
+  skis.vy[6] = 10.0f;
+  skis.jet_climb[6] = true;
+  skis.vy[0] = -1.0f;
+  EXPECT(skis.update(1.0f / 240.0f));
+  EXPECT(skis.vy[0] == skis.vy[6]);
+  EXPECT(skis.jet_climb[0]);
+}
+
+TEST(fix_skis_non_jet_velocity_clears_jet_climb) {
+  MovementTestGuard guard;
+  for (const bool per_second : {true, false}) {
+    zfix::options().per_second = per_second;
+    mech3::Skis skis;
+    for (bool& climbing : skis.jet_climb) climbing = true;
+    skis.set_vy(-3.0f);
+    for (int probe = 0; probe < 7; ++probe) {
+      EXPECT(skis.vy[probe] == -3.0f);
+      EXPECT(!skis.jet_climb[probe]);
+    }
+    for (const float initial_speed : {0.0f, -1.0f}) {
+      float height = 4.0f, speed = initial_speed;
+      bool climbing = true;
+      EXPECT(!mech3::Skis::integrate(&height, &speed, 1.0f / 240.0f, 0.0f, 0.0f,
+                                    true, &climbing));
+      EXPECT(!climbing);
+    }
+  }
+}
+
+TEST(fix_skis_legacy_integration_ignores_jet_state) {
+  MovementTestGuard guard;
+  zfix::options().per_second = false;
+  for (const float initial_height : {-0.8f, 0.0f, 4.0f}) {
+    for (const float initial_speed : {-1.0f, 0.0f, 22.0f}) {
+      float legacy_height = initial_height, legacy_speed = initial_speed;
+      const bool legacy_landed = mech3::Skis::integrate(&legacy_height, &legacy_speed,
+                                                       1.0f / 240.0f, 0.1f, 9.8f);
+      float height = initial_height, speed = initial_speed;
+      bool climbing = true;
+      const bool landed = mech3::Skis::integrate(&height, &speed, 1.0f / 240.0f, 0.1f,
+                                                9.8f, true, &climbing);
+      EXPECT(landed == legacy_landed);
+      EXPECT(std::memcmp(&height, &legacy_height, sizeof height) == 0);
+      EXPECT(std::memcmp(&speed, &legacy_speed, sizeof speed) == 0);
+      EXPECT(!climbing);
+    }
+  }
 }
 
 TEST(fix_skis_jets_lift_uphill_at_any_rate) {
