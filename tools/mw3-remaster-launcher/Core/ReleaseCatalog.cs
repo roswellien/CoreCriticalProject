@@ -21,7 +21,21 @@ public static class ReleaseCatalog
     public const long MaximumPayloadBytes = 512L * 1024 * 1024;
 
     public static VerifiedReleaseCatalog Verify(byte[] envelope, RuntimeUpdateTrust trust,
-        OnlineUpdateConfiguration config, DateTimeOffset now, long highestSequence = 0, string? previousHash = null)
+        OnlineUpdateConfiguration config, DateTimeOffset now, long highestSequence = 0,
+        string? previousHash = null)
+        => VerifyCore(envelope, trust, config, now, highestSequence, previousHash);
+
+    /// <summary>
+    /// Authenticates saved completion evidence at the signed catalog's issue time.
+    /// This must never authorize downloading or installing a new update.
+    /// </summary>
+    public static VerifiedReleaseCatalog VerifyForReconciliation(byte[] envelope,
+        RuntimeUpdateTrust trust, OnlineUpdateConfiguration config)
+        => VerifyCore(envelope, trust, config, null, 0, null);
+
+    private static VerifiedReleaseCatalog VerifyCore(byte[] envelope, RuntimeUpdateTrust trust,
+        OnlineUpdateConfiguration config, DateTimeOffset? now, long highestSequence,
+        string? previousHash)
     {
         config.Validate();
         if (envelope.Length > MaximumMetadataBytes) throw new InvalidDataException("Release catalog is too large.");
@@ -41,9 +55,16 @@ public static class ReleaseCatalog
         if (catalog.SchemaVersion != 1 || catalog.Type != "corecritical-release-catalog-v1" ||
             catalog.Channel != config.Channel || catalog.Sequence < 1)
             throw new InvalidDataException("Unsupported release catalog or different update channel.");
-        if (catalog.IssuedUtc > now.AddMinutes(5) || catalog.ExpiresUtc <= now ||
-            catalog.ExpiresUtc <= catalog.IssuedUtc || catalog.ExpiresUtc - catalog.IssuedUtc > TimeSpan.FromDays(31))
-            throw new InvalidDataException("Release catalog has expired or the system clock needs checking. Your installed games remain available.");
+        // Only retrospective completion checks use issue time, after signature verification.
+        var verificationTime = now ?? catalog.IssuedUtc;
+        var validLifetime = catalog.ExpiresUtc > catalog.IssuedUtc &&
+            catalog.ExpiresUtc - catalog.IssuedUtc <= TimeSpan.FromDays(31);
+        var validAtVerificationTime = catalog.IssuedUtc <= verificationTime.AddMinutes(5) &&
+            catalog.ExpiresUtc > verificationTime;
+        if (!validLifetime || !validAtVerificationTime)
+            throw new InvalidDataException(
+                "Release catalog has expired or the system clock needs checking. " +
+                "Your installed games remain available.");
         var hash = Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant();
         if (catalog.Sequence < highestSequence ||
             (catalog.Sequence == highestSequence && !string.Equals(previousHash, hash, StringComparison.Ordinal)))

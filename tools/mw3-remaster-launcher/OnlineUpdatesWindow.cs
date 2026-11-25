@@ -19,6 +19,7 @@ public sealed class OnlineUpdatesWindow : Window
     private readonly Button _resume = Button("Resume downloads");
     private readonly Button _install = Button("Install downloaded updates");
     private readonly Button _cancel = Button("Pause / cancel");
+    private readonly Button _discardLauncher = Button("Discard saved launcher update");
     private readonly List<CheckBox> _choices = new();
     private OnlineUpdateService? _service;
     private CancellationTokenSource? _operation;
@@ -46,6 +47,7 @@ public sealed class OnlineUpdatesWindow : Window
         var runtimeImport = Button("Import .mw3update…");
         var rollback = Button("Use previous MW3 runtime");
         local.Children.Add(launcherImport);
+        local.Children.Add(_discardLauncher);
         if (!NativeGameRunner.UsesBundledMw3Re(application))
         {
             local.Children.Add(runtimeImport);
@@ -55,12 +57,14 @@ public sealed class OnlineUpdatesWindow : Window
         panel.Children.Add(new ScrollViewer { Content = _releases, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
         Content = panel;
         _download.IsEnabled = _install.IsEnabled = _resume.IsEnabled = _cancel.IsEnabled = false;
+        _discardLauncher.IsEnabled = false;
         RefreshVersions();
         try
         {
             _service = new(application, game);
             _status.Text = _service.HasPending ? "An unfinished update is saved. Check for updates, then resume downloads or continue installation." : "Check for updates when you are ready.";
             _resume.IsEnabled = _install.IsEnabled = _service.HasPending;
+            _discardLauncher.IsEnabled = _service.CanDiscardLauncherUpdate();
         }
         catch (Exception error) { _status.Text = error.Message; }
         _check.Click += async (_, _) => await Run(async token =>
@@ -78,13 +82,30 @@ public sealed class OnlineUpdatesWindow : Window
             var restart = await Task.Run(() => _service.InstallAsync(progress, token), token);
             if (restart)
             {
-                _status.Text = "Restarting Core Critical. The saved game update can continue after restart.";
+                _status.Text = "Restarting Core Critical to finish the launcher update. Any saved game update can continue after restart…";
                 _operation = null;
                 Application.Current.Shutdown();
             }
             else { RefreshVersions(); _releases.Children.Clear(); _choices.Clear(); }
         });
         _cancel.Click += (_, _) => _operation?.Cancel();
+        _discardLauncher.Click += async (_, _) =>
+        {
+            if (_service == null || _operation != null) return;
+            var answer = MessageBox.Show(this,
+                "The running launcher already has this version or a newer version. " +
+                "Discard the saved launcher update? This cancels that saved attempt; it does not " +
+                "install or repair the launcher. Any saved game updates will be kept.",
+                "Discard saved launcher update", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes) return;
+            await Run(async _ =>
+            {
+                var discarded = await Task.Run(() => _service.DiscardPendingLauncherUpdate());
+                _status.Text = discarded
+                    ? "Saved launcher update discarded. Any saved game updates can still continue."
+                    : "There is no saved launcher update to discard.";
+            });
+        };
         launcherImport.Click += (_, _) => { if (_operation == null) new LauncherUpdateWindow(_application) { Owner = this }.ShowDialog(); };
         runtimeImport.Click += (_, _) => { if (_operation == null) new UpdatesWindow(_application, _game) { Owner = this }.ShowDialog(); RefreshVersions(); };
         rollback.Click += async (_, _) => await Run(token => Task.Run(() =>
@@ -143,6 +164,7 @@ public sealed class OnlineUpdatesWindow : Window
         if (_operation != null) return;
         using var operation = new CancellationTokenSource(); _operation = operation;
         _check.IsEnabled = _download.IsEnabled = _resume.IsEnabled = _install.IsEnabled = false;
+        _discardLauncher.IsEnabled = false;
         _cancel.IsEnabled = true;
         try { await action(operation.Token); }
         catch (OperationCanceledException) { _status.Text = "Paused. Verified downloads and partial transfers are saved; your selected game runtime was kept."; }
@@ -152,6 +174,7 @@ public sealed class OnlineUpdatesWindow : Window
             _operation = null; _progress.IsIndeterminate = false;
             _check.IsEnabled = true; _download.IsEnabled = _choices.Any(c => c.IsEnabled);
             _resume.IsEnabled = _install.IsEnabled = _service?.HasPending == true;
+            _discardLauncher.IsEnabled = _service?.CanDiscardLauncherUpdate() == true;
             _cancel.IsEnabled = false;
         }
     }
