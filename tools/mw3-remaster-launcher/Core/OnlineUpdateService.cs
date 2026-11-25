@@ -34,6 +34,39 @@ public sealed class OnlineUpdateService : IDisposable
         _workflow = Path.Combine(_downloader.Store, _config.Channel);
         PackStorage.EnsureNoLinks(_workflow);
         Directory.CreateDirectory(_workflow);
+        ReconcileCompletedLauncherUpdate();
+    }
+
+    private void ReconcileCompletedLauncherUpdate()
+    {
+        if (!HasPending)
+        {
+            return;
+        }
+        try
+        {
+            using var operation = Lock();
+            if (!HasPending)
+            {
+                return;
+            }
+            var pending = Pending();
+            if (pending.Products is not [var product] || product != GameCatalog.LauncherId || string.IsNullOrEmpty(pending.LauncherJob) || string.IsNullOrEmpty(pending.CatalogEnvelope))
+            {
+                return;
+            }
+            var verified = ReleaseCatalog.Verify(Convert.FromBase64String(pending.CatalogEnvelope), _trust, _config, DateTimeOffset.UtcNow);
+            var release = verified.Document.Releases.SingleOrDefault(r => r.ProductId == GameCatalog.LauncherId);
+            if (release == null || typeof(OnlineUpdateService).Assembly.GetName().Version! < Version.Parse(release.NumericVersion) || new LauncherUpdates(_application, _trust, _dataRoot).InstalledSequence < release.Sequence)
+            {
+                return;
+            }
+            VerifyHelperResult(pending.LauncherJob, release);
+            File.Delete(PendingFile);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or FormatException or ArgumentException or CryptographicException or KeyNotFoundException or InvalidOperationException)
+        {
+        }
     }
 
     private FileStream Lock() => new(Path.Combine(_workflow, ".workflow-lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
@@ -106,7 +139,7 @@ public sealed class OnlineUpdateService : IDisposable
     {
         var plan = Read<PendingOnlineUpdates>(PendingFile);
         if (plan.SchemaVersion != 1 || plan.Application != _application || plan.Channel != _config.Channel ||
-            plan.Products.Length is < 1 or > 6 || plan.Products.Distinct().Count() != plan.Products.Length)
+            plan.Products == null || plan.Products.Length is < 1 or > 6 || plan.Products.Distinct().Count() != plan.Products.Length)
             throw new InvalidDataException("Saved update plan belongs to a different installation or channel.");
         return plan;
     }
