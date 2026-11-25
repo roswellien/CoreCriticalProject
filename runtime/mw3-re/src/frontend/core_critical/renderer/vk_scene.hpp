@@ -3996,6 +3996,10 @@ private:
     for (auto it = fixtureCasters.begin(); it != fixtureCasters.end();) {
       if (it->second.texture == &texture) {
         fixture_atlas_touch();
+        // This frame's caster list points into the map too.
+        fixtureFrameCasters.erase(std::remove(fixtureFrameCasters.begin(),
+                                              fixtureFrameCasters.end(), &it->second),
+                                  fixtureFrameCasters.end());
         it = fixtureCasters.erase(it);
       } else
         ++it;
