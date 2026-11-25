@@ -78,7 +78,7 @@ public sealed class OnlineUpdatesWindow : Window
             var restart = await Task.Run(() => _service.InstallAsync(progress, token), token);
             if (restart)
             {
-                _status.Text = "Restarting Core Critical to finish the launcher update…";
+                _status.Text = "Restarting Core Critical to finish the launcher update. Any saved game update can continue after restart…";
                 _operation = null;
                 Application.Current.Shutdown();
             }

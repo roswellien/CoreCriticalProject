@@ -104,8 +104,99 @@ static class OnlineUpdateChecks
             File.WriteAllBytes(Path.Combine(trial, "online-updates.json"), JsonSerializer.SerializeToUtf8Bytes(config, Json));
             OnlineUpdateConfiguration.Read(trial);
             if (File.Exists(Path.Combine(trial, "update-trust.json"))) throw new Exception("Discovery changed installed trust.");
+
+            File.WriteAllBytes(Path.Combine(trial, "update-trust.json"), JsonSerializer.SerializeToUtf8Bytes(trust, Json));
+            string pendingFile;
+            using (var service = new OnlineUpdateService(trial, trial, trial))
+                pendingFile = service.PendingFile;
+            var stage = Path.Combine(updates.Store, "pending-reconciliation-fixture");
+            Directory.CreateDirectory(stage);
+            var job = Path.Combine(stage, "job.json");
+            File.WriteAllText(job, "{}");
+            var resultFile = Path.Combine(stage, "result.txt");
+            var sequenceFile = Path.Combine(updates.Store, "installed-sequence.json");
+            void SavePlan(ReleaseCatalogDocument savedCatalog, string[] products = null)
+            {
+                var pending = new PendingOnlineUpdates(1, Path.TrimEndingDirectorySeparator(Path.GetFullPath(trial)),
+                    config.Channel, Convert.ToBase64String(Sign(savedCatalog)),
+                    products ?? new[] { GameCatalog.LauncherId }, job);
+                File.WriteAllBytes(pendingFile, JsonSerializer.SerializeToUtf8Bytes(pending, Json));
+            }
+            void CheckPending(string name, bool expected)
+            {
+                var savedBytes = File.ReadAllBytes(pendingFile);
+                using var service = new OnlineUpdateService(trial, trial, trial);
+                if (service.HasPending != expected ||
+                    (expected && !savedBytes.SequenceEqual(File.ReadAllBytes(pendingFile))))
+                    throw new Exception("Launcher restart reconciliation failed: " + name);
+            }
+            var currentVersion = typeof(OnlineUpdateService).Assembly.GetName().Version;
+            var numericVersion = currentVersion.ToString(3);
+            var olderVersion = new Version(currentVersion.Major, currentVersion.Minor,
+                currentVersion.Build - 1).ToString();
+            var newerVersion = new Version(currentVersion.Major, currentVersion.Minor,
+                currentVersion.Build + 1).ToString();
+            var completedRelease = launcher;
+            foreach (var test in new[]
+            {
+                (Name: "older running launcher", Version: newerVersion, Sequence: 100L, Pending: true),
+                (Name: "missing installed sequence", Version: numericVersion, Sequence: 0L, Pending: true),
+                (Name: "older installed sequence", Version: numericVersion, Sequence: 99L, Pending: true),
+                (Name: "newer running launcher", Version: olderVersion, Sequence: 100L, Pending: false),
+                (Name: "newer installed sequence", Version: numericVersion, Sequence: 101L, Pending: false),
+                (Name: "four-part numeric version", Version: currentVersion.ToString(), Sequence: 100L, Pending: false),
+                (Name: "invalid numeric version", Version: "invalid", Sequence: 100L, Pending: true),
+                (Name: "missing numeric version", Version: (string)null, Sequence: 100L, Pending: true),
+                (Name: "preview assembly matches numeric release", Version: numericVersion, Sequence: 100L, Pending: false)
+            })
+            {
+                var savedMetadata = Sign(manifest with { Version = test.Version });
+                File.WriteAllBytes(Path.Combine(stage, "update.ccupdate"), savedMetadata);
+                completedRelease = launcher with
+                {
+                    Version = test.Version, NumericVersion = test.Version, DisplayVersion = test.Version + "-preview",
+                    Metadata = new("https://updates.example.test/" + test.Version + ".ccupdate",
+                        test.Version + ".ccupdate", savedMetadata.Length,
+                        Convert.ToHexString(SHA256.HashData(savedMetadata)).ToLowerInvariant()),
+                    Payload = launcher.Payload with
+                    {
+                        Url = "https://updates.example.test/" + test.Version + ".zip",
+                        Filename = test.Version + ".zip"
+                    }
+                };
+                if (test.Sequence == 0) File.Delete(sequenceFile);
+                else File.WriteAllText(sequenceFile, JsonSerializer.Serialize(test.Sequence));
+                File.WriteAllText(resultFile, "Core Critical updated to " + test.Version);
+                SavePlan(document with { Releases = new[] { completedRelease } });
+                CheckPending(test.Name, test.Pending);
+            }
+
+            // A signed null entry reaches a NullReferenceException outside the old catch filter.
+            var unexpectedFailure = document with { Releases = new OnlineRelease[] { null } };
+            try
+            {
+                Verify(unexpectedFailure);
+                throw new Exception("The unexpected-exception fixture no longer raises NullReferenceException.");
+            }
+            catch (NullReferenceException) { }
+            SavePlan(unexpectedFailure);
+            CheckPending("unexpected verifier exception leaves the plan unchanged", true);
+
+            var completedCatalog = document with { Releases = new[] { completedRelease } };
+            File.Delete(resultFile);
+            SavePlan(completedCatalog);
+            CheckPending("missing helper receipt", true);
+            File.WriteAllText(resultFile, "Core Critical updated to " + numericVersion);
+            SavePlan(document with { Releases = new[] { completedRelease, runtime } },
+                new[] { GameCatalog.LauncherId, GameCatalog.Mw3 });
+            CheckPending("saved game update survives restart", true);
+            SavePlan(completedCatalog);
+            using (var workflowLock = new FileStream(Path.Combine(Path.GetDirectoryName(pendingFile), ".workflow-lock"),
+                FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+                CheckPending("busy workflow lock leaves the plan unchanged", true);
+            CheckPending("completed update clears after the workflow lock is released", false);
         }
         finally { Directory.Delete(trial, true); }
-        Console.WriteLine("Online update contract checks passed: signed catalog, freshness, product/channel/host policy, dependency order, package cross-checks and independent configuration.");
+        Console.WriteLine("Online update contract checks passed: signed catalog, freshness, product/channel/host policy, dependency order, package cross-checks, independent configuration and restart reconciliation.");
     }
 }

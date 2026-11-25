@@ -1,5 +1,5 @@
+using System.Diagnostics;
 using System.IO;
-using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace MW3RemasterLauncher.Core;
@@ -39,12 +39,12 @@ public sealed class OnlineUpdateService : IDisposable
 
     private void ReconcileCompletedLauncherUpdate()
     {
-        if (!HasPending)
-        {
-            return;
-        }
         try
         {
+            if (!HasPending)
+            {
+                return;
+            }
             using var operation = Lock();
             if (!HasPending)
             {
@@ -57,18 +57,26 @@ public sealed class OnlineUpdateService : IDisposable
             }
             var verified = ReleaseCatalog.Verify(Convert.FromBase64String(pending.CatalogEnvelope), _trust, _config, DateTimeOffset.UtcNow);
             var release = verified.Document.Releases.SingleOrDefault(r => r.ProductId == GameCatalog.LauncherId);
-            if (release == null || typeof(OnlineUpdateService).Assembly.GetName().Version! < Version.Parse(release.NumericVersion) || new LauncherUpdates(_application, _trust, _dataRoot).InstalledSequence < release.Sequence)
+            var currentVersion = typeof(OnlineUpdateService).Assembly.GetName().Version;
+            if (release == null || currentVersion == null ||
+                !Version.TryParse(release.NumericVersion, out var releaseVersion) ||
+                currentVersion < releaseVersion ||
+                new LauncherUpdates(_application, _trust, _dataRoot).InstalledSequence < release.Sequence)
             {
                 return;
             }
             VerifyHelperResult(pending.LauncherJob, release);
             File.Delete(PendingFile);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or FormatException or ArgumentException or CryptographicException or KeyNotFoundException or InvalidOperationException)
+        catch (Exception error) when
+            (error is not (OutOfMemoryException or StackOverflowException or AccessViolationException))
         {
+            // Reconciliation is best-effort; retain the saved plan for retry or repair.
+            Trace.TraceWarning("Launcher update reconciliation: " + error);
         }
     }
 
+    // FileShare.None fails immediately on contention; there is no workflow-lock wait or retry.
     private FileStream Lock() => new(Path.Combine(_workflow, ".workflow-lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
     private static T Read<T>(string path)
     {
