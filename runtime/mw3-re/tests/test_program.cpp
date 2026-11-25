@@ -3259,8 +3259,14 @@ TEST(mods_screen_add_mod_headless) {
     EXPECT(std::filesystem::equivalent(opened, wd + "/mods"));
     std::printf("  export: offered %s; %s; %s; %s\n", offered.c_str(), exporting_note.c_str(), exported_note.c_str(), cancelled_note.c_str());
     EXPECT(offered == "Desert Pack.zip" && exporting_note == "Exporting to Desert Pack.zip...");
+#if MW3_HAVE_LIBARCHIVE
     EXPECT(exported_note.find("Exported Desert Pack to Desert Pack.zip (2 files).") == 0);  // notes.txt and the mod.txt written at its add
     EXPECT(std::filesystem::is_regular_file(src + "/out/Desert Pack.zip") && cancelled_note == "Not exported.");
+#else
+    // A build without libarchive can't write a zip: EXPORT says so and writes nothing.
+    EXPECT(exported_note.find("Not exported: this build cannot write archives.") == 0);
+    EXPECT(!std::filesystem::exists(src + "/out/Desert Pack.zip") && cancelled_note == "Not exported.");
+#endif
     app.stop_game();
     app.exit_instance();
     mech3::set_app(nullptr);
