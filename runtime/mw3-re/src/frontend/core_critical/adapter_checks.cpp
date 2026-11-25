@@ -2444,6 +2444,34 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                   pooled.live_allocation_count() + 1 == allocations_with_block,
               "Final pooled texture release did not free and untrack the complete block");
 
+      // #496: freeing old textures during play releases a shared block only
+      // whole; freeing part of one would return no memory.
+      Renderer shared_block;
+      shared_block.set_preload_batch_cap_for_test(256);
+      shared_block.begin_preload();
+      require(shared_block.preload_texture(texture(121)) &&
+                  shared_block.preload_texture(texture(122)),
+              "Could not queue the shared-block freeing fixture");
+      shared_block.finalize_preload();
+      shared_block.end_preload();
+      require(shared_block.texture_memory_shared_for_test(121, 122) &&
+                  shared_block.preload_memory_block_count() == 1,
+              "Shared-block freeing fixture did not share one block");
+      shared_block.advance_render_frames_for_test(301);
+      shared_block.mark_texture_used_for_test(122);
+      shared_block.free_unused_textures_for_test(300);
+      require(shared_block.texture_resident(121) && shared_block.texture_resident(122) &&
+                  shared_block.preload_memory_block_count() == 1 &&
+                  !shared_block.texture_awaiting_pixels(121),
+              "An old texture was freed from a block another texture still uses");
+      shared_block.advance_render_frames_for_test(301);
+      shared_block.free_unused_textures_for_test(300);
+      require(!shared_block.texture_resident(121) && !shared_block.texture_resident(122) &&
+                  shared_block.preload_memory_block_count() == 0 &&
+                  shared_block.texture_awaiting_pixels(121) &&
+                  shared_block.texture_awaiting_pixels(122),
+              "A shared block whose textures were all old was not freed whole");
+
       // Size the test block from the actual driver requirements, rather than
       // assuming an image has a fixed allocation size or alignment on all GPUs.
       const auto stride = ((first_memory[1] + first_memory[2] - 1) / first_memory[2]) * first_memory[2];

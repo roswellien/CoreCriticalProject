@@ -3977,15 +3977,32 @@ private:
   void free_unused_textures(std::uint64_t min_age_frames) {
     settle();
     std::vector<std::uint64_t> old_keys;
+    // Old textures per shared preload block. A block goes back to the card only
+    // when its last image is released, so freeing part of one returns nothing
+    // and only makes those textures upload again into new memory of their own.
+    std::map<VkDeviceMemory, std::size_t> old_in_block;
     for (const auto &[key, texture] : textures) {
       const bool old_enough = render_frame_ - texture.last_used_frame > min_age_frames;
       const bool held_by_preload =
           std::any_of(pending_preload_textures_.begin(), pending_preload_textures_.end(),
                       [key = key](const PendingPreloadTexture &p) { return p.key == key; });
-      if (old_enough && !held_by_preload)
-        old_keys.push_back(key);
+      if (!old_enough || held_by_preload)
+        continue;
+      old_keys.push_back(key);
+      if (preload_memory_blocks_.count(texture.memory))
+        ++old_in_block[texture.memory];
     }
-    for (const auto key : old_keys)
+    // Decide every key before freeing any: each free lowers its block's count.
+    std::vector<std::uint64_t> freeable_keys;
+    for (const auto key : old_keys) {
+      const auto block = preload_memory_blocks_.find(textures.at(key).memory);
+      const bool whole_block_old =
+          block == preload_memory_blocks_.end() ||
+          old_in_block[block->first] == block->second.references;
+      if (whole_block_old)
+        freeable_keys.push_back(key);
+    }
+    for (const auto key : freeable_keys)
       forget_texture(key);
   }
   // Destroys and erases a texture during play and waits for its pixels again.
@@ -4474,6 +4491,11 @@ public:
   }
   void free_unused_textures_for_test(std::uint64_t min_age_frames) {
     free_unused_textures(min_age_frames);
+  }
+  // Ages resources without rendering, and marks one texture as just used.
+  void advance_render_frames_for_test(std::uint64_t frames) { render_frame_ += frames; }
+  void mark_texture_used_for_test(std::uint64_t key) {
+    textures.at(key).last_used_frame = render_frame_;
   }
   bool texture_awaiting_pixels(std::uint64_t key) const {
     return textures_awaiting_pixels_.count(key) != 0;
