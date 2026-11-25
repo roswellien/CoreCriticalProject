@@ -3298,6 +3298,15 @@ bool is_model_geometry_gpu_uploaded(VulkanFrameRenderer &renderer, std::uint64_t
 bool has_partial_model_buffer_entry(VulkanFrameRenderer &renderer, std::uint64_t key) {
   return preload_impl(renderer).backend_for_test().partial_model(key);
 }
+std::size_t video_memory_full_log_count(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).backend_for_test().video_memory_full_log_count();
+}
+std::uint64_t scene_render_frame(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).backend_for_test().render_frame();
+}
+void free_unused_model_buffers(VulkanFrameRenderer &renderer, std::uint64_t min_age_frames) {
+  preload_impl(renderer).backend_for_test().free_unused_model_buffers_for_test(min_age_frames);
+}
 std::uint64_t shared_texture_staging_size(VulkanFrameRenderer &renderer) {
   return preload_impl(renderer).backend_for_test().texture_staging_size();
 }

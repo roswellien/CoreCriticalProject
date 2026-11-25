@@ -63,6 +63,7 @@
 #include "world_scene_vert.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -1610,6 +1611,7 @@ public:
       throw std::runtime_error("Vulkan scene renderer: rendering during preload");
     settle();
     retire_height_images();
+    ++render_frame_;
     // The previous GPU submission has completed. Indexed geometry owns no
     // live engine pointers and can retire once its source and packets expire.
     for (auto it = model_buffers.begin(); it != model_buffers.end();) {
@@ -1815,20 +1817,20 @@ private:
         if (!gpu_models() || !d.model->geometry)
           throw std::runtime_error(
               "GPU model draw without the enabled model path");
-        auto &b = model_buffer(*d.model->geometry);
-        if (!b.uploaded && std::find(model_pending.begin(), model_pending.end(),
-                                     &b) == model_pending.end())
-          model_pending.push_back(&b);
+        ModelBuffer *b = model_buffer_or_skip(*d.model->geometry);
+        if (b && !b->uploaded &&
+            std::find(model_pending.begin(), model_pending.end(), b) == model_pending.end())
+          model_pending.push_back(b);
       }
     // Warmup shares the original immutable upload and completion path.
     // It adds no draw and retains exact geometry identity checks.
     for (const auto &geometry : s.model_warmup) {
       if (!gpu_models() || !geometry)
         throw std::runtime_error("Invalid immutable model warmup");
-      auto &b = model_buffer(*geometry);
-      if (!b.uploaded && std::find(model_pending.begin(), model_pending.end(),
-                                   &b) == model_pending.end())
-        model_pending.push_back(&b);
+      ModelBuffer *b = model_buffer_or_skip(*geometry);
+      if (b && !b->uploaded &&
+          std::find(model_pending.begin(), model_pending.end(), b) == model_pending.end())
+        model_pending.push_back(b);
     }
     // Textures: content-hashed cache keyed by guest surface; changed or new
     // ones are uploaded.
@@ -2537,6 +2539,8 @@ private:
       }
       const auto &d = s.draws[o.index];
       if (!d.count || !d.scissor.extent.width || !d.scissor.extent.height)
+        continue;
+      if (model_skipped_this_frame(d))
         continue;
       unsigned vertexCount = d.count, logicalDraws = 1;
       if (combine && !d.model && !d.key.points && d.count % 3 == 0) {
@@ -3311,6 +3315,8 @@ private:
     for (const auto &d : s.draws) {
       if (!d.model || d.model->world || !d.count || !sun_lit(d))
         continue;
+      if (model_skipped_this_frame(d))
+        continue;
       const auto &i = *d.model;
       const auto &b = model_buffers.at(i.geometry->key);
       const auto rows = mw34::sun::shadow_caster(frame.view, i.sun_world);
@@ -3609,8 +3615,19 @@ private:
     std::uint64_t hash{};
     unsigned count{};
     bool uploaded{};
+    // render_frame_ of the last frame that drew or warmed this model; buffers
+    // unused for long enough are freed first when video memory runs out (#496).
+    std::uint64_t last_used_frame{};
   };
   std::map<std::uint64_t, ModelBuffer> model_buffers;
+  // Counts render() calls; the clock for ModelBuffer::last_used_frame.
+  std::uint64_t render_frame_{};
+  // Frames a model must go undrawn before it may be freed to make room: about
+  // five seconds at 60 fps, so nothing on screen or just behind the player is.
+  static constexpr std::uint64_t kModelFreeAgeFrames = 300;
+  // Play-time video memory figures (#496), logged once and then at most once a minute.
+  std::chrono::steady_clock::time_point video_memory_full_logged_at_{};
+  std::size_t video_memory_full_log_count_{};
 #include "fixture_shadow_stage.inc"
   Image colorImage, depthImage;
   Image qualitySource;
@@ -3808,6 +3825,100 @@ private:
         bytes += entry.second.bytes;
     return bytes;
   }
+  // The driver's current usage and budget for one heap (VK_EXT_memory_budget).
+  // Returns false when the extension is unavailable; the budget then shrinks and
+  // grows with other programs' use of the same GPU.
+  bool heap_budget(unsigned heap, VkDeviceSize &usage, VkDeviceSize &budget) const {
+    if (!memory_budget_supported_ || !memory_properties2_)
+      return false;
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT budgets{};
+    budgets.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    VkPhysicalDeviceMemoryProperties2 properties{};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    properties.pNext = &budgets;
+    memory_properties2_(gpu, &properties);
+    usage = budgets.heapUsage[heap];
+    budget = budgets.heapBudget[heap];
+    return true;
+  }
+  // One log line with the figures that explain a play-time allocation failure
+  // (#496): crash reports carry the log, so the next report shows whether the
+  // game's own use or something else filled the card.
+  void log_video_memory_full(const char *kind, VkDeviceSize bytes) {
+    const auto now = std::chrono::steady_clock::now();
+    const bool logged_before = video_memory_full_log_count_ > 0;
+    if (logged_before && now - video_memory_full_logged_at_ < std::chrono::minutes(1))
+      return;
+    video_memory_full_logged_at_ = now;
+    ++video_memory_full_log_count_;
+    constexpr double mib = 1024.0 * 1024.0;
+    for (unsigned heap = 0; heap < memory.memoryHeapCount; ++heap) {
+      if (!(memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT))
+        continue;
+      VkDeviceSize driver_usage = 0, driver_budget = 0;
+      if (heap_budget(heap, driver_usage, driver_budget))
+        std::fprintf(stderr,
+                     "mw3: video memory full: %s %llu bytes; game %.0f MiB in %zu allocations; "
+                     "driver usage %.0f of budget %.0f MiB (heap %u)\n",
+                     kind, (unsigned long long)bytes, tracked_heap_bytes(heap) / mib,
+                     memory_allocations_.size(), driver_usage / mib, driver_budget / mib, heap);
+      else
+        std::fprintf(stderr,
+                     "mw3: video memory full: %s %llu bytes; game %.0f MiB in %zu allocations; "
+                     "driver figures unavailable (heap %u)\n",
+                     kind, (unsigned long long)bytes, tracked_heap_bytes(heap) / mib,
+                     memory_allocations_.size(), heap);
+    }
+  }
+  // Frees model buffers no frame has used for min_age_frames, once the GPU is
+  // done with them. Their ModelGeometry keeps vertices and indices in system
+  // memory, so a freed model uploads again the next time it is drawn.
+  void free_unused_model_buffers(std::uint64_t min_age_frames) {
+    settle();
+    std::vector<std::uint64_t> old_keys;
+    for (const auto &[key, buffer] : model_buffers) {
+      const bool old_enough = render_frame_ - buffer.last_used_frame > min_age_frames;
+      const bool held_by_preload =
+          std::find(pending_preload_models_.begin(), pending_preload_models_.end(), key) !=
+          pending_preload_models_.end();
+      if (old_enough && !held_by_preload)
+        old_keys.push_back(key);
+    }
+    for (const auto key : old_keys)
+      discard_model_buffer(key);
+  }
+  // The model's GPU buffer for this frame, or nullptr when video memory stays
+  // full. #496: a player's game ended when a model's buffer did not fit during
+  // play. Now old model buffers are freed and the allocation retried once; if it
+  // still fails, the model is left out of this frame (draw and sun shadow) and
+  // tried again on the next one.
+  ModelBuffer *model_buffer_or_skip(const ModelGeometry &g) {
+    try {
+      ModelBuffer &b = model_buffer(g);
+      b.last_used_frame = render_frame_;
+      return &b;
+    } catch (const PreloadAllocationFailure &) {
+      if (preload_active_)
+        throw;
+    }
+    const VkDeviceSize model_bytes = VkDeviceSize(g.vertices.size()) * sizeof(ModelVertex) +
+                                     VkDeviceSize(g.indices.size()) * sizeof(std::uint32_t);
+    log_video_memory_full("model", model_bytes);
+    free_unused_model_buffers(kModelFreeAgeFrames);
+    try {
+      ModelBuffer &b = model_buffer(g);
+      b.last_used_frame = render_frame_;
+      return &b;
+    } catch (const PreloadAllocationFailure &) {
+      // model_buffer's own catch has already discarded the half-made buffer.
+      return nullptr;
+    }
+  }
+  // True for a model draw whose buffer model_buffer_or_skip left out this frame.
+  bool model_skipped_this_frame(const Draw &d) const {
+    return d.model && d.model->geometry &&
+           model_buffers.find(d.model->geometry->key) == model_buffers.end();
+  }
   VkResult allocate_memory(VkDevice selected_device, const VkMemoryAllocateInfo *info,
                            const VkAllocationCallbacks *callbacks, VkDeviceMemory *output,
                            PFN_vkAllocateMemory allocator = nullptr) {
@@ -3817,19 +3928,18 @@ private:
       ++preload_allocation_attempts_;
       VkDeviceSize budget = memory.memoryHeaps[heap].size;
       VkDeviceSize usage = tracked;
-      if (memory_budget_supported_ && memory_properties2_) {
+      VkDeviceSize driver_usage = 0, driver_budget = 0;
+      bool driver_figures = false;
+      {
         mw34::timing::ScopedDuration budget_timer(
             gpu_resource_timing_.enabled ? &preload_budget_nanoseconds_ : nullptr);
-        VkPhysicalDeviceMemoryBudgetPropertiesEXT budgets{};
-        budgets.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
-        VkPhysicalDeviceMemoryProperties2 properties{};
-        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
-        properties.pNext = &budgets;
-        memory_properties2_(gpu, &properties);
-        budget = std::min(budget, budgets.heapBudget[heap]);
+        driver_figures = heap_budget(heap, driver_usage, driver_budget);
+      }
+      if (driver_figures) {
+        budget = std::min(budget, driver_budget);
         // The driver estimate can lag a burst of allocations. Our exact ledger
         // provides a conservative lower bound until the next driver update.
-        usage = std::max(tracked, budgets.heapUsage[heap]);
+        usage = std::max(tracked, driver_usage);
       }
       if (preload_fault_.override_budget) {
         budget = preload_fault_.synthetic_heap_budget_bytes;
@@ -4181,6 +4291,11 @@ public:
   bool partial_texture(std::uint64_t key) const {
     const auto found = textures.find(key);
     return found != textures.end() && !found->second.valid;
+  }
+  std::size_t video_memory_full_log_count() const { return video_memory_full_log_count_; }
+  std::uint64_t render_frame() const { return render_frame_; }
+  void free_unused_model_buffers_for_test(std::uint64_t min_age_frames) {
+    free_unused_model_buffers(min_age_frames);
   }
   bool model_uploaded(std::uint64_t key) const {
     const auto found = model_buffers.find(key);

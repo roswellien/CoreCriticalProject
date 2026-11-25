@@ -2794,6 +2794,71 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
             "Actual preload allocations crossed the synthetic budget cap");
     require(frame(capped.get(), true, true) == expected_recovered,
             "Budget-denied resources did not render through the ordinary lazy path");
+
+    // #496: a model buffer that doesn't fit during play must not end the game.
+    // Without a mission preload the prepared model uploads lazily in render().
+    constexpr std::uint64_t play_model_key = 0x4343000000000001ULL;
+    auto play_model_fault = [&](std::size_t failures) {
+      auto renderer_with_fault = make_check_renderer(window, backend, quality, recovery_options);
+      renderer_with_fault->set_viewport(0, 0, 64, 64);
+      mw34::vkscene::PreloadFaultInjection fault{};
+      fault.fail_next_play_model_allocations = failures;
+      fault.injected_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+      set_preload_fault_injection(*renderer_with_fault, fault);
+      return renderer_with_fault;
+    };
+    {
+      // (a) One failure: old buffers are freed, the retry succeeds, the model draws.
+      auto retried = play_model_fault(1);
+      require(frame(retried.get(), true, true) == expected_recovered &&
+                  is_model_geometry_gpu_uploaded(*retried, play_model_key) &&
+                  video_memory_full_log_count(*retried) == 1,
+              "A play-time model allocation failure was not retried");
+    }
+    {
+      // (b) Two failures: the model is left out of this frame (draw and shadow)
+      // without an exception, and draws normally on the next frame.
+      auto skipped = play_model_fault(2);
+      const auto without_model = frame(skipped.get(), true, true);
+      require(without_model != expected_recovered &&
+                  !is_model_geometry_gpu_uploaded(*skipped, play_model_key) &&
+                  !has_partial_model_buffer_entry(*skipped, play_model_key) &&
+                  video_memory_full_log_count(*skipped) == 1,
+              "A model that still didn't fit was not skipped cleanly");
+      require(frame(skipped.get(), true, true) == expected_recovered &&
+                  is_model_geometry_gpu_uploaded(*skipped, play_model_key) &&
+                  video_memory_full_log_count(*skipped) == 1,
+              "A skipped model did not draw on the next frame");
+    }
+    {
+      // (c) Only models unused for more than the age limit are freed, and a
+      // freed model uploads again from its geometry the next time it is drawn.
+      auto aging = play_model_fault(0);
+      require(frame(aging.get(), true, true) == expected_recovered,
+              "Aging fixture did not draw its model");
+      const auto drawn_at = scene_render_frame(*aging);
+      auto render_without_model = [&](std::uint64_t until_frame) {
+        while (scene_render_frame(*aging) < until_frame) {
+          aging->clear(true, 0, 0, 0);
+          quad(*aging, 0, 64, .1f, 0xffffffff);
+          std::vector<uint32_t> ignored;
+          int ignored_width = 0, ignored_height = 0;
+          require(aging->read_back(&ignored, &ignored_width, &ignored_height),
+                  "Aging fixture frame did not render");
+        }
+      };
+      render_without_model(drawn_at + 300);
+      free_unused_model_buffers(*aging, 300);
+      require(is_model_geometry_gpu_uploaded(*aging, play_model_key),
+              "A model used within the age limit was freed");
+      render_without_model(drawn_at + 301);
+      free_unused_model_buffers(*aging, 300);
+      require(!is_model_geometry_gpu_uploaded(*aging, play_model_key),
+              "A model unused past the age limit was not freed");
+      require(frame(aging.get(), true, true) == expected_recovered &&
+                  is_model_geometry_gpu_uploaded(*aging, play_model_key),
+              "A freed model did not upload again when drawn");
+    }
   }
   require((first[20 * 64 + 23] & 0xff00) != 0 &&
               (first[20 * 64 + 23] & 255) == 0,
