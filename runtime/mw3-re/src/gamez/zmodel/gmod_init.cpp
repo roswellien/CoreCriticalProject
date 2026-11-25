@@ -105,6 +105,11 @@ void set_camera(zcls::Camera* camera) {
     }
     wd = render.w;
     ht = render.h;
+  } else if (wd <= 0 || ht <= 0) {
+    // FIX (bug), ours (issue 467): a window with no area would give a zero
+    // focal length; the camera and draw state are left as they were.
+    zcls::log_skipped_empty_window(wd, ht);
+    return;
   }
   DrawState& ds = draw_state();
   w.camera = camera;

@@ -1,5 +1,6 @@
 #include "mech3/hud.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdarg>
 #include <cstdlib>
@@ -1537,8 +1538,26 @@ void HudZoomWindow::set_rect(int32_t px, int32_t py, int32_t w, int32_t h) {
   box.color = zvid::pack_bytes(1, 0xa2, 0x1f);
 }
 
+// FIX (bug), ours (issue 467): the exe's clamp below moves one edge only. A
+// window held at its 2-pixel minimum (the zoom opening or closing) that sits on
+// the inset border ends 0 wide or 0 high, and the Core Critical renderer then
+// crashed drawing it. Only when the clamp leaves an axis empty, the whole
+// window is moved inside the border at its own size instead; a window wider
+// than the border's span is cut to that span, so it never overhangs. Windows
+// the clamp leaves non-empty clamp as the exe did.
+static void keep_axis_size(int32_t* start, int32_t* end, int32_t size, int32_t lowest,
+                           int32_t highest) {
+  const bool axis_left_empty = *end - *start < 1;
+  // A window wider than the border's span is cut to the span, so it never overhangs.
+  const int32_t fitted = std::min(size, highest - lowest);
+  if (!axis_left_empty || fitted < 1) return;
+  *start = std::max(lowest, std::min(*start, highest - fitted));
+  *end = *start + fitted;
+}
+
 // Mech3.exe 1.2 @ 0x0043fa40: an edge past the display's inner border moved
 // back (one per axis), the window's area set.
+
 void HudZoomWindow::set_view_rect(int32_t* px, int32_t* py, int32_t* w, int32_t* h) {
   rect = {*px, *py, *px + *w, *py + *h};
   const ztwod::Rect d = g_hooks->display_rect();
@@ -1549,6 +1568,7 @@ void HudZoomWindow::set_view_rect(int32_t* px, int32_t* py, int32_t* w, int32_t*
   else if (right < rect.right) rect.right = right;
   else if (rect.right < left) rect.right = left;
   else moved = false;
+  if (moved && zfix::options().fixed) keep_axis_size(&rect.left, &rect.right, *w, left, right);
   if (moved) {
     *px = rect.left;
     *w = rect.right - rect.left;
@@ -1559,6 +1579,7 @@ void HudZoomWindow::set_view_rect(int32_t* px, int32_t* py, int32_t* w, int32_t*
   else if (bottom < rect.bottom) rect.bottom = bottom;
   else if (rect.bottom < top) rect.bottom = top;
   else moved = false;
+  if (moved && zfix::options().fixed) keep_axis_size(&rect.top, &rect.bottom, *h, top, bottom);
   if (moved) {
     *py = rect.top;
     *h = rect.bottom - rect.top;
@@ -3218,7 +3239,9 @@ void HudTarget::track(float dt) {
   h.camera_set_position(view->view.camera, cam);
   h.camera_set_angles(view->view.camera, angles);
   HudZoomWindow& z = hd->reticle.zoom;
-  bool zoomed = !(z.flags & ztwod::kHidden);
+  // FIX (bug), ours (issue 467): an empty zoom window can't be projected
+  // through (its camera is never set), so the marker takes the main-view path.
+  bool zoomed = !(z.flags & ztwod::kHidden) && z.has_view_area();
   bool on_main = false;  // projected through the player's view
   float sp[3], zp[3];
   int32_t code;

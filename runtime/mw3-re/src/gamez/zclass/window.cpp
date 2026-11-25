@@ -1,5 +1,6 @@
 #include "gamez/zclass/window.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include "gamez/zclass/cls_data.h"
@@ -19,6 +20,30 @@ int window_size(Node* node, int32_t* width, int32_t* height) {
   *width = d->get<int32_t>(8);
   *height = d->get<int32_t>(0xc);
   return 0;
+}
+
+// Ours (issue 467). The class test is check_class's, done here without its
+// error report.
+bool window_has_area(Node* node, int32_t* width, int32_t* height) {
+  *width = 0;
+  *height = 0;
+  const bool is_window = node && node->data && node->cls() == 3;
+  if (!is_window || window_size(node, width, height) != 0) return true;
+  return *width > 0 && *height > 0;
+}
+
+// Ours (issue 467).
+void log_skipped_empty_window(int32_t width, int32_t height) {
+  constexpr int kMaxLoggedSizes = 8;
+  static int32_t logged[kMaxLoggedSizes][2];
+  static int logged_count = 0;
+  for (int i = 0; i < logged_count; ++i)
+    if (logged[i][0] == width && logged[i][1] == height) return;
+  if (logged_count == kMaxLoggedSizes) return;
+  logged[logged_count][0] = width;
+  logged[logged_count][1] = height;
+  ++logged_count;
+  std::printf("mw3: skipped drawing camera with empty window %dx%d\n", width, height);
 }
 
 // Mech3.exe 1.2 @ 0x004fa130
