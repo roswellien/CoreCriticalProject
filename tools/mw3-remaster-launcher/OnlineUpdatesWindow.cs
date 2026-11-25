@@ -64,7 +64,7 @@ public sealed class OnlineUpdatesWindow : Window
             _service = new(application, game);
             _status.Text = _service.HasPending ? "An unfinished update is saved. Check for updates, then resume downloads or continue installation." : "Check for updates when you are ready.";
             _resume.IsEnabled = _install.IsEnabled = _service.HasPending;
-            _discardLauncher.IsEnabled = _service.HasPending;
+            _discardLauncher.IsEnabled = _service.CanDiscardLauncherUpdate();
         }
         catch (Exception error) { _status.Text = error.Message; }
         _check.Click += async (_, _) => await Run(async token =>
@@ -93,9 +93,9 @@ public sealed class OnlineUpdatesWindow : Window
         {
             if (_service == null || _operation != null) return;
             var answer = MessageBox.Show(this,
+                "The running launcher already has this version or a newer version. " +
                 "Discard the saved launcher update? This cancels that saved attempt; it does not " +
-                "install or repair the launcher. Any saved game updates will be kept. " +
-                "If the helper failed, repair with the signed installer before continuing.",
+                "install or repair the launcher. Any saved game updates will be kept.",
                 "Discard saved launcher update", MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (answer != MessageBoxResult.Yes) return;
             await Run(async _ =>
@@ -174,7 +174,7 @@ public sealed class OnlineUpdatesWindow : Window
             _operation = null; _progress.IsIndeterminate = false;
             _check.IsEnabled = true; _download.IsEnabled = _choices.Any(c => c.IsEnabled);
             _resume.IsEnabled = _install.IsEnabled = _service?.HasPending == true;
-            _discardLauncher.IsEnabled = _service?.HasPending == true;
+            _discardLauncher.IsEnabled = _service?.CanDiscardLauncherUpdate() == true;
             _cancel.IsEnabled = false;
         }
     }

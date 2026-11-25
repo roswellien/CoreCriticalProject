@@ -144,6 +144,18 @@ static class OnlineUpdateChecks
                 if (!planUnchanged)
                     throw new Exception("Install cleared launcher state without proof: " + name);
             }
+            void CheckDiscardRefuses(string name)
+            {
+                var savedBytes = File.ReadAllBytes(pendingFile);
+                using var service = new OnlineUpdateService(trial, trial, trial);
+                if (service.CanDiscardLauncherUpdate())
+                    throw new Exception("Launcher discard should be disabled: " + name);
+                Reject(() => service.DiscardPendingLauncherUpdate());
+                var planUnchanged = File.Exists(pendingFile) &&
+                    savedBytes.SequenceEqual(File.ReadAllBytes(pendingFile));
+                if (!planUnchanged)
+                    throw new Exception("Refused discard changed the saved plan: " + name);
+            }
             string PreviousVersion(Version version)
             {
                 if (version.Build > 0)
@@ -208,6 +220,8 @@ static class OnlineUpdateChecks
                     currentVersion >= releaseVersion;
                 if (test.Pending && releaseAlreadyCurrent)
                     CheckInstallRefuses(test.Name);
+                if (numericVersionValid && currentVersion < releaseVersion)
+                    CheckDiscardRefuses(test.Name);
             }
 
             // A signed null entry reaches a NullReferenceException outside the old catch filter.
@@ -268,6 +282,7 @@ static class OnlineUpdateChecks
             }, Json));
             CheckPending("expired catalog still requires a valid signature", true);
             CheckInstallRefuses("invalid catalog signature");
+            CheckDiscardRefuses("invalid catalog signature");
 
             // Stage after construction so InstallAsync must do the same offline proof itself.
             File.Delete(pendingFile);
@@ -312,7 +327,7 @@ static class OnlineUpdateChecks
                 new[] { GameCatalog.LauncherId, GameCatalog.Mw3 });
             using (var service = new OnlineUpdateService(trial, trial, trial))
             {
-                if (!service.DiscardPendingLauncherUpdate())
+                if (!service.CanDiscardLauncherUpdate() || !service.DiscardPendingLauncherUpdate())
                     throw new Exception("Cannot discard a repaired launcher's stale update.");
                 var remaining = JsonSerializer.Deserialize<PendingOnlineUpdates>(
                     File.ReadAllBytes(pendingFile), Json);
@@ -322,10 +337,10 @@ static class OnlineUpdateChecks
                     remaining.LauncherJob != null || File.Exists(sequenceFile) ||
                     !failedReceiptPreserved)
                     throw new Exception("Discard changed game selection or success evidence.");
-                if (service.DiscardPendingLauncherUpdate())
-                    throw new Exception("Discard claimed to cancel a game-only plan.");
+                CheckDiscardRefuses("game-only plan");
                 SavePlan(completedCatalog);
-                if (!service.DiscardPendingLauncherUpdate() || service.HasPending)
+                if (!service.CanDiscardLauncherUpdate() ||
+                    !service.DiscardPendingLauncherUpdate() || service.HasPending)
                     throw new Exception("Discard did not clear the launcher-only failed attempt.");
             }
 

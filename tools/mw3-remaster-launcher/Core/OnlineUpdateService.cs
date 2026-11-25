@@ -139,7 +139,54 @@ public sealed class OnlineUpdateService : IDisposable
         return updated;
     }
 
-    /// <summary>Cancels the saved launcher selection without recording update success.</summary>
+    /// <summary>Checks whether the running launcher already satisfies the signed saved update.</summary>
+    public bool CanDiscardLauncherUpdate()
+    {
+        try
+        {
+            if (!HasPending)
+            {
+                return false;
+            }
+            ReadDiscardableLauncherUpdate();
+            return true;
+        }
+        catch (Exception error) when
+            (error is not (OutOfMemoryException or StackOverflowException or
+                AccessViolationException))
+        {
+            return false;
+        }
+    }
+
+    private PendingOnlineUpdates ReadDiscardableLauncherUpdate()
+    {
+        var pending = Pending();
+        if (!pending.Products.Contains(GameCatalog.LauncherId))
+        {
+            throw new InvalidDataException("The saved plan has no launcher update to discard.");
+        }
+        var envelope = Convert.FromBase64String(pending.CatalogEnvelope);
+        var verified = ReleaseCatalog.VerifyForReconciliation(envelope, _trust, _config);
+        var release = verified.Document.Releases.SingleOrDefault(
+            item => item.ProductId == GameCatalog.LauncherId)
+            ?? throw new InvalidDataException("The saved catalog has no launcher release.");
+        var currentVersion = typeof(OnlineUpdateService).Assembly.GetName().Version;
+        var numericVersionValid = Version.TryParse(release.NumericVersion, out var releaseVersion);
+        if (currentVersion == null || !numericVersionValid)
+        {
+            throw new InvalidDataException("The launcher version could not be verified.");
+        }
+        if (currentVersion < releaseVersion)
+        {
+            throw new InvalidDataException(
+                "The running launcher still needs the saved update. " +
+                "Repair with the signed installer before discarding it.");
+        }
+        return pending;
+    }
+
+    /// <summary>Cancels a repaired launcher's saved selection without recording update success.</summary>
     public bool DiscardPendingLauncherUpdate()
     {
         using var operation = Lock();
@@ -147,11 +194,7 @@ public sealed class OnlineUpdateService : IDisposable
         {
             return false;
         }
-        var pending = Pending();
-        if (!pending.Products.Contains(GameCatalog.LauncherId))
-        {
-            return false;
-        }
+        var pending = ReadDiscardableLauncherUpdate();
         RemoveLauncherProduct(pending);
         return true;
     }
