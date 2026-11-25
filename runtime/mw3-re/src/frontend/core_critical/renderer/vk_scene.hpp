@@ -1616,8 +1616,8 @@ public:
     ++render_frame_;
     models_failed_this_frame_.clear();
     textures_failed_this_frame_.clear();
-    // Stamp before any part of this frame (range backdrop captures render
-    // first) can free; render_scene stamps its own scene again.
+    // Stamp before any part of this frame can free (range backdrop captures
+    // render first); its captures and batches reuse this scene's resources.
     mark_used_this_frame(s);
     // The previous GPU submission has completed. Indexed geometry owns no
     // live engine pointers and can retire once its source and packets expire.
@@ -1819,7 +1819,6 @@ private:
     // it. std::map keeps pointers stable while additional model entries are
     // inserted.
     std::vector<ModelBuffer *> model_pending;
-    mark_used_this_frame(s);
     for (const auto &d : s.draws)
       if (d.model) {
         if (!gpu_models() || !d.model->geometry)
@@ -3656,8 +3655,9 @@ private:
   // Counts render() calls; the clock for ModelBuffer::last_used_frame.
   std::uint64_t render_frame_{};
   // Frames a model or texture must go undrawn before it may be freed to make
-  // room: about five seconds at 60 fps, so nothing on screen or just behind the
-  // player is.
+  // room. render_frame_ counts render() calls, and a displayed frame usually
+  // makes two or more (world, HUD, zoom), so this is a few seconds of play:
+  // nothing on screen or just behind the player is freed.
   static constexpr std::uint64_t kFreeAgeFrames = 300;
   // Textures freed during play whose pixels haven't come back yet (#496). The
   // frontend keeps every texture's pixels but sends them only when it holds no
@@ -3953,8 +3953,7 @@ private:
       b.last_used_frame = render_frame_;
       return &b;
     } catch (const PreloadAllocationFailure &) {
-      if (preload_active_)
-        throw;
+      // Only render() gets here, and it refuses to run during a preload.
     }
     const VkDeviceSize model_bytes = VkDeviceSize(g.vertices.size()) * sizeof(ModelVertex) +
                                      VkDeviceSize(g.indices.size()) * sizeof(std::uint32_t);
@@ -3986,21 +3985,24 @@ private:
       if (old_enough && !held_by_preload)
         old_keys.push_back(key);
     }
-    for (const auto key : old_keys) {
-      Tex &texture = textures.at(key);
-      // Retained fixture shadow casters keep a Tex pointer across frames, even
-      // while culled; they are rebuilt from the scene when next drawn.
-      for (auto it = fixtureCasters.begin(); it != fixtureCasters.end();) {
-        if (it->second.texture == &texture) {
-          fixture_atlas_touch();
-          it = fixtureCasters.erase(it);
-        } else
-          ++it;
-      }
-      destroy(texture);
-      textures.erase(key);
-      mark_texture_awaiting_pixels(key);
+    for (const auto key : old_keys)
+      forget_texture(key);
+  }
+  // Destroys and erases a texture during play and waits for its pixels again.
+  // Retained fixture shadow casters keep a Tex pointer across frames, even
+  // while culled, so those using it go too; they are rebuilt when next drawn.
+  void forget_texture(std::uint64_t key) {
+    Tex &texture = textures.at(key);
+    for (auto it = fixtureCasters.begin(); it != fixtureCasters.end();) {
+      if (it->second.texture == &texture) {
+        fixture_atlas_touch();
+        it = fixtureCasters.erase(it);
+      } else
+        ++it;
     }
+    destroy(texture);
+    textures.erase(key);
+    mark_texture_awaiting_pixels(key);
   }
   // Records that a texture's GPU copy is gone and tells the frontend, which
   // drops its upload receipt so the next frame that draws it sends its pixels.
@@ -4033,21 +4035,17 @@ private:
       create_once();
       return true;
     } catch (const PreloadAllocationFailure &) {
-      if (preload_active_)
-        throw;
       destroy(c);
       // destroy() clears the age; keep this frame's texture out of the freeing below.
       c.last_used_frame = render_frame_;
     }
-    log_video_memory_full("texture", VkDeviceSize(t.width) * t.height * 4);
+    log_video_memory_full("texture base level", VkDeviceSize(t.width) * t.height * 4);
     free_unused_resources();
     try {
       create_once();
       return true;
     } catch (const PreloadAllocationFailure &) {
-      destroy(c);
-      textures.erase(t.key);
-      mark_texture_awaiting_pixels(t.key);
+      forget_texture(t.key);
       textures_failed_this_frame_.insert(t.key);
       return false;
     }
