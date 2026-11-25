@@ -1846,8 +1846,11 @@ private:
                        : nullptr);
       if (c.image && (c.width != t.width || c.height != t.height))
         destroy(c);
-      if (!c.image)
+      if (!c.image) {
+        if (take_play_fault(preload_fault_.fail_next_play_texture_allocations))
+          check_allocation(static_cast<VkResult>(preload_fault_.injected_result), "image memory");
         create(c, t.width, t.height);
+      }
       if (c.hash != t.hash || !c.valid) {
         if ((t.format == TexFormat::rgba8888
                  ? t.pixels32.size()
@@ -3918,6 +3921,9 @@ private:
       dedicated_info.buffer = buffer_handle;
       if (requirements_available && dedicated.requiresDedicatedAllocation)
         info.pNext = &dedicated_info;
+      if (!preload_active_ && take_play_fault(preload_fault_.fail_next_play_model_allocations))
+        check_allocation(static_cast<VkResult>(preload_fault_.injected_result),
+                         "immutable resource memory");
       check_allocation(allocate_memory(device, &info, nullptr, &allocation),
                        preload_active_ ? "dedicated preload resource memory"
                                        : "immutable resource memory");
@@ -3958,6 +3964,13 @@ private:
     }
     allocation = acquired;
     offset = 0;
+  }
+  // Test hook (#496): true while a play-time fault still has failures left.
+  static bool take_play_fault(std::size_t &remaining) noexcept {
+    if (!remaining)
+      return false;
+    --remaining;
+    return true;
   }
   static void check_allocation(VkResult result, const char *what) {
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY || result == VK_ERROR_OUT_OF_HOST_MEMORY ||
