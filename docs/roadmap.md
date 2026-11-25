@@ -18,6 +18,19 @@ routine development/releases.
 See the [renderer and feature parity roadmap](renderer-feature-parity.md) for
 MW3-RE integration status, remaining milestones and contributor pickup.
 
+## Windows portable and macOS Apple Silicon release plan: 2026-11-24
+
+The [Windows portable and macOS release plan](portable-and-macos-release-plan.md)
+defines the proposed implementation sequence for adding a signed Windows
+portable `.zip` alongside the installer (`1.0.56-preview` target), scaling the
+update Worker and multi-OS feed, running the native Vulkan renderer on Apple
+Silicon (`M1+`, `arm64`, `WP20`) via MoltenVK, extracting shared launcher logic
+into `CoreCritical.Core` + Avalonia UI, and shipping Apple Developer ID
+signed/notarized `.app`/`.dmg` bundles, while keeping Linux (`WP19`) and Android
+(`WP21`) aligned. This is proposed work with explicit validation gates; no
+Windows portable `.zip` release, Avalonia shell, or macOS Core Critical Vulkan
+build has been implemented or validated yet.
+
 ## Optional FidelityFX integration plan: 2026-10-29
 
 The [FidelityFX implementation plan](fidelityfx-implementation-plan.md) defines
