@@ -146,6 +146,7 @@ struct Mech : Vehicle {
   bool damaged = false;      // +0x410  health() to work out again
   bool killed_by_nuke = false;  // +0x411
   float alive_time = 0;      // +0x414  seconds of full updates
+  float last_wall_flip = -1.0f;  // (port) alive_time of the last AI wall reversal (zfix per_second)
   Skis* skis = nullptr;      // +0x41c  the ground probes (mech_skis.h)
   float blend_weight = 0;    // +0x418  the current blend slot's weight
   int32_t anim_index = 2;    // +0x420  the gait's current slot in anims

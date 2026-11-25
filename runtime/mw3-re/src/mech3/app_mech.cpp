@@ -2885,7 +2885,11 @@ bool mech_ceiling_hit(void* mech, void* node, float out[7]) {
   if (!m || !m->head || !m->torso || !m->hip) return false;
   CollisionHit h{};
   h.hit.node = static_cast<zcls::Node*>(node);
+  // on_present runs after Mech::update clears frame_dt. Stand in for one 30 fps contact.
+  const float saved_dt = m->frame_dt;
+  m->frame_dt = 1.0f / 30.0f;
   m->ceiling_response(h);
+  m->frame_dt = saved_dt;
   out[0] = m->head->get_internal(0);
   for (int s = 0; s < 3; ++s) out[1 + s] = m->torso->get_internal(s);
   out[4] = m->hip->offset.y;  // the duck (0x004622a0)

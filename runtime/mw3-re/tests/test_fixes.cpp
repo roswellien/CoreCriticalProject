@@ -15,10 +15,13 @@
 #include <unistd.h>
 #endif
 
+#include "crt/msvc_math.h"
+#include "gamez/zgeometry/zgeo_x87.h"
 #include "gamez/zentity/zent_manager.h"
 #include "gamez/zinterp/zinterp.h"
 #include "gamez/zclass/light.h"
 #include "gamez/zclass/cls_data.h"
+#include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/cls_world.h"
 #include "gamez/zclass/list.h"
 #include "gamez/zclass/camera.h"
@@ -662,6 +665,468 @@ TEST(fix_skis_jets_lift_uphill_at_any_rate) {
     }
     EXPECT(grounded);
     EXPECT(std::fabs(mech.transform[10] - skis_test_ground) <= clearance_limit);
+  }
+}
+
+// Record damage at the part boundary without requiring armour or owner data.
+template <typename Part>
+struct CountingPart : Part {
+  float damage[3] = {};
+  int calls = 0;
+
+  void apply_damage(float amount, int section) override {
+    damage[section] += amount;
+    ++calls;
+  }
+};
+
+mech3::CollisionHit test_wall_hit() {
+  mech3::CollisionHit hit{};
+  hit.hit.normal[2] = -1.0f;
+  hit.to.z = 1.0f;
+  return hit;
+}
+
+void expect_contact_total(double actual, double reference) {
+  EXPECT(std::isfinite(actual));
+  EXPECT(actual != 0.0);
+  EXPECT(std::fabs(actual - reference) <= std::fabs(reference) * 0.05);
+}
+
+struct NetShoveTotals {
+  double damage = 0.0;
+  double x = 0.0;
+  double z = 0.0;
+  int calls = 0;
+};
+
+struct MechContactTotals {
+  float own_ct, other_ct;
+  mech3::Vec3 other_velocity;
+  int damage_calls;
+  NetShoveTotals net;
+};
+
+MechContactTotals mech_contact(float dt, int frames, bool remote, float speed = 10.0f,
+                              float max_speed = 10.0f) {
+  mech3::Mech& moving = *bare_mech();
+  static mech3::Mech other;
+  static mech3::MechControls other_controls;
+  static mech3::MechData other_pilot;
+  static mech3::Foot other_feet[2];
+  static CountingPart<mech3::Torso> torsos[2];
+  static CountingPart<mech3::Leg> legs[2][2];
+  static zcls::Node other_node{};
+  static float transform[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+  other = mech3::Mech{};
+  other_controls = mech3::MechControls{};
+  other_pilot = *moving.pilot;
+  other_controls.owner = &other;
+  other.controls = &other_controls;
+  other.pilot = &other_pilot;
+  other.node = &other_node;
+  other.remote = remote;
+  for (int side = 0; side < 2; ++side) {
+    legs[0][side] = CountingPart<mech3::Leg>{};
+    legs[1][side] = CountingPart<mech3::Leg>{};
+    other_feet[side] = mech3::Foot{};
+    legs[0][side].foot = moving.foot(side);
+    legs[1][side].foot = &other_feet[side];
+    moving.legs[side] = &legs[0][side];
+    other.legs[side] = &legs[1][side];
+  }
+  torsos[0] = CountingPart<mech3::Torso>{};
+  torsos[1] = CountingPart<mech3::Torso>{};
+  moving.torso = &torsos[0];
+  other.torso = &torsos[1];
+  moving.transform = transform;
+  moving.collider.count = 11;
+  moving.collider.restitution = 0.1f;
+  moving.collider.local[0].z = -1.0f;
+  moving.frame_dt = dt;
+  moving.max_speed = max_speed;
+  moving.vec_3c.z = -speed;
+  moving.velocity = {0.0f, 0.0f, -speed};
+
+  static NetShoveTotals net;
+  net = {};
+  mech3::skis_calls() = {};
+  mech3::CollideCalls& calls = mech3::collide_calls();
+  calls = {};
+  calls.segments = [](float*, int32_t points, zcls::SegmentHits* records) {
+    for (int probe = 0; probe < points / 2; ++probe) records[probe] = {};
+    // Forward motion puts probe 0 first on both sweeps. Keep the surface in
+    // range so the fixture measures sustained contact through Mech::collide.
+    records[0].count = 1;
+    records[0].hit[0].normal[2] = 1.0f;
+    records[0].hit[0].node = &other_node;
+  };
+  calls.node_mech = [](mech3::Handle node) -> mech3::Mech* {
+    return node == other.node ? &other : nullptr;
+  };
+  calls.remote = [](mech3::Mech& target) { return target.remote; };
+  calls.net_shove = [](mech3::Mech&, mech3::Mech&, float damage, float x, float z) {
+    net.damage += damage;
+    net.x += x;
+    net.z += z;
+    ++net.calls;
+  };
+  for (int frame = 0; frame < frames; ++frame) moving.collide();
+  EXPECT(moving.blocked[1]);
+  int damage_calls = torsos[0].calls + torsos[1].calls;
+  for (const auto& mech_legs : legs) {
+    for (const auto& leg : mech_legs) damage_calls += leg.calls;
+  }
+  return {torsos[0].damage[0], torsos[1].damage[0], other.velocity, damage_calls, net};
+}
+
+TEST(fix_mech_contact_same_per_second) {
+  MovementTestGuard guard;
+  zfix::options().fpu53 = true;
+  constexpr float reference_dt = 1.0f / 30.0f;
+  constexpr float fast_dt = 1.0f / 240.0f;
+  zfix::options().per_second = true;
+  for (const bool remote : {false, true}) {
+    const auto reference = mech_contact(reference_dt, 15, remote);
+    for (const int fps : {30, 144, 240}) {
+      const auto totals = mech_contact(1.0f / fps, fps / 2, remote);
+      expect_contact_total(totals.own_ct, reference.own_ct);
+      if (remote) {
+        expect_contact_total(totals.net.damage, reference.net.damage);
+        expect_contact_total(totals.net.z, reference.net.z);
+        EXPECT(totals.net.x == 0.0);
+        EXPECT(totals.net.calls == fps / 2);
+        EXPECT(totals.other_ct == 0.0f && totals.other_velocity.z == 0.0f);
+      } else {
+        expect_contact_total(totals.other_ct, reference.other_ct);
+        expect_contact_total(totals.other_velocity.z, reference.other_velocity.z);
+        EXPECT(totals.other_velocity.x == 0.0f);
+      }
+    }
+    const auto zero_dt = mech_contact(0.0f, 1, remote);
+    EXPECT(zero_dt.damage_calls == 0 && zero_dt.net.calls == 0);
+    EXPECT(zero_dt.other_velocity.x == 0.0f && zero_dt.other_velocity.z == 0.0f);
+  }
+
+  const auto zero_max = mech_contact(reference_dt, 1, false, 200.0f, 0.0f);
+  EXPECT(zero_max.own_ct == 0.0f && zero_max.other_ct == 0.0f);
+  EXPECT(std::isfinite(zero_max.other_velocity.z));
+  const auto runaway = mech_contact(reference_dt, 1, false, 200.0f);
+  // Equal tonnage shares the capped 2 * 0.02 damage between the two mechs.
+  EXPECT(runaway.own_ct == 0.01f && runaway.other_ct == 0.02f);
+  EXPECT(std::isfinite(runaway.other_velocity.z));
+
+  const auto one_step = mech_contact(reference_dt, 1, false);
+  zfix::options().per_second = false;
+  const auto legacy = mech_contact(fast_dt, 1, false);
+  EXPECT(legacy.own_ct == 0.005f && legacy.other_ct == 0.01f);
+  EXPECT(legacy.other_velocity.z == -0.5f);
+  EXPECT(one_step.own_ct == legacy.own_ct && one_step.other_ct == legacy.other_ct);
+  EXPECT(one_step.other_velocity.z == legacy.other_velocity.z);
+}
+
+TEST(fix_wall_push_ignores_vertical_speed) {
+  MovementTestGuard guard;
+  using zgeo::X;
+  mech3::skis_calls() = {};
+  mech3::collide_calls() = {};
+  static float jolt;
+  mech3::collide_calls().ff_jolt = [](const float*, float amount) { jolt = amount; };
+  mech3::World& world = mech3::world();
+  mech3::Mech* const saved_player = world.mission_player;
+  const bool saved_feedback = world.force_feedback;
+  world.force_feedback = true;
+  const auto hit = test_wall_hit();
+  float throttle_after_contact = 0.0f;
+  auto wall_push = [&](float horizontal, float vertical, float max_speed) {
+    mech3::Mech& mech = *bare_mech();
+    world.mission_player = &mech;
+    jolt = -1.0f;
+    mech.frame_dt = 1.0f / 240.0f;
+    mech.vec_3c = {0.0f, vertical, horizontal};
+    mech.max_speed = max_speed;
+    mech.controls->throttle = 0.75f;
+    mech.wall_response(hit);
+    throttle_after_contact = mech.controls->throttle;
+    return mech.push;
+  };
+
+  zfix::options().per_second = true;
+  const auto flat = wall_push(10.0f, 0.0f, 10.0f);
+  const auto vertical = wall_push(10.0f, 200.0f, 10.0f);
+  EXPECT(flat.z != 0.0f && flat.x == vertical.x && flat.z == vertical.z);
+  EXPECT(throttle_after_contact == crt::x87_mul_f24(0.75f, std::pow(0.1, 0.125)));
+  wall_push(200.0f, 0.0f, 0.0f);
+  EXPECT(jolt == 0.0f);
+  wall_push(200.0f, 0.0f, 10.0f);
+  EXPECT(jolt == 2.0f);
+
+  zfix::options().per_second = false;
+  const auto legacy = wall_push(10.0f, 200.0f, 10.0f);
+  const float legacy_speed = sqrt(X(200.0f) * 200.0f + X(10.0f) * 10.0f).f();
+  EXPECT(legacy.x == 0.0f && legacy.z == (-X(legacy_speed) * 0.1f).f());
+  EXPECT(jolt == legacy_speed / 10.0f);
+  EXPECT(throttle_after_contact == crt::x87_mul_f24(0.75f, 0.1));
+  world.mission_player = saved_player;
+  world.force_feedback = saved_feedback;
+}
+
+struct VehicleRamTotals {
+  double damage = 0.0;
+  int calls = 0;
+  float velocity[3] = {1, 2, 3};
+  float spin[3] = {4, 5, 6};
+};
+
+VehicleRamTotals vehicle_ram(float dt, int frames) {
+  mech3::Mech& mech = *bare_mech();
+  mech.frame_dt = dt;
+  mech.max_speed = 10.0f;
+  mech.vec_3c = mech.velocity = {0.0f, 0.0f, -1.0f};
+  static zcls::Node vehicle_node{};
+  auto hit = test_wall_hit();
+  hit.hit.node = &vehicle_node;
+  mech.collider.vehicles.push_back(hit);
+
+  static VehicleRamTotals totals;
+  totals = VehicleRamTotals{};
+  mech3::skis_calls() = {};
+  mech3::CollideCalls& calls = mech3::collide_calls();
+  calls = {};
+  // One token is enough to stand in for the entity, target and body.
+  calls.node_entity = calls.entity_target = calls.entity_body = [](mech3::Handle node) { return node; };
+  calls.entity_damage = [](mech3::Handle, float amount) {
+    totals.damage += amount;
+    ++totals.calls;
+    return 0;
+  };
+  calls.body_velocity = [](mech3::Handle) -> float* { return totals.velocity; };
+  calls.body_spin = [](mech3::Handle) -> float* { return totals.spin; };
+  calls.body_mass = [](mech3::Handle) { return 0.5f; };
+  for (int frame = 0; frame < frames; ++frame) mech.vehicle_response();
+  EXPECT(mech.blocked[0]);
+  return totals;
+}
+
+TEST(fix_vehicle_ram_same_per_second) {
+  MovementTestGuard guard;
+  zfix::options().fpu53 = true;
+  constexpr float reference_dt = 1.0f / 30.0f;
+  zfix::options().per_second = true;
+  const auto reference = vehicle_ram(reference_dt, 15);
+  for (const int fps : {30, 144, 240}) {
+    const auto totals = vehicle_ram(1.0f / fps, fps / 2);
+    EXPECT(totals.calls == fps / 2);
+    expect_contact_total(totals.damage, reference.damage);
+    expect_contact_total(totals.velocity[2] - 3.0f, reference.velocity[2] - 3.0f);
+    EXPECT(totals.spin[2] == totals.velocity[2]);
+  }
+  const auto zero_dt = vehicle_ram(0.0f, 1);
+  const VehicleRamTotals initial;
+  EXPECT(zero_dt.calls == 0 && zero_dt.damage == 0.0);
+  for (int axis = 0; axis < 3; ++axis) {
+    EXPECT(zero_dt.velocity[axis] == initial.velocity[axis]);
+    EXPECT(zero_dt.spin[axis] == initial.spin[axis]);
+  }
+
+  const auto one_step = vehicle_ram(reference_dt, 1);
+  zfix::options().per_second = false;
+  const auto legacy = vehicle_ram(1.0f / 240.0f, 1);
+  using zgeo::X;
+  const float expected_damage = (X(1.0f) / 100.0f * 20.0f).f();
+  const X shove = X(bare_mech()->tonnage()) * 0.5f * 0.1f;
+  EXPECT(legacy.calls == 1 && legacy.damage == expected_damage);
+  EXPECT(legacy.velocity[2] == (X(3.0f) + (shove * -1.0f).f()).f());
+  EXPECT(legacy.spin[2] == legacy.velocity[2]);
+  EXPECT(one_step.damage == legacy.damage);
+  EXPECT(one_step.velocity[2] == legacy.velocity[2] && one_step.spin[2] == legacy.spin[2]);
+}
+
+struct CeilingContact {
+  float head, centre, left, right, crouch, vertical_speed;
+  int damage_calls, crouch_calls;
+};
+
+CeilingContact ceiling_contact(float dt, bool airborne) {
+  mech3::Mech& mech = *bare_mech();
+  CountingPart<mech3::Head> head;
+  CountingPart<mech3::Torso> torso;
+  mech3::Skis skis;
+  mech.head = &head;
+  mech.torso = &torso;
+  mech.skis = &skis;
+  skis.mech = &mech;
+  mech.frame_dt = dt;
+  mech.no_power_down = airborne;
+  if (airborne) mech.vec_3c.y = 3.0f;
+
+  static float crouch;
+  static int crouch_calls;
+  crouch = 0.0f;
+  crouch_calls = 0;
+  mech3::skis_calls() = {};
+  mech3::CollideCalls& calls = mech3::collide_calls();
+  calls = {};
+  calls.hit_box = [](mech3::Handle) -> const float* {
+    // 360 cubic metres produces a reference crush volume of exactly 0.5.
+    static const float box[6] = {0, 0, 0, 6, 6, 10};
+    return box;
+  };
+  calls.crouch = [](mech3::Hip&, float amount) {
+    crouch = amount;
+    ++crouch_calls;
+  };
+  mech.ceiling_response(mech3::CollisionHit{});
+  return {head.damage[0], torso.damage[0], torso.damage[1], torso.damage[2], crouch,
+          mech.vec_3c.y, head.calls + torso.calls, crouch_calls};
+}
+
+TEST(fix_ceiling_crush_same_per_second) {
+  MovementTestGuard guard;
+  constexpr float reference_dt = 1.0f / 30.0f;
+  zfix::options().per_second = true;
+  const auto reference = ceiling_contact(reference_dt, false);
+  const auto airborne = ceiling_contact(reference_dt, true);
+  EXPECT(reference.damage_calls == 4 && reference.crouch_calls == 1);
+  EXPECT(airborne.damage_calls == 1 && airborne.crouch_calls == 0);
+  EXPECT(airborne.vertical_speed < 0.0f);
+  for (const int fps : {30, 144, 240}) {
+    const float dt = 1.0f / fps;
+    const float steps = zfix::frame_steps(dt);
+    const auto crush = ceiling_contact(dt, false);
+    const auto head_knock = ceiling_contact(dt, true);
+    EXPECT(crush.damage_calls == 4 && crush.crouch_calls == 1);
+    EXPECT(std::fabs(crush.head - reference.head * steps) < 1e-7f);
+    EXPECT(std::fabs(crush.centre - reference.centre * steps) < 1e-7f);
+    EXPECT(std::fabs(crush.left - reference.left * steps) < 1e-7f && crush.left == crush.right);
+    EXPECT(crush.crouch == reference.crouch * steps);
+    EXPECT(head_knock.head == airborne.head * steps && head_knock.damage_calls == 1);
+  }
+  const auto zero_dt = ceiling_contact(0.0f, false);
+  const auto airborne_zero_dt = ceiling_contact(0.0f, true);
+  EXPECT(zero_dt.damage_calls == 0 && zero_dt.crouch_calls == 0);
+  EXPECT(airborne_zero_dt.damage_calls == 0 && airborne_zero_dt.crouch_calls == 0);
+  EXPECT(airborne_zero_dt.vertical_speed == airborne.vertical_speed);
+
+  zfix::options().per_second = false;
+  const auto legacy = ceiling_contact(1.0f / 240.0f, false);
+  const auto airborne_legacy = ceiling_contact(1.0f / 240.0f, true);
+  EXPECT(legacy.head == crt::x87_mul_f24(0.5f, 0.1));
+  EXPECT(legacy.centre == crt::x87_mul_f24(0.5f, 0.4));
+  EXPECT(legacy.left == crt::x87_mul_f24(0.5f, 0.25) && legacy.left == legacy.right);
+  EXPECT(legacy.crouch == 0.5f);
+  EXPECT(reference.head == legacy.head && reference.centre == legacy.centre);
+  EXPECT(reference.left == legacy.left && reference.right == legacy.right);
+  EXPECT(reference.crouch == legacy.crouch);
+  EXPECT(airborne_legacy.head == 0.002f && airborne.head == airborne_legacy.head);
+}
+
+template <typename Part>
+struct StillPart : Part {
+  void update(float) override {}
+};
+
+float yaw_during_wall_contact(int fps, bool steering) {
+  mech3::Mech& mech = *bare_mech();
+  StillPart<mech3::Torso> torso;
+  StillPart<mech3::Hip> hip;
+  StillPart<mech3::Leg> legs[2];
+  StillPart<mech3::Arm> arms[2];
+  mech3::Skis skis;
+  float transform[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+  mech.torso = &torso;
+  mech.hip = &hip;
+  for (int side = 0; side < 2; ++side) {
+    legs[side].foot = mech.foot(side);
+    mech.legs[side] = &legs[side];
+    mech.arms[side] = &arms[side];
+  }
+  mech.skis = &skis;
+  skis.mech = &mech;
+  mech.transform = transform;
+  mech.vec_3c.z = 10.0f;
+  mech.collides = true;
+  mech.last_hit_time = mech3::world().time;  // The hit timeout is unrelated to yaw.
+  zent::budget() = {};
+  zent::budget().per_frame = 0;
+  mech3::skis_calls() = {};
+  mech3::collide_calls() = {};
+  mech3::UpdateCalls& calls = mech3::update_calls();
+  calls = {};
+  calls.controls_update = [](mech3::Mech&, float) { return 1; };
+  // The bare mech has no gait or action data; this test needs only the turn.
+  calls.select_gait = [](mech3::Mech&, float) {};
+  calls.update_action = [](mech3::Mech&, float) {};
+  calls.turn = [](mech3::Mech&, float) {};
+  if (steering) calls.turn = [](mech3::Mech& m, float) { m.vec_58.y = -1.0f; };
+  calls.finish_power_down = [](mech3::Mech&) {};
+  calls.update_heat = [](mech3::Mech&, float) {};
+  calls.equipment_update = [](mech3::Mech&, float) {};
+  calls.translate = [](mech3::Handle, float, float, float) {};
+  calls.moved = [](mech3::Mech&) {};
+  calls.collide = [](mech3::Mech& m) {
+    m.wall_response(test_wall_hit());
+    return false;  // Let Update integrate the wall's kick into orientation.
+  };
+
+  const float dt = 1.0f / fps;
+  const bool per_second = zfix::options().per_second;
+  float legacy_yaw_rate = 0.0f;
+  for (int frame = 0; frame < fps / 2; ++frame) {
+    mech.update(dt);
+    if (steering) EXPECT(mech.vec_58.y < 0.0f);
+    if (!steering && frame == 0) EXPECT(mech.vec_58.y > 0.05f && mech.orientation[2] > 0.0f);
+    if (!per_second) {
+      // The exe applies a full kick each tick, including while steering.
+      legacy_yaw_rate = -legacy_yaw_rate * 3.0f * dt + legacy_yaw_rate;
+      if (std::fabs(legacy_yaw_rate) < 0.05f) legacy_yaw_rate = 0.0f;
+      if (steering) legacy_yaw_rate = -1.0f;
+      using zgeo::X;
+      legacy_yaw_rate = (X(10.0f) * mech.collider.yaw_kick + legacy_yaw_rate).f();
+      EXPECT(std::fabs(mech.vec_58.y - legacy_yaw_rate) < 1e-5f);
+    }
+  }
+  return 2.0f * std::atan2(mech.orientation[2], mech.orientation[0]);
+}
+
+TEST(fix_wall_yaw_kick_survives_and_does_not_spin_up) {
+  MovementTestGuard guard;
+  zfix::options().per_second = true;
+  const float yaw_at_30 = yaw_during_wall_contact(30, false);
+  const float yaw_at_240 = yaw_during_wall_contact(240, false);
+  EXPECT(yaw_at_30 > 0.0f);
+  EXPECT(yaw_at_240 > yaw_at_30 * 0.5f && yaw_at_240 < yaw_at_30 * 2.0f);
+  for (const int fps : {30, 240}) EXPECT(yaw_during_wall_contact(fps, true) < 0.0f);
+
+  zfix::options().per_second = false;
+  for (const int fps : {30, 240}) {
+    yaw_during_wall_contact(fps, false);
+    yaw_during_wall_contact(fps, true);
+  }
+}
+
+TEST(fix_ai_wall_reverse_once_per_tenth) {
+  MovementTestGuard guard;
+  constexpr float dt = 1.0f / 240.0f;
+  mech3::skis_calls() = {};
+  mech3::collide_calls() = {};
+  mech3::collide_calls().ai_reverses = [](mech3::Mech&) { return 1; };
+  const auto hit = test_wall_hit();
+  for (const bool per_second : {true, false}) {
+    zfix::options().per_second = per_second;
+    mech3::Mech& mech = *bare_mech();
+    mech.frame_dt = dt;
+    mech.controls->throttle = 0.75f;
+    float expected = mech.controls->throttle;
+    for (int frame = 0; frame <= 24; ++frame) {
+      // Derive elapsed time from the frame index to exercise the boundary
+      // without the accumulated rounding error of repeated float addition.
+      mech.alive_time = frame / 240.0f;
+      if (!per_second || frame == 0 || frame == 24) expected = -expected;
+      mech.wall_response(hit);
+      EXPECT(mech.controls->throttle == expected);
+    }
+    EXPECT(mech.last_wall_flip == (per_second ? mech.alive_time : -1.0f));
   }
 }
 
