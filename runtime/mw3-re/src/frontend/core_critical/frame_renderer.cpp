@@ -67,6 +67,7 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <cmath>
 #include <chrono>
 #include <unordered_set>
+#include <set>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1508,6 +1509,7 @@ private:
     pending_local_packets_.clear();
     pending_local_bytes_ = 0;
     submitted_textures_.clear();
+    receipts_to_restore_.clear();
     invalidate_scene_bindings();
     deferred_material_binding_.reset();
     native_context_ = {};
@@ -2285,6 +2287,7 @@ private:
       retired_geometry_buffers_ += renderer_->retired_model_buffers;
       initialize_renderer();
       submitted_textures_.clear();
+      receipts_to_restore_.clear();
       window_bound_ = false;
       resident_width_ = resident_height_ = 0;
       scene_ = {};
@@ -2859,10 +2862,13 @@ private:
 
   unsigned bind_texture(int handle, bool sharp) {
     // #496: the renderer frees textures when video memory runs out during play.
-    // Dropping their receipts makes this and later frames send their pixels
-    // again, which this frontend keeps for every live texture.
+    // Dropping their receipts makes the next frame that draws one send its
+    // pixels again, which this frontend keeps for every live texture. The
+    // receipt comes back once they are sent, so later frames don't copy them
+    // again; if that upload fails too, the renderer reports the key again.
     for (const auto freed_key : renderer_->take_freed_texture_keys())
-      submitted_textures_.erase(freed_key);
+      if (submitted_textures_.erase(freed_key))
+        receipts_to_restore_.insert(freed_key);
     auto &entry = textures_.at(handle);
     if (entry.pixels.empty()) {
       throw std::runtime_error("mw3-re draw references a released texture");
@@ -2894,6 +2900,8 @@ private:
       // Held readback is already straight RGBA at the output extent. Its
       // nearest SSAA sampling must preserve alpha-zero RGB as well.
       ref.pixels32 = entry.pixels;
+      if (receipts_to_restore_.erase(ref.key))
+        submitted_textures_[ref.key] = {ref.hash, w, h};
     }
     index = unsigned(scene_.textures.size());
     scene_.textures.push_back(std::move(ref));
@@ -2976,6 +2984,9 @@ private:
   std::mutex recycle_mutex_;
   std::vector<vk::Scene> recycled_scenes_;
   std::map<std::uint64_t, std::array<std::uint64_t, 3>> submitted_textures_;
+  // Receipts dropped because the renderer freed the texture (#496), restored
+  // once its pixels have been sent again.
+  std::set<std::uint64_t> receipts_to_restore_;
   const sdlfe::FrameShape *shape_{};
   vk::Scene scene_{};
   ::platform::ProducerView producer_view_{};

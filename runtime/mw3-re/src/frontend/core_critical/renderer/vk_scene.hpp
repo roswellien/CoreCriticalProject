@@ -1614,6 +1614,11 @@ public:
     settle();
     retire_height_images();
     ++render_frame_;
+    models_failed_this_frame_.clear();
+    textures_failed_this_frame_.clear();
+    // Stamp before any part of this frame (range backdrop captures render
+    // first) can free; render_scene stamps its own scene again.
+    mark_used_this_frame(s);
     // The previous GPU submission has completed. Indexed geometry owns no
     // live engine pointers and can retire once its source and packets expire.
     for (auto it = model_buffers.begin(); it != model_buffers.end();) {
@@ -1852,7 +1857,8 @@ private:
       if (awaiting != textures_awaiting_pixels_.end()) {
         // A mission preload may have uploaded it again in the meantime.
         const bool uploaded_again = current(t.key, t.hash, t.width, t.height);
-        if (!has_pixels && !uploaded_again) {
+        const bool failed_this_frame = textures_failed_this_frame_.count(t.key) != 0;
+        if ((!has_pixels || failed_this_frame) && !uploaded_again) {
           bound[i] = &white;
           stand_in_slots[i] = true;
           continue;
@@ -3658,10 +3664,17 @@ private:
   // upload receipt; until a frame brings them, the texture draws white.
   // Touched only by render(), so only on the render worker when one runs.
   std::set<std::uint64_t> textures_awaiting_pixels_;
+  // Models and textures that still didn't fit this frame, and whether this
+  // frame already freed what it could. A frame can ask for one geometry in
+  // hundreds of draws and in several passes; each failure costs a staging copy
+  // and a scan of both caches, so it is tried once per frame. Cleared when
+  // render_frame_ advances.
+  std::set<std::uint64_t> models_failed_this_frame_, textures_failed_this_frame_;
+  std::uint64_t freed_at_frame_{~std::uint64_t(0)};
   // Keys freed since the frontend last asked, so it can drop their receipts.
-  // render() runs on the render worker one frame ahead of the game thread that
-  // builds the next frame, hence the lock; the flag keeps the common case to
-  // one atomic load.
+  // render() runs on the render worker while the game thread builds later
+  // frames (up to 8 queued), hence the lock; frames already queued without the
+  // pixels draw white. The flag keeps the common case to one atomic load.
   std::mutex freed_texture_mutex_;
   std::vector<std::uint64_t> freed_texture_keys_;
   std::atomic<bool> freed_textures_waiting_{false};
@@ -3933,6 +3946,8 @@ private:
   // still fails, the model is left out of this frame (draw and sun shadow) and
   // tried again on the next one.
   ModelBuffer *model_buffer_or_skip(const ModelGeometry &g) {
+    if (models_failed_this_frame_.count(g.key))
+      return nullptr;
     try {
       ModelBuffer &b = model_buffer(g);
       b.last_used_frame = render_frame_;
@@ -3951,6 +3966,7 @@ private:
       return &b;
     } catch (const PreloadAllocationFailure &) {
       // model_buffer's own catch has already discarded the half-made buffer.
+      models_failed_this_frame_.insert(g.key);
       return nullptr;
     }
   }
@@ -3971,7 +3987,17 @@ private:
         old_keys.push_back(key);
     }
     for (const auto key : old_keys) {
-      destroy(textures.at(key));
+      Tex &texture = textures.at(key);
+      // Retained fixture shadow casters keep a Tex pointer across frames, even
+      // while culled; they are rebuilt from the scene when next drawn.
+      for (auto it = fixtureCasters.begin(); it != fixtureCasters.end();) {
+        if (it->second.texture == &texture) {
+          fixture_atlas_touch();
+          it = fixtureCasters.erase(it);
+        } else
+          ++it;
+      }
+      destroy(texture);
       textures.erase(key);
       mark_texture_awaiting_pixels(key);
     }
@@ -3985,6 +4011,10 @@ private:
     freed_textures_waiting_.store(true, std::memory_order_release);
   }
   void free_unused_resources() {
+    // Nothing becomes old enough again within the same frame.
+    if (freed_at_frame_ == render_frame_)
+      return;
+    freed_at_frame_ = render_frame_;
     free_unused_model_buffers(kFreeAgeFrames);
     free_unused_textures(kFreeAgeFrames);
   }
@@ -4018,6 +4048,7 @@ private:
       destroy(c);
       textures.erase(t.key);
       mark_texture_awaiting_pixels(t.key);
+      textures_failed_this_frame_.insert(t.key);
       return false;
     }
   }

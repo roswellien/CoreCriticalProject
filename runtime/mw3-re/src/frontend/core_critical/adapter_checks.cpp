@@ -2953,7 +2953,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     }
     {
       // (g) A freed texture the frontend holds a receipt for gets its pixels
-      // sent again: white for at most one frame, then its pixels.
+      // sent again: white only for frames already queued, then its pixels.
       auto preloaded = preloaded_texture_renderer(0);
       require(draw_texture(*preloaded, near_surface.handle) == expected_texture,
               "Preloaded texture did not draw");
@@ -2968,6 +2968,8 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                   is_texture_gpu_resident(*preloaded, near_surface.handle) &&
                   !texture_awaiting_pixels(*preloaded, near_surface.handle),
               "A freed preloaded texture did not draw its pixels again");
+      require(has_texture_receipt(*preloaded, near_surface.handle),
+              "A re-sent texture's receipt was not restored, so its pixels are copied every frame");
     }
     {
       // (h) A model failure never frees a texture the same frame draws, however
