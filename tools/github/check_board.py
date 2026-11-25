@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_pr_conventions
 
-REPOSITORY = "roswellien/MW3Recomp-Private"
+REPOSITORY = "roswellien/CoreCriticalProject"
 BOARD_OWNER = "roswellien"
 BOARD_NUMBER = 1
 

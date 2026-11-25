@@ -101,11 +101,17 @@ the wall, its along-wall part kept at full speed and the into-wall part times
 10 %, an AI's flips (controls vt +0x70). Yaw kick: speed * 0.01 away from the
 wall. The player gets a force-feedback jolt (0x4335d0 on [0x608620]).
 Quirk: the reflect helper 0x51e280 returns -v when N.v is 0.
+With zfix per_second (#484): push uses horizontal speed, throttle drops per
+1/30 s, and yaw takes the full kick below Update's 0.05 cutoff or adds a
+kick per 1/30 s on top of a turn. AI throttle still reverses on every wall
+response as in the exe: a reversal is a collision event, not a decay rate.
+The former 0.1 s gate skipped responses even at 30 fps and changed the gait.
 
 **Bump (in 0x4225c0)**, when nothing else resolved: the nearest AiTarget
 contact that is a mech (or the Mobile HQ) within 9 m pushes the mech away by
 (9 - d) * 1.1, adds |forward speed| * 0.6 to the push, sets the yaw rate to
 the turn rate * 1.8 away from it, throttle to 10 %, sound 13 for the player.
+With zfix per_second (#484): the shove and throttle drop count per 1/30 s.
 
 **Mech (0x423a20)**, the head entry only, unless allied: r = |v_xz|^2 /
 max_speed^2 * 0.02, split by tonnage: you take `other / sum` of it on the
@@ -113,11 +119,15 @@ torso front (0.5) and both side torsos (0.25 each), or a leg when a foot
 probe hit; the other mech takes `yours / sum` on its torso and gets 0.1 x
 your share of your velocity added (a network message 0x18 for remote mechs).
 Then the wall response.
+With zfix per_second (#484): damage and shove (including network shove) count
+per 1/30 s, with the squared-speed ratio capped at 2.
 
 **Vehicle (0x4237c0)**: a non-allied vehicle or the Mobile HQ takes
 |v_xz|^2 / max_speed^2 * 20 damage (vt +0x160); if that kills it nothing
 blocks; otherwise its body is shoved by v * tonnage * body +0x9b0 * 0.1,
 and the wall response runs. Dead units are ignored by the foot probes.
+With zfix per_second (#484): ramming damage and body shove count per 1/30 s,
+with the squared-speed ratio capped at 2.
 
 **In the program (2026-10-29).** Until then a mech walked through every
 vehicle: the vehicle hooks were unset, so 0x4237c0 found no target.
@@ -177,6 +187,8 @@ happened in play). `mission_c1m1_ceiling_crush_uses_the_box_headless`: a
 boxed node of c1's world as the ceiling, the hip's drop exactly v x the
 crouch depth; a node without a box does nothing. Breaks: hit_box unwired,
 the box read from +0x80, the flag ignored.
+With zfix per_second (#484): crush damage, crouch and the airborne head knock
+count per 1/30 s.
 
 After the responses the segments are queried again; the mech stays blocked
 while touch, ceiling or wall hits remain, and only then are the probe

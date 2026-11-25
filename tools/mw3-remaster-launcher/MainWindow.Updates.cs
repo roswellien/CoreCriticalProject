@@ -11,11 +11,17 @@ public partial class MainWindow
     private DispatcherTimer? _updateNotificationTimer;
     private CancellationTokenSource? _updateNotificationCancellation;
     private Task? _updateNotificationCheck;
+    private Task? _startupUpdateReconciliation;
     private bool _onlineUpdatesOpen;
     private bool _updateNotificationsClosed;
 
     private void StartUpdateNotifications()
     {
+        if (_updateNotificationsClosed) return;
+        // Snapshot settings on the UI thread. Local receipt checks run at every startup,
+        // including the default preference with automatic network checks disabled.
+        _startupUpdateReconciliation ??= OnlineUpdateService.ReconcileAtStartupAsync(
+            _basePath, _settingsMgr.Current.GamePath, _dataRoot);
         if (_updateNotificationsClosed || !_settingsMgr.Current.AutomaticUpdateChecks ||
             !File.Exists(Path.Combine(_basePath, "online-updates.json"))) return;
         if (_updateNotificationTimer == null)
@@ -82,6 +88,7 @@ public partial class MainWindow
         var game = _settingsMgr.Current.GamePath;
         try
         {
+            if (_startupUpdateReconciliation != null) await _startupUpdateReconciliation;
             var result = await Task.Run(async () =>
             {
                 using var service = new OnlineUpdateService(_basePath, game, _dataRoot);
@@ -121,6 +128,7 @@ public partial class MainWindow
             // Release the background service's workflow lock before the manual updater
             // checks/downloads/installs. Cancellation alone does not release that lock.
             _updateNotificationCancellation?.Cancel();
+            if (_startupUpdateReconciliation != null) await _startupUpdateReconciliation;
             if (_updateNotificationCheck != null) await _updateNotificationCheck;
             if (_updateNotificationsClosed) return;
             new OnlineUpdatesWindow(_basePath, _settingsMgr.Current.GamePath) { Owner = this }.ShowDialog();

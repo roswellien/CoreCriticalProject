@@ -3259,8 +3259,14 @@ TEST(mods_screen_add_mod_headless) {
     EXPECT(std::filesystem::equivalent(opened, wd + "/mods"));
     std::printf("  export: offered %s; %s; %s; %s\n", offered.c_str(), exporting_note.c_str(), exported_note.c_str(), cancelled_note.c_str());
     EXPECT(offered == "Desert Pack.zip" && exporting_note == "Exporting to Desert Pack.zip...");
+#if MW3_HAVE_LIBARCHIVE
     EXPECT(exported_note.find("Exported Desert Pack to Desert Pack.zip (2 files).") == 0);  // notes.txt and the mod.txt written at its add
     EXPECT(std::filesystem::is_regular_file(src + "/out/Desert Pack.zip") && cancelled_note == "Not exported.");
+#else
+    // A build without libarchive can't write a zip: EXPORT says so and writes nothing.
+    EXPECT(exported_note.find("Not exported: this build cannot write archives.") == 0);
+    EXPECT(!std::filesystem::exists(src + "/out/Desert Pack.zip") && cancelled_note == "Not exported.");
+#endif
     app.stop_game();
     app.exit_instance();
     mech3::set_app(nullptr);
@@ -18448,14 +18454,15 @@ TEST(mission_c1m4_dominic_fires_on_a_target_headless) {
     // Since the probes land in the frame's own step above 30 fps (W31,
     // Skis::integrate) his walk differs: longer aiming, fewer firing frames.
     // Since the firing's real waits (W34, 3/6/1 s for the port's zeros) he
-    // keeps a plan to its end and rests between bursts: his first pick is
-    // ghsD5 (was ghsD2), his walk and contacts differ, the hut still falls.
+    // keeps a plan to its end and rests between bursts, so his walk and
+    // contacts differ and the hut still falls. Collision responses scaled to
+    // 1/30 s steps (#484) change his walk again: his first pick is ghsD3.
     std::printf("  dominic's target: contacts %d, first %s, on target %d, aiming %d, firing %d, health %.5f\n",
                 seen.target_contacts, seen.first_target.c_str(), seen.on_target, seen.aiming, seen.firing, seen.health);
     EXPECT(seen.hut != 0 && seen.health0 == 30.0f && seen.on_target > 0 && seen.firing > 0 && seen.health < seen.health0);
     if (data_is_12()) {
-      EXPECT(seen.target_contacts == 4869 && seen.first_target == "ghsD5");
-      EXPECT(seen.on_target == 938 && seen.aiming == 72 && seen.firing == 804);
+      EXPECT(seen.target_contacts == 4706 && seen.first_target == "ghsD3");
+      EXPECT(seen.on_target == 938 && seen.aiming == 235 && seen.firing == 694);
       EXPECT(std::fabs(seen.health - 0.0f) < 1e-3f);
     }
     mech3::missions().cleanup(false);

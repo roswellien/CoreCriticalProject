@@ -350,6 +350,51 @@ static class PlaytestSupportChecks
             File.WriteAllText(hangErrorLog, "Startup: Checking game files...\nERROR: authored hang fixture failure\n");
             Check(PlaytestDiagnostics.FailureSummary(hangErrorLog, hang).Contains("authored hang fixture failure"),
                 "Hang text replaced a specific error line");
+
+            // The runtime's exit-on-error lines (runtime/mw3-re/src/frontend/sdl/mw3_main.cpp)
+            // name the failure; they beat generic error lines, and native faults beat them.
+            const string gameLoopLine =
+                "mw3: game loop exception (class std::runtime_error): Local lights: invalid projection";
+            const string nativeFaultLine = "mw3: crashed: exception 0xc0000005 at 0x00401000";
+            var summaryCase = 0;
+            string SummaryFor(string launchLog, string nativeStderr = null)
+            {
+                var sessionDir = Path.Combine(root, "session-game-loop-" + summaryCase++);
+                Directory.CreateDirectory(Path.Combine(sessionDir, "native"));
+                var logPath = Path.Combine(sessionDir, "mw3-re.log");
+                File.WriteAllText(logPath, launchLog);
+                if (nativeStderr != null)
+                    File.WriteAllText(Path.Combine(sessionDir, "native", "stderr.txt"), nativeStderr);
+                return PlaytestDiagnostics.FailureSummary(logPath);
+            }
+            Check(SummaryFor("Startup: Checking game files...\n" + gameLoopLine + "\n") == gameLoopLine,
+                "Game loop exception line was not the failure summary");
+            Check(SummaryFor("ERROR: authored earlier error\n" + gameLoopLine + "\n") == gameLoopLine,
+                "Earlier ERROR line beat the game loop exception line");
+            Check(SummaryFor("mw3: rendering failed: authored render failure\n") ==
+                "mw3: rendering failed: authored render failure",
+                "Rendering failed line was not the failure summary");
+            Check(SummaryFor("mw3: game loop exception (non-standard C++ exception)\n") ==
+                "mw3: game loop exception (non-standard C++ exception)",
+                "Non-standard game loop exception line was not the failure summary");
+            Check(SummaryFor("mw3: game loop failed with an empty exception\n") ==
+                "mw3: game loop failed with an empty exception",
+                "Empty game loop exception line was not the failure summary");
+            Check(SummaryFor(gameLoopLine + "\nmw3: rendering failed: authored render failure\n") ==
+                gameLoopLine,
+                "Game loop exception line did not win over a rendering failed line");
+            Check(SummaryFor(gameLoopLine + "\n", "mw3: rendering failed: authored render failure\n") ==
+                gameLoopLine,
+                "Rendering failed line in stderr won over a game loop line in the launch log");
+            Check(SummaryFor(gameLoopLine + " [launcher elapsed 1234 ms]\n") == gameLoopLine,
+                "Launcher elapsed suffix was kept on the game loop summary");
+            Check(SummaryFor(gameLoopLine + "\n", "ERROR: authored stderr error\n") == gameLoopLine,
+                "ERROR line in stderr won over a game loop line in the launch log");
+            Check(SummaryFor(nativeFaultLine + "\n", gameLoopLine + "\n") == nativeFaultLine,
+                "Game loop line in stderr beat a native fault in the launch log");
+            Check(SummaryFor(nativeFaultLine + "\n", "ERROR: authored stderr error\n") ==
+                nativeFaultLine,
+                "Generic stderr line beat a native fault in the launch log");
             using (var hangReport = JsonSerializer.SerializeToDocument(PlaytestDiagnostics.CreateCrashReport(
                 settings.Current, Array.Empty<PackManifest>(), staleLauncherLog, app, "1.2.3", hang)))
             {
