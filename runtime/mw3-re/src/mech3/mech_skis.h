@@ -90,7 +90,8 @@ class Skis {
 
   static float pick_ground(const GroundHits& hits, int* best, float probe_y, float step,
                            bool water_not_ground, int32_t* in_water, float* surface);  // 0x00477820
-  static bool integrate(float* y, float* vy, float dt, float ground, float gravity);  // 0x00477940
+  // 0x00477940. The port passes jetting to keep active jet climb; the exe has no such parameter.
+  static bool integrate(float* y, float* vy, float dt, float ground, float gravity, bool jetting = false);
   static bool slope_slide(const GroundHit& c, Vec3* push, float dt);                  // 0x00477620
 };
 

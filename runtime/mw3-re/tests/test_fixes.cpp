@@ -15,6 +15,7 @@
 #include <unistd.h>
 #endif
 
+#include "gamez/zentity/zent_manager.h"
 #include "gamez/zinterp/zinterp.h"
 #include "gamez/zclass/light.h"
 #include "gamez/zclass/cls_data.h"
@@ -506,6 +507,162 @@ float touch_damage(float fps, bool per_second) {
   mech3::collide_calls() = mech3::CollideCalls{};
   zfix::options().per_second = true;
   return sum;
+}
+
+// Restore the shared movement hooks and settings before another test uses them.
+struct MovementTestGuard {
+  zfix::Options options;
+  mech3::SkisCalls skis_calls;
+  mech3::CollideCalls collide_calls;
+  mech3::MoveCalls move_calls;
+  mech3::UpdateCalls update_calls;
+  zent::Budget budget;
+  mech3::Environment environment;
+
+  MovementTestGuard() {
+    options = zfix::options();
+    skis_calls = mech3::skis_calls();
+    collide_calls = mech3::collide_calls();
+    move_calls = mech3::move_calls();
+    update_calls = mech3::update_calls();
+    budget = zent::budget();
+    environment = mech3::environment();
+  }
+
+  ~MovementTestGuard() {
+    zfix::options() = options;
+    mech3::skis_calls() = skis_calls;
+    mech3::collide_calls() = collide_calls;
+    mech3::move_calls() = move_calls;
+    mech3::update_calls() = update_calls;
+    zent::budget() = budget;
+    mech3::environment() = environment;
+  }
+};
+
+// The query has no context argument, so the fixture and stub share this height.
+float skis_test_ground = 0.0f;
+
+mech3::Skis& bare_skis(float ground_height) {
+  mech3::Mech& mech = *bare_mech();
+  static mech3::Skis skis;
+  static float transform[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+  static mech3::Vec3 foot_translation[2] = {};
+  transform[10] = 0.0f;
+  mech.transform = transform;
+  mech.detail = 0;  // Simple mode isolates the centre probe.
+  for (int side = 0; side < 2; ++side) mech.foot(side)->translation = &foot_translation[side];
+
+  skis = mech3::Skis{};
+  skis.mech = &mech;
+  mech.skis = &skis;
+  skis.length = 12.0f;
+  skis.half = skis.length * 0.5f;
+  skis.inv_half = 1.0f / skis.half;
+  skis.inv_half2 = skis.inv_half * skis.inv_half;
+
+  skis_test_ground = ground_height;
+  mech3::skis_calls() = mech3::SkisCalls{};
+  mech3::skis_calls().query = [](mech3::Vec3*, int count, float, mech3::GroundHits* hits) {
+    for (int probe = 0; probe < count; ++probe) {
+      hits[probe].count = 1;
+      hits[probe].hit[0].height = skis_test_ground;
+      hits[probe].hit[0].normal = {0.0f, 1.0f, 0.0f};
+    }
+  };
+  skis.reset();
+  return skis;
+}
+
+TEST(fix_skis_step_up_floored_at_any_rate) {
+  MovementTestGuard guard;
+  constexpr float reference_dt = 1.0f / 30.0f;
+  constexpr float ground_height = 2.0f;
+  for (const float dt : {reference_dt, 1.0f / 144.0f, 1.0f / 240.0f, 0.0f}) {
+    const float legacy_speed = dt == reference_dt ? ground_height / reference_dt
+                                                  : static_cast<float>(ground_height / 0.0333);
+    const float expected_speed = dt == reference_dt ? 60.0f : 60.06f;
+    for (const bool per_second : {true, false}) {
+      zfix::options().per_second = per_second;
+      float height = 0.0f;
+      float speed = 0.0f;
+      EXPECT(mech3::Skis::integrate(&height, &speed, dt, ground_height, 0.0f, false));
+      EXPECT(height == ground_height);
+      if (per_second) {
+        EXPECT(std::isfinite(speed));
+        EXPECT(std::fabs(speed - expected_speed) < expected_speed * 0.002f);
+      } else {
+        EXPECT(speed == legacy_speed);
+      }
+    }
+  }
+}
+
+TEST(fix_skis_snap_down_floored_at_any_rate) {
+  MovementTestGuard guard;
+  mech3::environment().gravity = 0.0f;  // Isolate the snap from ground pull.
+  for (const float dt : {1.0f / 144.0f, 1.0f / 240.0f, 0.0f}) {
+    zfix::options().per_second = true;
+    mech3::Skis& skis = bare_skis(-2.0f);
+    EXPECT(!skis.update(dt));
+    // Grounded probes clear their own velocities after passing the snap to the body.
+    const float speed = skis.mech->vec_3c.y;
+    EXPECT(std::isfinite(speed));
+    EXPECT(speed >= -60.2f && speed < -60.0f);
+    EXPECT(skis.clearance[6] == 0.0f);
+
+    if (dt > 0.0f) {
+      zfix::options().per_second = false;
+      mech3::Skis& legacy_skis = bare_skis(-2.0f);
+      EXPECT(!legacy_skis.update(dt));
+      EXPECT(legacy_skis.mech->vec_3c.y == -2.0f / dt);
+    }
+  }
+}
+
+TEST(fix_skis_jets_lift_uphill_at_any_rate) {
+  MovementTestGuard guard;
+  zfix::options().per_second = true;
+  mech3::environment() = mech3::Environment{};
+  constexpr float ground_rise = 3.0f;
+  constexpr float clearance_limit = 0.2f;
+  for (const int fps : {30, 144, 240, 500, 1000}) {
+    mech3::Skis& skis = bare_skis(0.0f);
+    mech3::Mech& mech = *skis.mech;
+    const float dt = 1.0f / fps;
+    int frames = 0;
+    auto advance = [&] {
+      skis_test_ground = ground_rise * (++frames * dt);
+      const bool airborne = skis.update(dt);
+      mech.transform[10] += mech.vec_3c.y * dt;
+      return airborne;
+    };
+
+    mech.impulse.y = 180.0f * dt;
+    // At 30 FPS, use a longer hop so a one-frame snap overshoot does not
+    // turn the next frame into a genuine step back up onto the rising ground.
+    const int minimum_thrust_frames = fps == 30 ? 6 : 0;
+    while (frames < fps / 2) {
+      advance();
+      if (frames >= minimum_thrust_frames && skis.clearance[6] > clearance_limit) break;
+    }
+    EXPECT(skis.clearance[6] > clearance_limit);
+
+    mech.impulse.y = 0.0f;
+    bool grounded = false;
+    const int release_frames = 2 * fps;
+    for (int frame = 0; frame < release_frames; ++frame) {
+      const bool airborne = advance();
+      if (!airborne) grounded = true;
+      if (grounded) {
+        // The ground's float height rounds differently on successive frames.
+        EXPECT(mech.vec_3c.y <= ground_rise + 0.001f);
+        EXPECT(std::fabs(skis.clearance[6]) <= clearance_limit);
+      }
+    }
+    EXPECT(grounded);
+    EXPECT(std::fabs(mech.transform[10] - skis_test_ground) <= clearance_limit);
+  }
 }
 
 float wading_speed(float depth, bool fixed) {

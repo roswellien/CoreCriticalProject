@@ -180,7 +180,7 @@ float Skis::pick_ground(const GroundHits& hits, int* best, float probe_y, float 
 
 // Mech3.exe 1.2 @ 0x00477940. Lands on the ground with the speed that takes
 // it there in one step (no shorter than 1/30 s); true for a hard landing.
-bool Skis::integrate(float* y, float* vy, float dt, float ground, float gravity) {
+bool Skis::integrate(float* y, float* vy, float dt, float ground, float gravity, bool jetting) {
   const X v0 = X(*vy) - X(gravity) * dt;
   *vy = v0.f();
   const X y1 = X(dt) * v0 + *y;  // v0 and y1 stay on the x87; the test reads them there
@@ -190,10 +190,14 @@ bool Skis::integrate(float* y, float* vy, float dt, float ground, float gravity)
   }
   const double span = dt < 0.0333 ? 0.0333 : dt;  // 0x005c3790
   const float v = (-(X(*y) - ground) / X(span)).f();
-  // FIX (B): there in this step at any rate, as at 30 fps; the 1/30 s floor
-  // left the probes under rising ground, eating the jets' climb (fixes.md).
-  // The hard landing keeps the floor's speed.
-  *vy = zfix::options().per_second ? -(*y - ground) / dt : v;
+  // FIX (B): the unfloored step launched mechs off rocks and bridge lips
+  // above 30 fps and divided by zero at dt == 0 (fixes.md, Frame rate, #484).
+  // Only active jet thrust keeps a larger climb so jets can lift uphill (W31).
+  if (zfix::options().per_second && jetting) {
+    *vy = v > *vy ? v : *vy;
+  } else {
+    *vy = v;
+  }
   *y = ground;
   return v > 20.0f;  // 0x005c3798
 }
@@ -281,12 +285,21 @@ bool Skis::update(float dt) {
     contact[j].x = world[j].x;
     contact[j].z = world[j].z;
     y[j] = world[j].y;
-    landed[j] = integrate(&y[j], &vy[j], dt, ground[j], g);
+    landed[j] = integrate(&y[j], &vy[j], dt, ground[j], g, m.impulse.y > 0.0f);
     clearance[j] = y[j] - ground[j];
     if (!air && clearance[j] < kSnap) {
       world[j].y = ground[j];
       y[j] = ground[j];
-      vy[j] = (X(vy[j]) - X(clearance[j]) / dt).f();
+      if (zfix::options().per_second) {
+        const double span = dt < 0.0333 ? 0.0333 : dt;
+        // A probe still above the ground and rising carries climb from jets
+        // just released. The snap only runs when !air, so thrust is off.
+        const bool carrying_jet_climb = clearance[j] > 0.0f && vy[j] > 0.0f;
+        if (carrying_jet_climb) vy[j] = 0.0f;
+        vy[j] = (X(vy[j]) - X(clearance[j]) / X(span)).f();
+      } else {
+        vy[j] = (X(vy[j]) - X(clearance[j]) / dt).f();
+      }
       clearance[j] = 0.0f;
     }
     if (!air) slid = slope_slide(contact[j], &m.push, dt) || slid;
