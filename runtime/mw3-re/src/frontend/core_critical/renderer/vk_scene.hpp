@@ -63,6 +63,7 @@
 #include "world_scene_vert.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -72,6 +73,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <set>
@@ -1812,6 +1814,7 @@ private:
     // it. std::map keeps pointers stable while additional model entries are
     // inserted.
     std::vector<ModelBuffer *> model_pending;
+    mark_used_this_frame(s);
     for (const auto &d : s.draws)
       if (d.model) {
         if (!gpu_models() || !d.model->geometry)
@@ -1837,9 +1840,27 @@ private:
     VkDeviceSize texBytes = 0;
     std::vector<std::pair<Tex *, const TextureRef *>> changed;
     std::vector<Tex *> bound(s.textures.size());
+    // Slots drawn with white this frame because their texture is waiting for
+    // pixels or didn't fit in video memory (#496).
+    std::vector<bool> stand_in_slots(s.textures.size());
     for (size_t i = 0; i < s.textures.size(); ++i) {
       const auto &t = s.textures[i];
+      const bool has_pixels = (t.format == TexFormat::rgba8888 ? t.pixels32.size()
+                                                                : t.pixels.size()) ==
+                              size_t(t.width) * t.height;
+      const auto awaiting = textures_awaiting_pixels_.find(t.key);
+      if (awaiting != textures_awaiting_pixels_.end()) {
+        // A mission preload may have uploaded it again in the meantime.
+        const bool uploaded_again = current(t.key, t.hash, t.width, t.height);
+        if (!has_pixels && !uploaded_again) {
+          bound[i] = &white;
+          stand_in_slots[i] = true;
+          continue;
+        }
+        textures_awaiting_pixels_.erase(awaiting);
+      }
       auto &c = textures[t.key];
+      c.last_used_frame = render_frame_;
       const bool needs_upload = !c.image || c.width != t.width ||
                                 c.height != t.height || c.hash != t.hash ||
                                 !c.valid;
@@ -1848,15 +1869,14 @@ private:
                        : nullptr);
       if (c.image && (c.width != t.width || c.height != t.height))
         destroy(c);
-      if (!c.image) {
-        if (take_play_fault(preload_fault_.fail_next_play_texture_allocations))
-          check_allocation(static_cast<VkResult>(preload_fault_.injected_result), "image memory");
-        create(c, t.width, t.height);
+      if (!c.image && !create_play_texture(c, t)) {
+        // create_play_texture erased c; draw white until the pixels come back.
+        bound[i] = &white;
+        stand_in_slots[i] = true;
+        continue;
       }
       if (c.hash != t.hash || !c.valid) {
-        if ((t.format == TexFormat::rgba8888
-                 ? t.pixels32.size()
-                 : t.pixels.size()) != size_t(t.width) * t.height)
+        if (!has_pixels)
           throw std::runtime_error(
               "Vulkan scene renderer: changed texture without pixels");
         if (bridge_config.parallax_materials) {
@@ -1877,6 +1897,7 @@ private:
       }
       bound[i] = &c;
     }
+    drop_height_on_stand_ins(s, stand_in_slots);
     std::vector<HeightUpload> pending_heights;
     const auto draw_heights = prepare_height_images(s, bound, pending_heights);
     {
@@ -2238,7 +2259,10 @@ private:
               "Scene normal texture slot out of range: draw=" +
               std::to_string(i) + " slot=" + std::to_string(d.normal_texture) +
               " textures=" + std::to_string(bound.size()));
-        Tex *t = (normal_active && d.normal_texture >= 0)
+        // A normal map waiting for its pixels shades flat rather than white (#496).
+        const bool normal_bound = normal_active && d.normal_texture >= 0 &&
+                                  !stand_in_slots[size_t(d.normal_texture)];
+        Tex *t = normal_bound
                      ? bound[size_t(d.normal_texture)]
                      : &flatNormal;
         const unsigned normal_sampler =
@@ -3061,6 +3085,9 @@ private:
     // which is a monotonically assigned version in native frontend scenes.
     std::uint64_t source_rgb565_hash{}, source_rgba8_hash{};
     bool valid{};
+    // render_frame_ of the last frame that created or drew this texture;
+    // textures unused for long enough are freed when video memory runs out (#496).
+    std::uint64_t last_used_frame{};
   };
 #include "parallax_gpu.inc"
   cc_mw3_re::platform::VulkanLoader loader;
@@ -3622,9 +3649,22 @@ private:
   std::map<std::uint64_t, ModelBuffer> model_buffers;
   // Counts render() calls; the clock for ModelBuffer::last_used_frame.
   std::uint64_t render_frame_{};
-  // Frames a model must go undrawn before it may be freed to make room: about
-  // five seconds at 60 fps, so nothing on screen or just behind the player is.
-  static constexpr std::uint64_t kModelFreeAgeFrames = 300;
+  // Frames a model or texture must go undrawn before it may be freed to make
+  // room: about five seconds at 60 fps, so nothing on screen or just behind the
+  // player is.
+  static constexpr std::uint64_t kFreeAgeFrames = 300;
+  // Textures freed during play whose pixels haven't come back yet (#496). The
+  // frontend keeps every texture's pixels but sends them only when it holds no
+  // upload receipt; until a frame brings them, the texture draws white.
+  // Touched only by render(), so only on the render worker when one runs.
+  std::set<std::uint64_t> textures_awaiting_pixels_;
+  // Keys freed since the frontend last asked, so it can drop their receipts.
+  // render() runs on the render worker one frame ahead of the game thread that
+  // builds the next frame, hence the lock; the flag keeps the common case to
+  // one atomic load.
+  std::mutex freed_texture_mutex_;
+  std::vector<std::uint64_t> freed_texture_keys_;
+  std::atomic<bool> freed_textures_waiting_{false};
   // Play-time video memory figures (#496), logged once and then at most once a minute.
   std::chrono::steady_clock::time_point video_memory_full_logged_at_{};
   std::size_t video_memory_full_log_count_{};
@@ -3904,7 +3944,7 @@ private:
     const VkDeviceSize model_bytes = VkDeviceSize(g.vertices.size()) * sizeof(ModelVertex) +
                                      VkDeviceSize(g.indices.size()) * sizeof(std::uint32_t);
     log_video_memory_full("model", model_bytes);
-    free_unused_model_buffers(kModelFreeAgeFrames);
+    free_unused_resources();
     try {
       ModelBuffer &b = model_buffer(g);
       b.last_used_frame = render_frame_;
@@ -3913,6 +3953,107 @@ private:
       // model_buffer's own catch has already discarded the half-made buffer.
       return nullptr;
     }
+  }
+  // Frees textures no frame has used for min_age_frames, once the GPU is done
+  // with them. The frontend keeps every texture's pixels, so a freed texture is
+  // uploaded again when a later frame brings them (see textures_awaiting_pixels_).
+  // Textures in a shared preload memory block return memory only once the whole
+  // block is free.
+  void free_unused_textures(std::uint64_t min_age_frames) {
+    settle();
+    std::vector<std::uint64_t> old_keys;
+    for (const auto &[key, texture] : textures) {
+      const bool old_enough = render_frame_ - texture.last_used_frame > min_age_frames;
+      const bool held_by_preload =
+          std::any_of(pending_preload_textures_.begin(), pending_preload_textures_.end(),
+                      [key = key](const PendingPreloadTexture &p) { return p.key == key; });
+      if (old_enough && !held_by_preload)
+        old_keys.push_back(key);
+    }
+    for (const auto key : old_keys) {
+      destroy(textures.at(key));
+      textures.erase(key);
+      mark_texture_awaiting_pixels(key);
+    }
+  }
+  // Records that a texture's GPU copy is gone and tells the frontend, which
+  // drops its upload receipt so the next frame that draws it sends its pixels.
+  void mark_texture_awaiting_pixels(std::uint64_t key) {
+    textures_awaiting_pixels_.insert(key);
+    std::lock_guard lock(freed_texture_mutex_);
+    freed_texture_keys_.push_back(key);
+    freed_textures_waiting_.store(true, std::memory_order_release);
+  }
+  void free_unused_resources() {
+    free_unused_model_buffers(kFreeAgeFrames);
+    free_unused_textures(kFreeAgeFrames);
+  }
+  // Creates a texture's image during play; false when video memory stays full.
+  // #496: a player's game ended when a texture did not fit during play. Now the
+  // figures are logged, old models and textures are freed and creation is tried
+  // once more; if that fails too, the cache entry is erased, the texture draws
+  // white this frame and is uploaded once a frame brings its pixels again.
+  bool create_play_texture(Tex &c, const TextureRef &t) {
+    auto create_once = [&] {
+      if (take_play_fault(preload_fault_.fail_next_play_texture_allocations))
+        check_allocation(static_cast<VkResult>(preload_fault_.injected_result), "image memory");
+      create(c, t.width, t.height);
+    };
+    try {
+      create_once();
+      return true;
+    } catch (const PreloadAllocationFailure &) {
+      if (preload_active_)
+        throw;
+      destroy(c);
+      // destroy() clears the age; keep this frame's texture out of the freeing below.
+      c.last_used_frame = render_frame_;
+    }
+    log_video_memory_full("texture", VkDeviceSize(t.width) * t.height * 4);
+    free_unused_resources();
+    try {
+      create_once();
+      return true;
+    } catch (const PreloadAllocationFailure &) {
+      destroy(c);
+      textures.erase(t.key);
+      mark_texture_awaiting_pixels(t.key);
+      return false;
+    }
+  }
+  // Stamps every model and texture this frame uses before anything is freed,
+  // so a video memory failure mid-frame never frees what the frame draws.
+  void mark_used_this_frame(const Scene &s) {
+    auto stamp_model = [&](const ModelGeometry *geometry) {
+      if (!geometry)
+        return;
+      const auto found = model_buffers.find(geometry->key);
+      if (found != model_buffers.end())
+        found->second.last_used_frame = render_frame_;
+    };
+    for (const auto &d : s.draws)
+      if (d.model)
+        stamp_model(d.model->geometry.get());
+    for (const auto &geometry : s.model_warmup)
+      stamp_model(geometry.get());
+    for (const auto &t : s.textures) {
+      const auto found = textures.find(t.key);
+      if (found != textures.end())
+        found->second.last_used_frame = render_frame_;
+    }
+  }
+  // Parallax checks each draw's height image against its real albedo and
+  // normal textures, which a white stand-in isn't. Such a draw renders without
+  // parallax for this frame. The scene is this frame's own packet.
+  static void drop_height_on_stand_ins(Scene &s, const std::vector<bool> &stand_in_slots) {
+    if (std::find(stand_in_slots.begin(), stand_in_slots.end(), true) == stand_in_slots.end())
+      return;
+    auto stand_in = [&](int slot) {
+      return slot >= 0 && size_t(slot) < stand_in_slots.size() && stand_in_slots[size_t(slot)];
+    };
+    for (auto &d : s.draws)
+      if (d.height_binding && (stand_in(d.texture) || stand_in(d.normal_texture)))
+        d.height_binding.reset();
   }
   // True for a model draw whose buffer model_buffer_or_skip left out this frame.
   bool model_skipped_this_frame(const Draw &d) const {
@@ -4031,7 +4172,8 @@ private:
       dedicated_info.buffer = buffer_handle;
       if (requirements_available && dedicated.requiresDedicatedAllocation)
         info.pNext = &dedicated_info;
-      if (!preload_active_ && take_play_fault(preload_fault_.fail_next_play_model_allocations))
+      const bool play_model_buffer = !preload_active_ && buffer_handle != VK_NULL_HANDLE;
+      if (play_model_buffer && take_play_fault(preload_fault_.fail_next_play_model_allocations))
         check_allocation(static_cast<VkResult>(preload_fault_.injected_result),
                          "immutable resource memory");
       check_allocation(allocate_memory(device, &info, nullptr, &allocation),
@@ -4296,6 +4438,22 @@ public:
   std::uint64_t render_frame() const { return render_frame_; }
   void free_unused_model_buffers_for_test(std::uint64_t min_age_frames) {
     free_unused_model_buffers(min_age_frames);
+  }
+  void free_unused_textures_for_test(std::uint64_t min_age_frames) {
+    free_unused_textures(min_age_frames);
+  }
+  bool texture_awaiting_pixels(std::uint64_t key) const {
+    return textures_awaiting_pixels_.count(key) != 0;
+  }
+  // Keys of textures freed since the last call, for the frontend to drop their
+  // upload receipts (#496). Safe to call from the game thread while render()
+  // runs on the render worker.
+  std::vector<std::uint64_t> take_freed_texture_keys() {
+    if (!freed_textures_waiting_.load(std::memory_order_acquire))
+      return {};
+    std::lock_guard lock(freed_texture_mutex_);
+    freed_textures_waiting_.store(false, std::memory_order_relaxed);
+    return std::exchange(freed_texture_keys_, {});
   }
   bool model_uploaded(std::uint64_t key) const {
     const auto found = model_buffers.find(key);
@@ -5305,6 +5463,7 @@ private:
   }
   void create(Tex &t, unsigned w, unsigned h) {
     t.levels = 1;
+    t.last_used_frame = render_frame_;
     if (anisotropy() > 1)
       for (unsigned n = std::max(w, h); n > 1; n >>= 1)
         ++t.levels;

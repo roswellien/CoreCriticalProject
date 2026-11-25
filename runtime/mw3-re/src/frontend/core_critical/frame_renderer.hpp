@@ -157,6 +157,9 @@ bool has_partial_model_buffer_entry(VulkanFrameRenderer &renderer,
 std::size_t video_memory_full_log_count(VulkanFrameRenderer &renderer);
 std::uint64_t scene_render_frame(VulkanFrameRenderer &renderer);
 void free_unused_model_buffers(VulkanFrameRenderer &renderer, std::uint64_t min_age_frames);
+void free_unused_textures(VulkanFrameRenderer &renderer, std::uint64_t min_age_frames);
+// True while a texture the renderer freed waits for a frame to bring its pixels.
+bool texture_awaiting_pixels(VulkanFrameRenderer &renderer, int32_t handle, bool sharp = false);
 std::uint64_t shared_texture_staging_size(VulkanFrameRenderer &renderer);
 bool shared_texture_staging_mapped(VulkanFrameRenderer &renderer);
 } // namespace testing

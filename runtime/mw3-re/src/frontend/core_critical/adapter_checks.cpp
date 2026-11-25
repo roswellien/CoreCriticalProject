@@ -2859,6 +2859,140 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                   is_model_geometry_gpu_uploaded(*aging, play_model_key),
               "A freed model did not upload again when drawn");
     }
+
+    // #496: a texture that doesn't fit during play must not end the game either.
+    auto play_texture_fault = [&](std::size_t texture_failures, std::size_t model_failures) {
+      auto renderer_with_fault = make_check_renderer(window, backend, quality, recovery_options);
+      renderer_with_fault->set_viewport(0, 0, 64, 64);
+      mw34::vkscene::PreloadFaultInjection fault{};
+      fault.fail_next_play_texture_allocations = texture_failures;
+      fault.fail_next_play_model_allocations = model_failures;
+      fault.injected_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+      set_preload_fault_injection(*renderer_with_fault, fault);
+      return renderer_with_fault;
+    };
+    auto draw_texture = [&](cc_mw3_re::VulkanFrameRenderer &target, int32_t handle) {
+      target.clear(true, 0, 0, 0);
+      platform::DrawState state{};
+      state.texture = handle;
+      quad(target, 0, 64, .1f, 0xffffffff, state);
+      std::vector<uint32_t> pixels;
+      int pixels_width = 0, pixels_height = 0;
+      require(target.read_back(&pixels, &pixels_width, &pixels_height) && pixels_width == 64 &&
+                  pixels_height == 64,
+              "Texture fault fixture did not render at the fixture extent");
+      return pixels;
+    };
+    // Untextured frames, to age a texture without drawing it.
+    auto age_to = [&](cc_mw3_re::VulkanFrameRenderer &target, std::uint64_t until_frame) {
+      while (scene_render_frame(target) < until_frame)
+        draw_texture(target, -1);
+    };
+    auto texture_control = play_texture_fault(0, 0);
+    const auto plain_texture = texture_control->create_texture(2, 2, native_pixels, 1);
+    const auto expected_texture = draw_texture(*texture_control, plain_texture);
+    const auto expected_white = draw_texture(*texture_control, -1);
+    require(expected_texture != expected_white,
+            "Texture fault fixture can't tell its texture from white");
+    // A renderer whose mission preload uploaded the nearby native albedo, so the
+    // frontend holds a receipt for it and stops sending its pixels.
+    auto preloaded_texture_renderer = [&](std::size_t model_failures) {
+      auto preloaded = play_texture_fault(0, model_failures);
+      mw34::materials::set_active_surface_key({2, 2, 1, 0x11223344ULL});
+      far_surface.handle = preloaded->create_texture(2, 2, native_pixels, 1);
+      near_surface.handle = preloaded->create_texture(2, 2, native_pixels, 1);
+      mw34::materials::clear_active_surface_key();
+      preloaded->mission_changed({});
+      require(has_texture_receipt(*preloaded, near_surface.handle) &&
+                  is_texture_gpu_resident(*preloaded, near_surface.handle),
+              "Texture fault fixture's preload left no receipt for the nearby albedo");
+      return preloaded;
+    };
+    {
+      // (d) One failure: old resources are freed, the retry succeeds, it draws.
+      auto retried = play_texture_fault(1, 0);
+      const auto handle = retried->create_texture(2, 2, native_pixels, 1);
+      require(draw_texture(*retried, handle) == expected_texture &&
+                  is_texture_gpu_resident(*retried, handle) &&
+                  video_memory_full_log_count(*retried) == 1,
+              "A play-time texture allocation failure was not retried");
+    }
+    {
+      // (e) Two failures: white this frame without an exception, its pixels next frame.
+      auto stand_in = play_texture_fault(2, 0);
+      const auto handle = stand_in->create_texture(2, 2, native_pixels, 1);
+      require(draw_texture(*stand_in, handle) == expected_white &&
+                  !is_texture_gpu_resident(*stand_in, handle) &&
+                  !has_partial_texture_cache_entry(*stand_in, handle) &&
+                  texture_awaiting_pixels(*stand_in, handle) &&
+                  video_memory_full_log_count(*stand_in) == 1,
+              "A texture that still didn't fit did not draw white cleanly");
+      require(draw_texture(*stand_in, handle) == expected_texture &&
+                  is_texture_gpu_resident(*stand_in, handle) &&
+                  !texture_awaiting_pixels(*stand_in, handle),
+              "A texture that didn't fit did not draw once its pixels came back");
+    }
+    {
+      // (f) Only textures unused past the age limit are freed, and a freed one
+      // draws its pixels again on its next use.
+      auto aging = play_texture_fault(0, 0);
+      const auto handle = aging->create_texture(2, 2, native_pixels, 1);
+      require(draw_texture(*aging, handle) == expected_texture, "Aging texture did not draw");
+      const auto drawn_at = scene_render_frame(*aging);
+      age_to(*aging, drawn_at + 300);
+      free_unused_textures(*aging, 300);
+      require(is_texture_gpu_resident(*aging, handle),
+              "A texture used within the age limit was freed");
+      age_to(*aging, drawn_at + 301);
+      free_unused_textures(*aging, 300);
+      require(!is_texture_gpu_resident(*aging, handle),
+              "A texture unused past the age limit was not freed");
+      require(draw_texture(*aging, handle) == expected_texture &&
+                  is_texture_gpu_resident(*aging, handle),
+              "A freed texture did not draw its pixels again");
+    }
+    {
+      // (g) A freed texture the frontend holds a receipt for gets its pixels
+      // sent again: white for at most one frame, then its pixels.
+      auto preloaded = preloaded_texture_renderer(0);
+      require(draw_texture(*preloaded, near_surface.handle) == expected_texture,
+              "Preloaded texture did not draw");
+      age_to(*preloaded, scene_render_frame(*preloaded) + 301);
+      free_unused_textures(*preloaded, 300);
+      require(!is_texture_gpu_resident(*preloaded, near_surface.handle),
+              "Preloaded texture was not freed");
+      const auto first = draw_texture(*preloaded, near_surface.handle);
+      require(first == expected_texture || first == expected_white,
+              "A freed preloaded texture drew neither its pixels nor white");
+      require(draw_texture(*preloaded, near_surface.handle) == expected_texture &&
+                  is_texture_gpu_resident(*preloaded, near_surface.handle) &&
+                  !texture_awaiting_pixels(*preloaded, near_surface.handle),
+              "A freed preloaded texture did not draw its pixels again");
+    }
+    {
+      // (h) A model failure never frees a texture the same frame draws, however
+      // old: this one has a receipt, so a freed copy couldn't come back in-frame.
+      auto preloaded = preloaded_texture_renderer(0);
+      require(draw_texture(*preloaded, near_surface.handle) == expected_texture,
+              "Preloaded texture did not draw");
+      age_to(*preloaded, scene_render_frame(*preloaded) + 301);
+      mw34::vkscene::PreloadFaultInjection model_fault{};
+      model_fault.fail_next_play_model_allocations = 1;
+      model_fault.injected_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+      free_unused_model_buffers(*preloaded, 0);
+      set_preload_fault_injection(*preloaded, model_fault);
+      frame(preloaded.get(), false, true);
+      platform::DrawState state{};
+      state.texture = near_surface.handle;
+      quad(*preloaded, 0, 64, .1f, 0xffffffff, state);
+      std::vector<uint32_t> ignored;
+      int ignored_width = 0, ignored_height = 0;
+      require(preloaded->read_back(&ignored, &ignored_width, &ignored_height) &&
+                  video_memory_full_log_count(*preloaded) == 1 &&
+                  is_texture_gpu_resident(*preloaded, near_surface.handle) &&
+                  !texture_awaiting_pixels(*preloaded, near_surface.handle),
+              "A model failure freed a texture drawn in the same frame");
+    }
   }
   require((first[20 * 64 + 23] & 0xff00) != 0 &&
               (first[20 * 64 + 23] & 255) == 0,

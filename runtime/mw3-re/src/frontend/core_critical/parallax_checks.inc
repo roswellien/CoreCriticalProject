@@ -916,6 +916,36 @@ void immutable_height_reuse_across_admission_stamps(vk::Renderer &renderer) {
   std::printf("pom_immutable_height_reuse_across_admission_stamps pass\n");
 }
 
+// #496: a parallax draw whose albedo or normal texture didn't fit in video
+// memory draws with a white stand-in and no parallax for that frame, instead of
+// failing the height check, and gets its parallax back once the texture fits.
+void parallax_stand_in_while_texture_waits(vk::Renderer &renderer) {
+  auto reference = fixture(Route::tl, Height::ramp_u, .08f, .1f, .7);
+  renderer.render(reference.scene);
+  const auto reference_uv = decode(reference.scene);
+  // The same textures under keys the renderer hasn't seen, so it must create
+  // their images now; the height check compares content, not keys.
+  auto with_new_keys = [] {
+    auto moved = fixture(Route::tl, Height::ramp_u, .08f, .1f, .7);
+    for (auto &texture : moved.scene.textures)
+      texture.key += 0x4960000000000000ULL;
+    return moved;
+  };
+  vk::PreloadFaultInjection fault{};
+  fault.fail_next_play_texture_allocations = 2;
+  fault.injected_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+  renderer.set_preload_fault(fault);
+  auto waiting = with_new_keys();
+  renderer.render(waiting.scene);
+  require(!waiting.scene.draws[0].height_binding,
+          "POM draw with a stand-in texture kept its height binding");
+  renderer.set_preload_fault({});
+  auto returned = with_new_keys();
+  renderer.render(returned.scene);
+  require(decode(returned.scene) == reference_uv,
+          "POM did not return once the waiting texture fit again");
+  std::printf("pom_stand_in_while_texture_waits pass\n");
+}
 void height_replacement_and_queued_retirement(vk::Renderer &renderer) {
   auto old = fixture(Route::tl, Height::constant, .04f, 0, .3);
   auto replacement = fixture(Route::tl, Height::ramp_u, .04f, 0, .3);
@@ -1003,6 +1033,7 @@ void check_parallax(SDL_Window *window, sdlfe::RendererBackend backend) {
     descriptor_identity_and_mixed_draws(renderer, uncombined);
     immutable_height_reuse_across_admission_stamps(renderer);
     height_replacement_and_queued_retirement(renderer);
+    parallax_stand_in_while_texture_waits(renderer);
     for (const auto quality : {vk::Renderer::Quality{1, 1, 16, true},
                                vk::Renderer::Quality{2, 1, 16, false},
                                vk::Renderer::Quality{2, 2, 16, false}}) {

@@ -2858,6 +2858,11 @@ private:
   }
 
   unsigned bind_texture(int handle, bool sharp) {
+    // #496: the renderer frees textures when video memory runs out during play.
+    // Dropping their receipts makes this and later frames send their pixels
+    // again, which this frontend keeps for every live texture.
+    for (const auto freed_key : renderer_->take_freed_texture_keys())
+      submitted_textures_.erase(freed_key);
     auto &entry = textures_.at(handle);
     if (entry.pixels.empty()) {
       throw std::runtime_error("mw3-re draw references a released texture");
@@ -3306,6 +3311,13 @@ std::uint64_t scene_render_frame(VulkanFrameRenderer &renderer) {
 }
 void free_unused_model_buffers(VulkanFrameRenderer &renderer, std::uint64_t min_age_frames) {
   preload_impl(renderer).backend_for_test().free_unused_model_buffers_for_test(min_age_frames);
+}
+void free_unused_textures(VulkanFrameRenderer &renderer, std::uint64_t min_age_frames) {
+  preload_impl(renderer).backend_for_test().free_unused_textures_for_test(min_age_frames);
+}
+bool texture_awaiting_pixels(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
+  return preload_impl(renderer).backend_for_test().texture_awaiting_pixels(
+      std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
 }
 std::uint64_t shared_texture_staging_size(VulkanFrameRenderer &renderer) {
   return preload_impl(renderer).backend_for_test().texture_staging_size();
