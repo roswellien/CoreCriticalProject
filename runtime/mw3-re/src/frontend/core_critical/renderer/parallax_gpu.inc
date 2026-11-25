@@ -67,7 +67,8 @@ void validate_height(const Scene &scene, const Draw &draw,
            value.find_first_not_of("0123456789abcdef") == std::string::npos;
   };
   if (!binding.image || !digest(binding.source_sha256) || !digest(binding.sidecar_sha256) ||
-      !binding.mesh_uv_hash || binding.image_version != 1 || !binding.producer_epoch ||
+      !binding.mesh_uv_hash ||
+      (binding.image_version != 1 && binding.image_version != 2) || !binding.producer_epoch ||
       !binding.texture_version || !binding.albedo.hash ||
       !binding.normal_hash || !binding.retained_decoded_bytes ||
       binding.retained_decoded_bytes > max_surface_sidecar_bytes ||
@@ -83,7 +84,7 @@ void validate_height(const Scene &scene, const Draw &draw,
   if (image.role != surface_role_height || !image.hash || !image.width || !image.height ||
       image.width > max_surface_dimension || image.height > max_surface_dimension ||
       image.pixels.size() != std::uint64_t(image.width) * image.height ||
-      image.pixels.size() * 4ULL > binding.retained_decoded_bytes)
+      image.pixels.size() > binding.retained_decoded_bytes)
     throw std::runtime_error("POM height image dimensions/role/reservation mismatch");
   VkPhysicalDeviceProperties properties{};
   f.vkGetPhysicalDeviceProperties(gpu, &properties);
@@ -172,11 +173,11 @@ std::vector<HeightImage *> prepare_height_images(const Scene &scene,
     auto found = height_images.find(key);
     if (found == height_images.end()) {
       const auto &source = *draw.height_binding->image;
-      const auto size = std::uint64_t(source.width) * source.height * 4;
+      const auto size = std::uint64_t(source.width) * source.height;
       if (size > mw34::materials::max_surface_sidecar_bytes ||
           height_resident_bytes > mw34::materials::max_surface_sidecar_bytes - size)
         throw std::runtime_error("POM resident GPU height cache exceeds its byte bound");
-      if (mw34::materials::normal_hash(source.pixels.data(), std::size_t(size)) != source.hash)
+      if (mw34::materials::normal_hash(source.pixels.data(), source.pixels.size()) != source.hash)
         throw std::runtime_error("POM immutable height image hash mismatch");
       found = height_images.emplace(key, HeightImage{}).first;
       auto &cached = found->second;
@@ -185,7 +186,7 @@ std::vector<HeightImage *> prepare_height_images(const Scene &scene,
       // behavior stays unchanged and atlas filtering has a bounded footprint.
       try {
         image(cached.texture.image, cached.texture.memory, cached.texture.view,
-              source.width, source.height, VK_FORMAT_R8G8B8A8_UNORM,
+              source.width, source.height, VK_FORMAT_R8_UNORM,
               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
               VK_IMAGE_ASPECT_COLOR_BIT);
       } catch (...) {

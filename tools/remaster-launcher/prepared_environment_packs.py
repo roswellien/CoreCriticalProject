@@ -396,7 +396,7 @@ def select(roots, host, verification=None):
                 if fmt=='ZBD-texture-v1':
                     if len(magic)!=24 or struct.unpack('<3I',magic[:12])!=(0,1,0): raise ValueError('Invalid texture bank')
                 elif fmt not in ('MW34-lighting-v1', MATERIAL_TARGET_FORMAT) and (fmt not in expected or not magic.startswith(expected[fmt])): raise ValueError('Mislabeled environment payload')
-                if fmt == 'BWSFM1' and (size > 256 * 1024**2 or
+                if fmt == 'BWSFM1' and (size > 512 * 1024**2 or
                         payload.get('required_capabilities', {}).get('surface-materials') != 1):
                     raise ValueError('Surface-materials capability/byte budget required')
                 if fmt == MATERIAL_TARGET_FORMAT and size > MATERIAL_TARGET_BYTES:

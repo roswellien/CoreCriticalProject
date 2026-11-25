@@ -18,7 +18,7 @@
 #include "mech3/mod_install.h"
 #include "mech3/patch_import.h"
 
-#ifdef MW3_HAVE_LIBARCHIVE
+#if MW3_HAVE_LIBARCHIVE
 #include <archive.h>
 #include <archive_entry.h>
 #endif
@@ -127,7 +127,7 @@ ModExportResult mod_export(const std::string& mod_dir, const std::string& zip_pa
   }
   const ModExportList list = mod_export_list(mod_dir);
   if (!list.error.empty()) return r.message = "Not exported: " + list.error + ".", r;
-#ifndef MW3_HAVE_LIBARCHIVE
+#if !MW3_HAVE_LIBARCHIVE
   return r.message = "Not exported: this build cannot write archives.", r;
 #else
   ModInfo info;

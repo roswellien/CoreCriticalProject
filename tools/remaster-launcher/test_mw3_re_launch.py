@@ -1002,6 +1002,20 @@ class NativePreviewPlanTests(unittest.TestCase):
                            if item.get("feature") == "surface_materials"]
                 self.assertEqual(len(skipped), 1)
 
+    def test_surface_material_reader_accepts_grayscale_v2_and_rgba_v1(self):
+        from test_surface_materials import _legacy_v1_sidecar_from_v2
+
+        _, _, sidecar = self.surface_sidecar("strider:close")
+        legacy = _legacy_v1_sidecar_from_v2(sidecar)
+        module = importlib.import_module("mw3_re_launch")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "height.bwsfm1"
+            for payload, version in ((sidecar, 2), (legacy, 1)):
+                with self.subTest(version=version):
+                    path.write_bytes(payload)
+                    parsed = module.read_surface_materials_file(path)
+                    self.assertEqual(parsed["version"], version)
+
     def test_invalid_choices_are_refused(self):
         for preview in ({"draw_distance": 1000}, {"draw_distance": "1200"}, {"hud": "neon"},
                         {"hud_text": True}, {"hud": "original", "hud_text": True}, {"geometry": "gpu"},

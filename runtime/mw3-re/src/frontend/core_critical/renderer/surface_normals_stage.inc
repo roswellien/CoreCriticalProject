@@ -200,7 +200,8 @@ void surface_normals_load() {
     std::memcpy(&version, native_bytes.data() + 8, 4);
     std::memcpy(&expected_polygons, native_bytes.data() + 12, 4);
     std::memcpy(&expected_hash, native_bytes.data() + 24, 8);
-    if (std::memcmp(native_bytes.data(), "BWSFM1\0\0", 8) || version != 1 ||
+    if (std::memcmp(native_bytes.data(), "BWSFM1\0\0", 8) ||
+        (version != 1 && version != 2) ||
         !expected_polygons || expected_polygons > 4096)
       throw std::runtime_error("Native material sidecar header is invalid");
   }

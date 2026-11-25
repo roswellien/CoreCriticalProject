@@ -49,7 +49,7 @@ _MAX_MATERIAL_NAME_BYTES = 31
 _MAX_SURFACE_RECORDS = 4096
 _MAX_SURFACE_IMAGES = 512
 _MAX_SURFACE_DIMENSION = 4096
-MAX_SIDECAR_BYTES = 256 * 1024 * 1024
+MAX_SIDECAR_BYTES = 512 * 1024 * 1024
 _NO_SURFACE_MATERIAL = 0xFFFFFFFF
 _NO_SURFACE_IMAGE = 0xFFFFFFFF
 _ROLE_HEIGHT = 1
@@ -232,7 +232,7 @@ def read_surface_materials_file(path, *, expected_asset_id=None, expected_mesh_u
     if take(8) != b"BWSFM1\0\0":
         raise ValueError("Unsupported surface material magic")
     version, batch_count, record_count, image_count, mesh_uv_hash = struct.unpack("<IIIIQ", take(24))
-    if version != 1:
+    if version not in (1, 2):
         raise ValueError(f"Unsupported surface material version: {version}")
     if (not 1 <= batch_count <= _MAX_TEXTURE_BATCHES or record_count > _MAX_SURFACE_RECORDS or
             image_count > _MAX_SURFACE_IMAGES):
@@ -315,7 +315,7 @@ def read_surface_materials_file(path, *, expected_asset_id=None, expected_mesh_u
                 not 1 <= width <= _MAX_SURFACE_DIMENSION or
                 not 1 <= height <= _MAX_SURFACE_DIMENSION):
             raise ValueError("Invalid surface material image header")
-        byte_count = width * height * 4
+        byte_count = width * height * (4 if version == 1 else 1)
         if decoded_total + byte_count > max_bytes:
             raise ValueError("Surface material decoded images exceed budget")
         decoded_total += byte_count
