@@ -37,6 +37,26 @@ public sealed class OnlineUpdateService : IDisposable
         ReconcileCompletedLauncherUpdate();
     }
 
+    /// <summary>Runs local restart cleanup independently of automatic network checks.</summary>
+    public static Task ReconcileAtStartupAsync(string application, string game,
+        string? dataRoot = null) => Task.Run(() =>
+    {
+        try
+        {
+            if (!File.Exists(Path.Combine(application, "online-updates.json")))
+            {
+                return;
+            }
+            using var service = new OnlineUpdateService(application, game, dataRoot);
+        }
+        catch (Exception error) when
+            (error is not (OutOfMemoryException or StackOverflowException or
+                AccessViolationException))
+        {
+            Trace.TraceWarning("Startup update reconciliation: " + error);
+        }
+    });
+
     private void ReconcileCompletedLauncherUpdate()
     {
         try
@@ -51,29 +71,89 @@ public sealed class OnlineUpdateService : IDisposable
                 return;
             }
             var pending = Pending();
-            if (pending.Products is not [var product] || product != GameCatalog.LauncherId || string.IsNullOrEmpty(pending.LauncherJob) || string.IsNullOrEmpty(pending.CatalogEnvelope))
-            {
-                return;
-            }
-            var verified = ReleaseCatalog.Verify(Convert.FromBase64String(pending.CatalogEnvelope), _trust, _config, DateTimeOffset.UtcNow);
-            var release = verified.Document.Releases.SingleOrDefault(r => r.ProductId == GameCatalog.LauncherId);
-            var currentVersion = typeof(OnlineUpdateService).Assembly.GetName().Version;
-            if (release == null || currentVersion == null ||
-                !Version.TryParse(release.NumericVersion, out var releaseVersion) ||
-                currentVersion < releaseVersion ||
-                new LauncherUpdates(_application, _trust, _dataRoot).InstalledSequence < release.Sequence)
-            {
-                return;
-            }
-            VerifyHelperResult(pending.LauncherJob, release);
-            File.Delete(PendingFile);
+            ReconcileLauncherProduct(pending, requireCompletionProof: false);
         }
         catch (Exception error) when
-            (error is not (OutOfMemoryException or StackOverflowException or AccessViolationException))
+            (error is not (OutOfMemoryException or StackOverflowException or
+                AccessViolationException))
         {
             // Reconciliation is best-effort; retain the saved plan for retry or repair.
             Trace.TraceWarning("Launcher update reconciliation: " + error);
         }
+    }
+
+    // Caller owns the workflow lock. Both restart cleanup and installation require this proof.
+    private PendingOnlineUpdates? ReconcileLauncherProduct(PendingOnlineUpdates pending,
+        bool requireCompletionProof)
+    {
+        if (!pending.Products.Contains(GameCatalog.LauncherId))
+        {
+            return pending;
+        }
+        var envelope = Convert.FromBase64String(pending.CatalogEnvelope);
+        var verified = ReleaseCatalog.VerifyForReconciliation(envelope, _trust, _config);
+        var release = verified.Document.Releases.SingleOrDefault(
+            item => item.ProductId == GameCatalog.LauncherId)
+            ?? throw new InvalidDataException("The saved catalog has no launcher release.");
+        var currentVersion = typeof(OnlineUpdateService).Assembly.GetName().Version;
+        var numericVersionValid = Version.TryParse(release.NumericVersion, out var releaseVersion);
+        if (currentVersion == null || !numericVersionValid)
+        {
+            throw new InvalidDataException("The launcher version could not be verified.");
+        }
+        var launcherAlreadyCurrent = currentVersion >= releaseVersion;
+        if (!launcherAlreadyCurrent)
+        {
+            return pending;
+        }
+        var updates = new LauncherUpdates(_application, _trust, _dataRoot);
+        var sequenceInstalled = updates.InstalledSequence >= release.Sequence;
+        var hasHelperJob = !string.IsNullOrWhiteSpace(pending.LauncherJob);
+        if (!sequenceInstalled || !hasHelperJob)
+        {
+            if (requireCompletionProof)
+            {
+                throw new InvalidDataException(
+                    "The launcher update has no verified completion proof. " +
+                    "After repairing with the signed installer, use " +
+                    "Discard saved launcher update to cancel the stale attempt.");
+            }
+            return pending;
+        }
+        VerifyHelperResult(pending.LauncherJob!, release);
+        return RemoveLauncherProduct(pending);
+    }
+
+    // Preserve all other products and evidence when removing a selection.
+    private PendingOnlineUpdates? RemoveLauncherProduct(PendingOnlineUpdates pending)
+    {
+        var remaining = pending.Products.Where(product => product != GameCatalog.LauncherId)
+            .ToArray();
+        if (remaining.Length == 0)
+        {
+            File.Delete(PendingFile);
+            return null;
+        }
+        var updated = pending with { Products = remaining, LauncherJob = null };
+        Write(PendingFile, updated);
+        return updated;
+    }
+
+    /// <summary>Cancels the saved launcher selection without recording update success.</summary>
+    public bool DiscardPendingLauncherUpdate()
+    {
+        using var operation = Lock();
+        if (!HasPending)
+        {
+            return false;
+        }
+        var pending = Pending();
+        if (!pending.Products.Contains(GameCatalog.LauncherId))
+        {
+            return false;
+        }
+        RemoveLauncherProduct(pending);
+        return true;
     }
 
     // FileShare.None fails immediately on contention; there is no workflow-lock wait or retry.
@@ -203,17 +283,19 @@ public sealed class OnlineUpdateService : IDisposable
     public async Task<bool> InstallAsync(IProgress<string>? progress, CancellationToken cancellation)
     {
         using var operation = Lock();
+        cancellation.ThrowIfCancellationRequested();
+        // Completed local work needs no network or live catalog TTL. An already-current
+        // launcher without the same signed proof used at startup must never be skipped.
+        var pending = ReconcileLauncherProduct(Pending(), requireCompletionProof: true);
+        if (pending == null)
+        {
+            progress?.Report("The launcher update is already complete.");
+            return false;
+        }
         await CheckCoreAsync(cancellation); // An offline/stale check cannot advance an interrupted transaction.
-        var pending = Pending();
         var releases = RevalidatePending(pending);
-        var currentVersion = typeof(OnlineUpdateService).Assembly.GetName().Version!;
         foreach (var release in releases)
         {
-            if (release.ProductId == GameCatalog.LauncherId && currentVersion >= Version.Parse(release.NumericVersion))
-            {
-                if (pending.LauncherJob != null) VerifyHelperResult(pending.LauncherJob, release);
-                continue;
-            }
             if (release.ProductId != GameCatalog.LauncherId)
             {
                 var runtimeState = new RuntimeUpdates(_application, _trust, _dataRoot).State();
@@ -255,7 +337,10 @@ public sealed class OnlineUpdateService : IDisposable
         PackStorage.EnsureNoLinks(result);
         if (!File.Exists(result) || new FileInfo(result).Length > 4096 ||
             File.ReadAllText(result) != "Core Critical updated to " + release.NumericVersion)
-            throw new InvalidDataException("The launcher helper did not confirm a successful update. Repair the launcher using the signed installer, then retry.");
+            throw new InvalidDataException(
+                "The launcher helper did not confirm a successful update. " +
+                "Repair using the signed installer, then use Discard saved launcher update " +
+                "to cancel the stale attempt.");
         ReleaseCatalog.VerifyArtifact(Path.Combine(stage, "update.ccupdate"), release.Metadata);
     }
 

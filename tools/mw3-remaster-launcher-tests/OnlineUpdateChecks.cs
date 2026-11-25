@@ -115,25 +115,54 @@ static class OnlineUpdateChecks
             File.WriteAllText(job, "{}");
             var resultFile = Path.Combine(stage, "result.txt");
             var sequenceFile = Path.Combine(updates.Store, "installed-sequence.json");
-            void SavePlan(ReleaseCatalogDocument savedCatalog, string[] products = null)
+            void SavePlan(ReleaseCatalogDocument savedCatalog, string[] products = null,
+                bool includeJob = true)
             {
-                var pending = new PendingOnlineUpdates(1, Path.TrimEndingDirectorySeparator(Path.GetFullPath(trial)),
+                var application = Path.TrimEndingDirectorySeparator(Path.GetFullPath(trial));
+                var pending = new PendingOnlineUpdates(1, application,
                     config.Channel, Convert.ToBase64String(Sign(savedCatalog)),
-                    products ?? new[] { GameCatalog.LauncherId }, job);
+                    products ?? new[] { GameCatalog.LauncherId }, includeJob ? job : null);
                 File.WriteAllBytes(pendingFile, JsonSerializer.SerializeToUtf8Bytes(pending, Json));
             }
             void CheckPending(string name, bool expected)
             {
                 var savedBytes = File.ReadAllBytes(pendingFile);
                 using var service = new OnlineUpdateService(trial, trial, trial);
-                if (service.HasPending != expected ||
-                    (expected && !savedBytes.SequenceEqual(File.ReadAllBytes(pendingFile))))
+                var planChanged = expected &&
+                    !savedBytes.SequenceEqual(File.ReadAllBytes(pendingFile));
+                if (service.HasPending != expected || planChanged)
                     throw new Exception("Launcher restart reconciliation failed: " + name);
+            }
+            void CheckInstallRefuses(string name)
+            {
+                var savedBytes = File.ReadAllBytes(pendingFile);
+                using var service = new OnlineUpdateService(trial, trial, trial);
+                Reject(() => service.InstallAsync(null, CancellationToken.None)
+                    .GetAwaiter().GetResult());
+                var planUnchanged = File.Exists(pendingFile) &&
+                    savedBytes.SequenceEqual(File.ReadAllBytes(pendingFile));
+                if (!planUnchanged)
+                    throw new Exception("Install cleared launcher state without proof: " + name);
+            }
+            string PreviousVersion(Version version)
+            {
+                if (version.Build > 0)
+                    return new Version(version.Major, version.Minor, version.Build - 1).ToString();
+                if (version.Minor > 0)
+                    return new Version(version.Major, version.Minor - 1, 0).ToString();
+                if (version.Major > 0)
+                    return new Version(version.Major - 1, 0, 0).ToString();
+                return "0.0.0";
+            }
+            foreach (var zeroBuildVersion in new[] { "1.1.0", "2.0.0", "0.0.0" })
+            {
+                var version = Version.Parse(zeroBuildVersion);
+                if (Version.Parse(PreviousVersion(version)) > version)
+                    throw new Exception("The earlier-version fixture is newer than its input.");
             }
             var currentVersion = typeof(OnlineUpdateService).Assembly.GetName().Version;
             var numericVersion = currentVersion.ToString(3);
-            var olderVersion = new Version(currentVersion.Major, currentVersion.Minor,
-                currentVersion.Build - 1).ToString();
+            var olderVersion = PreviousVersion(currentVersion);
             var newerVersion = new Version(currentVersion.Major, currentVersion.Minor,
                 currentVersion.Build + 1).ToString();
             var completedRelease = launcher;
@@ -142,12 +171,17 @@ static class OnlineUpdateChecks
                 (Name: "older running launcher", Version: newerVersion, Sequence: 100L, Pending: true),
                 (Name: "missing installed sequence", Version: numericVersion, Sequence: 0L, Pending: true),
                 (Name: "older installed sequence", Version: numericVersion, Sequence: 99L, Pending: true),
-                (Name: "newer running launcher", Version: olderVersion, Sequence: 100L, Pending: false),
+                (Name: "running launcher meets earlier release", Version: olderVersion,
+                    Sequence: 100L, Pending: false),
                 (Name: "newer installed sequence", Version: numericVersion, Sequence: 101L, Pending: false),
-                (Name: "four-part numeric version", Version: currentVersion.ToString(), Sequence: 100L, Pending: false),
-                (Name: "invalid numeric version", Version: "invalid", Sequence: 100L, Pending: true),
-                (Name: "missing numeric version", Version: (string)null, Sequence: 100L, Pending: true),
-                (Name: "preview assembly matches numeric release", Version: numericVersion, Sequence: 100L, Pending: false)
+                (Name: "four-part numeric version", Version: currentVersion.ToString(),
+                    Sequence: 100L, Pending: false),
+                (Name: "catalog rejects invalid numeric version", Version: "invalid",
+                    Sequence: 100L, Pending: true),
+                (Name: "catalog rejects missing numeric version", Version: (string)null,
+                    Sequence: 100L, Pending: true),
+                (Name: "preview assembly matches numeric release", Version: numericVersion,
+                    Sequence: 100L, Pending: false)
             })
             {
                 var savedMetadata = Sign(manifest with { Version = test.Version });
@@ -169,6 +203,11 @@ static class OnlineUpdateChecks
                 File.WriteAllText(resultFile, "Core Critical updated to " + test.Version);
                 SavePlan(document with { Releases = new[] { completedRelease } });
                 CheckPending(test.Name, test.Pending);
+                var numericVersionValid = Version.TryParse(test.Version, out var releaseVersion);
+                var releaseAlreadyCurrent = numericVersionValid &&
+                    currentVersion >= releaseVersion;
+                if (test.Pending && releaseAlreadyCurrent)
+                    CheckInstallRefuses(test.Name);
             }
 
             // A signed null entry reaches a NullReferenceException outside the old catch filter.
@@ -186,12 +225,116 @@ static class OnlineUpdateChecks
             File.Delete(resultFile);
             SavePlan(completedCatalog);
             CheckPending("missing helper receipt", true);
+            CheckInstallRefuses("missing helper receipt");
             File.WriteAllText(resultFile, "Core Critical updated to " + numericVersion);
+
+            var metadataFile = Path.Combine(stage, "update.ccupdate");
+            var originalMetadata = File.ReadAllBytes(metadataFile);
+            File.AppendAllText(metadataFile, "tampered");
+            SavePlan(completedCatalog);
+            CheckPending("helper metadata must match the signed catalog", true);
+            CheckInstallRefuses("tampered helper metadata");
+            File.WriteAllBytes(metadataFile, originalMetadata);
+
+            SavePlan(completedCatalog, includeJob: false);
+            CheckPending("missing launcher job", true);
+            CheckInstallRefuses("missing launcher job");
+
+            var expiredCatalog = completedCatalog with
+            {
+                IssuedUtc = now.AddDays(-3), ExpiresUtc = now.AddDays(-2)
+            };
+            Reject(() => Verify(expiredCatalog));
+            SavePlan(expiredCatalog);
+            var defaultSettings = new LauncherSettings();
+            if (defaultSettings.AutomaticUpdateChecks)
+                throw new Exception("The startup fixture no longer represents default settings.");
+            // This is the same offline Task.Run entry point called before the UI preference guard.
+            OnlineUpdateService.ReconcileAtStartupAsync(trial, defaultSettings.GamePath, trial)
+                .GetAwaiter().GetResult();
+            if (File.Exists(pendingFile))
+                throw new Exception("Default startup retained a proven expired-catalog update.");
+
+            var unsignedEnvelope = JsonSerializer.Deserialize<Dictionary<string, string>>(
+                Sign(expiredCatalog));
+            unsignedEnvelope["signature"] = Convert.ToBase64String(new byte[key.KeySize / 8]);
+            SavePlan(expiredCatalog);
+            var unsignedPlan = JsonSerializer.Deserialize<PendingOnlineUpdates>(
+                File.ReadAllBytes(pendingFile), Json);
+            File.WriteAllBytes(pendingFile, JsonSerializer.SerializeToUtf8Bytes(unsignedPlan with
+            {
+                CatalogEnvelope = Convert.ToBase64String(
+                    JsonSerializer.SerializeToUtf8Bytes(unsignedEnvelope))
+            }, Json));
+            CheckPending("expired catalog still requires a valid signature", true);
+            CheckInstallRefuses("invalid catalog signature");
+
+            // Stage after construction so InstallAsync must do the same offline proof itself.
+            File.Delete(pendingFile);
+            using (var service = new OnlineUpdateService(trial, trial, trial))
+            {
+                SavePlan(expiredCatalog);
+                var restart = service.InstallAsync(null, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                if (restart || service.HasPending)
+                    throw new Exception("Install retained a proven local launcher update.");
+            }
+
             SavePlan(document with { Releases = new[] { completedRelease, runtime } },
                 new[] { GameCatalog.LauncherId, GameCatalog.Mw3 });
-            CheckPending("saved game update survives restart", true);
+            var mixedPlan = JsonSerializer.Deserialize<PendingOnlineUpdates>(
+                File.ReadAllBytes(pendingFile), Json);
+            using (var service = new OnlineUpdateService(trial, trial, trial))
+            {
+                var remaining = JsonSerializer.Deserialize<PendingOnlineUpdates>(
+                    File.ReadAllBytes(pendingFile), Json);
+                var gamePlanPreserved = service.HasPending &&
+                    remaining.Products.SequenceEqual(new[] { GameCatalog.Mw3 }) &&
+                    remaining.LauncherJob == null &&
+                    remaining.Application == mixedPlan.Application &&
+                    remaining.Channel == mixedPlan.Channel &&
+                    remaining.CatalogEnvelope == mixedPlan.CatalogEnvelope;
+                if (!gamePlanPreserved)
+                    throw new Exception("Reconciliation did not preserve the remaining game plan.");
+            }
+            CheckPending("remaining game plan is valid and unchanged on the next start", true);
+
+            File.WriteAllText(resultFile, "Launcher update failed: authored failure fixture");
             SavePlan(completedCatalog);
-            using (var workflowLock = new FileStream(Path.Combine(Path.GetDirectoryName(pendingFile), ".workflow-lock"),
+            CheckPending("failed helper receipt", true);
+            CheckInstallRefuses("failed helper receipt with sufficient installed sequence");
+            // Standalone setup does not write helper sequence or receipt state.
+            File.Delete(sequenceFile);
+            SavePlan(completedCatalog);
+            CheckPending("installer repair cannot masquerade as helper success", true);
+            CheckInstallRefuses("failed helper after installer repair");
+            SavePlan(document with { Releases = new[] { completedRelease, runtime } },
+                new[] { GameCatalog.LauncherId, GameCatalog.Mw3 });
+            using (var service = new OnlineUpdateService(trial, trial, trial))
+            {
+                if (!service.DiscardPendingLauncherUpdate())
+                    throw new Exception("Cannot discard a repaired launcher's stale update.");
+                var remaining = JsonSerializer.Deserialize<PendingOnlineUpdates>(
+                    File.ReadAllBytes(pendingFile), Json);
+                var failedReceiptPreserved = File.ReadAllText(resultFile) ==
+                    "Launcher update failed: authored failure fixture";
+                if (!remaining.Products.SequenceEqual(new[] { GameCatalog.Mw3 }) ||
+                    remaining.LauncherJob != null || File.Exists(sequenceFile) ||
+                    !failedReceiptPreserved)
+                    throw new Exception("Discard changed game selection or success evidence.");
+                if (service.DiscardPendingLauncherUpdate())
+                    throw new Exception("Discard claimed to cancel a game-only plan.");
+                SavePlan(completedCatalog);
+                if (!service.DiscardPendingLauncherUpdate() || service.HasPending)
+                    throw new Exception("Discard did not clear the launcher-only failed attempt.");
+            }
+
+            File.WriteAllText(resultFile, "Core Critical updated to " + numericVersion);
+            File.WriteAllText(sequenceFile, JsonSerializer.Serialize(100L));
+            SavePlan(completedCatalog);
+            var workflowDirectory = Path.GetDirectoryName(pendingFile);
+            var workflowLockFile = Path.Combine(workflowDirectory, ".workflow-lock");
+            using (var workflowLock = new FileStream(workflowLockFile,
                 FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
                 CheckPending("busy workflow lock leaves the plan unchanged", true);
             CheckPending("completed update clears after the workflow lock is released", false);
