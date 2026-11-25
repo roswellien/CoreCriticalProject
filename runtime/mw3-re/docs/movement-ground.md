@@ -74,10 +74,12 @@ for j = 6 down to the first probe:
       (the mech walks on the river bed; water sets the surface); none valid: the lowest
   integrate 0x477940: vy -= g dt; y' = y + vy dt; above h: y = y'; else
       vy = (h - y) / max(dt, 0.0333), y = h, landed hard = vy > 20
-      per_second: same 0.0333 s floor for catch-up and hard landing, active thrust keeps a larger jet vy
+      per_second: use the larger of the floor speed and the own-step speed capped at 20 m/s
+                  use the floor speed for hard landings, and let active thrust keep a larger jet vy
   c = y - h; !air && c < 3: snap y = h, vy -= c / dt
-      per_second: clear vy first if c > 0 and vy > 0 (leftover jet climb),
-                  then subtract c / max(dt, 0.0333)
+      per_second: subtract the same capped own-step correction, using the floor alone at dt <= 0
+                  clear positive vy first only if c > 0 and this probe has carried jet thrust
+                  since its last contact; either integration contact or snap clears that flag
   !air: slope slide 0x477620: steeper than n.y 0.85 and not noslip: push += 30 dt n.xz
   vy < 0: vy = max(vy, vy 6)
 simple: probes 0..5 copy probe 6; the push is tripled when sliding (per frame)

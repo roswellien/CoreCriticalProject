@@ -102,8 +102,10 @@ the wall, its along-wall part kept at full speed and the into-wall part times
 wall. The player gets a force-feedback jolt (0x4335d0 on [0x608620]).
 Quirk: the reflect helper 0x51e280 returns -v when N.v is 0.
 With zfix per_second (#484): push uses horizontal speed, throttle drops per
-1/30 s, AI reverses at most once per 0.1 s, and yaw takes the full kick
-below Update's 0.05 cutoff or adds a kick per 1/30 s on top of a turn.
+1/30 s, and yaw takes the full kick below Update's 0.05 cutoff or adds a
+kick per 1/30 s on top of a turn. AI throttle still reverses on every wall
+response as in the exe: a reversal is a collision event, not a decay rate.
+The former 0.1 s gate skipped responses even at 30 fps and changed the gait.
 
 **Bump (in 0x4225c0)**, when nothing else resolved: the nearest AiTarget
 contact that is a mech (or the Mobile HQ) within 9 m pushes the mech away by

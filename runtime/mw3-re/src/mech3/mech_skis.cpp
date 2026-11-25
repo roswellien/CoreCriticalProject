@@ -1,5 +1,6 @@
 #include "mech3/mech_skis.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -51,6 +52,7 @@ constexpr float kLiftMin = -0.8f;        // 0x005e58f4
 constexpr float kSlopePush = 0.8f;       // 0x005e58f0
 constexpr double kLedge = 1.5;           // 0x005c3778
 constexpr float kSeventh = 0.142857149f; // 0x005c3780
+constexpr float kMaxCatchUp = 20.0f;     // 0x005c3798, the hard-landing threshold
 constexpr float kCeilingTime = 4.0f;     // 0x005e58c4
 constexpr bool kStopOnGround = true;     // byte 0x005e58c8
 constexpr float kSteep = 0.85f;          // 0x005e58b0, normal y
@@ -58,6 +60,14 @@ constexpr float kSlide = 30.0f;          // 0x005e58b4
 constexpr int kWater = 1, kNoSlip = 10;
 
 int soil(Handle material) { return material && g_calls.soil ? g_calls.soil(material) : 0; }
+
+// FIX (B), #484: Follow slopes in one frame within the cap. Big steps keep the 1/30 s
+// floor speed (a 2 m step at 240 fps takes about 60 m/s instead of 480).
+X capped_catch_up(X distance, float dt, X floored) {
+  if (dt <= 0.0f) return floored;
+  const X own = distance / dt;
+  return std::max(floored, std::min(own, X(kMaxCatchUp)));
+}
 
 // A point through the top of the matrix stack, as the skis inline it.
 Vec3 through_top(const Vec3& p) {
@@ -134,6 +144,7 @@ void Skis::set_ski(int side, float angle, float lift) {
 
 // Mech3.exe 1.2 @ 0x00475fb0
 void Skis::reset() {
+  for (bool& climbing : jet_climb) climbing = false;
   for (int side = 0; side < 2; ++side) {
     const float x = side ? half_track : -half_track;
     local[3 * side] = {x, 0.0f, -half};
@@ -179,27 +190,31 @@ float Skis::pick_ground(const GroundHits& hits, int* best, float probe_y, float 
 }
 
 // Mech3.exe 1.2 @ 0x00477940. Lands on the ground with the speed that takes
-// it there in one step (no shorter than 1/30 s); true for a hard landing.
-bool Skis::integrate(float* y, float* vy, float dt, float ground, float gravity, bool jetting) {
+// it there in one step (exe: no shorter than 1/30 s). True for a hard landing.
+bool Skis::integrate(float* y, float* vy, float dt, float ground, float gravity,
+                     bool jetting, bool* jet_climb) {
   const X v0 = X(*vy) - X(gravity) * dt;
   *vy = v0.f();
   const X y1 = X(dt) * v0 + *y;  // v0 and y1 stay on the x87; the test reads them there
   if (y1 > X(ground)) {
     *y = y1.f();
+    if (jet_climb && jetting) *jet_climb = true;
     return false;
   }
+  if (jet_climb) *jet_climb = false;
   const double span = dt < 0.0333 ? 0.0333 : dt;  // 0x005c3790
-  const float v = (-(X(*y) - ground) / X(span)).f();
-  // FIX (B): the unfloored step launched mechs off rocks and bridge lips
-  // above 30 fps and divided by zero at dt == 0 (fixes.md, Frame rate, #484).
-  // Only active jet thrust keeps a larger climb so jets can lift uphill (W31).
-  if (zfix::options().per_second && jetting) {
-    *vy = v > *vy ? v : *vy;
+  const X gap = -(X(*y) - ground);
+  const X floored = gap / X(span);
+  const float v = floored.f();
+  if (zfix::options().per_second) {
+    const float catch_up = capped_catch_up(gap, dt, floored).f();
+    // Keep active thrust so jets can lift uphill (W31).
+    *vy = jetting ? std::max(catch_up, *vy) : catch_up;
   } else {
     *vy = v;
   }
   *y = ground;
-  return v > 20.0f;  // 0x005c3798
+  return v > kMaxCatchUp;
 }
 
 // Mech3.exe 1.2 @ 0x00477620: down a polygon steeper than about 32 degrees.
@@ -266,8 +281,9 @@ bool Skis::update(float dt) {
 
   float g = environment().gravity;
   const bool both = down[0] && down[1];
+  const bool jetting = m.impulse.y > 0.0f;
   bool air;
-  if (m.impulse.y > 0.0f || (!(clearance[6] < kAirGap) && !both)) {
+  if (jetting || (!(clearance[6] < kAirGap) && !both)) {
     air = true;
   } else {
     g = kGroundPull * g;
@@ -285,22 +301,23 @@ bool Skis::update(float dt) {
     contact[j].x = world[j].x;
     contact[j].z = world[j].z;
     y[j] = world[j].y;
-    landed[j] = integrate(&y[j], &vy[j], dt, ground[j], g, m.impulse.y > 0.0f);
+    landed[j] = integrate(&y[j], &vy[j], dt, ground[j], g, jetting, &jet_climb[j]);
     clearance[j] = y[j] - ground[j];
     if (!air && clearance[j] < kSnap) {
       world[j].y = ground[j];
       y[j] = ground[j];
       if (zfix::options().per_second) {
         const double span = dt < 0.0333 ? 0.0333 : dt;
-        // A probe still above the ground and rising carries climb from jets
-        // just released. The snap only runs when !air, so thrust is off.
-        const bool carrying_jet_climb = clearance[j] > 0.0f && vy[j] > 0.0f;
+        // A rising probe can carry terrain catch-up. Only cancel climb left by thrust.
+        const bool carrying_jet_climb = jet_climb[j] && clearance[j] > 0.0f && vy[j] > 0.0f;
         if (carrying_jet_climb) vy[j] = 0.0f;
-        vy[j] = (X(vy[j]) - X(clearance[j]) / X(span)).f();
+        const X gap = X(clearance[j]);
+        vy[j] = (X(vy[j]) - capped_catch_up(gap, dt, gap / X(span))).f();
       } else {
         vy[j] = (X(vy[j]) - X(clearance[j]) / dt).f();
       }
       clearance[j] = 0.0f;
+      jet_climb[j] = false;
     }
     if (!air) slid = slope_slide(contact[j], &m.push, dt) || slid;
     if (vy[j] < 0.0f && vy[j] < vy[6]) vy[j] = vy[6];
@@ -310,6 +327,7 @@ bool Skis::update(float dt) {
       surface[k] = surface[6], vy[k] = vy[6], in_water[k] = in_water[6], ground[k] = ground[6];
       contact[k] = contact[6];
       y[k] = y[6], clearance[k] = clearance[6], landed[k] = landed[6];
+      jet_climb[k] = jet_climb[6];
     }
     // x3 a frame. FIX (B): x3 per 1/30 s (fixes.md, Frame rate).
     const float x3 = zfix::options().per_second ? std::pow(kSnap, zfix::frame_steps(dt)) : kSnap;
@@ -444,6 +462,7 @@ Skis* make_skis(Mech& m, float half_track, float length) {
     s->world[i] = s->local[i] = Vec3{};
     s->contact[i] = GroundHit{};
     s->landed[i] = false;
+    s->jet_climb[i] = false;
   }
   s->down[0] = s->down[1] = true;
   s->slope[0] = s->slope[1] = 0;

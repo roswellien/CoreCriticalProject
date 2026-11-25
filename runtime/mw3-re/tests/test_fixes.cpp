@@ -521,6 +521,8 @@ struct MovementTestGuard {
   mech3::UpdateCalls update_calls;
   zent::Budget budget;
   mech3::Environment environment;
+  mech3::Mech* mission_player = nullptr;  // (port)
+  bool force_feedback = false;  // (port)
 
   MovementTestGuard() {
     options = zfix::options();
@@ -530,6 +532,8 @@ struct MovementTestGuard {
     update_calls = mech3::update_calls();
     budget = zent::budget();
     environment = mech3::environment();
+    mission_player = mech3::world().mission_player;  // (port)
+    force_feedback = mech3::world().force_feedback;  // (port)
   }
 
   ~MovementTestGuard() {
@@ -540,6 +544,8 @@ struct MovementTestGuard {
     mech3::update_calls() = update_calls;
     zent::budget() = budget;
     mech3::environment() = environment;
+    mech3::world().mission_player = mission_player;  // (port)
+    mech3::world().force_feedback = force_feedback;  // (port)
   }
 };
 
@@ -599,6 +605,16 @@ TEST(fix_skis_step_up_floored_at_any_rate) {
       }
     }
   }
+
+  zfix::options().per_second = true;
+  for (const float gap : {0.05f, 0.1f}) {
+    float height = 0.0f;
+    float speed = 0.0f;
+    EXPECT(!mech3::Skis::integrate(&height, &speed, 1.0f / 240.0f, gap, 0.0f));
+    EXPECT(height == gap);
+    const float expected_speed = gap < 0.1f ? 12.0f : 20.0f;
+    EXPECT(std::fabs(speed - expected_speed) < 0.001f);
+  }
 }
 
 TEST(fix_skis_snap_down_floored_at_any_rate) {
@@ -621,6 +637,50 @@ TEST(fix_skis_snap_down_floored_at_any_rate) {
       EXPECT(legacy_skis.mech->vec_3c.y == -2.0f / dt);
     }
   }
+
+  zfix::options().per_second = true;
+  mech3::Skis& skis = bare_skis(-0.05f);
+  EXPECT(!skis.update(1.0f / 240.0f));
+  EXPECT(std::fabs(skis.mech->vec_3c.y + 12.0f) < 0.001f);
+}
+
+TEST(fix_skis_walk_uphill_at_any_rate) {
+  MovementTestGuard guard;
+  zfix::options().per_second = true;
+  mech3::environment() = mech3::Environment{};
+  constexpr float ground_rise = 3.0f;
+  constexpr float clearance_limit = 0.05f;
+  for (const int fps : {60, 144, 240}) {
+    mech3::Skis& skis = bare_skis(0.0f);
+    mech3::Mech& mech = *skis.mech;
+    const float dt = 1.0f / fps;
+    for (int frame = 1; frame <= fps; ++frame) {
+      skis_test_ground = ground_rise * (frame * dt);
+      mech.vec_3c.y = 0.0f;  // The walking gait supplies fresh root motion before the skis update.
+      EXPECT(!skis.update(dt));
+      mech.transform[10] += mech.vec_3c.y * dt;
+      EXPECT(std::fabs(skis.clearance[6]) <= clearance_limit);
+      // The snap clears probe clearance even if the body has yet to catch up.
+      EXPECT(std::fabs(mech.transform[10] - skis_test_ground) <= clearance_limit);
+    }
+  }
+}
+
+TEST(fix_skis_snap_preserves_terrain_climb) {
+  MovementTestGuard guard;
+  zfix::options().per_second = true;
+  mech3::environment().gravity = 0.0f;
+  mech3::Skis& skis = bare_skis(0.0f);
+  constexpr float dt = 1.0f / 240.0f;
+  float probe_height = -0.8f;
+  // Seed a probe with catch-up from a terrain step. Its next snap should
+  // subtract the 20 m/s correction from that rise and keep the remainder.
+  EXPECT(mech3::Skis::integrate(&probe_height, &skis.vy[6], dt, 0.0f, 0.0f));
+  const float terrain_speed = skis.vy[6];
+  EXPECT(!skis.update(dt));
+  EXPECT(skis.clearance[6] == 0.0f);
+  EXPECT(skis.mech->vec_3c.y > 0.0f);
+  EXPECT(std::fabs(skis.mech->vec_3c.y - (terrain_speed - 20.0f)) < 0.001f);
 }
 
 TEST(fix_skis_jets_lift_uphill_at_any_rate) {
@@ -636,6 +696,8 @@ TEST(fix_skis_jets_lift_uphill_at_any_rate) {
     int frames = 0;
     auto advance = [&] {
       skis_test_ground = ground_rise * (++frames * dt);
+      // Fresh gait root motion leaves the vertical integration to the probes.
+      mech.vec_3c.y = 0.0f;
       const bool airborne = skis.update(dt);
       mech.transform[10] += mech.vec_3c.y * dt;
       return airborne;
@@ -650,6 +712,7 @@ TEST(fix_skis_jets_lift_uphill_at_any_rate) {
       if (frames >= minimum_thrust_frames && skis.clearance[6] > clearance_limit) break;
     }
     EXPECT(skis.clearance[6] > clearance_limit);
+    EXPECT(skis.jet_climb[6]);
 
     mech.impulse.y = 0.0f;
     bool grounded = false;
@@ -661,6 +724,7 @@ TEST(fix_skis_jets_lift_uphill_at_any_rate) {
         // The ground's float height rounds differently on successive frames.
         EXPECT(mech.vec_3c.y <= ground_rise + 0.001f);
         EXPECT(std::fabs(skis.clearance[6]) <= clearance_limit);
+        EXPECT(!skis.jet_climb[6]);
       }
     }
     EXPECT(grounded);
@@ -833,8 +897,6 @@ TEST(fix_wall_push_ignores_vertical_speed) {
   static float jolt;
   mech3::collide_calls().ff_jolt = [](const float*, float amount) { jolt = amount; };
   mech3::World& world = mech3::world();
-  mech3::Mech* const saved_player = world.mission_player;
-  const bool saved_feedback = world.force_feedback;
   world.force_feedback = true;
   const auto hit = test_wall_hit();
   float throttle_after_contact = 0.0f;
@@ -867,8 +929,6 @@ TEST(fix_wall_push_ignores_vertical_speed) {
   EXPECT(legacy.x == 0.0f && legacy.z == (-X(legacy_speed) * 0.1f).f());
   EXPECT(jolt == legacy_speed / 10.0f);
   EXPECT(throttle_after_contact == crt::x87_mul_f24(0.75f, 0.1));
-  world.mission_player = saved_player;
-  world.force_feedback = saved_feedback;
 }
 
 struct VehicleRamTotals {
@@ -1105,28 +1165,29 @@ TEST(fix_wall_yaw_kick_survives_and_does_not_spin_up) {
   }
 }
 
-TEST(fix_ai_wall_reverse_once_per_tenth) {
+TEST(fix_ai_wall_reverse_on_each_contact) {
   MovementTestGuard guard;
-  constexpr float dt = 1.0f / 240.0f;
   mech3::skis_calls() = {};
   mech3::collide_calls() = {};
   mech3::collide_calls().ai_reverses = [](mech3::Mech&) { return 1; };
   const auto hit = test_wall_hit();
   for (const bool per_second : {true, false}) {
     zfix::options().per_second = per_second;
-    mech3::Mech& mech = *bare_mech();
-    mech.frame_dt = dt;
-    mech.controls->throttle = 0.75f;
-    float expected = mech.controls->throttle;
-    for (int frame = 0; frame <= 24; ++frame) {
-      // Derive elapsed time from the frame index to exercise the boundary
-      // without the accumulated rounding error of repeated float addition.
-      mech.alive_time = frame / 240.0f;
-      if (!per_second || frame == 0 || frame == 24) expected = -expected;
-      mech.wall_response(hit);
-      EXPECT(mech.controls->throttle == expected);
+    for (const int fps : {30, 60, 144, 240}) {
+      mech3::Mech& mech = *bare_mech();
+      mech.frame_dt = 1.0f / fps;
+      mech.controls->throttle = 0.75f;
+      float expected = mech.controls->throttle;
+      for (int frame = 0; frame <= 24; ++frame) {
+        mech.alive_time = frame * mech.frame_dt;
+        // Even two contacts in one frame each reverse, as in 0x004231c0.
+        for (int contact = 0; contact < 2; ++contact) {
+          expected = -expected;
+          mech.wall_response(hit);
+          EXPECT(mech.controls->throttle == expected);
+        }
+      }
     }
-    EXPECT(mech.last_wall_flip == (per_second ? mech.alive_time : -1.0f));
   }
 }
 

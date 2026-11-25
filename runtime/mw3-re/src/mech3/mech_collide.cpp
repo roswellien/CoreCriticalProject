@@ -268,15 +268,12 @@ void Mech::wall_response(const CollisionHit& h) {
   const Vec3 nv{(X(into.x) + along.x).f(), (X(into.y) + along.y).f(), (X(into.z) + along.z).f()};
   push = {(X(nv.x) - velocity.x).f(), 0.0f, (X(nv.z) - velocity.z).f()};
   const int32_t flips = g_calls.ai_reverses ? g_calls.ai_reverses(*this) : 0;
-  if (zfix::options().per_second) {
-    if (!flips) {
-      controls->throttle = crt::x87_mul_f24(controls->throttle, kept_per_step(0.1, frame_dt));
-    } else if (alive_time - last_wall_flip >= 0.1f) {
-      controls->throttle = -controls->throttle;
-      last_wall_flip = alive_time;
-    }
+  if (flips) {
+    // Reversal is a collision event in 0x004231c0, not a decay rate. A time
+    // gate also skips responses at 30 fps and changes the next selected gait.
+    controls->throttle = -controls->throttle;
   } else {
-    controls->throttle = flips ? -controls->throttle : crt::x87_mul_f24(controls->throttle, 0.1);  // 0x005bd378
+    controls->throttle = crt::x87_mul_f24(controls->throttle, kept_per_step(0.1, frame_dt));  // 0x005bd378
   }
   const float sign = (X(d.z) * rs.x - X(d.x) * rs.z) < X(0.0f) ? -1.0f : 1.0f;
   if (zfix::options().per_second) {

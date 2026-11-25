@@ -380,7 +380,6 @@ void mech_construct(Mech& m, MechData* data, MechControls* ctl, Config* cfg, con
   m.model_node = m.lod_node = nullptr;
   m.x690 = m.net_damaged = 0;
   m.alive_time = 0;
-  m.last_wall_flip = -1.0f;
   m.anim_index = 2;
   for (MechAnim*& a : m.anims) a = nullptr;
   for (int i = 0; i < 9; ++i) m.action_objects[i] = nullptr;

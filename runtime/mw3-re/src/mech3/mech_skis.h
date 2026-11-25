@@ -3,7 +3,7 @@
 
 #include "mech3/mech_parts.h"
 
-// The mech's ground probes, "skis" (mech +0x41c, 0x300 bytes): seven points
+// The mech's ground probes, "skis" (exe: mech +0x41c, 0x300 bytes): seven points
 // that find the ground under the mech each frame, move its body up and down,
 // slide it off steep slopes and decide whether it is airborne
 // (docs/movement-ground.md). Original file: mech3\mech_skis.cpp.
@@ -78,6 +78,7 @@ class Skis {
   // wins); the exe's unset +0x2f4 with zfix fixed off.
   float mid() const;
   float inv_half = 0, inv_half2 = 0;  // +0x2f8, +0x2fc
+  bool jet_climb[7] = {};  // (port) Distinguishes leftover thrust from terrain catch-up.
 
   bool update(float dt);                                     // 0x004765b0, returns airborne
   void fit(int side);                                        // 0x00475c80
@@ -90,8 +91,9 @@ class Skis {
 
   static float pick_ground(const GroundHits& hits, int* best, float probe_y, float step,
                            bool water_not_ground, int32_t* in_water, float* surface);  // 0x00477820
-  // 0x00477940. The port passes jetting to keep active jet climb; the exe has no such parameter.
-  static bool integrate(float* y, float* vy, float dt, float ground, float gravity, bool jetting = false);
+  // 0x00477940. The port tracks jet thrust until the probe next meets the ground.
+  static bool integrate(float* y, float* vy, float dt, float ground, float gravity,
+                        bool jetting = false, bool* jet_climb = nullptr);
   static bool slope_slide(const GroundHit& c, Vec3* push, float dt);                  // 0x00477620
 };
 
