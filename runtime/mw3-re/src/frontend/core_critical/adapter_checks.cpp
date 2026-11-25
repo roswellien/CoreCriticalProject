@@ -2845,18 +2845,24 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     }
     {
       // (b) Two failures: the model is left out of this frame (draw and shadow)
-      // without an exception, and draws normally on the next frame.
+      // without an exception, isn't tried again for 30 render frames, then draws.
       auto skipped = play_model_fault(2);
       const auto without_model = frame(skipped.get(), true, true);
+      const auto failed_at = scene_render_frame(*skipped);
       require(without_model != expected_recovered &&
                   !is_model_geometry_gpu_uploaded(*skipped, play_model_key) &&
                   !has_partial_model_buffer_entry(*skipped, play_model_key) &&
                   video_memory_full_log_count(*skipped) == 1,
               "A model that still didn't fit was not skipped cleanly");
+      require(frame(skipped.get(), true, true) == without_model &&
+                  !is_model_geometry_gpu_uploaded(*skipped, play_model_key),
+              "A skipped model was tried again before its back-off ended");
+      while (scene_render_frame(*skipped) + 1 < failed_at + 30)
+        frame(skipped.get(), true, true);
       require(frame(skipped.get(), true, true) == expected_recovered &&
                   is_model_geometry_gpu_uploaded(*skipped, play_model_key) &&
                   video_memory_full_log_count(*skipped) == 1,
-              "A skipped model did not draw on the next frame");
+              "A skipped model did not draw once its back-off ended");
     }
     {
       // (c) Only models unused for more than the age limit are freed, and a
@@ -2946,7 +2952,8 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
               "A play-time texture allocation failure was not retried");
     }
     {
-      // (e) Two failures: white this frame without an exception, its pixels next frame.
+      // (e) Two failures: white without an exception, not tried again for 30
+      // render frames, then its pixels (asked for again if needed).
       auto stand_in = play_texture_fault(2, 0);
       const auto handle = stand_in->create_texture(2, 2, native_pixels, 1);
       require(draw_texture(*stand_in, handle) == expected_white &&
@@ -2955,6 +2962,14 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                   texture_awaiting_pixels(*stand_in, handle) &&
                   video_memory_full_log_count(*stand_in) == 1,
               "A texture that still didn't fit did not draw white cleanly");
+      const auto failed_at = scene_render_frame(*stand_in);
+      require(draw_texture(*stand_in, handle) == expected_white &&
+                  !is_texture_gpu_resident(*stand_in, handle),
+              "A texture was tried again before its back-off ended");
+      while (scene_render_frame(*stand_in) < failed_at + 30)
+        draw_texture(*stand_in, handle);
+      // The frame that ends the back-off may lack the pixels; the next brings them.
+      draw_texture(*stand_in, handle);
       require(draw_texture(*stand_in, handle) == expected_texture &&
                   is_texture_gpu_resident(*stand_in, handle) &&
                   !texture_awaiting_pixels(*stand_in, handle),

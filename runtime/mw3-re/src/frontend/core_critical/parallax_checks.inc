@@ -940,6 +940,11 @@ void parallax_stand_in_while_texture_waits(vk::Renderer &renderer) {
   require(!waiting.scene.draws[0].height_binding,
           "POM draw with a stand-in texture kept its height binding");
   renderer.set_preload_fault({});
+  // A texture that didn't fit waits 30 render frames before it is tried again.
+  for (int frame = 0; frame < 30; ++frame) {
+    auto backing_off = with_new_keys();
+    renderer.render(backing_off.scene);
+  }
   auto returned = with_new_keys();
   renderer.render(returned.scene);
   require(decode(returned.scene) == reference_uv,

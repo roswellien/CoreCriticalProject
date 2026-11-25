@@ -1614,8 +1614,6 @@ public:
     settle();
     retire_height_images();
     ++render_frame_;
-    models_failed_this_frame_.clear();
-    textures_failed_this_frame_.clear();
     // Stamp before any part of this frame can free (range backdrop captures
     // render first); its captures and batches reuse this scene's resources.
     mark_used_this_frame(s);
@@ -1856,12 +1854,21 @@ private:
       if (awaiting != textures_awaiting_pixels_.end()) {
         // A mission preload may have uploaded it again in the meantime.
         const bool uploaded_again = current(t.key, t.hash, t.width, t.height);
-        const bool failed_this_frame = textures_failed_this_frame_.count(t.key) != 0;
-        if ((!has_pixels || failed_this_frame) && !uploaded_again) {
+        const auto retry = texture_retry_at_.find(t.key);
+        const bool backing_off = retry != texture_retry_at_.end() && render_frame_ < retry->second;
+        if ((!has_pixels || backing_off) && !uploaded_again) {
+          // The frontend may have re-sent the pixels during the back-off and
+          // taken its receipt back; once the back-off ends, ask again.
+          if (!backing_off && retry != texture_retry_at_.end()) {
+            texture_retry_at_.erase(retry);
+            mark_texture_awaiting_pixels(t.key);
+          }
           bound[i] = &white;
           stand_in_slots[i] = true;
           continue;
         }
+        if (retry != texture_retry_at_.end())
+          texture_retry_at_.erase(retry);
         textures_awaiting_pixels_.erase(awaiting);
       }
       auto &c = textures[t.key];
@@ -3664,12 +3671,14 @@ private:
   // upload receipt; until a frame brings them, the texture draws white.
   // Touched only by render(), so only on the render worker when one runs.
   std::set<std::uint64_t> textures_awaiting_pixels_;
-  // Models and textures that still didn't fit this frame, and whether this
-  // frame already freed what it could. A frame can ask for one geometry in
-  // hundreds of draws and in several passes; each failure costs a staging copy
-  // and a scan of both caches, so it is tried once per frame. Cleared when
-  // render_frame_ advances.
-  std::set<std::uint64_t> models_failed_this_frame_, textures_failed_this_frame_;
+  // Models and textures that still didn't fit, with the render_frame_ from
+  // which they may be tried again. Each try copies the whole model or texture
+  // into staging before the card refuses it, and a frame can ask for one
+  // geometry in hundreds of draws and several passes, so while the card stays
+  // full each is tried once every kRetryAfterFrames.
+  std::map<std::uint64_t, std::uint64_t> model_retry_at_, texture_retry_at_;
+  static constexpr std::uint64_t kRetryAfterFrames = 30;
+  // Whether this frame already freed what it could.
   std::uint64_t freed_at_frame_{~std::uint64_t(0)};
   // Keys freed since the frontend last asked, so it can drop their receipts.
   // render() runs on the render worker while the game thread builds later
@@ -3946,8 +3955,12 @@ private:
   // still fails, the model is left out of this frame (draw and sun shadow) and
   // tried again on the next one.
   ModelBuffer *model_buffer_or_skip(const ModelGeometry &g) {
-    if (models_failed_this_frame_.count(g.key))
-      return nullptr;
+    const auto retry = model_retry_at_.find(g.key);
+    if (retry != model_retry_at_.end()) {
+      if (render_frame_ < retry->second)
+        return nullptr;
+      model_retry_at_.erase(retry);
+    }
     try {
       ModelBuffer &b = model_buffer(g);
       b.last_used_frame = render_frame_;
@@ -3965,7 +3978,7 @@ private:
       return &b;
     } catch (const PreloadAllocationFailure &) {
       // model_buffer's own catch has already discarded the half-made buffer.
-      models_failed_this_frame_.insert(g.key);
+      model_retry_at_[g.key] = render_frame_ + kRetryAfterFrames;
       return nullptr;
     }
   }
@@ -4067,7 +4080,7 @@ private:
       return true;
     } catch (const PreloadAllocationFailure &) {
       forget_texture(t.key);
-      textures_failed_this_frame_.insert(t.key);
+      texture_retry_at_[t.key] = render_frame_ + kRetryAfterFrames;
       return false;
     }
   }
