@@ -266,7 +266,7 @@ TEST(entry_archives_whole_archives_and_no_base) {
   EXPECT(!fs::exists(base + "/old") && fs::exists(base + "/kept") && fs::exists(base + "/theirs/file.txt"));
 }
 
-#ifdef MW3_HAVE_LIBARCHIVE
+#if MW3_HAVE_LIBARCHIVE
 // Both ways: EXPORT of a mod kept as changed entries puts the whole archive into the zip (the game's own with
 // the entries laid over it), so the zip is ordinary files; the mod's folder and the install are not changed.
 // Imported again it is cut to the same entries; on an install without that archive it stays whole.
