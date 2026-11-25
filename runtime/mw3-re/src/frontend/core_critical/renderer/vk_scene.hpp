@@ -4510,6 +4510,23 @@ public:
   void mark_texture_used_for_test(std::uint64_t key) {
     textures.at(key).last_used_frame = render_frame_;
   }
+  // A retained shadow caster drawn with this texture, also in this frame's list.
+  void plant_fixture_caster_for_test(std::uint64_t texture_key) {
+    FixtureCaster caster;
+    caster.texture = &textures.at(texture_key);
+    auto &planted = fixtureCasters[{texture_key, 0}] = caster;
+    fixtureFrameCasters.push_back(&planted);
+  }
+  // Retained and this-frame casters still pointing at the texture.
+  std::size_t fixture_casters_using_texture_for_test(std::uint64_t texture_key) const {
+    const auto found = textures.find(texture_key);
+    const Tex *texture = found == textures.end() ? nullptr : &found->second;
+    std::size_t count = fixtureFrameCasters.size();
+    for (const auto &[key, caster] : fixtureCasters)
+      if (key.first == texture_key || (texture && caster.texture == texture))
+        ++count;
+    return count;
+  }
   bool texture_awaiting_pixels(std::uint64_t key) const {
     return textures_awaiting_pixels_.count(key) != 0;
   }

@@ -2472,6 +2472,23 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                   shared_block.texture_awaiting_pixels(122),
               "A shared block whose textures were all old was not freed whole");
 
+      // #496: a retained shadow caster keeps a pointer to its texture across
+      // frames; freeing the texture must drop the caster from both caster lists.
+      Renderer caster_texture;
+      caster_texture.begin_preload();
+      require(caster_texture.preload_texture(texture(131)),
+              "Could not queue the shadow caster fixture texture");
+      caster_texture.finalize_preload();
+      caster_texture.end_preload();
+      caster_texture.plant_fixture_caster_for_test(131);
+      require(caster_texture.fixture_casters_using_texture_for_test(131) == 2,
+              "Shadow caster fixture was not planted in both lists");
+      caster_texture.advance_render_frames_for_test(301);
+      caster_texture.free_unused_textures_for_test(300);
+      require(!caster_texture.texture_resident(131) &&
+                  caster_texture.fixture_casters_using_texture_for_test(131) == 0,
+              "A freed texture left a shadow caster pointing at it");
+
       // Size the test block from the actual driver requirements, rather than
       // assuming an image has a fixed allocation size or alignment on all GPUs.
       const auto stride = ((first_memory[1] + first_memory[2] - 1) / first_memory[2]) * first_memory[2];
