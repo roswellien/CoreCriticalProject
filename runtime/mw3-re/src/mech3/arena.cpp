@@ -479,6 +479,8 @@ void arena_start() {
       }
       ArenaMech entry;
       entry.mech = mech, entry.id = id, entry.side = side, entry.spot = spot;
+      // Stable: g_names is a deque (push_back never moves its strings) and is
+      // cleared only with g_mechs, as the mech itself already holds this pointer.
       entry.name = g_names.back().c_str();
       g_mechs.push_back(entry);
     }
