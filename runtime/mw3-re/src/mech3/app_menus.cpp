@@ -688,6 +688,9 @@ void GameEngine::delete_screens() {
   delete quit_box_;
   quit_box_ = nullptr;
   quit_box_at_ = 0;
+  // An options page still on top at quit registered its backdrop as the menu background
+  // (menu_screen_backdrop); its texture goes with the screens below, so drop the source first.
+  zrndr::set_menu_background_source(nullptr);
   // The app may be gone: the screens go below, not through the states' destructors.
   while (!menu_states_.empty()) {
     MenuState* st = menu_states_.begin()->second;
