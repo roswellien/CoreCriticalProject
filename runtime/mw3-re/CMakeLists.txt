@@ -302,6 +302,7 @@ add_library(mw3core STATIC
   src/mech3/arena_setup.cpp
   src/mech3/arena_catalog.cpp
   src/mech3/arena.cpp
+  src/mech3/arena_camera.cpp  # ours (#529): spectator camera motion
   src/mech3/arena_log.cpp
   src/mech3/zai_repair.cpp
   src/mech3/zai_node.cpp
@@ -693,6 +694,7 @@ add_executable(mw3tests
   tests/test_nav.cpp
   tests/test_hunt.cpp
   tests/test_arena.cpp
+  tests/test_arena_camera.cpp
   tests/test_replay.cpp
   tests/test_replay_game.cpp
   tests/test_arena_game.cpp
@@ -905,6 +907,7 @@ if(SDL3_FOUND)
       src/frontend/sdl/replay_view.cpp
       src/frontend/sdl/replay_ui.cpp
       src/frontend/sdl/replay3d_view.cpp
+      src/frontend/sdl/arena_camera_view.cpp  # ours (#529): the watched arena's spectator camera
       src/frontend/sdl/watch_launch.cpp
     )
     target_link_libraries(mw3 PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)

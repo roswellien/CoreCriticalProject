@@ -12,6 +12,7 @@
 
 #include "arena_counts.h"
 #include "check.h"
+#include "frontend/core_critical/renderer/campaign_lighting.hpp"
 #include "gamez/znetwork/znet_session.h"
 #include "gamez/zutil/zutl_path.h"
 #include "mech3/app_mech.h"
@@ -79,7 +80,32 @@ int side_of(const void* mech) {
 }
 }  // namespace
 
+TEST(arena_record_every_update_setup) {
+  Setup setup;
+  std::string error;
+  EXPECT(parse_arena_setup(setup_json(), &setup, &error));
+  EXPECT(!setup.record_every_update);
+  EXPECT(parse_arena_setup(setup_json("c1mp1", "", R"(,"record_every_update":true)"), &setup, &error));
+  EXPECT(setup.record_every_update);
+  EXPECT(parse_arena_setup(setup_json("c1mp1", "", R"(,"record_every_update":false)"), &setup, &error));
+  EXPECT(!setup.record_every_update);
+  for (const char* value : {"1", "null", "\"true\""}) {
+    EXPECT(starts_with(refused(setup_json("c1mp1", "", std::string(",\"record_every_update\":") + value)),
+                       "record_every_update:"));
+  }
+  const std::string path = temp_dir("arena_recording_setup") + "/setup.json";
+  std::ofstream(path) << setup_json();
+  Flags flags;
+  flags.seed = flags.frame_ms = flags.record_every_update = true;
+  ArenaRun run;
+  EXPECT(run.read_setup(path, flags, &error));
+  EXPECT(run.setup().record_every_update);
+}
+
 namespace arena_counts {
+
+void set_death_anim_toggle(bool right) { mech3::world().death_anim_toggle = right; }
+void reset_last_action() { mech3::world().last_action = 0; }
 void begin() {
   for (int side = 0; side < kSides; ++side) g_shots[side] = g_hits[side] = 0;
   g_shot_starts.clear();
@@ -151,6 +177,40 @@ TEST(arena_setup_reads_a_good_setup) {
   EXPECT(s.sides[1][0].preset.world == "c1" && s.sides[1][0].preset.mission == "mp1");
   EXPECT(s.sides[1][0].preset.record == "remote_1");
   EXPECT(!s.sides[0][0].params_read);
+}
+
+// #507: an optional time of day, each one a campaign mission's lighting.
+TEST(arena_setup_reads_a_time_of_day) {
+  Setup s;
+  std::string error;
+  EXPECT(parse_arena_setup(setup_json(), &s, &error) && s.time_of_day.empty());
+  EXPECT(parse_arena_setup(setup_json("c1mp1", "", R"(, "time_of_day": null)"), &s, &error) &&
+         s.time_of_day.empty());
+  for (const auto& t : mech3::arena::kTimesOfDay) {
+    EXPECT(parse_arena_setup(setup_json("c1mp1", "", std::string(R"(, "time_of_day": ")") + t.name + "\""),
+                             &s, &error));
+    EXPECT(s.time_of_day == t.name);
+    EXPECT(mech3::arena::time_of_day_lighting(t.name) == std::string(t.lighting_mission));
+  }
+  EXPECT(mech3::arena::time_of_day_lighting("noon") == nullptr);
+}
+
+// #507: each time of day borrows a real, outdoor campaign profile, so a renamed
+// mission can't silently fall back to the map's own lighting.
+TEST(arena_times_of_day_borrow_outdoor_campaign_lighting) {
+  for (const auto& t : mech3::arena::kTimesOfDay) {
+    const auto resolved = mw34::campaign::resolve_mission_lighting(t.lighting_mission);
+    EXPECT(resolved.has_profile && resolved.environment);
+    if (!resolved.environment) continue;
+    EXPECT(!resolved.environment->is_interior && !resolved.policy.suppress_sun && !resolved.policy.suppress_sky);
+  }
+}
+
+TEST(arena_setup_refuses_an_unknown_time_of_day) {
+  EXPECT(starts_with(refused(setup_json("c1mp1", "", R"(, "time_of_day": "noon")")), "time_of_day: "));
+  EXPECT(starts_with(refused(setup_json("c1mp1", "", R"(, "time_of_day": "")")), "time_of_day: "));
+  EXPECT(starts_with(refused(setup_json("c1mp1", "", R"(, "time_of_day": 3)")), "time_of_day: "));
+  EXPECT(starts_with(refused(setup_json("c1mp1", "", R"(, "time_of_day": "Night")")), "time_of_day: "));
 }
 
 TEST(arena_setup_takes_eight_a_side) {

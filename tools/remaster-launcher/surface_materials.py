@@ -1,7 +1,7 @@
 """Pack and validate optional BWSFM1 surface-material sidecars for replacement mechs.
 
 BWSFM1 carries explicit height, displacement, UV transform/addressing/atlas and
-subsurface-scattering (SSS) parameters plus linear red-channel RGBA8 images.
+subsurface-scattering (SSS) parameters plus grayscale scalar images.
 Normal-map alpha is never modified or repurposed. Spatial amplitudes, displacement
 bounds, radii and thickness scales are expressed in native host world units.
 """
@@ -17,7 +17,7 @@ import struct
 from normal_materials import uncached_pixel_hash
 
 MAGIC = b"BWSFM1\0\0"
-VERSION = 1
+VERSION = 2
 CAPABILITY = "surface-materials"
 FORMAT = "BWSFM1"
 
@@ -37,7 +37,7 @@ MAX_IMAGES = 512
 MAX_IDENTIFIER_BYTES = 4096
 MAX_MATERIAL_NAME_BYTES = 31
 MAX_DIMENSION = 4096
-MAX_SIDECAR_BYTES = 256 * 1024 * 1024
+MAX_SIDECAR_BYTES = 512 * 1024 * 1024
 MAX_WORLD_AMPLITUDE = 16.0
 MAX_UV_TRANSFORM = 1024.0
 
@@ -111,15 +111,21 @@ def _mesh_uv_identity(stream) -> int:
 
     magic = take(8)
     donor = magic == b"BWMESH4\0"
+    guard = magic == b"BWMESH7\0"
     anchored = magic == b"BWMESH6\0"
     layered = anchored or magic == b"BWMESH5\0"
     placement = layered or magic == b"BWMESH3\0"
-    visibility = donor or placement or magic == b"BWMESH2\0"
+    visibility = guard or donor or placement or magic == b"BWMESH2\0"
     if not visibility and magic != b"BWMESH1\0":
         raise ValueError("Unsupported mesh payload format for UV identity")
     count = struct.unpack("<I", take(4))[0]
     if not 1 <= count <= 256:
         raise ValueError("Invalid mesh batch count for UV identity")
+    if guard:
+        sample_count = struct.unpack("<I", take(4))[0]
+        if not 4 <= sample_count <= 4096:
+            raise ValueError("Invalid Orion guard fit sample count")
+        take(24 + 104 * sample_count)
     if donor:
         bones, refs, flags = struct.unpack("<III", take(12))
         if not 1 <= bones <= 256 or not 1 <= refs <= 128 or flags > 3:
@@ -138,6 +144,8 @@ def _mesh_uv_identity(stream) -> int:
         take(32)  # owner name
         if visibility:
             take(32)
+        if guard and struct.unpack("<I", take(4))[0] > 2:
+            raise ValueError("Invalid Orion guard fit side")
         if placement:
             take(32 + 12)
         if layered:
@@ -366,7 +374,7 @@ def pack_surface_materials(
 ) -> bytes:
     """ Deterministically serialize a BWSFM1 surface-material sidecar.
 
-    ``images`` maps image_name -> (role, width, height, rgba_bytes).
+    ``images`` maps image_name -> (role, width, height, scalar bytes or RGBA bytes).
     ``records`` is a list of material record dicts for ``asset_id``. Records are
     sorted by ``(asset_id, material_name)`` and bound to matching batch materials;
     batches whose material has no record receive ``NO_SURFACE_MATERIAL``.
@@ -400,10 +408,14 @@ def pack_surface_materials(
             or not 1 <= width <= MAX_DIMENSION
             or not 1 <= height <= MAX_DIMENSION
             or not isinstance(pixels, (bytes, bytearray))
-            or len(pixels) != width * height * 4
+            or len(pixels) not in (width * height, width * height * 4)
         ):
             raise ValueError(f"Invalid surface material image: {name!r}")
-        raw_pixels = bytes(pixels)
+        source_pixels = bytes(pixels)
+        if len(source_pixels) == width * height * 4:
+            raw_pixels = source_pixels[0::4]
+        else:
+            raw_pixels = source_pixels
         image_roles[name] = role
         validated_images[name] = (role, width, height, uncached_pixel_hash(raw_pixels), raw_pixels)
 
@@ -508,7 +520,7 @@ def pack_surface_materials(
         out.extend(raw_pixels)
 
     if len(out) > MAX_SIDECAR_BYTES:
-        raise ValueError("Surface material sidecar exceeds 256 MiB limit")
+        raise ValueError("Surface material sidecar exceeds 512 MiB limit")
     return bytes(out)
 
 
@@ -568,7 +580,7 @@ def read_surface_materials(
     version, batch_count, record_count, image_count, mesh_uv_hash = struct.unpack(
         "<IIIIQ", take(24)
     )
-    if version != VERSION:
+    if version not in (1, VERSION):
         raise ValueError(f"Unsupported surface material version: {version}")
     if (
         not 1 <= batch_count <= MAX_BATCHES
@@ -715,20 +727,22 @@ def read_surface_materials(
             or not 1 <= height <= MAX_DIMENSION
         ):
             raise ValueError("Invalid surface material image header")
-        byte_count = width * height * 4
-        if decoded_total + byte_count > max_bytes:
+        pixel_count = width * height
+        stored_byte_count = pixel_count * (4 if version == 1 else 1)
+        if decoded_total + pixel_count > max_bytes:
             raise ValueError("Surface material decoded images exceed budget")
-        decoded_total += byte_count
-        pixels = take(byte_count)
-        if uncached_pixel_hash(pixels) != expected_hash:
+        decoded_total += pixel_count
+        stored_pixels = take(stored_byte_count)
+        if uncached_pixel_hash(stored_pixels) != expected_hash:
             raise ValueError("Surface material image hash mismatch")
+        pixels = stored_pixels[0::4] if version == 1 else stored_pixels
         images.append(
             {
                 "name": img_name,
                 "role": role,
                 "width": width,
                 "height": height,
-                "hash": expected_hash,
+                "hash": uncached_pixel_hash(pixels),
                 "pixels": pixels,
             }
         )

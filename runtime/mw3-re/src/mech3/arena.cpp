@@ -1,13 +1,20 @@
 #include "mech3/arena.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <string>
 
+#include "gamez/zclass/class.h"
+#include "gamez/zmath/zmth_matrix.h"
+#include "gamez/zmath/zmth_vector.h"
 #include "mech3/app_mech.h"
+#include "mech3/arena_camera.h"
+#include "mech3/mech_parts.h"
+#include "mech3/spectator_camera_hooks.h"
 #include "mech3/app_view.h"
 #include "mech3/arena_log.h"
 #include "mech3/mech.h"
@@ -18,6 +25,7 @@
 #include "mech3/zai_attack.h"
 #include "mech3/zai_hunt.h"
 #include "mech3/zrdraiv.h"
+#include "platform/render3d.h"
 
 namespace mech3::arena {
 
@@ -87,12 +95,12 @@ void view_clear() {
   g_viewed = -1;
 }
 
-// The first standing bot after `from` in setup order, wrapping round; -1
-// when none stands.
-int next_standing(int from) {
+// The first standing bot after `from` in setup order (before it with
+// `direction` -1), wrapping round; -1 when none stands.
+int next_standing(int from, int direction = 1) {
   const int count = static_cast<int>(g_mechs.size());
   for (int step = 1; step <= count; ++step) {
-    const int index = (from + step + count) % count;
+    const int index = ((from + direction * step) % count + count) % count;
     if (arena_standing(g_mechs[static_cast<size_t>(index)].mech)) return index;
   }
   return -1;
@@ -322,6 +330,85 @@ bool arena_view_next() {
   return true;
 }
 
+// Ours (#529)
+bool arena_view_previous() {
+  if (!g_started || g_mechs.empty() || arena_headless()) return false;
+  const int previous = next_standing(g_viewed < 0 ? 0 : g_viewed, -1);
+  if (previous < 0) return false;
+  view_mech(previous);
+  return true;
+}
+
+namespace {
+// `v` scaled to unit length, or `fallback` when it has none.
+void unit_or(const float v[3], const float fallback[3], float out[3]) {
+  const float length = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+  for (int axis = 0; axis < 3; ++axis) out[axis] = length > 1e-6f ? v[axis] / length : fallback[axis];
+}
+}  // namespace
+
+// Ours (#529). The centre is program_vehicle_centre, the same point the
+// arena log records. The heading is Vehicle::forward (flat, kept by the
+// game each frame). The torso's look is the mech's yaw times the torso's
+// own turn and shake (Torso::shake_q, a const read), applied to the mech's
+// forward axis, -z.
+bool arena_camera_view(arena_camera::Subject* subject, arena_camera::Action* action) {
+  *subject = arena_camera::Subject{};
+  *action = arena_camera::Action{};
+  if (!g_started || g_mechs.empty()) return false;
+  float sum[3] = {};
+  float centres[kArenaPlayers][3] = {};
+  int standing = 0;
+  for (const ArenaMech& entry : g_mechs) {
+    if (!arena_standing(entry.mech) || standing >= static_cast<int>(kArenaPlayers)) continue;
+    program_vehicle_centre(entry.mech, centres[standing]);
+    for (int axis = 0; axis < 3; ++axis) sum[axis] += centres[standing][axis];
+    ++standing;
+  }
+  action->count = standing;
+  if (standing > 0) {
+    for (int axis = 0; axis < 3; ++axis) action->centre[axis] = sum[axis] / static_cast<float>(standing);
+    for (int index = 0; index < standing; ++index) {
+      const float dx = centres[index][0] - action->centre[0];
+      const float dz = centres[index][2] - action->centre[2];
+      action->radius = std::max(action->radius, std::sqrt(dx * dx + dz * dz));
+    }
+  }
+  Mech* mech = arena_viewed_mech();
+  if (!mech) return true;
+  // A fallen viewed bot stays the subject until view_follow hands the view on,
+  // so the camera watches it fall rather than jumping first.
+  subject->present = true;
+  program_vehicle_centre(mech, subject->centre);
+  const float ahead[3] = {0, 0, 1};
+  const float flat[3] = {mech->forward.x, 0, mech->forward.z};
+  unit_or(flat, ahead, subject->forward);
+  float look[3] = {subject->forward[0], 0, subject->forward[2]};
+  if (mech->torso) {
+    float torso_q[4];
+    mech->torso->shake_q(torso_q);
+    float turned[4];
+    zmth::quat_mul(mech->orientation, torso_q, turned);
+    const zmth::Quat q{turned[0], turned[1], turned[2], turned[3]};
+    zmth::Vec3 rotated{};
+    zmth::quat_rotate(q, zmth::Vec3{0, 0, -1}, rotated);
+    const float direction[3] = {rotated.x, rotated.y, rotated.z};
+    unit_or(direction, subject->forward, look);
+  }
+  for (int axis = 0; axis < 3; ++axis) subject->look[axis] = look[axis];
+  if (mech->torso && mech->torso->node) zcls::node_world_position(static_cast<zcls::Node*>(mech->torso->node), subject->cockpit);
+  else for (int axis = 0; axis < 3; ++axis) subject->cockpit[axis] = subject->centre[axis];
+  return true;
+}
+
+bool arena_viewed_label(int* id, std::string* label) {
+  if (!g_started || g_viewed < 0 || g_viewed >= static_cast<int>(g_mechs.size())) return false;
+  const ArenaMech& entry = g_mechs[static_cast<size_t>(g_viewed)];
+  *id = entry.id;
+  *label = g_names[static_cast<size_t>(g_viewed)];
+  return true;
+}
+
 bool arena_hunt_net_held() { return ai::hunt_net() != nullptr; }
 
 const std::vector<ArenaMech>& arena_mechs() { return g_mechs; }
@@ -416,6 +503,7 @@ bool ArenaRun::read_setup(const std::string& path, const Flags& flags, std::stri
     *message = "--arena " + path_ + ": " + error;
     return false;
   }
+  setup_.record_every_update = setup_.record_every_update || flags.record_every_update;
   return true;
 }
 
@@ -441,6 +529,9 @@ bool ArenaRun::open(int64_t seed, int32_t frame_ms, bool headless, std::string* 
   set_arena_seed(seed);      // which ends of the map the sides start at, and the update order
   set_arena_log(log_.get(), frame_ms);
   set_arena_headless(headless);  // nobody watches: draw nothing
+  // Before the mission loads, so its first mission_changed lights it (#507).
+  const char* lighting = time_of_day_lighting(setup_.time_of_day);
+  platform::arena_lighting_mission() = lighting ? lighting : "";
   return true;
 }
 
@@ -449,8 +540,18 @@ ArenaRun::~ArenaRun() {
   set_arena_setup(nullptr);
   set_arena_log(nullptr, 0);
   set_arena_headless(false);
+  platform::arena_lighting_mission().clear();
   znet::shutdown();
   hub_.reset();
 }
 
 }  // namespace mech3::arena
+
+// Ours (#529): the spectator camera's hooks (spectator_camera_hooks.h).
+namespace mech3 {
+namespace {
+SpectatorCameraHooks* g_spectator_camera = nullptr;
+}  // namespace
+void set_spectator_camera_hooks(SpectatorCameraHooks* hooks) { g_spectator_camera = hooks; }
+SpectatorCameraHooks* spectator_camera_hooks() { return g_spectator_camera; }
+}  // namespace mech3

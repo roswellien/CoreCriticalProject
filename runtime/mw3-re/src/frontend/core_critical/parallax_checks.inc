@@ -43,7 +43,7 @@ binding(const std::vector<vk::ModelVertex> &vertices, const std::vector<std::uin
   const auto uv_hash = mat::compute_mesh_uv_hash(batches, 0, 1);
   const unsigned width = (height == Height::atlas || height == Height::atlas_ramp) ? 64 : 32;
   const unsigned image_height = 32;
-  std::vector<std::uint32_t> pixels(width * image_height);
+  std::vector<std::uint8_t> pixels(width * image_height);
   for (unsigned y = 0; y < image_height; ++y)
     for (unsigned x = 0; x < width; ++x) {
       const unsigned scalar = height == Height::zero ? 0
@@ -53,7 +53,7 @@ binding(const std::vector<vk::ModelVertex> &vertices, const std::vector<std::uin
                               : height == Height::atlas ? (x < 32 ? 0 : 255)
                               : height == Height::atlas_ramp ? (x < 32 ? 4 + 8 * x : 255)
                                                          : 128;
-      pixels[y * width + x] = scalar | scalar << 8 | scalar << 16 | 0xff000000U;
+      pixels[y * width + x] = static_cast<std::uint8_t>(scalar);
     }
   std::ostringstream encoded(std::ios::binary);
   auto u32 = [&](std::uint32_t value) {
@@ -66,7 +66,7 @@ binding(const std::vector<vk::ModelVertex> &vertices, const std::vector<std::uin
     encoded.write(value.data(), std::streamsize(value.size()));
   };
   encoded.write("BWSFM1\0\0", 8);
-  u32(1); u32(1); u32(1); u32(1); u64(uv_hash); u32(0);
+  u32(2); u32(1); u32(1); u32(1); u64(uv_hash); u32(0);
   text("fixture:pom"); text("PomFixture");
   u32(0); u32(mat::no_surface_image);
   scalar(material.height_reference); scalar(material.height_amplitude);
@@ -79,8 +79,8 @@ binding(const std::vector<vk::ModelVertex> &vertices, const std::vector<std::uin
   for (unsigned i = 0; i < 6; ++i) scalar(0);
   scalar(.7f); scalar(.04f); scalar(0);
   text("fixture-height"); u32(mat::surface_role_height); u32(width); u32(image_height);
-  u64(mat::normal_hash(pixels.data(), pixels.size() * 4));
-  encoded.write(reinterpret_cast<const char *>(pixels.data()), std::streamsize(pixels.size() * 4));
+  u64(mat::normal_hash(pixels.data(), pixels.size()));
+  encoded.write(reinterpret_cast<const char *>(pixels.data()), std::streamsize(pixels.size()));
   const auto bytes = encoded.str();
   std::istringstream input(bytes, std::ios::binary);
   auto pack = std::make_shared<mat::SurfaceMaterialPack>(mat::read_surface_materials(
@@ -811,7 +811,7 @@ void descriptor_identity_and_mixed_draws(vk::Renderer &renderer, vk::Renderer &u
     if (invalid == 3) snapshot->source_sha256.clear();
     if (invalid == 4) snapshot->producer_epoch = 0;
     if (invalid == 5) snapshot->texture_version = 0;
-    if (invalid == 6) snapshot->image_version = 2;
+    if (invalid == 6) snapshot->image_version = 3;
     test.draws[0].height_binding = snapshot;
     bool rejected{};
     try { renderer.render(test); } catch (const std::runtime_error &) { rejected = true; }
@@ -823,8 +823,8 @@ void descriptor_identity_and_mixed_draws(vk::Renderer &renderer, vk::Renderer &u
 void immutable_height_reuse_across_admission_stamps(vk::Renderer &renderer) {
   auto source = fixture(Route::tl, Height::ramp_u, .08f, .1f, .7);
   const auto immutable = source.scene.draws[0].height_binding;
-  const auto payload_bytes = immutable->image->pixels.size() * sizeof(std::uint32_t);
-  require(payload_bytes == 4096, "POM shared height fixture has an unexpected size");
+  const auto payload_bytes = immutable->image->pixels.size();
+  require(payload_bytes == 1024, "POM shared height fixture has an unexpected size");
   const auto uploads = renderer.height_uploads;
   const auto uploaded_bytes = renderer.height_uploaded_bytes;
   const auto hits = renderer.height_cache_hits;

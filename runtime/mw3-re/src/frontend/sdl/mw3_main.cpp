@@ -278,6 +278,7 @@ struct Args {
   bool window_given = false;  // --window: kept, the frame pillarboxed in it (else the frame's shape)
   std::string chain;          // --campaign-chain new:N / resume:N (ours, campaign_chain.h)
   std::string modes;          // --action-chain all / c2 / c2:4 (ours, modes_chain.h)
+  bool arena_record_every_update = false;
   int frame_ms = 0;           // --frame-ms N: each frame shown N ms on the game's clock (ours)
   int64_t seed = -1;          // --seed N: rand seeded with N wherever the game seeds it from the clock (ours)
   int win = 0;  // --win N (ours): the mission won N frames in, by its Exit Mission
@@ -354,10 +355,11 @@ void usage() {
       "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires Core Critical Vulkan and --cc-lighting normal)]\n"
       "    [--cc-draw-distance 800|1200|1600|2400|3200 (default 800)]\n"
       "    [--cc-flare-style modern|original (default modern)]\n"
+      "    [--cc-vsync 0|1 (default 1)]\n"
       "    [--cc-controller FILE] (launcher-exported controller profile)\n"
       "    [--cc-input FILE] (launcher-exported extended mouse and combo bindings)\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
-      "    [--arena SETUP.json --seed N --frame-ms N] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
+      "    [--arena SETUP.json --seed N --frame-ms N [--arena-record-every-update]] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
 }
@@ -372,6 +374,7 @@ bool parse(int argc, char** argv, Args& a) {
     // the next restart (sdl_restart.h keeps it and drops what stood before).
     if (s == "--then") { later = true; continue; }
     if (later && (s == "--click-at" || s == "--tap" || s == "--mouse-at") && next(1)) { ++i; continue; }
+    bool parsed_common_option = true;
     if (s == "--version") {  // ours: the build, and (on Windows) that every DLL it needs loaded
       std::printf("mw3 (MechWarrior 3 rebuild) %s\n", mw3_version_tag + 20);
       std::exit(0);
@@ -438,6 +441,10 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--net-walk" && next(1)) std::sscanf(argv[++i], "%d,%d", &a.net_walk[0], &a.net_walk[1]);
     else if (s == "--net-drive" && next(1)) a.net_drive = std::strtoll(argv[++i], nullptr, 10);
     else if (s == "--net-soak") a.net_soak = true;
+    else parsed_common_option = false;
+    // Split at the arena options to stay below MSVC's else-if nesting limit.
+    if (parsed_common_option) continue;
+    if (s == "--arena-record-every-update") a.arena_record_every_update = true;
     else if (sdlfe::parse_watch_option(a.watch, argc, argv, &i)) continue;
     else if (s == "--net-staged" && next(1)) a.net_staged = std::atoi(argv[++i]) != 0;
     else if (s == "--net-ahead" && next(1)) a.net_ahead = std::strtof(argv[++i], nullptr);
@@ -605,6 +612,14 @@ bool parse(int argc, char** argv, Args& a) {
       }
       a.cc_assets.sun_shadows_explicit = true;
       a.cc_assets.sun_shadows = value == "1";
+    } else if (s == "--cc-vsync" && next(1)) {
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") {
+        std::fprintf(stderr, "--cc-vsync supports 0 or 1\n");
+        return false;
+      }
+      a.cc_assets.vsync_explicit = true;
+      a.cc_assets.vsync = value == "1";
     } else if (s == "--cc-water-detail" && next(1)) {
       const std::string value = argv[++i];
       if (value != "0" && value != "1") {
@@ -733,7 +748,12 @@ bool parse(int argc, char** argv, Args& a) {
   replay.net_upnp = !a.net_upnp.empty(), replay.mission = !a.mission.empty(), replay.fly = a.fly;
   replay.replay = !a.watch.replay_path.empty(), replay.replay3d = !a.watch.replay3d_path.empty();
   replay.play_original = a.play_original;
+  if (a.arena_record_every_update && a.watch.arena_path.empty()) {
+    std::fprintf(stderr, "mw3: --arena-record-every-update requires --arena\n");
+    return false;
+  }
   mech3::arena::Flags arena;
+  arena.record_every_update = a.arena_record_every_update;
   arena.host = a.net_host, arena.join = !a.net_join.empty(), arena.net_upnp = !a.net_upnp.empty();
   arena.original = a.play_original, arena.mission = !a.mission.empty();
   arena.net_minutes = a.net_minutes > 0, arena.net_soak = a.net_soak, arena.net_drive = a.net_drive >= 0;
@@ -949,6 +969,10 @@ std::string flat(const std::string& s) {
   }
   return out;
 }
+
+// A watched arena match (ours, #516): one with a window. It runs on the wall
+// clock; a hidden one steps by --frame-ms so its log repeats.
+bool watched_arena(const Args& a) { return !a.watch.arena_path.empty() && !a.hidden; }
 
 }  // namespace
 
@@ -1388,7 +1412,9 @@ int program(int argc, char** argv) {
   }
   // --arena (ours, #287): a lone host's session on the in-process hub, never
   // the ENet transport above (refused with --host and --join).
-  if (!sdlfe::open_watch_session(a.watch, a.seed, a.frame_ms, a.hidden && a.shot.empty())) {
+  // A watched match runs on the wall clock (below), so its log says 0: no fixed step.
+  const int arena_log_frame_ms = watched_arena(a) ? 0 : a.frame_ms;
+  if (!sdlfe::open_watch_session(a.watch, a.seed, arena_log_frame_ms, a.hidden && a.shot.empty())) {
     SDL_Quit();
     return 1;
   }
@@ -1516,10 +1542,15 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   sdlfe::SdlZinHost zin_host(&input);
   sdlfe::FrontendInputLifetime input_lifetime(zin_host);
   sdlfe::SdlClock clock;
-  clock.frame_ms = static_cast<uint32_t>(a.frame_ms);
+  // A watched arena match (ours, #516) keeps the wall clock, as Play and
+  // Training do: the game steps by the real time between frames, so it plays
+  // at real speed whatever the frame rate. With the fixed --frame-ms step a
+  // slow window was slow motion and a fast one fast-forward. A hidden match
+  // keeps the fixed step, so its log repeats byte for byte.
+  clock.frame_ms = watched_arena(a) ? 0u : static_cast<uint32_t>(a.frame_ms);
   // A network run's frames keep the wall clock too: the peers' packets come in
   // real time, and a build that draws fast ran its game clock far ahead of them.
-  clock.paced = a.frame_ms > 0 && (a.net_host || !a.net_join.empty() || a.net_port >= 0 || !a.net_lan.empty() || a.net_soak);
+  clock.paced = clock.frame_ms > 0 && (a.net_host || !a.net_join.empty() || a.net_port >= 0 || !a.net_lan.empty() || a.net_soak);
   // --seed: every srand(time()) takes N instead (with --frame-ms a run repeats).
   if (a.seed >= 0) {
     crt::rand_fixed_seed() = static_cast<uint32_t>(a.seed);
@@ -1641,7 +1672,8 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     screen.in_mission = [&input] { return input.in_mission && input.in_mission(); };
     // Ours (#289): the 3D replay's mouse is the viewer's (clicks pick mechs,
     // the seek bar), never the mission's, so it is left free as the editor's.
-    input.pointer_free = [replay = !a.watch.replay3d_path.empty()] {
+    // Ours (#529): a watched arena match's too, for its spectator camera.
+    input.pointer_free = [replay = !a.watch.replay3d_path.empty() || watched_arena(a)] {
       return replay || mech3::editor_state().active != 0;
     };
     // FIX (A), playtest W4 (sdl_focus.h): a shown window's real focus; the mouse is held only when it is ours.
@@ -2535,7 +2567,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       // A quit outside the Exit state returns through ExitInstance, as the exe's WM_QUIT does,
       // and leaves the world to the process's end: stop_game after zSound's shutdown freed
       // the sounds the world's nodes still held (the exit's SIGTRAP, docs/program.md).
-      if (!sdlfe::watch_attach(a.watch, pump, window.render())) return 2;  // --replay3d's view (ours, #289)
+      if (!sdlfe::watch_attach(a.watch, pump, window.render(), window.sdl(), a.hidden)) return 2;  // --replay3d's view (ours, #289), the arena's camera (#529)
       try {
         result = app.run(pump);
       } catch (...) {

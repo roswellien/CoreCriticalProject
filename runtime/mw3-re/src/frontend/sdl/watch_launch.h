@@ -1,4 +1,6 @@
 #pragma once
+#include <SDL3/SDL.h>
+
 #include <memory>
 #include <string>
 
@@ -73,8 +75,10 @@ void close_watch(WatchArgs& w);
 
 // --replay3d, once the window and the pump exist: the 3D view made, set as
 // the replay's hooks and put ahead of the game's input. False (exit 2) when
-// its script can't be read. watch_detach() undoes it before the window goes.
-bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render);
+// its script can't be read. A watched --arena match (not `hidden`) gets the
+// spectator camera (arena_camera_view.h) the same way. watch_detach() undoes
+// either before the window goes.
+bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render, SDL_Window* window, bool hidden);
 void watch_detach(SdlPump& pump);
 
 // --arena and --replay3d: respawn off (a downed mech stays down) and the

@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <filesystem>
 
+#include "frontend/sdl/arena_camera_view.h"
 #include "frontend/sdl/replay3d_view.h"
 #include "frontend/sdl/replay_view.h"
 #include "frontend/sdl/sdl_platform.h"
@@ -123,9 +124,15 @@ void close_watch(WatchArgs& w) {
 
 namespace {
 std::unique_ptr<Replay3dView> g_view;  // --replay3d's, between watch_attach and watch_detach
+std::unique_ptr<ArenaCameraView> g_arena_camera;  // a watched --arena match's (#529), likewise
 }  // namespace
 
-bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render) {
+bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render, SDL_Window* window, bool hidden) {
+  if (w.arena && !hidden) {
+    g_arena_camera = std::make_unique<ArenaCameraView>(window);
+    mech3::set_spectator_camera_hooks(g_arena_camera.get());
+    pump.intercept = [](const SDL_Event& e) { return g_arena_camera && g_arena_camera->handle(e); };
+  }
   if (!w.replay3d) return true;
   g_view = std::make_unique<Replay3dView>(*w.replay3d, render, w.replay_script, [&pump] { pump.post_quit(); });
   std::string message;
@@ -140,6 +147,11 @@ bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render) {
 }
 
 void watch_detach(SdlPump& pump) {
+  if (g_arena_camera) {
+    pump.intercept = nullptr;
+    if (mech3::spectator_camera_hooks() == g_arena_camera.get()) mech3::set_spectator_camera_hooks(nullptr);
+    g_arena_camera.reset();
+  }
   if (!g_view) return;
   pump.intercept = nullptr;
   if (mech3::replay_hooks() == g_view.get()) mech3::set_replay_hooks(nullptr);

@@ -72,5 +72,8 @@
         <TextBlock Text="MW3-RE adds cloud surface detail when an enabled environment pack provides the map. Off keeps the original cloud shading." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
         <CheckBox x:Name="ChkLoadCache" Content="Load Cache" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged" />
         <TextBlock Text="Remembers which environment pack files were already fully checked, so later launches skip re-hashing unchanged packs (about 90 seconds with all campaign packs). A file is checked again whenever it changes or the game updates. Applies on the next launch." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
+        <CheckBox x:Name="ChkVsync" Content="VSync" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged"
+                  ToolTip="Limits frame rate to the monitor refresh rate and prevents tearing. Off: uncapped frame rate." />
+        <TextBlock Text="Limits frame rate to the monitor refresh rate and prevents tearing. Off: uncapped frame rate." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
     </StackPanel>
 </UserControl>

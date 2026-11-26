@@ -31,7 +31,7 @@ inline std::optional<uint64_t> native_mesh_uv_hash(const zmod::Model &m) {
   if (position_count == 0 || position_count > 1048576)
     return std::nullopt;
   uint64_t h = kFnvOffset;
-  auto fold_bytes = [&h](const void *p, std::size_t n) {
+  auto fold_bytes = [&h, kFnvPrime](const void *p, std::size_t n) {
     const auto *b = static_cast<const unsigned char *>(p);
     for (std::size_t i = 0; i < n; ++i) {
       h ^= b[i];
@@ -226,7 +226,8 @@ inline std::shared_ptr<const mw34::materials::HeightBinding> admit_native_ground
   if (target.sidecar_path.empty() || target.sidecar_sha256.size() != 64 ||
       target.sidecar_sha256.find_first_not_of("0123456789abcdef") != std::string::npos ||
       !pack || !pack->decoded_reservation || pack->decoded_reservation->budget() != budget ||
-      !budget || pack->version != 1 || pack->mesh_uv_hash != target.mesh_uv_hash ||
+      !budget || (pack->version != 1 && pack->version != 2) ||
+      pack->mesh_uv_hash != target.mesh_uv_hash ||
       pack->bindings.size() != polygon_count)
     reject("Native ground cached sidecar identity/budget mismatch");
   for (const auto &record : pack->records)

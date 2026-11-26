@@ -635,8 +635,9 @@ static EnvironmentSelection load_environment_packs_impl(
                env_uint(
                    payload["required_capabilities"]["surface-materials"]) != 1))
             env_fail("surface-materials capability required");
-          if ((pin.format == "BWSFM1" || pin.format == "BWSNR2") &&
-              pin.bytes > 256ULL * 1024 * 1024)
+          if (pin.format == "BWSFM1" && pin.bytes > 512ULL * 1024 * 1024)
+            env_fail("surface-material sidecar byte limit");
+          if (pin.format == "BWSNR2" && pin.bytes > 256ULL * 1024 * 1024)
             env_fail("sidecar byte limit");
           env_header(pin);
         }

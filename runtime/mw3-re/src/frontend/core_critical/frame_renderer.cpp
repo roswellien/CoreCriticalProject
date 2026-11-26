@@ -37,6 +37,7 @@
 #include "renderer/native_fixture_sources.hpp"
 #include "renderer/fixture_observation_emission.hpp"
 #include "platform/loading.hpp"
+#include "platform/render3d.h"
 #include "platform/prepared_visuals.h"
 #include "platform/sha256.hpp"
 #include "renderer/surface_detail_bindings.hpp"
@@ -833,7 +834,7 @@ public:
     fixture_model_scope(context);
     if(fixture_trace_run().open()) fixture_trace_model(context);
     ensure_extent();
-    const auto draws = prepared_.draw(context);
+    const auto draws = prepared_.draw(context, false, lab_preview_lighting_);
     if (!draws.replace)
       return;
     if (scene_.hud && !scene_.draws.empty()) {
@@ -878,12 +879,18 @@ public:
     staging_first_flush_pending_ = true;
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
+    // An arena match (#507) may borrow a campaign mission's lighting for its
+    // chosen time of day. Only the lighting uses the borrowed id: the mission
+    // identity (terrain materials, effect lights) stays the arena map's own.
+    const std::string &arena_lighting = ::platform::arena_lighting_mission();
+    const std::string lighting_id =
+        arena_lighting.empty() ? id : arena_lighting;
     mw34::campaign::ResolvedMissionLighting resolved{};
-    if (!id.empty())
-      resolved = mw34::campaign::resolve_mission_lighting(id);
+    if (!lighting_id.empty())
+      resolved = mw34::campaign::resolve_mission_lighting(lighting_id);
     lighting_ = mw34::campaign::mission_sun_settings(
         base_lighting_, resolved, campaign_enabled_, sun_explicit_,
-        environment_.get(), id);
+        environment_.get(), lighting_id);
     display_hdr_ = window_hdr_enabled();
     if (renderer_)
       renderer_->update_lighting_settings(display_lighting());
@@ -3133,7 +3140,7 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.world_scale_percent = 100;
   config.remaster_width = 0;
   config.remaster_height = 0;
-  config.vsync = true;
+  config.vsync = assets.vsync;
   config.temporal_inputs = false;
   config.gpu_models = (assets.geometry != "legacy");
   config.geometry = assets.geometry;

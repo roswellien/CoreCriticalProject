@@ -33,6 +33,22 @@ Wrangler serves the static build and discovers the Function in `website/function
 For a static-only preview, use `python -m http.server 4173 --directory dist`
 from `website/`.
 
+## Web-sized images and fonts
+
+Pages load WebP images and WOFF2 fonts generated from the original PNG plates and
+TTF fonts, which stay in the repository as the source. After replacing or adding an
+original, regenerate the web files from the repository root and commit them:
+
+```powershell
+pip install pillow fonttools brotli
+python website/tools/optimize_assets.py
+```
+
+New artwork must be listed in the script and referenced as `.webp` with a
+`srcset`. Fonts are converted without subsetting, so the Orbitron and Russo One
+Reserved Font Names remain valid. The Mod Studio tour links each screenshot to its
+full-quality PNG.
+
 ## Publish
 
 The existing `core-critical` Pages project is connected to this repository with

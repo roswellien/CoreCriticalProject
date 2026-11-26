@@ -15,6 +15,10 @@
 namespace mech3 {
 struct Mech;
 }
+namespace mech3::arena_camera {
+struct Subject;
+struct Action;
+}
 
 namespace mech3::arena {
 
@@ -52,6 +56,17 @@ void arena_start();
 Mech* arena_viewed_mech();
 // The next standing bot after the viewed one; false outside a match.
 bool arena_view_next();
+// Ours (#529): the standing bot before the viewed one, as arena_view_next.
+bool arena_view_previous();
+// Ours (#529, the spectator camera, arena_camera.h): what the camera reads
+// this frame. `subject` is the viewed bot (present false without one); its
+// centre, flat heading, torso node position and torso look. `action` is
+// every standing bot's mean position and spread. Reads only: no mech,
+// torso or node is changed, so a watched match plays as it would without the
+// camera. False outside a started match.
+bool arena_camera_view(arena_camera::Subject* subject, arena_camera::Action* action);
+// The viewed bot's id and chassis label for the camera's caption, or false.
+bool arena_viewed_label(int* id, std::string* label);
 
 // Each Core frame (CoreState::update), with a match set and started: the
 // match end. One side with no mech standing (Mech::active) loses, both at

@@ -83,6 +83,17 @@ Matrix from_native(const float *m) {
     return {m[0], m[3], m[6], m[9], m[1], m[4], m[7], m[10], m[2], m[5], m[8], m[11], 0, 0, 0, 1};
 }
 
+Matrix local_object_transform(const Node &node) {
+    const auto *data = static_cast<const zcls::Object3d *>(node.data);
+    if (!data)
+        throw std::runtime_error("Prepared source control has no class data");
+    if (data->get<uint32_t>(0) & 8)
+        return math::identity();
+    float values[12];
+    std::memcpy(values, data->raw + 0x30, sizeof values);
+    return from_native(values);
+}
+
 using Poses = std::map<std::string, Matrix>;
 struct Hierarchy {
     Poses poses;
@@ -111,14 +122,7 @@ Hierarchy hierarchy(const Node *root) {
                 continue;
             Matrix local = math::identity();
             if (next->cls() == 5) {
-                const auto *data = static_cast<const zcls::Object3d *>(next->data);
-                if (!data)
-                    throw std::runtime_error("Prepared source control has no class data");
-                if (!(data->get<uint32_t>(0) & 8)) {
-                    float values[12];
-                    std::memcpy(values, data->raw + 0x30, sizeof values);
-                    local = from_native(values);
-                }
+                local = local_object_transform(*next);
             } else if (next->cls() != 6) {
                 throw std::runtime_error("Prepared source hierarchy contains an "
                                          "unsupported transform class");
@@ -129,6 +133,30 @@ Hierarchy hierarchy(const Node *root) {
         }
     }
     return output;
+}
+
+std::array<float, 2> orion_guard_weights(const Hierarchy &live, const mw34::orion_guard::Fit &fit) {
+    const auto hip = live.targets.find("hip");
+    if (hip == live.targets.end())
+        return {};
+    const std::array<const char *, 2> names{"lthigh", "rthigh"};
+    mw34::orion_guard::PoseKey key{};
+    for (size_t side = 0; side < names.size(); ++side) {
+        const auto thigh = live.targets.find(names[side]);
+        if (thigh == live.targets.end() || thigh->second->cls() != 5 ||
+            thigh->second->parent_count() != 1 || thigh->second->parents[0] != hip->second)
+            return {}; // Detached or destroyed legs cannot inform the stock pose fit.
+        const auto transform = local_object_transform(*thigh->second);
+        for (size_t axis = 0; axis < 12; ++axis)
+            key[side * 12 + axis] = static_cast<float>(transform[axis] * (axis % 4 == 3 ? 0.5 : 1.0));
+    }
+    return mw34::orion_guard::weights(fit, key);
+}
+
+void shift_orion_guard(Matrix &matrix, const std::array<float, 3> &shift, float weight) {
+    for (size_t row = 0; row < 3; ++row)
+        for (size_t col = 0; col < 3; ++col)
+            matrix[row * 4 + 3] += matrix[row * 4 + col] * shift[col] * weight;
 }
 
 std::runtime_error binding_error(const Node &root, const std::string &name, size_t index,
@@ -329,6 +357,8 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
                                           std::filesystem::u8path(binding.mesh));
         auto geometry = open(binding.mesh), textures = open(binding.textures);
         model.mesh = platform::prepared::read_mesh(geometry);
+        if (model.mesh.guard_fit && binding.chassis != "orion")
+            throw std::runtime_error("Orion guard fit requires the stock Orion chassis");
         model.textures = platform::prepared::read_textures(textures);
         platform::prepared::validate_bindings(model.mesh, model.textures);
         const auto normal = normals.find({binding.chassis, binding.lod});
@@ -537,7 +567,7 @@ PreparedModels::resources_for_assets(const std::vector<std::string> &source_asse
 }
 
 PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context,
-                                       bool rigid_only) const {
+                                       bool rigid_only, bool lab_preview) const {
     sdlfe::CpuInterval interval(cpu_profile_ ? &cpu_statistics_.selection_ticks : nullptr);
     if (cpu_profile_)
         ++cpu_statistics_.calls;
@@ -646,6 +676,16 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
         sdlfe::CpuInterval retarget(cpu_profile_ ? &cpu_statistics_.retarget_ticks : nullptr);
         donor = donor_pose(rig_for(selected->mesh.rig), live.poses);
     }
+    std::array<float, 2> guard_weights{};
+    const auto &guard_fit = selected->mesh.guard_fit;
+    if (guard_fit && !lab_preview && source_node_name(node, root) == "hip_polys") {
+        guard_weights = orion_guard_weights(live, *guard_fit);
+        if (!selected->logged_guard_clearance && (guard_weights[0] > 0.0f || guard_weights[1] > 0.0f)) {
+            selected->logged_guard_clearance = true;
+            std::fprintf(stderr, "Orion guard clearance applied: %s, weights %.3f %.3f\n",
+                         selected->source_asset.c_str(), guard_weights[0], guard_weights[1]);
+        }
+    }
     output.replace = true;
     const auto skin_owner = resolve_skin(selected->source_asset, node->prepared_skin_index);
     const auto &textures = skin_owner ? *skin_owner : selected->textures;
@@ -675,6 +715,14 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
         if (selected->mesh.version != 4) {
             draw.camera = placed(root_camera, live.poses, batch);
             draw.world = placed(root_world, live.poses, batch);
+            if (guard_fit && batch.guard_side) {
+                const auto side = batch.guard_side - 1;
+                const auto weight = guard_weights[side];
+                if (weight > 0.0f) {
+                    shift_orion_guard(draw.camera, guard_fit->shifts[side], weight);
+                    shift_orion_guard(draw.world, guard_fit->shifts[side], weight);
+                }
+            }
         } else {
             const auto camera = math::product(root_camera, math::inverse(math::axis()));
             const auto world = math::product(root_world, math::inverse(math::axis()));

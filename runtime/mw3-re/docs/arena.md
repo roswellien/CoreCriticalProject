@@ -39,8 +39,15 @@ nothing is bound to a socket and nothing leaves the process. A match plays
 without sound, watched or not. Every bot walks the grid (the Improved AI
 upgrade) whatever `mw3.cfg` says, so a setup and seed play the same match on
 any machine. With `--hidden` and no screenshots the match draws
-nothing; without `--hidden` a window follows one bot, and the camera-cycle
-key moves the view to the next bot still standing.
+nothing; without `--hidden` a window shows the match through the spectator
+camera below, and the game's camera-cycle key still moves the view to the
+next bot still standing.
+
+A hidden match steps the game clock by exactly `--frame-ms` each frame, so
+the same setup and seed write the same log byte for byte. A watched match
+uses the wall clock instead, as Play and Training do: it plays at real
+speed and draws as fast as the computer allows, and its log's `start` line
+records `frame_ms` 0. A watched match can't be repeated exactly (#294).
 
 The run ends once the match is decided: one side with no mech standing loses,
 both at once is a draw, and at the time limit the side with more standing
@@ -55,6 +62,23 @@ given: `--host`, `--join`, `--net-upnp`, `--original`, `--mission` (and
 `--net-walk`, `--net-ahead`, `--briefing` or `--lab-mech`. A match that
 can't start (the map's spawn spots can't be read, or a side has no bot that
 could be made) prints why and exits 1.
+
+For graphics benchmark recording, add `--arena-record-every-update` to the
+command above, or set `"record_every_update": true` in the arena setup. The
+flag requires `--arena` and enables recording even if the JSON field is false.
+This opt-in mode writes one complete `state` per simulation update, including
+all mech poses, rounds and beams, alongside the existing shot, hit, action and
+other replay effect events. State `t` is the actual match time of the update,
+without timestamp rounding or resampling. With `--frame-ms 33 --hidden` and no
+screenshots, updates are about 33 ms apart (floating-point clock precision can
+vary slightly). Watched matches still use wall-clock update times.
+
+Dense logs retain version 2 and add `"record_every_update": true` only to the
+start record; both replay readers accept them. Omitted or false, the setting
+preserves the existing bytes, record fields and nominal 100 ms cadence. Dense
+recording uses more disk space and replay memory. The authored reference setup
+and reproduction instructions live in `tools/benchmark/fixtures/`; generated
+logs stay local under ignored `local/benchmark/`.
 
 A match log grows by every mech's state ten times a second: a few minutes of
 4v4 is tens of megabytes, and the viewers read a whole log into memory.
@@ -85,6 +109,20 @@ A match log grows by every mech's state ten times a second: a few minutes of
   mech lab lists them (Primary, Alternate A ...). A player's saved loadouts
   and the training ones can't be picked, so a setup plays the same on any
   install.
+- `time_of_day` (optional): `"dawn"`, `"day"`, `"dusk"` or `"night"`; left
+  out or `null`, a watched match keeps the map's own lighting. Each borrows
+  the sun, ambient, sky and haze of one outdoor campaign mission's lighting
+  profile (`kTimesOfDay` in `arena_setup.h`: dawn Training 1, day c3m1 at
+  noon, dusk Training 4, night c1m3). It is purely visual: only the renderer
+  reads it, and AI sight and sensors never do. A fresh `--hidden` run with no
+  screenshots, on the same build, seed and frame time, writes the same match
+  log at every time of day. A watched match is not
+  repeatable anyway (#294). The lighting shows only with the Core Critical
+  renderer and `--cc-lighting` set to something other than `off` (the
+  launcher's settings). The default SDL renderer and `--cc-lighting off`
+  accept the field but draw the map's own lighting. Any other value is
+  refused (exit 2) naming the field. `--arena-catalog` lists the values as
+  `times_of_day`.
 
 Whatever the preset says, a bot is awake from the start, engages any enemy,
 is no one's lancemate and starts powered up: a campaign record can start its
@@ -302,6 +340,52 @@ replay shows the map's own fog. A mech is
 picked by its label's point on the screen, not its shape. The camera goes
 through hills.
 
+## The spectator camera (#529)
+
+A watched match (no `--hidden`) is seen through a spectator camera with five
+modes. It starts in chase. The window's title names the mode, the followed
+mech and the keys.
+
+| Mode | Key | What it shows |
+| --- | --- | --- |
+| Chase | 1 | Behind and above the followed mech, turning with its heading |
+| Cockpit | 2 | From the followed mech's torso, looking where its torso looks |
+| Orbit | 3 | Slowly circling the middle of every standing mech, wide enough to hold them all |
+| Overhead | 4 | High above the followed mech, north up; it never turns with the mech |
+| Free | 5 or V | Flown by hand |
+
+- C cycles chase, cockpit, orbit and overhead; Shift+C goes back.
+- Tab (or `]`) follows the next standing mech, Shift+Tab (or `[`) the one before.
+  When the followed mech falls, the view moves on by itself after it is down.
+- The mouse wheel, or `=` and `-`, zooms: the chase distance (8 to 150 m),
+  the overhead height (40 to 800 m), the orbit's size, or the free camera's
+  speed (5 to 400 m/s, starting at 40).
+- Free camera: hold the right mouse button and move the mouse to look; W, A,
+  S and D fly, Q and E go down and up, Shift flies four times as fast. A fly
+  key or the right mouse button in any other mode takes over from where the
+  camera is; V goes back to the mode it left.
+- Escape opens the game's quit box as before.
+
+Every move is smoothed in real seconds (1 - e^(-rate x seconds)), so the
+camera moves the same at 30 frames a second as at 300. The camera only reads
+where the mechs are and places the scene's camera after the game's own view
+has placed it; it never touches a mech, its torso or the match. A hidden
+match never makes one, so its log stays byte for byte as before. The math is
+`src/mech3/arena_camera.h` (tested in `tests/test_arena_camera.cpp`); the keys
+are `src/frontend/sdl/arena_camera_view.cpp`. The camera goes through hills.
+
+The old overhead view was the game's godseye camera, 150 m above the mech,
+looking straight down (a pitch of exactly -90 degrees) and turning with the
+mech's heading. Bots turn all the time, so the whole map spun under the
+viewer, and at exactly -90 degrees the camera's angles sit at gimbal lock,
+where a rounding error swaps yaw and roll from frame to frame and the picture
+jumps. It also sat a fixed 150 m above the mech's centre, so its height rose
+and fell with every hill. A trace of a watched c1mp1 1v1 (seed 7, 5,759 frames
+at about 144 a second) showed its yaw jumping more than 0.05 radians in 947
+frames (up to 0.78 in one), a roll that should be zero in 535, 221 radians of
+turning in 40 seconds, and its height ranging from 126 to 174 m. The spectator's overhead view keeps north up, looks down at 83
+degrees, and glides after the mech instead of snapping to it each frame.
+
 ## Repeating a match
 
 The same seed and frame time play the same match, byte for byte, when the run
@@ -428,8 +512,8 @@ install, takes a few seconds and writes:
 - `catalog.json`: the arena maps (those with 16 spawn spots) with the
   lobby's names; every chassis with its stock loadouts (the mech lab's names,
   weapons by part, ammo, armor, walk and run speed, heat sinks, jump jets);
-  and every enemy pilot record in the game's mission readers with the numbers
-  behind the runner's summary line.
+  every enemy pilot record in the game's mission readers with the numbers
+  behind the runner's summary line; and the setup's `times_of_day` values.
 - `terrain/<map>.ppm` and `<map>.json`: the map from above as the top-down
   replay draws it, framed on its 16 spawn spots with 300 m more each way (a
   multiplayer map is a part of its campaign world, which shares its files),
