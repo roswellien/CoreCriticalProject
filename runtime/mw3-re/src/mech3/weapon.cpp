@@ -650,6 +650,10 @@ bool WeaponManager::prev_group() {
 
 // Mech3.exe 1.2 @ 0x004b0730
 bool WeaponManager::select_group(int32_t g) {
+  // Ours (FIX, bug): a group past the five (0..4), or none, read past `groups`
+  // into the next member, an address whose "count" differed from run to run
+  // (the reticle test's group 5, #485). No game key asks for one.
+  if (g < 0 || g >= 5 || !groups[g]) return false;
   if (groups[g]->count < 1) return false;
   release();
   group = g;

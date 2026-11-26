@@ -14296,7 +14296,8 @@ TEST(mission_c1m1_reticle_picks_out_to_the_weapons_range_headless) {
           k.on_owens = k.node && mech3::program_hud_node_object(k.node) == owens;
           // The sky 300 m over the Owens: a miss. Each group in turn, the ER lasers' last.
           const float sky[3] = {o.pos[0], o.pos[1] + 300.0f, o.pos[2]};
-          for (int g : {1, 2, 4, 5, 3}) {
+          // The groups are 0..4; 5, asked before, read past them (select_group).
+          for (int g : {1, 2, 4, 3}) {
             if (!mech3::mech_select_group(player, g)) continue;
             Sky y;
             y.group = g;
