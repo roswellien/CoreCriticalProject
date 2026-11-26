@@ -33,6 +33,7 @@ struct Record {
   bool has_previous = false;
   // Set by apply when this node was drawn blended, so restore writes it back.
   bool blended = false;
+  unsigned pass = 0;  // the record() pass that last found this node on list 6
   uint32_t flags_before_draw = 0;
   // What apply wrote. The draw itself may move a node (a camera, for one);
   // restore puts back only what still holds apply's blend.
@@ -42,6 +43,7 @@ struct Record {
 
 std::unordered_map<const Node*, Record> g_records;
 std::vector<Node*> g_blended;  // the nodes apply wrote, for restore
+unsigned g_pass = 0;
 // Every node whose cached world matrix was stale when the draw began. The draw
 // rebuilds those from the (blended) chain and marks them valid; restore marks
 // them stale again, so the simulation rebuilds them from the exact chain.
@@ -144,11 +146,15 @@ void blend_matrix(const float from[12], const float to[12], float t, float out[1
 
 void record() {
   // List 6 holds every node made and not yet freed; a removed item keeps its
-  // place with no node until the list is purged.
+  // place with no node until the list is purged. A record whose node is no
+  // longer on it is dropped: a whole scene can go without node_slot_free (a
+  // mission's pools reset), and its node addresses may be handed out again.
+  ++g_pass;
   for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
     Node* node = item->node;
     if (!is_live_object3d(node)) continue;
     Record& r = g_records[node];
+    r.pass = g_pass;
     const Transforms now = read_transforms(node);
     if (r.blended || !r.has_previous) {
       // A first record (or one left over from an unfinished draw): both ends are now.
@@ -160,14 +166,26 @@ void record() {
     r.has_previous = true;
     r.blended = false;
   }
+  for (auto it = g_records.begin(); it != g_records.end();) {
+    if (it->second.pass != g_pass) it = g_records.erase(it);
+    else ++it;
+  }
 }
 
 void apply(float alpha) {
   g_blended.clear();
   g_stale_before_draw.clear();
-  for (auto& [key, r] : g_records) {
-    Node* node = const_cast<Node*>(key);
+  // Walked from list 6, never from the records: only a node on the list is
+  // known to be live, so a record is only ever read through a live node.
+  for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
+    Node* node = item->node;
     if (!is_live_object3d(node)) continue;
+    auto found = g_records.find(node);
+    if (found == g_records.end()) {
+      if (object_data(node)->get<uint32_t>(kFlagsOffset) & kWorldStale) g_stale_before_draw.push_back(node);
+      continue;
+    }
+    Record& r = found->second;
     if (object_data(node)->get<uint32_t>(kFlagsOffset) & kWorldStale) g_stale_before_draw.push_back(node);
     if (!r.has_previous) continue;
     // Moved since its last record, outside a step (a placement between frames,
