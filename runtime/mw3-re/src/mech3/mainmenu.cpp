@@ -114,7 +114,8 @@ MainMenu::MainMenu(Engine& e, Handle s)
     e.render_set_target2(e.video_target(), r, b, a);
   }
   const bool moving = !e.fast_menu();
-  if (load("dialog.zrd", "MAINMENU", moving)) {
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
+  if (load("dialog.zrd", "MAINMENU", moving || !bake_menu)) {
     definition = tree;
     bind_primitive(&background, "BACKGROUND");
     for (int i = 0; i < 7; ++i) bind_button(&buttons[i], kButtonNames[i]);
@@ -134,7 +135,7 @@ MainMenu::MainMenu(Engine& e, Handle s)
     add(&version);
     if (moving) {
       bind_primitive(&title, "MECH3TEXT");
-    } else {
+    } else if (bake_menu) {
       bake();
       remove(&background);
       for (MainMenuButton& b : buttons) b.set_baked(true);
@@ -143,7 +144,7 @@ MainMenu::MainMenu(Engine& e, Handle s)
   } else {
     definition = nullptr;
   }
-  set_flags_all(moving ? 0 : ztwod::kManaged);
+  set_flags_all(moving || !bake_menu ? 0 : ztwod::kManaged);
   set_active(1);
   g_main_menu = this;
 }

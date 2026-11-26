@@ -92,6 +92,9 @@ class Screen2D {
   virtual void begin_menu_observation(const uint16_t*, int, int, int) {}
   virtual void cancel_menu_observation() noexcept {}
   virtual void finish_menu_observation() noexcept {}
+  // Ours (#552): only a ready HD presenter may ask FastMenu to retain separate live layers.
+  // Native hosts keep the original bake; frame source/coverage validation still happens at present.
+  virtual bool hd_menu_background_ready() const { return false; }
   virtual void present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) = 0;
   // FIX (A): the back buffer locked over a Direct3D frame (0x00576d00 /
   // 0x00576d60): what the 2D code drew into the 16-bit layer goes over the

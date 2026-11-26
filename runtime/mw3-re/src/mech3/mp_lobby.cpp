@@ -216,7 +216,8 @@ LobbyScreen::LobbyScreen(Engine& e, Handle s)
   for (InvertCheck* c : {&regen_box, &mobile_box, &stock_box, &ammo_box, &select_box}) c->id = id++;
   ready_box.id = 0x15;
   const bool moving = !e.fast_menu();
-  if (load_from(e.main_menu_definition(), "MULTIPLAYER_HOST_DIALOG", moving)) {
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
+  if (load_from(e.main_menu_definition(), "MULTIPLAYER_HOST_DIALOG", moving || !bake_menu)) {
     zimg::Texture* img = nullptr;
     uint8_t bg_moving = 0;
     e.main_menu_background(&img, &bg_moving);
@@ -228,7 +229,7 @@ LobbyScreen::LobbyScreen(Engine& e, Handle s)
     }
     add(&background);
     bind_primitive(&lines1, "LINES1");
-    if (!moving) {
+    if (bake_menu) {
       bake();
       remove(&background);
       remove(&lines1);
