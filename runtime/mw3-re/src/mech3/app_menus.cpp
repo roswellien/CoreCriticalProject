@@ -431,14 +431,17 @@ void GameEngine::widen_screen(MenuScreen* s, uint32_t ctor) {
 // page reached from the pause registers its own backdrop while it shows
 // (issue 519). Each page binds its own copy of the dialog's BACKGROUND, so
 // the source follows the page on top: shown on enter and resume, dropped on
-// suspend, leave and deletion, and only when it is still this page's, so the
-// main menu's own source is never cleared here.
+// leave and deletion, and only when it is still this page's. With a main menu
+// nothing is done: its option pages borrow the main menu's own image
+// (MenuScreen::borrow_background), so dropping it would clear the main menu's
+// source, which only its screens' construction registers again.
 void GameEngine::menu_screen_backdrop(Handle screen, bool show) {
+  const bool main_menu_registers_its_own = main_menu() != nullptr;
+  if (main_menu_registers_its_own) return;
   MenuScreen* page = screen_of(screen);
   const zimg::Texture* backdrop = page ? page->background.image : nullptr;
   if (!backdrop) return;
-  const bool main_menu_registers_its_own = main_menu() != nullptr;
-  if (show && !main_menu_registers_its_own) zrndr::set_menu_background_source(backdrop);
+  if (show) zrndr::set_menu_background_source(backdrop);
   if (!show && zrndr::menu_background_source() == backdrop) zrndr::set_menu_background_source(nullptr);
 }
 

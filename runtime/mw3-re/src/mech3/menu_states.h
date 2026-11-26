@@ -35,7 +35,6 @@ class OptionsState : public MenuState {
   // (Engine::menu_screen_backdrop, issue 519).
   bool enter() override;
   void resume(uint32_t arg) override;   // 0x0042da70
-  void suspend(uint32_t arg) override;  // ours
   void leave() override;                // ours
   Kind kind;
 };

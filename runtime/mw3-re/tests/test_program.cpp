@@ -20600,7 +20600,7 @@ struct SavedMapHost : zin::Host {  // the SDL host's: the map is the settings' b
 std::vector<uint8_t> w40_run(const std::string& dir, const std::function<void(platform::RegFile&)>& before,
                              const std::function<void()>& at_start,
                              const std::function<bool(mech3::GameEngine&, mech3::Mech3App&)>& frame,
-                             platform::Input* input = nullptr) {
+                             platform::Input* input = nullptr, BoxHost* image_host = nullptr) {
   platform::RegFile settings(dir + "/settings.reg");
   if (before) before(settings);
   mech3::reset_states();
@@ -20619,7 +20619,8 @@ std::vector<uint8_t> w40_run(const std::string& dir, const std::function<void(pl
   {
     mech3::GameEngine engine(p, "mech3.exe -nofmv");
     engine.quiet = true;
-    BoxHost host;
+    BoxHost default_host;
+    BoxHost& host = image_host ? *image_host : default_host;  // a test's own, for its images
     host.e = &engine;
     ztwod::set_host(&host);
     mech3::Mech3App app(&engine);
@@ -26738,12 +26739,61 @@ TEST(mission_c1m1_options_from_the_pause_4x3_by_default_headless) {
   EXPECT(wide.upgrades_objects.empty() || wide.upgrades_objects != v5.upgrades_objects);
 }
 
+// Issue 519: the option pages reached from the main menu borrow its image, so
+// their show and drop leave the main menu's HD background source alone: once
+// OPTIONS registers it (main_menu_background), GRAPHICS & AUDIO, BACK, BACK
+// keep it registered, back at the main menu too.
+TEST(main_menu_options_keep_the_main_menu_background_source_headless) {
+  if (!have_game()) return;
+  W40Setup w("519_main_menu_backdrop");
+  // A texture for every named image (no archive holds them loaded at the main
+  // menu here), so the main menu has an image to lend.
+  struct AnyImageHost : DistinctImageHost {
+    zimg::Texture* image_get(const char* n) override { return n && *n ? image_new(640, 480) : nullptr; }
+  } image_host;
+  int stage = 0;
+  const zimg::Texture* at_main = nullptr;
+  const zimg::Texture* on_game = nullptr;
+  const zimg::Texture* on_gfx = nullptr;
+  const zimg::Texture* back_at_main = nullptr;
+  auto walk = [&](mech3::GameEngine& engine, mech3::Mech3App& app) {
+    auto* os = dynamic_cast<mech3::OptionsState*>(app.current());
+    if (stage == 0 && at_main_menu(app)) {
+      at_main = mech3::main_menu()->background.image;  // what its borrowers register (main_menu_background)
+      const_cast<mech3::MainMenu*>(mech3::main_menu())->buttons[mech3::MainMenuButton::kOptions].on_left_up();
+      stage = 1;
+    } else if (stage == 1 && os && os->kind == mech3::OptionsState::kGame) {
+      auto* g = dynamic_cast<mech3::GameOptionsScreen*>(engine.screen_of(os->screen_));
+      if (!g) return false;
+      on_game = zrndr::menu_background_source();
+      g->gfx_audio.on_left_up();
+      stage = 2;
+    } else if (stage == 2 && os && os->kind == mech3::OptionsState::kGfxAudio) {
+      on_gfx = zrndr::menu_background_source();
+      os->escape();  // back to the game options
+      stage = 3;
+    } else if (stage == 3 && os && os->kind == mech3::OptionsState::kGame) {
+      os->escape();  // back to the main menu
+      stage = 4;
+    } else if (stage == 4 && at_main_menu(app)) {
+      back_at_main = zrndr::menu_background_source();
+      return true;
+    }
+    return false;
+  };
+  w40_run(w.dir, nullptr, nullptr, walk, nullptr, &image_host);
+  EXPECT(stage == 4);
+  EXPECT(at_main != nullptr);
+  EXPECT(on_game == at_main && on_gfx == at_main);
+  EXPECT(back_at_main == at_main);
+}
+
 // Issue 519: in a mission there is no main menu to register the menu
 // background source (Engine::main_menu_background), so the live GPU menu
 // never recognized the option pages' backdrop and drew no HD background. Each
 // page registers its own backdrop while it shows (its own copy: four textures,
-// one picture), and drops it when a page goes above it or it leaves; after
-// RESUME, and once the screens are freed, nothing is left registered.
+// one picture) and drops it when it leaves, the page below registering its own
+// again; after RESUME, and once the screens are freed, nothing is left registered.
 TEST(mission_c1m1_options_background_source_headless) {
   if (!have_game()) return;
   const OptionsPlace v = c1m1_options_place(13, true, nullptr, true);

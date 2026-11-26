@@ -46,14 +46,11 @@ void OptionsState::resume(uint32_t arg) {
   ShellState::resume(arg);
 }
 
-// Ours: a page pushed above this one, or this one leaving, takes its backdrop
-// off the menu background; the deleting destructor too, for a state freed
-// without leaving (the screen's texture goes with it).
-void OptionsState::suspend(uint32_t arg) {
-  e().menu_screen_backdrop(screen_, false);
-  ShellState::suspend(arg);
-}
-
+// Ours: this page leaving takes its backdrop off the menu background; the
+// deleting destructor too, for a state freed without leaving (the screen's
+// texture goes with it). Not on suspend: a popup pushed above (the controls'
+// axis and load/save boxes) leaves this page drawn under it, and a page pushed
+// above registers its own.
 void OptionsState::leave() {
   e().menu_screen_backdrop(screen_, false);
   ShellState::leave();
