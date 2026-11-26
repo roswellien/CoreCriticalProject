@@ -1,3 +1,5 @@
+import { LOG_LABELS, LOG_ORDER } from "../_lib/crash-report-logs.js";
+
 const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_ISSUE_BODY_CHARS = 48_000;
 const MAX_ISSUE_REPORT_CHARS = 20_000;
@@ -16,7 +18,6 @@ const GENERIC_FAILURES = [
 
 const MIN_INT32 = -2_147_483_648;
 const MAX_INT32 = 2_147_483_647;
-const LOG_ORDER = ["native_crash", "native_run", "native_stderr", "launcher", "native_stdout"];
 
 // Only the legacy host fault record may retain a module basename and numeric suffix.
 const NATIVE_MODULE_SUFFIX_LINE =
@@ -690,13 +691,6 @@ function issueBody(
             `${header}\n\nLog excerpts were omitted for overflow or repeat-report limits.`,
         );
 
-    const logNames = {
-        native_crash: "Native crash details (crash.txt)",
-        native_run: "Native run log (mw3.log)",
-        native_stderr: "Native standard error",
-        launcher: "Launcher log",
-        native_stdout: "Native standard output",
-    };
     const orderedKeys = [
         ...LOG_ORDER.filter((key) => key in reportLogs),
         ...Object.keys(reportLogs).filter((key) => !LOG_ORDER.includes(key)),
@@ -712,7 +706,7 @@ function issueBody(
     for (let index = 0; index < entries.length; index++) {
         const [name, content] = entries[index];
         const remainingEntries = entries.length - index;
-        const heading = `#### ${logNames[name] ?? name}\n\n`;
+        const heading = `#### ${LOG_LABELS[name] ?? name}\n\n`;
         const maxFenceRun = Math.max(
             0,
             ...Array.from(content.matchAll(/`+/g), (match) => match[0].length),

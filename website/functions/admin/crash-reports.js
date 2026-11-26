@@ -1,4 +1,5 @@
 import { authorizeCrashReportAdmin } from "../_lib/crash-report-admin-auth.js";
+import { LOG_LABELS, LOG_ORDER } from "../_lib/crash-report-logs.js";
 
 const PAGE_HEADERS = {
     "content-type": "text/html; charset=utf-8",
@@ -284,28 +285,14 @@ function renderPacksSection(packs) {
 }
 
 function renderLogsSection(logs) {
-    const logLabels = {
-        native_crash: "Native crash details (crash.txt)",
-        native_run: "Native run log (mw3.log)",
-        native_stderr: "Native standard error",
-        launcher: "Launcher log",
-        native_stdout: "Native standard output",
-    };
-    const logPriority = [
-        "native_crash",
-        "native_run",
-        "native_stderr",
-        "launcher",
-        "native_stdout",
-    ];
     const sourceLogs = logs && typeof logs === "object" && !Array.isArray(logs) ? logs : {};
     const orderedKeys = [
-        ...logPriority.filter(
+        ...LOG_ORDER.filter(
             (key) => typeof sourceLogs[key] === "string" && sourceLogs[key].length > 0,
         ),
         ...Object.keys(sourceLogs).filter(
             (key) =>
-                !logPriority.includes(key) &&
+                !LOG_ORDER.includes(key) &&
                 typeof sourceLogs[key] === "string" &&
                 sourceLogs[key].length > 0,
         ),
@@ -316,7 +303,7 @@ function renderLogsSection(logs) {
     return orderedKeys
         .map((name, index) => {
             const openAttr = name === "native_crash" || index === 0 ? " open" : "";
-            return `<details class="pane"${openAttr}><summary>${escapeHtml(logLabels[name] ?? name)}</summary><pre class="log">${escapeHtml(sourceLogs[name])}</pre></details>`;
+            return `<details class="pane"${openAttr}><summary>${escapeHtml(LOG_LABELS[name] ?? name)}</summary><pre class="log">${escapeHtml(sourceLogs[name])}</pre></details>`;
         })
         .join("");
 }
