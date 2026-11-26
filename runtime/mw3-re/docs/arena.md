@@ -96,8 +96,9 @@ A match log grows by every mech's state ten times a second: a few minutes of
   the sun, ambient, sky and haze of one outdoor campaign mission's lighting
   profile (`kTimesOfDay` in `arena_setup.h`: dawn Training 1, day c3m1 at
   noon, dusk Training 4, night c1m3). It is purely visual: only the renderer
-  reads it, and AI sight and sensors never do, so a `--hidden` run of one seed
-  writes the same match log at every time of day. A watched match is not
+  reads it, and AI sight and sensors never do. A fresh `--hidden` run with no
+  screenshots, on the same build, seed and frame time, writes the same match
+  log at every time of day. A watched match is not
   repeatable anyway (#294). The lighting shows only with the Core Critical
   renderer and `--cc-lighting` set to something other than `off` (the
   launcher's settings). The default SDL renderer and `--cc-lighting off`

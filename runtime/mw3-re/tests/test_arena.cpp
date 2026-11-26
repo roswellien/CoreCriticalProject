@@ -179,6 +179,7 @@ TEST(arena_times_of_day_borrow_outdoor_campaign_lighting) {
   for (const auto& t : mech3::arena::kTimesOfDay) {
     const auto resolved = mw34::campaign::resolve_mission_lighting(t.lighting_mission);
     EXPECT(resolved.has_profile && resolved.environment);
+    if (!resolved.environment) continue;
     EXPECT(!resolved.environment->is_interior && !resolved.policy.suppress_sun && !resolved.policy.suppress_sky);
   }
 }
