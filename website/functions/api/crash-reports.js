@@ -489,7 +489,6 @@ function validateReport(report) {
         report.mode.trim().length === 0 ||
         report.mode.length > 80 ||
         !Number.isInteger(report.exit_code) ||
-        report.exit_code === 0 ||
         report.exit_code < MIN_INT32 ||
         report.exit_code > MAX_INT32 ||
         !report.logs ||
@@ -533,6 +532,12 @@ function validateReport(report) {
             throw new Error("The crash report logs are invalid.");
         if (value) logs[name] = redactPaths(value.slice(-64 * 1024));
     }
+    // A clean exit is only worth a report when the game logged problems during play;
+    // without them it would be noise in the crash-report repository.
+    const hasProblems =
+        typeof logs.native_problems === "string" && logs.native_problems.trim().length > 0;
+    if (report.exit_code === 0 && !hasProblems)
+        throw new Error("The crash report format is invalid.");
     const packs = Array.isArray(report.packs)
         ? report.packs.slice(0, 64).map((pack) => {
               const rawId = field(pack, "Id");
@@ -951,7 +956,8 @@ export async function onRequestPost({ request, env }) {
         const suffix = crashFingerprint
             ? ` [${crashFingerprint.slice(0, 12)}]`
             : ` [${report.report_id.slice(0, 8)}]`;
-        const title = `Crash (${report.mode}, exit ${report.exit_code}): ${titleReason}${suffix}`;
+        const kind = report.exit_code === 0 ? "Problems" : "Crash";
+        const title = `${kind} (${report.mode}, exit ${report.exit_code}): ${titleReason}${suffix}`;
         await github(
             config.token,
             `mutation($repository:ID!, $title:String!, $body:String!) {
