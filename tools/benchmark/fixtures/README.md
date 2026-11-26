@@ -93,3 +93,51 @@ For an authored alternative, set the scene camera to
 `{"mode":"track","file":"c1mp1-camera.json","sha256":"..." }` and provide the
 file's SHA-256. Key times are relative to playback start and the track must
 cover the whole span. Keep recording files and run outputs in local storage.
+
+## Four-scene suite (step 3, #514)
+
+`suite-benchmark.json` keeps the qualified c1mp1 definition and adds c2mp2 and
+c3mp1 4v4 baselines plus c4mp2 stress. The baselines use the same chassis,
+stock loadouts and pilot preset as c1mp1. The stress recipe doubles each
+side, filling the map's 16 spawn spots (`remote_0` through `remote_15`). The
+arena setup accepts at most eight bots per side, and generation verified all
+16 spawned.
+
+The three new logs were each generated twice in fresh serial Windows x64
+Release processes with separate profiles and log directories. Each pair was
+byte identical and ended with a complete terminal record. The generator was
+source `0368e1bd905f331d684a0ac2fb12f950dfa7e983`, executable SHA-256
+`76065ea217934d601bcb5c0d3fadae508dee760887ecdac5f440ca3d04639953`, MSVC
+19.51.36260.0, SDL 3.4.18 and SDL_ttf 3.2.2. The original install's
+`zbd/reader.zbd` SHA-256 was
+`5e17037f3634480f74265b3e378e4513b84cae518e20bc55cd5c6e9c6683851a`.
+The ten `.zbd` archives together fingerprinted as
+`c882ddae83e20e6d95f42b9555c3f1dda3f5cb07d9357744844eac931766e851`.
+All three logs used seed 7 and began at `state.t=0.033000119030475616`.
+
+| Map | SHA-256 | Bytes | States | State spacing (ms) | Terminal record |
+| --- | --- | ---: | ---: | --- | --- |
+| c2mp2 | `f0e1f715fcac76ac9785d34a0edaef68e10dba233d9582b6cb8299e9c051e27c` | 53,939,593 | 5,607 | 32.989502–33.004761 | 185.031 s, draw, A/B losses 2/2 |
+| c3mp1 | `06628063fa10810716e72f0140720c8bd659e2c22b4d170f45eab23eba972d31` | 34,974,802 | 3,667 | 32.997131–33.004761 | 121.011 s, A wins, losses 3/4 |
+| c4mp2 | `e4a7c52fef671a036d88b5b64a0b7d6051c699194b13f3bea3466f6cff9e2645` | 105,104,293 | 5,607 | 32.989502–33.004761 | 185.031 s, B wins, losses 7/5 |
+
+Full-match shots and hits were 644 and 1,048 for c2mp2, 574 and 892 for
+c3mp1, and 1,095 and 1,223 for c4mp2.
+
+The baselines start at log times 30 s (`c1mp1`), 102 s (`c2mp2`) and 21 s
+(`c3mp1`). Each warms up for 10 s and measures for 30 s. The c2mp2 and c3mp1
+cuts use their highest-activity measured windows. The cameras follow surviving
+mechs 3, 1 and 4, respectively, with the same seven shot types and timings.
+For the new routes, subject selection counts shots and hits within 150 m of
+each surviving mech, using the nearest following pose and the lowest ID to
+break ties.
+
+The stress candidates were ranked by the mean per-state product of standing
+mechs and active recorded rounds plus beams. At nominal measured start
+10 s, the top c4mp2 window had a score of 69.96, with 14.61 standing mechs
+and 4.70 rounds plus beams on average. The next candidate at 11 s scored 62.74.
+The three baseline windows scored 18.39, 17.46 and 52.07 in suite order.
+The selected stress route follows mech 10 from the first recorded state
+(`t≈0.033 s`), measures `[10.033, 40.033)` and carries warm-up effects across
+the boundary. The Windows replay results are recorded in the
+[benchmark README](../README.md).

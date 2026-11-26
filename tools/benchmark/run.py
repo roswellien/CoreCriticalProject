@@ -1,14 +1,20 @@
 """Run the full-graphics arena benchmark using the native Play launch planner."""
 
 import argparse
+import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCHMARK_ROOT = ROOT / "local" / "benchmark"
+FIXTURES = ROOT / "tools" / "benchmark" / "fixtures"
+SUITE_SCENES = ("c1mp1", "c2mp2", "c3mp1", "c4mp2")
+BLOCK_ORDER = ("A1", "B1", "B2", "A2")
 sys.path.insert(0, str(ROOT / "tools" / "remaster-launcher"))
 from mw3_re_launch import plan_launch
 
@@ -22,6 +28,11 @@ PACK_FIELDS = {
 
 def read_json(path):
     return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def sha256(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def read_packs(data_root, active):
@@ -223,6 +234,88 @@ def build_launch(
     return plan
 
 
+def launch_scene(plan):
+    return subprocess.call(
+        plan["argv"], cwd=plan["working_directory"], env={**os.environ, **plan["environment"]}
+    )
+
+
+def run_scene(definition, scene, output, profile, data_root, runtime, executable, settings):
+    profile.mkdir(parents=True)
+    plan = build_launch(
+        definition, scene, output, profile, data_root, runtime, executable, settings
+    )
+    (profile / "launch-plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+    for item in plan.get("skipped_packs", []):
+        print(f"Play planner left out {item['root']}: {item['reason']}", file=sys.stderr)
+    print(f"Benchmark scene {scene}\n" + json.dumps(settings, indent=2), flush=True)
+    argv = plan["argv"]
+    toggles = {}
+    for flag in (
+        "--cc-dynamic-lighting",
+        "--cc-sun-shadows",
+        "--cc-fixture-lights",
+        "--cc-water-detail",
+        "--cc-cloud-detail",
+        "--cc-pom",
+    ):
+        toggles[flag] = flag in argv and argv[argv.index(flag) + 1] == "1"
+    for flag in ("--cc-effect-lights", "--cc-mech-headlights"):
+        toggles[flag] = flag in argv
+    print("Resolved Play features:\n" + json.dumps(toggles, indent=2), flush=True)
+    return launch_scene(plan)
+
+
+def run_suite(definition, output, label, data_root, runtime, executable, settings):
+    definition_hash = sha256(definition)
+    document = read_json(definition)
+    scenes = tuple(scene["id"] for scene in document["scenes"])
+    if document["version"] != 1 or scenes != SUITE_SCENES:
+        raise ValueError(f"Suite must list these scenes in order: {', '.join(SUITE_SCENES)}")
+    output.mkdir(parents=True)
+    manifest = {
+        "version": 1,
+        "label": label,
+        "host": socket.gethostname(),
+        "definition_sha256": definition_hash,
+        "started_ns": time.time_ns(),
+        "scenes": [],
+    }
+
+    def run_entry(scene, directory):
+        if sha256(definition) != definition_hash:
+            raise ValueError("Definition changed during the suite")
+        profile = output / "profiles" / directory
+        started = time.time_ns()
+        code = run_scene(
+            definition, scene, output / directory, profile, data_root, runtime, executable, settings
+        )
+        if code:
+            raise ValueError(f"{directory} ({scene}) exited with status {code}")
+        summary = output / directory / "summary.json"
+        result = read_json(summary)
+        if result.get("valid") is not True or result.get("scene_id") != scene:
+            raise ValueError(f"Invalid scene result: {summary}")
+        return {
+            "id": scene,
+            "summary": summary.relative_to(output).as_posix(),
+            "summary_sha256": sha256(summary),
+            "profile": profile.relative_to(output).as_posix(),
+            "started_ns": started,
+            "finished_ns": time.time_ns(),
+        }
+
+    if label == "A1":
+        manifest["conditioning"] = run_entry(SUITE_SCENES[0], "conditioning")
+    for scene in scenes:
+        manifest["scenes"].append(run_entry(scene, scene))
+    if sha256(definition) != definition_hash:
+        raise ValueError("Definition changed during the suite")
+    manifest["finished_ns"] = time.time_ns()
+    (output / "suite.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for flag in OPTIONS:
@@ -250,13 +343,16 @@ def main():
         help="Installed Play launcher's NativePreview directory",
     )
     parser.add_argument("--exe", type=Path, default=BENCHMARK_ROOT / "build/Release/mw3.exe")
-    parser.add_argument(
-        "--definition", type=Path, default=ROOT / "tools/benchmark/fixtures/c1mp1-benchmark.json"
-    )
-    parser.add_argument("--scene", default="c1mp1")
+    parser.add_argument("--definition", type=Path)
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--scene")
+    selection.add_argument("--suite", action="store_true")
+    parser.add_argument("--run-label", choices=(*BLOCK_ORDER, "smoke"))
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     try:
+        if args.suite != (args.run_label is not None):
+            raise ValueError("--suite and --run-label must be supplied together")
         data_root = (Path(os.environ["LOCALAPPDATA"]) / "MW3Remaster").resolve(strict=True)
         overrides = {
             field: getattr(args, flag.replace("-", "_")) for flag, field in OPTIONS.items()
@@ -280,45 +376,34 @@ def main():
         launcher_runtime = args.launcher_runtime.resolve(strict=True)
         executable = args.exe.resolve(strict=True)
         output = args.out.resolve()
-        profile = output.with_name(output.name + "-profile")
-        for path in (output, profile):
+        profile = None if args.suite else output.with_name(output.name + "-profile")
+        write_paths = (output,) if profile is None else (output, profile)
+        for path in write_paths:
             if not path.is_relative_to(BENCHMARK_ROOT.resolve()) or path.exists():
                 raise ValueError(f"Expected a fresh path under local/benchmark: {path}")
             if any(path.is_relative_to(root) for root in (data_root, game, launcher_runtime)):
                 raise ValueError(f"Benchmark write path overlaps a read-only input: {path}")
-        plan = build_launch(
-            args.definition.resolve(strict=True),
-            args.scene,
+        default_name = "suite-benchmark.json" if args.suite else "c1mp1-benchmark.json"
+        definition = (args.definition or FIXTURES / default_name).resolve(strict=True)
+        if profile is None:
+            return run_suite(
+                definition,
+                output,
+                args.run_label,
+                data_root,
+                launcher_runtime,
+                executable,
+                settings,
+            )
+        return run_scene(
+            definition,
+            args.scene or "c1mp1",
             output,
             profile,
             data_root,
             launcher_runtime,
             executable,
             settings,
-        )
-        profile.mkdir(parents=True, exist_ok=True)
-        (profile / "launch-plan.json").write_text(
-            json.dumps(plan, indent=2) + "\n", encoding="utf-8"
-        )
-        for item in plan.get("skipped_packs", []):
-            print(f"Play planner left out {item['root']}: {item['reason']}", file=sys.stderr)
-        print("Benchmark settings:\n" + json.dumps(settings, indent=2), flush=True)
-        argv = plan["argv"]
-        toggles = {}
-        for flag in (
-            "--cc-dynamic-lighting",
-            "--cc-sun-shadows",
-            "--cc-fixture-lights",
-            "--cc-water-detail",
-            "--cc-cloud-detail",
-            "--cc-pom",
-        ):
-            toggles[flag] = flag in argv and argv[argv.index(flag) + 1] == "1"
-        for flag in ("--cc-effect-lights", "--cc-mech-headlights"):
-            toggles[flag] = flag in argv
-        print("Resolved Play features:\n" + json.dumps(toggles, indent=2), flush=True)
-        return subprocess.call(
-            plan["argv"], cwd=plan["working_directory"], env={**os.environ, **plan["environment"]}
         )
     except (OSError, KeyError, ValueError) as error:
         print(f"benchmark: {error}", file=sys.stderr)
