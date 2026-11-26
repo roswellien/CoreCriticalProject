@@ -273,6 +273,29 @@ TEST(strict_benchmark_output_retains_validated_ticks_and_names_the_missing_prese
     EXPECT(!result.contains("statistics") && !std::filesystem::exists(files.dir / "out/summary.json"));
 }
 
+TEST(strict_benchmark_rejects_extra_worker_present_in_fifo_order) {
+    Files files("benchmark-strict-extra-present");
+    Run run({}, 10, 2, 1, files.dir / "out", {});
+    run.enable_strict({10, 10.25f}, {});
+    const auto wait = [&](double) {
+        auto present = run.take_strict_present();
+        EXPECT(present && present->sequence == 1);
+        return present;
+    };
+    EXPECT(run.next_strict_tick(wait).has_value());
+    run.record_strict_present(strict_present(1));
+    run.record_strict_present(strict_present(2));
+    EXPECT(!run.next_strict_tick(wait));
+    EXPECT(run.failed());
+    const auto extra = run.take_strict_present();
+    EXPECT(extra && extra->sequence == 2);
+    EXPECT(!run.take_strict_present());
+    EXPECT(!run.write_results());
+    const auto result = Json::parse(files.read("out/strict.json"));
+    EXPECT(result["valid"] == false && result["failure"]["tick"] == 0);
+    EXPECT(result["failure"]["reason"] == "unexpected extra strict worker present");
+}
+
 TEST(strict_benchmark_uses_the_run_clock_for_present_deadlines) {
     Files files("benchmark-strict-clock");
     double now = 100;

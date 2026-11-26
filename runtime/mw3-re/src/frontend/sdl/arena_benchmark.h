@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -242,7 +243,7 @@ class Run {
     Measurements measurements_;
     std::optional<StrictPlayback> strict_;
     std::optional<size_t> capture_tick_;
-    std::optional<StrictPresent> strict_present_;
+    std::deque<StrictPresent> strict_presents_;
     std::optional<InvalidFrame> strict_failure_;
 };
 

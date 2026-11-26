@@ -776,6 +776,7 @@ public:
   }
 
   bool wait_strict_job(std::size_t job, double deadline) {
+    // A timeout fails the run, so later waits return immediately to keep shutdown bounded.
     if (strict_wait_timed_out_) return false;
     using Clock = std::chrono::steady_clock;
     // The run can use an injected clock with a different epoch.

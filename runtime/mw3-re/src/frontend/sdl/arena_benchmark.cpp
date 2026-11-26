@@ -560,12 +560,16 @@ void Run::enable_strict(std::vector<float> times, std::optional<size_t> capture)
 
 void Run::record_strict_present(StrictPresent present) {
     std::lock_guard lock(mutex_);
-    strict_present_ = std::move(present);
+    strict_presents_.push_back(std::move(present));
 }
 
 std::optional<StrictPresent> Run::take_strict_present() {
     std::lock_guard lock(mutex_);
-    return std::exchange(strict_present_, std::nullopt);
+    if (strict_presents_.empty())
+        return {};
+    auto present = std::move(strict_presents_.front());
+    strict_presents_.pop_front();
+    return present;
 }
 
 std::optional<StrictTick> Run::next_strict_tick(const StrictPlayback::PresentSource &wait) {
@@ -578,6 +582,11 @@ std::optional<StrictTick> Run::next_strict_tick(const StrictPlayback::PresentSou
         std::lock_guard lock(mutex_);
         if (strict_failure_)
             return {};
+        if (present && !strict_presents_.empty()) {
+            strict_failure_ =
+                InvalidFrame{strict_->pending_frame(), "unexpected extra strict worker present"};
+            return {};
+        }
         return strict_->advance(std::move(present));
     } catch (const std::exception &error) {
         invalidate(strict_->pending_frame(), error.what());
