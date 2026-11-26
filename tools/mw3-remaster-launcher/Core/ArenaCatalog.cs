@@ -104,26 +104,37 @@ public sealed class ArenaCatalog
             throw new InvalidDataException("Arena catalog is missing its presets array.");
 
         var maps = new List<ArenaCatalogMap>();
+        var mapIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var item in mapsElement.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.Object)
                 throw new InvalidDataException("Arena catalog map entry must be a JSON object.");
             var id = ReadRequiredString(item, "id", "maps");
+            if (!mapIds.Add(id))
+            {
+                throw new InvalidDataException($"Arena catalog lists map \"{id}\" twice.");
+            }
             var name = ReadRequiredString(item, "name", "maps", allowEmpty: true);
             maps.Add(new ArenaCatalogMap(id, string.IsNullOrEmpty(name) ? id : name));
         }
 
         var mechs = new List<ArenaCatalogMech>();
+        var mechIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var item in mechsElement.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.Object)
                 throw new InvalidDataException("Arena catalog mech entry must be a JSON object.");
             var id = ReadRequiredString(item, "id", "mechs");
+            if (!mechIds.Add(id))
+            {
+                throw new InvalidDataException($"Arena catalog lists mech \"{id}\" twice.");
+            }
             var name = ReadRequiredString(item, "name", "mechs", allowEmpty: true);
             if (!item.TryGetProperty("loadouts", out var loadoutsElement) || loadoutsElement.ValueKind != JsonValueKind.Array)
                 throw new InvalidDataException($"Arena catalog mech '{id}' is missing its loadouts array.");
 
             var loadouts = new List<ArenaCatalogLoadout>();
+            var loadoutIndices = new HashSet<int>();
             var listIndex = 0;
             foreach (var loadoutItem in loadoutsElement.EnumerateArray())
             {
@@ -136,6 +147,10 @@ public sealed class ArenaCatalog
                     indexProp.ValueKind == JsonValueKind.Number && indexProp.TryGetInt32(out var parsedIndex)
                     ? parsedIndex
                     : listIndex;
+                if (!loadoutIndices.Add(explicitIndex))
+                {
+                    throw new InvalidDataException($"Arena catalog mech \"{id}\" lists loadout index {explicitIndex} twice.");
+                }
                 loadouts.Add(new ArenaCatalogLoadout(explicitIndex, loadoutName, loadoutItem.Clone()));
                 listIndex++;
             }
@@ -194,7 +209,8 @@ public sealed class ArenaCatalog
         NativeGameRunner runner,
         string gamePath,
         string dataRoot,
-        bool forceRefresh = false)
+        bool forceRefresh = false,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(runner);
         var validation = GameValidator.Validate(gamePath);
@@ -203,8 +219,12 @@ public sealed class ArenaCatalog
 
         var runtimeRoot = runner.RequireBundledMw3Re();
         var contract = Mw3ReRuntimeContract.ReadStructure(runtimeRoot);
-        return await EnsureCatalogForExecutableAsync(contract.Executable, validation.GameDirectory, dataRoot, forceRefresh)
-            .ConfigureAwait(false);
+        return await EnsureCatalogForExecutableAsync(
+            contract.Executable,
+            validation.GameDirectory,
+            dataRoot,
+            forceRefresh,
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -214,8 +234,10 @@ public sealed class ArenaCatalog
         string executablePath,
         string gameDirectory,
         string dataRoot,
-        bool forceRefresh = false)
+        bool forceRefresh = false,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var fullExePath = Path.GetFullPath(executablePath);
         if (!File.Exists(fullExePath))
             throw new FileNotFoundException("The MW3-RE executable was not found.", fullExePath);
@@ -251,17 +273,14 @@ public sealed class ArenaCatalog
             startInfo.ArgumentList.Add("--write-dir");
             startInfo.ArgumentList.Add(writeDirectory);
 
+            cancellationToken.ThrowIfCancellationRequested();
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start MW3-RE for arena catalog generation.");
 
-            // Read stdout and stderr asynchronously so a full pipe buffer cannot deadlock the child.
-            var stdoutTask = process.StandardOutput.ReadToEndAsync();
-            var stderrTask = process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync().ConfigureAwait(false);
-            process.WaitForExit();
-
-            var stdoutText = await stdoutTask.ConfigureAwait(false);
-            var stderrText = await stderrTask.ConfigureAwait(false);
+            var (stdoutText, stderrText) = await WaitForCatalogProcessAsync(
+                process,
+                ProductionCatalogTimeout,
+                cancellationToken).ConfigureAwait(false);
 
             if (process.ExitCode != 0)
             {
@@ -275,6 +294,58 @@ public sealed class ArenaCatalog
         }
 
         return LoadFromFile(catalogJsonPath);
+    }
+
+    private static readonly TimeSpan ProductionCatalogTimeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Wait for the catalog generation process to exit within the specified timeout.
+    /// On timeout or caller cancellation, kills the child process tree, awaits termination/drain,
+    /// and throws a TimeoutException or rethrows the caller's cancellation.
+    /// </summary>
+    public static async Task<(string Stdout, string Stderr)> WaitForCatalogProcessAsync(
+        Process process,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        using var timeoutCancellationSource = new CancellationTokenSource(timeout);
+        using var linkedCancellationSource = CancellationTokenSource.CreateLinkedTokenSource(timeoutCancellationSource.Token, cancellationToken);
+
+        var stdoutTask = process.StartInfo.RedirectStandardOutput
+            ? process.StandardOutput.ReadToEndAsync()
+            : Task.FromResult(string.Empty);
+        var stderrTask = process.StartInfo.RedirectStandardError
+            ? process.StandardError.ReadToEndAsync()
+            : Task.FromResult(string.Empty);
+
+        try
+        {
+            await process.WaitForExitAsync(linkedCancellationSource.Token).ConfigureAwait(false);
+            process.WaitForExit();
+
+            var stdoutText = await stdoutTask.ConfigureAwait(false);
+            var stderrText = await stderrTask.ConfigureAwait(false);
+            return (stdoutText, stderrText);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // The process can exit while cancellation requests its termination.
+            }
+
+            // Draining both pipes releases the readers before the caller disposes the process.
+            await process.WaitForExitAsync().ConfigureAwait(false);
+            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            throw new TimeoutException("Generating the arena catalog took longer than 2 minutes");
+        }
     }
 
     private sealed record ExecutableStamp(string Exe, long Size, long MtimeTicks);

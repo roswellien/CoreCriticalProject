@@ -285,6 +285,7 @@
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button x:Name="BtnStartMatch" Content="▶  START MATCH" Style="{StaticResource PrimaryLaunchButton}" FontSize="14" Padding="20,9" Margin="0,0,10,0" IsEnabled="False" Click="BtnStartMatch_Click" />
+                <Button x:Name="BtnStopMatch" Content="Stop match" Style="{StaticResource SecondaryButton}" FontSize="13" Padding="16,9" Margin="0,0,10,0" IsEnabled="False" Click="BtnStopMatch_Click" />
                 <Button x:Name="BtnClose" Content="Close" Style="{StaticResource SecondaryButton}" Padding="16,9" Click="BtnClose_Click" />
             </StackPanel>
         </DockPanel>

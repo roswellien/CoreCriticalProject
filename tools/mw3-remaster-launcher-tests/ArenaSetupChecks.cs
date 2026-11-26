@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
+using System.Threading;
 using MW3RemasterLauncher.Core;
 
 internal static class ArenaSetupChecks
@@ -91,10 +93,13 @@ internal static class ArenaSetupChecks
             var catalog = ArenaCatalog.ParseJson(SampleCatalogJson);
             CheckRuntimeJsonAndRoundTrip(tempRoot, catalog);
             CheckOptionalLoadoutAndTimeOfDay(catalog);
+            CheckSparseLoadoutIndices();
             CheckRejectionFieldPaths(catalog);
             CheckRandomSeedAndDirectoryPrep(tempRoot);
             CheckArgumentsAndGraphicsSummary(tempRoot);
             CheckOutcomeParsingAndExitHandling(tempRoot);
+            CheckRuntimeLogOffsetAndStdoutResult(tempRoot);
+            CheckCatalogProcessWaitHelper();
             Console.WriteLine("AI Arena catalog, setup schema, field-path validation, argument builder and result parser checks passed.");
         }
         finally
@@ -159,6 +164,62 @@ internal static class ArenaSetupChecks
             throw new Exception("Catalog version 2 was accepted.");
         }
         catch (InvalidDataException) { }
+
+        // Reject duplicate map IDs
+        try
+        {
+            var duplicateMapJson = SampleCatalogJson.Replace("\"c2mp2\"", "\"c1mp1\"");
+            ArenaCatalog.ParseJson(duplicateMapJson);
+            throw new Exception("Catalog with duplicate map ID was accepted.");
+        }
+        catch (InvalidDataException error)
+        {
+            Check(error.Message.Contains("c1mp1", StringComparison.OrdinalIgnoreCase) &&
+                  error.Message.Contains("twice", StringComparison.OrdinalIgnoreCase),
+                "Duplicate map exception did not name map: " + error.Message);
+        }
+
+        // Reject duplicate mech IDs
+        try
+        {
+            var duplicateMechJson = SampleCatalogJson.Replace("\"id\": \"madcat\"", "\"id\": \"thor\"");
+            ArenaCatalog.ParseJson(duplicateMechJson);
+            throw new Exception("Catalog with duplicate mech ID was accepted.");
+        }
+        catch (InvalidDataException error)
+        {
+            Check(error.Message.Contains("thor", StringComparison.OrdinalIgnoreCase) &&
+                  error.Message.Contains("twice", StringComparison.OrdinalIgnoreCase),
+                "Duplicate mech exception did not name mech: " + error.Message);
+        }
+
+        // Reject duplicate explicit loadout index within mech
+        try
+        {
+            var duplicateLoadoutJson = SampleCatalogJson.Replace("\"index\": 1", "\"index\": 0");
+            ArenaCatalog.ParseJson(duplicateLoadoutJson);
+            throw new Exception("Catalog with duplicate explicit loadout index was accepted.");
+        }
+        catch (InvalidDataException error)
+        {
+            Check(error.Message.Contains("0") && error.Message.Contains("twice", StringComparison.OrdinalIgnoreCase),
+                "Duplicate explicit loadout index exception did not name index: " + error.Message);
+        }
+
+        // Reject implicit/explicit loadout index collision
+        try
+        {
+            var collisionLoadoutJson = SampleCatalogJson
+                .Replace("\"index\": 0, ", "")
+                .Replace("\"index\": 1", "\"index\": 0");
+            ArenaCatalog.ParseJson(collisionLoadoutJson);
+            throw new Exception("Catalog with implicit/explicit loadout index collision was accepted.");
+        }
+        catch (InvalidDataException error)
+        {
+            Check(error.Message.Contains("0") && error.Message.Contains("twice", StringComparison.OrdinalIgnoreCase),
+                "Implicit/explicit loadout collision exception did not name index: " + error.Message);
+        }
     }
 
     private static void CheckRuntimeJsonAndRoundTrip(string tempRoot, ArenaCatalog catalog)
@@ -256,8 +317,17 @@ internal static class ArenaSetupChecks
             catalogWithoutTime.Presets,
             new[] { "day", "night" });
 
+        // Reject ANY non-null time_of_day even when listed in catalog
+        foreach (var timeOfDay in new[] { "night", "", " " })
+        {
+            parsed.TimeOfDay = timeOfDay;
+            ExpectFieldFailure(
+                () => parsed.ValidateAgainst(catalogWithTime),
+                "time_of_day",
+                "this game runtime cannot set time of day yet");
+        }
+
         parsed.TimeOfDay = "night";
-        parsed.ValidateAgainst(catalogWithTime);
         using var runtimeWithTimeDoc = JsonDocument.Parse(parsed.ToRuntimeSetupJson("D:/arena-out"));
         Check(!runtimeWithTimeDoc.RootElement.TryGetProperty("time_of_day", out _),
             "Runtime setup JSON must never include time_of_day.");
@@ -447,7 +517,18 @@ internal static class ArenaSetupChecks
                 badTime.ValidateAgainst(catalog);
             },
             "time_of_day",
-            "this runtime has no time-of-day setting");
+            "this game runtime cannot set time of day yet");
+
+        // Empty string TimeOfDay rejected by ValidateAgainst before Validate()
+        ExpectFieldFailure(
+            () =>
+            {
+                var emptyTime = ArenaSetupFile.Parse(SampleValidSetupJson);
+                emptyTime.TimeOfDay = "";
+                emptyTime.ValidateAgainst(catalog);
+            },
+            "time_of_day",
+            "this game runtime cannot set time of day yet");
 
         var catalogWithTime = new ArenaCatalog(
             catalog.Maps,
@@ -458,11 +539,11 @@ internal static class ArenaSetupChecks
         ExpectFieldFailure(
             () =>
             {
-                var unknownTime = ArenaSetupFile.Parse(SampleValidSetupJson.Replace("\"time_of_day\": null", "\"time_of_day\": \"dusk\""));
+                var unknownTime = ArenaSetupFile.Parse(SampleValidSetupJson.Replace("\"time_of_day\": null", "\"time_of_day\": \"day\""));
                 unknownTime.ValidateAgainst(catalogWithTime);
             },
             "time_of_day",
-            "unknown time of day");
+            "this game runtime cannot set time of day yet");
     }
 
     private static void CheckRandomSeedAndDirectoryPrep(string tempRoot)
@@ -618,6 +699,136 @@ internal static class ArenaSetupChecks
             exit0Missing.ErrorMessage != null &&
             exit0Missing.ErrorMessage.Contains("without a result", StringComparison.OrdinalIgnoreCase),
             "Exit 0 without a result did not fail with an explanation.");
+    }
+
+    private static void CheckSparseLoadoutIndices()
+    {
+        var sparseCatalogJson = """
+            {
+              "version": 1,
+              "maps": [ { "id": "c1mp1", "name": "Canyon" } ],
+              "mechs": [
+                {
+                  "id": "madcat",
+                  "name": "Mad Cat",
+                  "loadouts": [
+                    { "index": 0, "name": "Stock" },
+                    { "index": 5, "name": "Sparse High Index" }
+                  ]
+                }
+              ],
+              "presets": [
+                { "world": "c1", "mission": "ia1", "record": "Enemy_01", "mech": "madcat" }
+              ]
+            }
+            """;
+        var sparseCatalog = ArenaCatalog.ParseJson(sparseCatalogJson);
+
+        var validSparse = ArenaSetupFile.Parse(SampleValidSetupJson);
+        validSparse.Sides[1][0] = validSparse.Sides[1][0] with { Mech = "madcat", Loadout = 5 };
+        // High index 5 exists on madcat and must be accepted
+        validSparse.ValidateAgainst(sparseCatalog);
+
+        var missingLower = validSparse.Clone();
+        missingLower.Sides[1][0] = missingLower.Sides[1][0] with { Loadout = 1 };
+        // Lower index 1 does not exist on madcat and must be rejected with exact field path
+        ExpectFieldFailure(
+            () => missingLower.ValidateAgainst(sparseCatalog),
+            "arena.sides[1][0].loadout",
+            "is not a stock loadout of madcat");
+    }
+
+    private static void CheckRuntimeLogOffsetAndStdoutResult(string tempRoot)
+    {
+        var testLogPath = Path.Combine(tempRoot, "test_mw3.log");
+
+        // 1. Unchanged stale winner + appended ordinary text rejected
+        File.WriteAllText(testLogPath, "arena: winner A, time 1:15, lost A 0 B 2\n");
+        var baselineOffset = ArenaMatchRunner.GetLogFileLength(testLogPath);
+
+        File.AppendAllText(testLogPath, "ordinary runtime startup line\nanother non-result line\n");
+        var linesAfterOrdinaryAppend = ArenaMatchRunner.TryReadFreshRuntimeLogLines(testLogPath, baselineOffset);
+        var foundStale = ArenaMatchRunner.TryParseStdoutResult(linesAfterOrdinaryAppend, out _, out _, out _, out _);
+        Check(!foundStale, "Stale winner before baseline offset must be ignored.");
+
+        // 2. Appended winner accepted
+        baselineOffset = ArenaMatchRunner.GetLogFileLength(testLogPath);
+        File.AppendAllText(testLogPath, "arena: winner B, time 2:30, lost A 1 B 0\n");
+        var linesAfterResultAppend = ArenaMatchRunner.TryReadFreshRuntimeLogLines(testLogPath, baselineOffset);
+        var foundAppended = ArenaMatchRunner.TryParseStdoutResult(linesAfterResultAppend, out var appendedWinner, out var appendedTime, out var appendedLostA, out var appendedLostB);
+        Check(foundAppended && appendedWinner == "B" && appendedTime == "2:30" && appendedLostA == 1 && appendedLostB == 0,
+            "Appended fresh winner result was not accepted.");
+
+        // 3. Truncated file read from offset 0
+        var largeBaseline = ArenaMatchRunner.GetLogFileLength(testLogPath) + 500;
+        File.WriteAllText(testLogPath, "arena: winner draw, time 4:00, lost A 2 B 2\n");
+        var linesAfterTruncation = ArenaMatchRunner.TryReadFreshRuntimeLogLines(testLogPath, largeBaseline);
+        var foundTruncated = ArenaMatchRunner.TryParseStdoutResult(linesAfterTruncation, out var truncatedWinner, out var truncatedTime, out _, out _);
+        Check(foundTruncated && truncatedWinner == "draw" && truncatedTime == "4:00",
+            "Truncated log file must be read from offset 0.");
+
+        // 4. Several results, last wins
+        var severalLines = new[]
+        {
+            "arena: winner A, time 1:00, lost A 0 B 2",
+            "ordinary log line",
+            "arena: winner B, time 3:20, lost A 2 B 0"
+        };
+        var foundLast = ArenaMatchRunner.TryParseStdoutResult(severalLines, out var lastWinner, out var lastTime, out _, out _);
+        Check(foundLast && lastWinner == "B" && lastTime == "3:20",
+            "TryParseStdoutResult must pick the LAST matching result.");
+    }
+
+    private static void CheckCatalogProcessWaitHelper()
+    {
+        // 1. Timeout kills process tree and throws TimeoutException
+        {
+            var startInfo = new ProcessStartInfo("cmd.exe", "/c ping -n 30 127.0.0.1 >nul")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            using var process = Process.Start(startInfo)!;
+            var timedOut = false;
+            try
+            {
+                ArenaCatalog.WaitForCatalogProcessAsync(process, TimeSpan.FromMilliseconds(400)).GetAwaiter().GetResult();
+            }
+            catch (TimeoutException error)
+            {
+                timedOut = true;
+                Check(error.Message == "Generating the arena catalog took longer than 2 minutes",
+                    "Timeout exception message did not match expected text: " + error.Message);
+            }
+            Check(timedOut, "WaitForCatalogProcessAsync did not time out as expected.");
+            Check(process.HasExited, "Process was not killed on timeout.");
+        }
+
+        // 2. Cancellation kills process tree and propagates OperationCanceledException
+        {
+            var startInfo = new ProcessStartInfo("cmd.exe", "/c ping -n 30 127.0.0.1 >nul")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            using var process = Process.Start(startInfo)!;
+            using var cancellationSource = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+            var cancelled = false;
+            try
+            {
+                ArenaCatalog.WaitForCatalogProcessAsync(process, TimeSpan.FromSeconds(30), cancellationSource.Token).GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled = true;
+            }
+            Check(cancelled, "WaitForCatalogProcessAsync did not propagate caller cancellation.");
+            Check(process.HasExited, "Process was not killed on cancellation.");
+        }
     }
 
     /// <summary>

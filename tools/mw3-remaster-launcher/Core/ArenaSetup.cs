@@ -147,6 +147,13 @@ public sealed class ArenaSetup
     public void ValidateAgainst(ArenaCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
+
+        // #507: send time_of_day to the runtime and relax this guard once it supports it.
+        if (TimeOfDay != null)
+        {
+            throw new ArenaSetupException("time_of_day", "this game runtime cannot set time of day yet");
+        }
+
         Validate();
 
         var knownMaps = new HashSet<string>(catalog.Maps.Select(map => map.Id), StringComparer.Ordinal);
@@ -166,11 +173,12 @@ public sealed class ArenaSetup
                 var botPath = $"arena.sides[{sideIndex}][{botIndex}]";
                 if (!mechsById.TryGetValue(bot.Mech, out var catalogMech))
                     throw new ArenaSetupException($"{botPath}.mech", $"unknown mech \"{bot.Mech}\"");
-                if (bot.Loadout < 0 || bot.Loadout >= catalogMech.Loadouts.Count)
+
+                if (!catalogMech.Loadouts.Any(loadout => loadout.Index == bot.Loadout))
                 {
                     throw new ArenaSetupException(
                         $"{botPath}.loadout",
-                        $"{bot.Loadout} is not a stock loadout of {bot.Mech} (it has {catalogMech.Loadouts.Count})");
+                        $"{bot.Loadout} is not a stock loadout of {bot.Mech}");
                 }
 
                 var presetKey = (bot.Preset.World, bot.Preset.Mission, bot.Preset.Record);
@@ -181,14 +189,6 @@ public sealed class ArenaSetup
                         $"unknown pilot preset \"{bot.Preset.World} {bot.Preset.Mission} {bot.Preset.Record}\"");
                 }
             }
-        }
-
-        if (TimeOfDay != null)
-        {
-            if (catalog.TimeOfDayOptions.Count == 0)
-                throw new ArenaSetupException("time_of_day", "this runtime has no time-of-day setting");
-            if (!catalog.TimeOfDayOptions.Contains(TimeOfDay, StringComparer.Ordinal))
-                throw new ArenaSetupException("time_of_day", $"unknown time of day \"{TimeOfDay}\"");
         }
     }
 

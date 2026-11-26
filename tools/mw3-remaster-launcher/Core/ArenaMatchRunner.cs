@@ -201,7 +201,7 @@ public static class ArenaMatchRunner
 
     /// <summary>
     /// Try to parse the game's printed <c>arena: winner A|B|draw, time M:SS, lost A N B M</c> line
-    /// from captured stdout/stderr lines.
+    /// from captured stdout/stderr lines. When multiple result lines are present, the last one wins.
     /// </summary>
     public static bool TryParseStdoutResult(
         IEnumerable<string> capturedLines,
@@ -217,6 +217,7 @@ public static class ArenaMatchRunner
         if (capturedLines == null)
             return false;
 
+        var foundMatch = false;
         foreach (var rawLine in capturedLines)
         {
             if (string.IsNullOrWhiteSpace(rawLine))
@@ -230,10 +231,10 @@ public static class ArenaMatchRunner
             timeText = match.Groups["time"].Value;
             lostA = int.Parse(match.Groups["lostA"].Value);
             lostB = int.Parse(match.Groups["lostB"].Value);
-            return true;
+            foundMatch = true;
         }
 
-        return false;
+        return foundMatch;
     }
 
     /// <summary>
@@ -432,7 +433,7 @@ public static class ArenaMatchRunner
 
         var profileWriteDir = Path.Combine(Path.GetFullPath(dataRoot), "mw3-re", "profiles", NativeGameRunner.ProfileId);
         var runtimeLogPath = Path.Combine(profileWriteDir, "mw3.log");
-        var baselineLogTimestamp = File.Exists(runtimeLogPath) ? File.GetLastWriteTimeUtc(runtimeLogPath) : DateTime.MinValue;
+        var baselineLogOffset = GetLogFileLength(runtimeLogPath);
 
         var process = await Task.Run(() => runner.Launch(
             settings,
@@ -464,7 +465,8 @@ public static class ArenaMatchRunner
 
             // When built as a Windows GUI executable without an attached console, mw3.exe
             // redirects stdout and stderr directly into <write-dir>/mw3.log (log_to_file).
-            var fallbackLines = TryReadFreshRuntimeLogLines(runtimeLogPath, baselineLogTimestamp);
+            // Read only freshly appended bytes starting from our recorded pre-launch offset.
+            var fallbackLines = TryReadFreshRuntimeLogLines(runtimeLogPath, baselineLogOffset);
             return EvaluateOutcome(
                 exitCode,
                 resolvedSeed,
@@ -477,17 +479,42 @@ public static class ArenaMatchRunner
         }
     }
 
-    private static IReadOnlyList<string> TryReadFreshRuntimeLogLines(string runtimeLogPath, DateTime baselineWriteTimeUtc)
+    /// <summary>Return the current file size in bytes, or 0 when the file does not exist.</summary>
+    public static long GetLogFileLength(string logPath)
+    {
+        try
+        {
+            if (File.Exists(logPath))
+            {
+                return new FileInfo(logPath).Length;
+            }
+        }
+        catch
+        {
+        }
+        return 0L;
+    }
+
+    /// <summary>
+    /// Read freshly appended lines from <paramref name="runtimeLogPath"/> starting at
+    /// <paramref name="baselineByteOffset"/>. If the file is now shorter than before launch
+    /// (e.g. truncated or recreated), read from offset 0.
+    /// </summary>
+    public static IReadOnlyList<string> TryReadFreshRuntimeLogLines(string runtimeLogPath, long baselineByteOffset)
     {
         try
         {
             if (!File.Exists(runtimeLogPath))
                 return Array.Empty<string>();
-            var lastWriteUtc = File.GetLastWriteTimeUtc(runtimeLogPath);
-            if (lastWriteUtc <= baselineWriteTimeUtc)
-                return Array.Empty<string>();
 
             using var stream = new FileStream(runtimeLogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            // If the file shrank or was truncated/restarted from 0, reset reading to offset 0.
+            var startOffset = stream.Length < baselineByteOffset ? 0L : baselineByteOffset;
+            if (startOffset > 0)
+            {
+                stream.Seek(startOffset, SeekOrigin.Begin);
+            }
+
             using var reader = new StreamReader(stream, Encoding.UTF8);
             var lines = new List<string>();
             string? line;

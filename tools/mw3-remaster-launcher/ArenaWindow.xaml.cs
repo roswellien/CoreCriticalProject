@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using System.Windows;
 using System.Windows.Media;
 using Microsoft.Win32;
@@ -127,6 +128,10 @@ public partial class ArenaWindow : Window
 
     private ArenaCatalog? _catalog;
     private bool _matchOrReplayActive;
+    private Process? _activeProcess;
+    private bool _stopRequested;
+    private bool _closeDeferred;
+    private CancellationTokenSource? _catalogCancellationSource;
     private string? _lastRunFolder;
     private string? _lastMatchLogPath;
     private string? _lastCommandLine;
@@ -161,11 +166,19 @@ public partial class ArenaWindow : Window
     {
         SetEditingEnabled(false);
         BtnStartMatch.IsEnabled = false;
+        BtnStopMatch.IsEnabled = false;
         SetStatus("Loading AI Arena catalog from MW3-RE…", isError: false);
 
+        _catalogCancellationSource = new CancellationTokenSource();
         try
         {
-            var catalog = await Task.Run(() => ArenaCatalog.EnsureCatalogAsync(_runner, _settings.GamePath, _dataRoot));
+            var catalog = await Task.Run(() => ArenaCatalog.EnsureCatalogAsync(
+                _runner,
+                _settings.GamePath,
+                _dataRoot,
+                cancellationToken: _catalogCancellationSource.Token));
+            _catalogCancellationSource.Token.ThrowIfCancellationRequested();
+
             if (catalog.Maps.Count == 0 || catalog.Mechs.Count == 0 || catalog.Presets.Count == 0)
             {
                 throw new InvalidDataException("The game's arena catalog is missing maps, mechs or pilot presets.");
@@ -177,12 +190,21 @@ public partial class ArenaWindow : Window
             BtnStartMatch.IsEnabled = true;
             SetStatus($"Ready — {catalog.Maps.Count} arena maps, {catalog.Mechs.Count} mechs, {catalog.Presets.Count} pilot presets.", isError: false);
         }
+        catch (OperationCanceledException) when (_catalogCancellationSource.IsCancellationRequested)
+        {
+            // Closing the window cancels loading without showing an error on the closed dialog.
+        }
         catch (Exception error)
         {
             _catalog = null;
             SetEditingEnabled(false);
             BtnStartMatch.IsEnabled = false;
             SetStatus("Arena catalog unavailable: " + error.Message, isError: true);
+        }
+        finally
+        {
+            _catalogCancellationSource?.Dispose();
+            _catalogCancellationSource = null;
         }
     }
 
@@ -506,6 +528,35 @@ public partial class ArenaWindow : Window
         }
     }
 
+    private void BtnStopMatch_Click(object sender, RoutedEventArgs e)
+    {
+        RequestStop();
+    }
+
+    private void RequestStop()
+    {
+        _stopRequested = true;
+        BtnStopMatch.IsEnabled = false;
+        SetStatus("Stopping match...", isError: false);
+
+        try
+        {
+            if (_activeProcess != null && !_activeProcess.HasExited)
+                _activeProcess.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // The process can exit between checking HasExited and requesting termination.
+        }
+        catch (Exception error)
+        {
+            _stopRequested = false;
+            _closeDeferred = false;
+            BtnStopMatch.IsEnabled = _matchOrReplayActive;
+            SetStatus("Could not stop match: " + error.Message, isError: true);
+        }
+    }
+
     private async void BtnStartMatch_Click(object sender, RoutedEventArgs e)
     {
         if (_catalog == null || _matchOrReplayActive)
@@ -531,8 +582,12 @@ public partial class ArenaWindow : Window
 
         ClearResultActions();
         _matchOrReplayActive = true;
+        _stopRequested = false;
+        _closeDeferred = false;
+        _activeProcess = null;
         SetEditingEnabled(false);
         BtnStartMatch.IsEnabled = false;
+        BtnStopMatch.IsEnabled = true;
         BtnStartMatch.Content = "●  MATCH RUNNING…";
 
         var modeWord = setupSnapshot.Hidden ? "hidden" : "watched";
@@ -555,17 +610,21 @@ public partial class ArenaWindow : Window
                     {
                         Dispatcher.BeginInvoke(() =>
                         {
-                            if (_matchOrReplayActive)
+                            if (_matchOrReplayActive && !_stopRequested)
                                 SetStatus($"Running {modeWord} match (seed {resolvedSeed}) — {line}", isError: false);
                         });
                     }
                 },
-                onProcessStarted: (_, commandLine) =>
+                onProcessStarted: (startedProcess, commandLine) =>
                 {
-                    Dispatcher.BeginInvoke(() =>
+                    Dispatcher.Invoke(() =>
                     {
                         _lastCommandLine = commandLine;
                         BtnCopyCommand.IsEnabled = true;
+
+                        _activeProcess = startedProcess;
+                        if (_stopRequested)
+                            RequestStop();
                     });
                 });
 
@@ -575,14 +634,24 @@ public partial class ArenaWindow : Window
 
             BtnOpenRunFolder.IsEnabled = Directory.Exists(outcome.RunFolder);
             BtnCopyCommand.IsEnabled = !string.IsNullOrWhiteSpace(outcome.CommandLine);
-            BtnWatchReplay3d.IsEnabled = outcome.Succeeded && File.Exists(outcome.ExpectedLogPath);
+            BtnWatchReplay3d.IsEnabled = !_stopRequested && outcome.Succeeded && File.Exists(outcome.ExpectedLogPath);
 
-            if (outcome.Succeeded)
+            if (_stopRequested)
+            {
+                SetStatus("Match stopped.", isError: false);
+                TxtResultDetail.Text = "";
+                TxtResultDetail.Visibility = Visibility.Collapsed;
+                TxtLogPath.Text = "";
+                TxtLogPath.Visibility = Visibility.Collapsed;
+            }
+            else if (outcome.Succeeded)
             {
                 SetStatus(outcome.WinnerDisplayLabel, isError: false);
                 TxtResultDetail.Text = $"Time: {outcome.TimeText} · Mechs lost: Side A {outcome.LostA}, Side B {outcome.LostB} · Seed: {outcome.ResolvedSeed}";
                 TxtResultDetail.Foreground = (Brush)FindResource("BrushInk");
                 TxtResultDetail.Visibility = Visibility.Visible;
+                TxtLogPath.Text = "Match log: " + outcome.ExpectedLogPath;
+                TxtLogPath.Visibility = Visibility.Visible;
             }
             else
             {
@@ -590,25 +659,42 @@ public partial class ArenaWindow : Window
                 TxtResultDetail.Text = outcome.ErrorMessage ?? $"Exit code {outcome.ExitCode}";
                 TxtResultDetail.Foreground = Brushes.LightCoral;
                 TxtResultDetail.Visibility = Visibility.Visible;
+                TxtLogPath.Text = "Match log: " + outcome.ExpectedLogPath;
+                TxtLogPath.Visibility = Visibility.Visible;
             }
-
-            TxtLogPath.Text = "Match log: " + outcome.ExpectedLogPath;
-            TxtLogPath.Visibility = Visibility.Visible;
         }
         catch (Exception error)
         {
-            SetStatus("Match could not start: " + error.Message, isError: true);
-            TxtResultDetail.Text = error.Message;
-            TxtResultDetail.Foreground = Brushes.LightCoral;
-            TxtResultDetail.Visibility = Visibility.Visible;
+            if (_stopRequested)
+            {
+                SetStatus("Match stopped.", isError: false);
+                TxtResultDetail.Text = "";
+                TxtResultDetail.Visibility = Visibility.Collapsed;
+                TxtLogPath.Text = "";
+                TxtLogPath.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                SetStatus("Match could not start: " + error.Message, isError: true);
+                TxtResultDetail.Text = error.Message;
+                TxtResultDetail.Foreground = Brushes.LightCoral;
+                TxtResultDetail.Visibility = Visibility.Visible;
+            }
         }
         finally
         {
+            _activeProcess = null;
             _matchOrReplayActive = false;
+            BtnStopMatch.IsEnabled = false;
             SetEditingEnabled(_catalog != null);
             BtnStartMatch.Content = "▶  START MATCH";
             BtnStartMatch.IsEnabled = _catalog != null;
             UpdateSideCountsAndButtons();
+
+            if (_closeDeferred)
+            {
+                Close();
+            }
         }
     }
 
@@ -633,41 +719,79 @@ public partial class ArenaWindow : Window
 
         var logPath = _lastMatchLogPath;
         _matchOrReplayActive = true;
+        _stopRequested = false;
+        _closeDeferred = false;
+        _activeProcess = null;
         SetEditingEnabled(false);
         BtnStartMatch.IsEnabled = false;
         BtnWatchReplay3d.IsEnabled = false;
+        BtnStopMatch.IsEnabled = true;
         SetStatus("Starting 3D replay for " + Path.GetFileName(logPath) + "…", isError: false);
 
         try
         {
             var extraArgs = ArenaMatchRunner.BuildReplay3dArguments(logPath);
-            using var process = await Task.Run(() => _runner.Launch(_settings, _activeModDirs, null, extraArgs));
-            SetStatus("Watching 3D replay (" + Path.GetFileName(logPath) + ")…", isError: false);
-            var exitCode = _runner.LastSessionCompletion != null
-                ? await _runner.LastSessionCompletion
-                : await GameRunner.WaitForCompletionAsync(process);
+            var process = await Task.Run(() => _runner.Launch(_settings, _activeModDirs, null, extraArgs));
 
-            if (exitCode != 0)
+            _activeProcess = process;
+            if (_stopRequested)
+                RequestStop();
+
+            using (process)
             {
-                SetStatus($"3D replay exited with code {exitCode}.", isError: true);
-            }
-            else
-            {
-                SetStatus("3D replay finished.", isError: false);
+                if (!_stopRequested)
+                {
+                    SetStatus("Watching 3D replay (" + Path.GetFileName(logPath) + ")…", isError: false);
+                }
+
+                var exitCode = _runner.LastSessionCompletion != null
+                    ? await _runner.LastSessionCompletion
+                    : await GameRunner.WaitForCompletionAsync(process);
+
+                if (_stopRequested)
+                {
+                    SetStatus("Match stopped.", isError: false);
+                    TxtResultDetail.Text = "";
+                    TxtResultDetail.Visibility = Visibility.Collapsed;
+                }
+                else if (exitCode != 0)
+                {
+                    SetStatus($"3D replay exited with code {exitCode}.", isError: true);
+                }
+                else
+                {
+                    SetStatus("3D replay finished.", isError: false);
+                }
             }
         }
         catch (Exception error)
         {
-            SetStatus("Could not start 3D replay: " + error.Message, isError: true);
-            MessageBox.Show(this, error.Message, "Cannot watch 3D replay", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (_stopRequested)
+            {
+                SetStatus("Match stopped.", isError: false);
+                TxtResultDetail.Text = "";
+                TxtResultDetail.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                SetStatus("Could not start 3D replay: " + error.Message, isError: true);
+                MessageBox.Show(this, error.Message, "Cannot watch 3D replay", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
         finally
         {
+            _activeProcess = null;
             _matchOrReplayActive = false;
+            BtnStopMatch.IsEnabled = false;
             SetEditingEnabled(_catalog != null);
             BtnStartMatch.IsEnabled = _catalog != null;
             BtnWatchReplay3d.IsEnabled = File.Exists(logPath);
             UpdateSideCountsAndButtons();
+
+            if (_closeDeferred)
+            {
+                Close();
+            }
         }
     }
 
@@ -707,7 +831,7 @@ public partial class ArenaWindow : Window
         PanelRunOptions.IsEnabled = enabled;
         BtnLoadSetup.IsEnabled = enabled;
         BtnSaveSetup.IsEnabled = enabled;
-        BtnClose.IsEnabled = !_matchOrReplayActive;
+        BtnClose.IsEnabled = true;
     }
 
     private void SetStatus(string message, bool isError)
@@ -720,24 +844,40 @@ public partial class ArenaWindow : Window
 
     private void BtnClose_Click(object sender, RoutedEventArgs e)
     {
-        if (_matchOrReplayActive)
-            return;
         Close();
     }
 
     private void ArenaWindow_Closing(object? sender, CancelEventArgs e)
     {
-        // Prevent closing while a match or 3D replay process is active so output callbacks
-        // and session gate disposal never race a disposed window or leave an orphaned session.
+        if (_catalogCancellationSource != null && !_catalogCancellationSource.IsCancellationRequested)
+        {
+            _catalogCancellationSource.Cancel();
+        }
+
         if (_matchOrReplayActive)
         {
             e.Cancel = true;
-            MessageBox.Show(
+            if (_closeDeferred)
+                return;
+
+            var result = MessageBox.Show(
                 this,
-                "Wait for the active AI Arena match or replay to finish before closing this window.",
-                "AI Arena match active",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+                "An AI Arena match or replay is currently running. Do you want to stop it and close the window?",
+                "Stop and close AI Arena?",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Yes)
+            {
+                // Defer window close until the session and runner gate have finished cleaning up.
+                e.Cancel = true;
+                _closeDeferred = true;
+                RequestStop();
+            }
+            else
+            {
+                e.Cancel = true;
+            }
         }
     }
 }
