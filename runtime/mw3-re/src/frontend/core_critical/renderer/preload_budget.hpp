@@ -103,6 +103,11 @@ struct PreloadFaultInjection {
   // Numeric VkResult is kept here so platform users of frame_renderer.hpp
   // do not acquire a Vulkan SDK dependency. The backend converts at its boundary.
   std::int32_t injected_result{-2};
+  // Play-time faults (#496), outside the preload: the next N model buffer
+  // allocations, or the next N texture image allocations, fail with
+  // injected_result, one after another.
+  std::size_t fail_next_play_model_allocations{};
+  std::size_t fail_next_play_texture_allocations{};
 };
 
 } // namespace mw34::vkscene
