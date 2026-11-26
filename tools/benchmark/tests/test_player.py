@@ -87,6 +87,27 @@ class ReferenceTest(unittest.TestCase):
                     references, definition(), Path("f"), None, None, fake_freeze([]), sha256
                 )
 
+    def test_incomplete_scene_folder_is_regenerated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            references = Path(temporary)
+            player.prepare_references(
+                references, definition(), Path("f"), None, None, fake_freeze([]), sha256
+            )
+            (references / "c2mp2" / "match-7.jsonl").unlink()
+            calls = []
+            player.prepare_references(
+                references, definition(), Path("f"), None, None, fake_freeze(calls), sha256
+            )
+            self.assertEqual(calls, [player.SCENE_RECIPES["c2mp2"]])
+            self.assertTrue((references / "c2mp2" / "match-7.jsonl").is_file())
+
+    def test_short_frame_row_is_a_readable_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            csv = Path(temporary) / "frames.csv"
+            csv.write_text("scene_id,interval_ms\nc1mp1,10\n\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Malformed benchmark frame row"):
+                player.read_intervals(csv)
+
     def test_reference_key_depends_on_every_input(self):
         base = player.reference_key("a", "b", "c")
         self.assertNotEqual(base, player.reference_key("x", "b", "c"))
@@ -157,6 +178,17 @@ class ReportTest(unittest.TestCase):
             found = player.previous_report(
                 results, {"reference_key": "key", "settings_sha256": "s"}
             )
+            self.assertEqual(found["finished"], "1")
+
+    def test_damaged_earlier_report_is_skipped(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            results = Path(temporary)
+            (results / "1").mkdir()
+            good = {"reference_key": "k", "settings_sha256": "s", "finished": "1", "overall": {}}
+            (results / "1" / "report.json").write_text(json.dumps(good), encoding="utf-8")
+            (results / "2").mkdir()
+            (results / "2" / "report.json").write_text("{truncated", encoding="utf-8")
+            found = player.previous_report(results, {"reference_key": "k", "settings_sha256": "s"})
             self.assertEqual(found["finished"], "1")
 
     def test_focus_loss_is_classified(self):

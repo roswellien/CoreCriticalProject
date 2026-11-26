@@ -61,7 +61,15 @@ public sealed class BenchmarkRunner
         var coordinator = FindCoordinator() ?? throw new FileNotFoundException(
             "This launcher does not include the benchmark. Update Core Critical.");
         var runtimeRoot = _nativeRunner.RequireBundledMw3Re();
-        var python = _nativeRunner.FindPlannerPython();
+        // Same integrity checks as Play: pinned runtime hashes, no links, a contained executable.
+        // The Python probe waits on a child process, so keep both off the UI thread.
+        var python = await Task.Run(() =>
+        {
+            Mw3ReRuntimeContract.ReadStructure(runtimeRoot);
+            return _nativeRunner.FindPlannerPython();
+        }, cancellation);
+        // Hold the update gate for the whole run so no update replaces the runtime or packs mid-suite.
+        using var gate = GameUpdateGate.Acquire();
         var planner = Path.Combine(_basePath, NativeGameRunner.PlannerFolder);
         var start = new ProcessStartInfo(python)
         {
@@ -90,16 +98,33 @@ public sealed class BenchmarkRunner
                 }
             }
         });
-        using (cancellation.Register(() => { try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { } }))
+        void KillTree()
         {
-            while (await process.StandardOutput.ReadLineAsync() is { } line)
+            // Cancel runs this on the UI thread; a child exiting at the same moment can make
+            // Kill throw, which must not crash the launcher.
+            try { process.Kill(entireProcessTree: true); }
+            catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception
+                                              or AggregateException or NotSupportedException) { }
+        }
+        using (cancellation.Register(KillTree))
+        {
+            try
             {
-                if (ParseEvent(line) is not { } item) continue;
-                if (item.Kind is "result" or "error") final = item;
-                else progress(item);
+                while (await process.StandardOutput.ReadLineAsync() is { } line)
+                {
+                    if (ParseEvent(line) is not { } item) continue;
+                    if (item.Kind is "result" or "error") final = item;
+                    else progress(item);
+                }
+                await process.WaitForExitAsync(CancellationToken.None);
+                await errorReader;
             }
-            await process.WaitForExitAsync(CancellationToken.None);
-            await errorReader;
+            catch
+            {
+                // Never leave the coordinator or a game benchmarking after the launcher gives up.
+                KillTree();
+                throw;
+            }
         }
         cancellation.ThrowIfCancellationRequested();
         if (final != null) return final;
@@ -112,10 +137,15 @@ public sealed class BenchmarkRunner
     /// <summary>Parse one coordinator event line; other output is diagnostic text and returns null.</summary>
     public static BenchmarkEvent? ParseEvent(string line)
     {
-        if (!line.StartsWith(EventPrefix, StringComparison.Ordinal)) return null;
-        using var document = JsonDocument.Parse(line[EventPrefix.Length..]);
+        // The game shares the coordinator's stdout, so an event can follow its unterminated text.
+        var start = line.IndexOf(EventPrefix, StringComparison.Ordinal);
+        if (start < 0) return null;
+        JsonDocument document;
+        try { document = JsonDocument.Parse(line[(start + EventPrefix.Length)..]); }
+        catch (JsonException) { return null; } // Child text that happens to share the prefix.
+        using var parsed = document;
         var root = document.RootElement;
-        var kind = root.GetProperty("event").GetString() ?? throw new InvalidDataException("Benchmark event lacks a kind");
+        if (root.ValueKind != JsonValueKind.Object || Text(root, "event") is not { } kind) return null;
         BenchmarkReport? report = null;
         if (kind == "result")
             report = ParseReport(root.GetProperty("report"), Text(root, "output"));
@@ -178,7 +208,7 @@ public sealed class BenchmarkRunner
             row.Name, row.AverageFps, row.LowOnePercentFps, row.P95Ms, row.P99Ms));
         foreach (var scene in report.Scenes) Row(scene);
         Row(report.Overall);
-        if (report.Previous is { } previous)
+        if (report.Previous is { AverageFps: > 0 } previous)
         {
             var change = (report.Overall.AverageFps - previous.AverageFps) / previous.AverageFps * 100;
             text.AppendLine();

@@ -1138,7 +1138,13 @@ namespace MW3RemasterLauncher
             // the Play planner, so it uses the same graphics settings and packs Play would.
             _settingsMgr.Save();
             _nativeSessionActive = true; // Blocks Play, pack installs and update prompts meanwhile.
+            // Restore exactly these afterwards: Play may have been disabled for another reason.
+            var playWasEnabled = BtnLaunchGame.IsEnabled;
+            var installWasEnabled = BtnInstallPack.IsEnabled;
+            var packsWereEnabled = ListPacks.IsEnabled;
             BtnLaunchGame.IsEnabled = false;
+            BtnInstallPack.IsEnabled = false;
+            ListPacks.IsEnabled = false;
             BtnRunBenchmark.IsEnabled = false;
             BtnCancelBenchmark.Visibility = Visibility.Visible;
             TxtBenchmarkResult.Visibility = Visibility.Collapsed;
@@ -1150,7 +1156,8 @@ namespace MW3RemasterLauncher
             {
                 var runner = new BenchmarkRunner(_basePath, _nativeGameRunner);
                 var outcome = await runner.RunAsync(
-                    item => Dispatcher.Invoke(() => TxtBenchmarkStatus.Text = BenchmarkRunner.DescribeProgress(item)),
+                    // RunAsync resumes on the UI thread, so progress can update the page directly.
+                    item => TxtBenchmarkStatus.Text = BenchmarkRunner.DescribeProgress(item),
                     _benchmarkCancellation.Token);
                 if (outcome.Report is { } report)
                 {
@@ -1179,7 +1186,10 @@ namespace MW3RemasterLauncher
                 _benchmarkCancellation = null;
                 BtnCancelBenchmark.Visibility = Visibility.Collapsed;
                 BtnRunBenchmark.IsEnabled = true;
-                ResetNativeLaunchControls();
+                _nativeSessionActive = false;
+                BtnLaunchGame.IsEnabled = playWasEnabled;
+                BtnInstallPack.IsEnabled = installWasEnabled;
+                ListPacks.IsEnabled = packsWereEnabled;
             }
         }
 

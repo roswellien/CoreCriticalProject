@@ -15,6 +15,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -95,6 +96,9 @@ def prepare_references(references, definition, fixtures, executable, game, freez
             # partial folder that the next run replaces.
             partial = references / f"{scene_id}.partial-{time.time_ns()}"
             freeze(executable, game, fixtures / SCENE_RECIPES[scene_id], SEED, partial, references)
+            # An incomplete earlier folder (for example a deleted log) would block the rename.
+            if scene_root.exists():
+                shutil.rmtree(scene_root)
             partial.replace(scene_root)
             found = frozen_log(scene_root, sha256)
         log_path, receipt = found
@@ -136,7 +140,10 @@ def read_intervals(frames_csv):
         header = stream.readline().strip().split(",")
         column = header.index("interval_ms")
         for line in stream:
-            value = line.rstrip("\n").split(",")[column]
+            fields = line.rstrip("\n").split(",")
+            if len(fields) <= column:
+                raise ValueError(f"Malformed benchmark frame row in {frames_csv}")
+            value = fields[column]
             if value:
                 intervals.append(float(value))
     return intervals
@@ -174,12 +181,17 @@ def previous_report(results, report):
         path = directory / "report.json"
         if not path.is_file():
             continue
-        earlier = json.loads(path.read_text(encoding="utf-8"))
-        if (
-            earlier.get("reference_key") == report["reference_key"]
-            and earlier.get("settings_sha256") == report["settings_sha256"]
-        ):
-            return {"finished": earlier["finished"], "overall": earlier["overall"]}
+        # A damaged earlier report must not discard the run that just finished.
+        try:
+            earlier = json.loads(path.read_text(encoding="utf-8"))
+            matches = (
+                earlier.get("reference_key") == report["reference_key"]
+                and earlier.get("settings_sha256") == report["settings_sha256"]
+            )
+            if matches:
+                return {"finished": earlier["finished"], "overall": earlier["overall"]}
+        except (OSError, ValueError, KeyError, AttributeError):
+            continue
     return None
 
 
@@ -202,6 +214,8 @@ def run(args):
     sys.path.insert(0, str(args.planner_dir))
     sys.path.insert(0, str(HERE))
     # Imported here because both modules need the planner directory on sys.path first.
+    # Load the shipped planner before run.py, which prepends a checkout path of its own.
+    import mw3_re_launch  # noqa: F401
     import run as runner
     from freeze import freeze
 
@@ -209,6 +223,8 @@ def run(args):
     runtime = args.runtime.resolve(strict=True)
     descriptor = runner.read_json(runtime / "runtime.json")
     executable = (runtime / descriptor["roles"]["executable"]).resolve(strict=True)
+    if not executable.is_relative_to(runtime):
+        raise ValueError(f"The runtime's game executable is outside {runtime}")
     if not executable_supports_benchmark(executable):
         emit(
             "error",

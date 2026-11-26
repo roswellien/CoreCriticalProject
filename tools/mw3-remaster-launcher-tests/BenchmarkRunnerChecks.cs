@@ -14,6 +14,10 @@ internal static class BenchmarkRunnerChecks
         // Diagnostic output from the planner and the game is not an event.
         Check(BenchmarkRunner.ParseEvent("{\"Width\": 1920}") == null, "plain JSON output parsed as an event");
         Check(BenchmarkRunner.ParseEvent("mw3: benchmark invalid") == null, "game text parsed as an event");
+        Check(BenchmarkRunner.ParseEvent("BENCHMARK-EVENT not json") == null, "malformed event line threw");
+        Check(BenchmarkRunner.ParseEvent("mw3: partial textBENCHMARK-EVENT {\"event\":\"error\",\"kind\":\"failed\"}")?.Kind == "error",
+            "event after unterminated child text was lost");
+        Check(BenchmarkRunner.ParseEvent("BENCHMARK-EVENT {\"no\":1}") == null, "event without a kind accepted");
 
         var progress = BenchmarkRunner.ParseEvent("BENCHMARK-EVENT {\"event\":\"progress\",\"stage\":\"generate\",\"scene\":\"c2mp2\"}")!;
         Check(progress.Kind == "progress" && progress.Scene == "c2mp2", "progress event fields");
