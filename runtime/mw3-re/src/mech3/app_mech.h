@@ -320,6 +320,7 @@ void mission_win();  // Missions::complete 0x0048f740 (the cheats')
 void mission_controls_free(void* controls);  // app_mission.cpp: an AI mech's controls (and brain) deleted
 // A mech (one on zEntity's list) deleted (vtable +0 with 1); false for anything else.
 bool mech_free(void* obj);
+void mech_free_in_play(void* mech);  // ours (#289): the sensors drop it first, as a wreck's fade does
 void mech_dead_tick(float dt);  // 0x0041e3f0, the player tick's: the dead mechs' frame
 void mech_dead_clear();         // 0x00414000's list: emptied at the mission's cleanup
 void mechs_shutdown();          // 0x00414000: the mechs' mission end (app_mission's cleanup)
@@ -407,6 +408,12 @@ void program_action_lineup(bool launch);  // app_mission.cpp: player.cpp's 0x004
 void program_objectives_start();   // app_mission.cpp: 0x0045c4a0 on the mission's objectives
 // 0x00491120: a mech's controls (+0x37c), the controls told their owner.
 void program_mech_set_controls(void* mech, void* controls);
+// Ours (#287): an AI mech of roster `mech` named `name`, on AI controls over
+// `net` (an ai::AiNet) and `rec` (an ai::AivRecord), placed at the record's
+// place, as player.cpp's create_ai_mech makes one. Null when it fails.
+void* program_create_ai_mech(int32_t mech, const char* name, void* net, void* rec);
+// Ours (#289): the same, on ReplayControls (a replay puppet, no pilot).
+void* program_create_replay_mech(int32_t mech, const char* name, void* net, void* rec);
 // 0x005a85e0: a vehicle's centroid (its node's world position); false without one.
 bool program_vehicle_centre(void* vehicle, float out[3]);
 void* program_launch_campaign();   // app_mission.cpp: the launch's CampaignGame (the menus' or the debug start's)
@@ -422,6 +429,8 @@ const float* spawn_position();                                     // the placed
 bool is_launched_mech(const void* mech);                           // the pilot's mech, the port's
 void update_mech(void* mech, float dt);
 void update_entities(float dt);                                   // 0x004a1140: every other entity's frame
+// Ours (#287): seeds the arena's per-frame update order (update_entities).
+void set_update_order_seed(uint32_t seed);
 void* node_owner(void* node);                                     // 0x0040e9d0 (app_weapons.cpp)
 void* node_entity(void* node);                                    // 0x0040e920 (app_weapons.cpp)
 struct MechControls;

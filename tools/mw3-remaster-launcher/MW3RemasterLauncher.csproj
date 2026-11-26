@@ -11,13 +11,14 @@
     <ApplicationIcon>Assets\app-icon.ico</ApplicationIcon>
     <AssemblyName>Core Critical Launcher</AssemblyName>
     <RootNamespace>MW3RemasterLauncher</RootNamespace>
-    <Version>1.0.49-preview</Version>
+    <Version>1.0.58-preview</Version>
     <Authors>MW3 Remaster Team</Authors>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="System.Management" Version="[8.0.0]" />
     <None Update="online-updates.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="asset-pack-updates.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Update="update-trust.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="Core\SupportedMedia.json" />
     <EmbeddedResource Include="Core\Mw3ControlActions.json" />

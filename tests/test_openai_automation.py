@@ -918,6 +918,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(job.get("permissions", {"contents": "read"}), {"contents": "read"})
         self.assertEqual((job["timeout-minutes"], job["environment"]), (5, "openai-automation"))
         for condition in (
+            f"github.repository == '{automation.REPOSITORY}'",
             "github.ref == 'refs/heads/develop'",
             "vars.OPENAI_AUTOMATION_ENABLED == 'true'",
             "vars.OPENAI_AUTOMATION_ROLLOUT_COMPLETE == 'true'",

@@ -28,6 +28,7 @@ struct RegionHeightCacheKey {
 
 struct SurfaceNormalState {
   bool loaded{false};
+  bool preload_pending{false};
   std::uint64_t peak_decoded_bytes{};
   mw34::materials::WorldNormalCache cache{};
   std::string native_material_bytes;
@@ -228,7 +229,8 @@ void surface_normals_load() {
     std::memcpy(&version, native_bytes.data() + 8, 4);
     std::memcpy(&expected_polygons, native_bytes.data() + 12, 4);
     std::memcpy(&expected_hash, native_bytes.data() + 24, 8);
-    if (std::memcmp(native_bytes.data(), "BWSFM1\0\0", 8) || version != 1 ||
+    if (std::memcmp(native_bytes.data(), "BWSFM1\0\0", 8) ||
+        (version != 1 && version != 2) ||
         !expected_polygons || expected_polygons > 4096)
       throw std::runtime_error("Native material sidecar header is invalid");
   }
@@ -483,7 +485,7 @@ native_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
           input.texture_version = input.current_texture_version = slot.version;
           input.normal_index = surface_normal_index(key, true, texture);
           if (input.normal_index >= 0) {
-            const auto &normal = surface_normal_image(input.normal_index);
+            const auto &normal = surface_normals_.cache.normal_record(input.normal_index);
             input.normal_width = normal.width;
             input.normal_height = normal.height;
             input.normal_hash = normal.hash;
@@ -551,6 +553,20 @@ native_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
   return {};
 }
 
+void preload_surface_normal(const mw34::materials::SurfaceKey &key) {
+  if (!surface_normals_enabled() || !key.hash) {
+    return;
+  }
+  surface_normals_load();
+  // Only mark the mission preload pending here. Decoding each texture's world
+  // page as the texture arrives read pages in arrival order, and once a
+  // mission's pages outgrew the resident limit that re-read the same pages
+  // many times (issue 461: 806 page reads for c1m1's 52 pages). The post-load
+  // mission preload reads each page once, grouped, before the first visible
+  // turn, so the first turn still doesn't stall on disk reads.
+  surface_normals_.preload_pending = true;
+}
+
 int surface_normal_index(const mw34::materials::SurfaceKey &input_key,
                          bool enabled = true, int texture_handle = -1) {
   if (!enabled || !surface_normals_enabled()) {
@@ -570,7 +586,11 @@ int surface_normal_index(const mw34::materials::SurfaceKey &input_key,
     native_surface_binding_matches(key, texture_handle);
   if (candidate && !native_surface_binding_matches(key, texture_handle))
     return -1;
-  const int index = surface_normals_.cache.surface_normal_index(key, enabled);
+  mw34::timing::ScopedDuration decode_timer(
+      producer_resource_timing_.page_decode_target());
+  // Draws need only the index; the GPU copy is uploaded once per index by
+  // surface_normal_texture(), so an evicted page must not be read again here.
+  const int index = surface_normals_.cache.resident_normal_index(key, enabled);
   surface_normals_.peak_decoded_bytes = std::max(
       surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
   return index;
@@ -578,7 +598,11 @@ int surface_normal_index(const mw34::materials::SurfaceKey &input_key,
 
 const mw34::materials::WorldNormalCache::TextureRecord &
 surface_normal_image(int index) {
+  mw34::timing::ScopedDuration decode_timer(
+      producer_resource_timing_.page_decode_target());
   surface_normals_.cache.require_image(index);
+  surface_normals_.peak_decoded_bytes = std::max(
+      surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
   return surface_normals_.cache.textures.at(static_cast<std::size_t>(index));
 }
 
@@ -613,7 +637,7 @@ validated_deferred_binding(const mw34::materials::SurfaceKey &key, int texture,
   if (require_height && binding->height_binding && bridge_config_.parallax_materials && lighting_.normals) {
     if (binding->normal_index < 0)
       throw std::runtime_error("Deferred native ground normal identity is missing");
-    const auto &normal = surface_normal_image(binding->normal_index);
+    const auto &normal = surface_normals_.cache.normal_record(binding->normal_index);
     const auto &height = *binding->height_binding;
     if (normal.width != height.normal_width || normal.height != height.normal_height ||
         normal.hash != height.normal_hash)
@@ -734,8 +758,17 @@ void apply_native_geometry_admission(vk::Draw &draw,
                                      const NativeGroundRangeAdmission &admission) {
   draw.height_binding = admission.height_binding;
   draw.surface_parameters = admission.surface_parameters;
-  if (admission.normal_index >= 0)
-    draw.normal_texture = int(bind_texture(surface_normal_texture(admission.normal_index), false));
+  if (admission.normal_index >= 0) {
+    const bool first_normal_handle =
+        surface_normal_textures_.find(admission.normal_index) ==
+        surface_normal_textures_.end();
+    const int32_t normal_handle =
+        surface_normal_texture(admission.normal_index);
+    mw34::timing::ScopedDuration upload_timer(
+        first_normal_handle ? producer_resource_timing_.page_upload_target()
+                            : nullptr);
+    draw.normal_texture = int(bind_texture(normal_handle, false));
+  }
 }
 
 private:

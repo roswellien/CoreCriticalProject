@@ -33,7 +33,7 @@ inline constexpr std::size_t max_surface_images = 2048U;
 inline constexpr std::size_t max_surface_identifier_bytes = 4096U;
 inline constexpr std::size_t max_surface_material_name_bytes = 31U;
 inline constexpr std::uint32_t max_surface_dimension = 4096U;
-inline constexpr std::uint64_t max_surface_sidecar_bytes = 256ULL * 1024ULL * 1024ULL;
+inline constexpr std::uint64_t max_surface_sidecar_bytes = 512ULL * 1024ULL * 1024ULL;
 inline constexpr float max_surface_world_amplitude = 16.0f;
 inline constexpr float max_surface_uv_transform = 1024.0f;
 
@@ -85,15 +85,14 @@ class SurfaceDecodedReservation {
     std::uint64_t bytes_{};
 };
 
-// Owns decoded linear RGBA8 pixels where the red channel carries scalar height
-// or thickness. Normal-map alpha is never modified or repurposed for these
-// channels.
+// Owns decoded linear 8-bit scalar height or thickness pixels. Normal-map alpha
+// is never modified or repurposed for these channels.
 struct SurfaceMaterialImage {
     std::string name;
     std::uint32_t role{};
     std::uint32_t width{}, height{};
     std::uint64_t hash{};
-    std::vector<std::uint32_t> pixels;
+    std::vector<std::uint8_t> pixels;
 };
 
 // Immutable validated surface-material parameters in native host world units.
@@ -290,7 +289,7 @@ inline std::shared_ptr<const HeightBinding> resolve_height_binding(
     binding->normal_height = normal_height;
     binding->normal_hash = normal_hash;
     for (const auto &retained : pack->images)
-        binding->retained_decoded_bytes += std::uint64_t(retained.pixels.size()) * 4;
+        binding->retained_decoded_bytes += retained.pixels.size();
     binding->source_batch = std::uint32_t(batch);
     return binding;
 }
@@ -326,7 +325,7 @@ inline std::shared_ptr<const HeightBinding> resolve_catalog_height_binding(
     binding->normal_height = normal_height;
     binding->normal_hash = normal_hash;
     for (const auto &retained : pack->images)
-        binding->retained_decoded_bytes += std::uint64_t(retained.pixels.size()) * 4ULL;
+        binding->retained_decoded_bytes += retained.pixels.size();
     binding->source_batch = std::uint32_t(record_index);
     return binding;
 }
@@ -450,7 +449,7 @@ read_surface_materials_impl(std::istream &input, const std::string &expected_ass
     const bool batch_count_valid =
         expected_batch_materials ? (batch_count == expected_batch_materials->size())
                                  : (batch_count >= 1U && batch_count <= max_surface_batches);
-    if (pack.version != 1U || !batch_count_valid ||
+    if ((pack.version != 1U && pack.version != 2U) || !batch_count_valid ||
         record_count > max_surface_records || image_count > max_surface_images ||
         pack.mesh_uv_hash != expected_mesh_uv_hash)
         fail();
@@ -560,17 +559,29 @@ read_surface_materials_impl(std::istream &input, const std::string &expected_ass
             image.height > max_surface_dimension)
             fail();
 
-        const auto pixel_bytes = std::uint64_t(image.width) * image.height * 4ULL;
-        if (pixel_bytes > max_bytes - decoded_image_bytes ||
-            pixel_bytes > max_decoded_bytes - decoded_image_bytes)
+        const auto pixel_count = std::uint64_t(image.width) * image.height;
+        const auto stored_pixel_bytes = pixel_count * (pack.version == 1U ? 4ULL : 1ULL);
+        if (stored_pixel_bytes > max_bytes - consumed_bytes ||
+            pixel_count > max_decoded_bytes - decoded_image_bytes)
             fail();
-        decoded_image_bytes += pixel_bytes;
+        decoded_image_bytes += pixel_count;
 
-        pack.decoded_reservation->grow(pixel_bytes);
-        image.pixels.resize(static_cast<std::size_t>(pixel_bytes / 4ULL));
-        bytes(image.pixels.data(), static_cast<std::size_t>(pixel_bytes));
-        if (normal_hash(image.pixels.data(), static_cast<std::size_t>(pixel_bytes)) != image.hash)
-            fail();
+        pack.decoded_reservation->grow(pixel_count);
+        if (pack.version == 1U) {
+            std::vector<std::uint8_t> rgba(static_cast<std::size_t>(stored_pixel_bytes));
+            bytes(rgba.data(), rgba.size());
+            if (normal_hash(rgba.data(), rgba.size()) != image.hash)
+                fail();
+            image.pixels.resize(static_cast<std::size_t>(pixel_count));
+            for (std::size_t pixel = 0; pixel < image.pixels.size(); ++pixel)
+                image.pixels[pixel] = rgba[pixel * 4];
+        } else {
+            image.pixels.resize(static_cast<std::size_t>(pixel_count));
+            bytes(image.pixels.data(), image.pixels.size());
+            if (normal_hash(image.pixels.data(), image.pixels.size()) != image.hash)
+                fail();
+        }
+        image.hash = normal_hash(image.pixels.data(), image.pixels.size());
         pack.images.push_back(std::move(image));
     }
 

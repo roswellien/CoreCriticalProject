@@ -662,6 +662,11 @@ void check_prepared_models_surface_materials() {
                 "Catalog lost a namespaced added-chassis skin identity");
         cc_mw3_re::PreparedModels skins(skin_options, skin_options.materials);
         require(skins.skin_texture_loads() == 0, "Alternate textures loaded eagerly");
+        require(skins.skin_cache_budget() >= 1024ULL * 1024 * 1024,
+                "PreparedModels skin cache budget below default");
+        cc_mw3_re::PreparedSkinCache default_skin_cache;
+        require(default_skin_cache.budget() >= 1024ULL * 1024 * 1024,
+                "PreparedSkinCache budget below default");
         const auto primary = skins.draw(context).batches[0].texture;
         for (int lod = 0; lod != 2; ++lod) {
             asset->name = lod ? "mech_authored_1.flt" : "mech_authored.flt";
@@ -676,12 +681,33 @@ void check_prepared_models_surface_materials() {
                 const auto repeated = skins.draw(context);
                 require(repeated.batches[0].texture == selected.batches[0].texture,
                         "Repeated skin draw decoded a new texture set");
+                require(skins.skin_cache_evictions() == 0,
+                        "Skin cache evicted entries during reuse");
                 panel->prepared_skin_index = 0;
                 require(!skins.draw(context).batches[0].texture_owner,
                         "Skin selection leaked into the primary instance state");
             }
         }
         require(skins.skin_texture_loads() == 14, "Retail skin cache did not reuse decodes");
+        require(skins.skin_cache_evictions() == 0, "Retail skin cache had evictions during reuse");
+        {
+            std::ifstream norm_mesh_in(mesh_path, std::ios::binary);
+            const auto norm_mesh = platform::prepared::read_mesh(norm_mesh_in);
+            const auto canonical_path = tex_path.string();
+            const auto noncanonical_path = (tex_path.parent_path() / "." / tex_path.filename()).string();
+            require(cc_mw3_re::PreparedSkinCache::normalize_key(noncanonical_path) ==
+                        cc_mw3_re::PreparedSkinCache::normalize_key(canonical_path),
+                    "normalize_key produced unequal paths");
+            const auto first_res = default_skin_cache.resolve(noncanonical_path, norm_mesh);
+            const auto second_res = default_skin_cache.resolve_normalized(
+                cc_mw3_re::PreparedSkinCache::normalize_key(canonical_path), norm_mesh);
+            require(first_res == second_res,
+                    "normalize_key and resolve_normalized did not reuse shared_ptr");
+            require(default_skin_cache.loads() == 1,
+                    "Normalized skin cache resolution did not reuse existing load");
+            require(default_skin_cache.evictions() == 0,
+                    "Normalized skin cache resolution caused unexpected eviction");
+        }
         prepared_fixture::Bytes binding_index;
         binding_index.value = "BWSKIDX1";
         binding_index.u32(1);
@@ -754,12 +780,15 @@ void check_prepared_models_surface_materials() {
         auto owned = tiny_cache.resolve(tex_path.string(), mesh);
         std::weak_ptr<const platform::prepared::Textures> old = owned;
         tiny_cache.resolve((temp_dir / "skin-1-0").string(), mesh);
+        require(tiny_cache.evictions() == 1, "Tiny cache eviction count mismatch");
         require(!old.expired(), "Eviction invalidated a retained draw");
         owned.reset();
         require(old.expired(), "Eviction retained unused skin pixels");
         require(tiny_cache.loads() == 2, "Tiny cache decode accounting mismatch");
         tiny_cache.clear();
         require(tiny_cache.bytes() == 0, "Skin cache reset retained decoded bytes");
+        require(tiny_cache.loads() == 2 && tiny_cache.evictions() == 1,
+                "Skin cache clear did not preserve cumulative loads and evictions");
         for (const auto &bad : {catalog.value.substr(0, catalog.value.size() - 1), catalog.value + "x"}) {
             std::istringstream input(bad);
             bool rejected = false;
@@ -794,6 +823,15 @@ void check_prepared_models_surface_materials() {
             require(!off.height_binding && off.surface_parameters == baseline.surface_parameters &&
                         off.surface_eye == baseline.surface_eye,
                     "Height-Off changed the original normal-only material output");
+            auto without_normal = source;
+            without_normal.normal = nullptr;
+            without_normal.height_binding.reset();
+            mw34::vkscene::Draw without_parallax{};
+            cc_mw3_re::apply_surface_material(without_parallax, without_normal, true, true, 7, 11);
+            require(!without_parallax.height_binding &&
+                        without_parallax.surface_parameters == baseline.surface_parameters &&
+                        without_parallax.surface_eye == baseline.surface_eye,
+                    "Height data without a normal map changed ordinary material shading");
             cc_mw3_re::apply_surface_material(on, source, true, true, 7, 11);
             retained = on.height_binding;
             require(retained && retained->image == source.height_binding->image &&

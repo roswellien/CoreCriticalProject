@@ -392,10 +392,10 @@ void check_environment_packs() {
             "Shared immutable sidecar was decoded into duplicate owners");
     save(document);
     {
-      EnvironmentPackCache warm(32);
+      EnvironmentPackCache warm(8);
       auto owner = warm.resolve({targets.path()}).material_targets.at("training")[0].pack;
       const auto budget = warm.resolve({targets.path()}).surface_budget;
-      require(budget->used() == 32 &&
+      require(budget->used() == 8 &&
                   warm.resolve({targets.path()}).material_targets.at("training")[0].pack == owner,
               "Warm exact cache hit decoded or recharged an immutable owner");
       auto bad = document;
@@ -407,7 +407,7 @@ void check_environment_packs() {
       } catch (const std::runtime_error &error) {
         exact_rejection = std::string(error.what()).find("shared sidecar asset") != std::string::npos;
       }
-      require(exact_rejection && budget->used() == 32,
+      require(exact_rejection && budget->used() == 8,
               "Cache hit inherited another target asset admission or lost retained ownership");
       for (bool uv : {false, true}) {
         bad = document;
@@ -422,7 +422,7 @@ void check_environment_packs() {
         } catch (const std::runtime_error &error) {
           exact_rejection = std::string(error.what()).find("shared sidecar") != std::string::npos;
         }
-        require(exact_rejection && budget->used() == 32,
+        require(exact_rejection && budget->used() == 8,
                 "Cache hit skipped a changed mesh/UV or polygon material expectation");
       }
       bad = document;
@@ -439,12 +439,12 @@ void check_environment_packs() {
       require(warm.resolve({targets.path()}).material_targets.at("training")[0].pack == owner,
               "A still-owned exact cache entry was decoded after target rejection");
       (void)warm.resolve({});
-      require(budget->used() == 32, "Clearing selection forgot a queued image owner");
+      require(budget->used() == 8, "Clearing selection forgot a queued image owner");
       owner.reset();
       require(budget->used() == 0, "Last image owner did not release its decoded reservation");
     }
     {
-      EnvironmentPackCache changing(64);
+      EnvironmentPackCache changing(16);
       auto first_owner = changing.resolve({targets.path()}).material_targets.at("training")[0].pack;
       const auto budget = changing.resolve({targets.path()}).surface_budget;
       std::shared_ptr<const mw34::materials::SurfaceMaterialImage> queued(
@@ -453,20 +453,20 @@ void check_environment_packs() {
       targets.put("environment/height.bin", build_bwsfm1(9, .06f, .2f), "BWSFM1");
       save(document);
       auto second_owner = changing.resolve({targets.path()}).material_targets.at("training")[0].pack;
-      require(budget->used() == 64 &&
+      require(budget->used() == 16 &&
                   changing.resolve({targets.path()}).material_targets.at("training")[0].pack == second_owner,
               "Changed selection forgot a queued old owner or warm cache recharged it");
       targets.put("environment/height.bin", build_bwsfm1(9, .07f, .2f), "BWSFM1");
       save(document);
       env_test_reject([&] { changing.resolve({targets.path()}); },
                       "Changed selection allocated while old and new owners exhausted the budget");
-      require(budget->used() == 64, "Rejected allocation changed live owner reservations");
+      require(budget->used() == 16, "Rejected allocation changed live owner reservations");
       queued.reset();
-      require(budget->used() == 32, "Queued retirement did not return its old reservation");
+      require(budget->used() == 8, "Queued retirement did not return its old reservation");
       (void)changing.resolve({targets.path()});
-      require(budget->used() == 64, "Retry did not admit the now-available decoded space");
+      require(budget->used() == 16, "Retry did not admit the now-available decoded space");
       second_owner.reset();
-      require(budget->used() == 32, "Second old source owner was not released");
+      require(budget->used() == 8, "Second old source owner was not released");
       (void)changing.resolve({});
       require(budget->used() == 0, "Empty selection retained decoded image storage");
       targets.put("environment/height.bin", build_bwsfm1(9, .05f, .05f), "BWSFM1");

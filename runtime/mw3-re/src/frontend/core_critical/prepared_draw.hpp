@@ -77,9 +77,9 @@ inline void apply_surface_material(mw34::vkscene::Draw &draw,
   draw.surface_parameters = {material.roughness, material.reflectivity,
                              material.metallic, 1.f};
   draw.surface_eye = {eye[3], eye[7], eye[11], 1.f};
-  if (height_enabled && material.height_image != mw34::materials::no_surface_image) {
-    if (!source.height_binding)
-      throw std::runtime_error("Prepared height material has no admitted normal/source binding");
+  // Height data may be present before the batch has an authored normal map.
+  if (height_enabled && material.height_image != mw34::materials::no_surface_image &&
+      source.height_binding) {
     auto binding = std::make_shared<mw34::materials::HeightBinding>(*source.height_binding);
     binding->producer_epoch = epoch;
     binding->texture_version = texture_version;

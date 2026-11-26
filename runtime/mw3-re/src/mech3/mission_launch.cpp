@@ -23,12 +23,15 @@ namespace {
 LaunchHooks g_default_hooks;
 LaunchHooks* g_hooks = &g_default_hooks;
 Mech* g_launched = nullptr;
+bool g_spectator = false;  // ours (#287)
 
 }  // namespace
 
 void set_launch_hooks(LaunchHooks* h) { g_hooks = h ? h : &g_default_hooks; }
 LaunchHooks& launch_hooks() { return *g_hooks; }
 Mech* launched_mech() { return g_launched; }
+void set_launch_spectator(bool spectator) { g_spectator = spectator; }
+bool launch_spectator() { return g_spectator; }
 
 ai::AivRecord* LaunchHooks::aiv_read_named(ai::AivRecord& rec, const char* name) { return rec.read_named(name); }
 void LaunchHooks::mech_attach_view(Mech& m) { unported("0x0041ce30", {mech_build_hooks().ref(&m)}); }
@@ -63,6 +66,40 @@ int32_t place_pilot_mech(LaunchHooks& h, Handle pilot, Mech& m, const float pos[
   return 1;
 }
 
+namespace {
+
+// The Instant Action and network launch's pilot save: the file opened, its
+// header and record written, closed (pilot +0x10 the file's handle).
+void save_launch_pilot(LaunchHooks& h, Handle pilot) {
+  h.pilot_478ce0(pilot);
+  if (h.pilot_4794f0(pilot)) h.pilot_vt4(pilot);
+  const uint32_t handle = h.field32(pilot, 0x10);
+  if (handle != 0xffffffff) h.close_handle(handle);
+  h.set_field32(pilot, 0x10, 0xffffffff);
+}
+
+void finish_launch(LaunchHooks& h, Handle missions);
+
+// Ours (#287): a spectator's network launch. No mech, controls, HUD or
+// cockpit; what does not need a mech stays: the view's camera and its
+// update, which makes the camera zSound's listener, the camera option, the
+// session's player data (multiplayer, which places a mech only when there is
+// one), the pilot save and the launch's last steps. The arena attaches the
+// view to a bot at the first Core frame.
+void launch_spectator_seat(LaunchHooks& h, Handle missions, Handle pilot, int32_t cam) {
+  g_launched = nullptr;
+  h.view_set_camera(h.view(), static_cast<uint32_t>(cam));
+  h.camera_update(h.h(h.field32(h.view(), 0x04)));
+  h.set_camera_mode(h.camera_mode());
+  h.set_field8(pilot, 0x59, 0);
+  h.clear_60b570();
+  h.multiplayer(pilot);
+  save_launch_pilot(h, pilot);
+  finish_launch(h, missions);
+}
+
+}  // namespace
+
 // Mech3.exe 1.2 @ 0x00491150. The exe first closes the loader thread's
 // handles (+0x68, +0x6c) and gives the game thread its priority back; the
 // port loads without a thread (FIX (A), mission-load.md section 4).
@@ -80,9 +117,15 @@ bool launch_player() {
   const uint32_t team = r->get<uint32_t>(0x18);
   const uint32_t mode = h.use_joystick() == 1 ? 6 : 3;
   const int32_t cam = h.camera_mode();
-  PlayerControls* ctl = player_controls(mode);
   const Handle pilot = h.pilot();
   const Handle game = h.h(h.field32(pilot, 0x6c));
+  // Ours (#287): a spectator's network launch (the arena's) makes no mech.
+  const bool spectator_network_launch = g_spectator && h.game_type(game) == 3;
+  if (spectator_network_launch) {
+    launch_spectator_seat(h, missions, pilot, cam);
+    return true;
+  }
+  PlayerControls* ctl = player_controls(mode);
   const Handle slot = h.game_slot(game);
   const int32_t index = static_cast<int32_t>(h.field32(slot, 0x04));
   MechData* data = b.mech_data(index, 1);
@@ -154,11 +197,7 @@ bool launch_player() {
       } else {
         h.multiplayer(pilot);
       }
-      h.pilot_478ce0(pilot);
-      if (h.pilot_4794f0(pilot)) h.pilot_vt4(pilot);
-      const uint32_t handle = h.field32(pilot, 0x10);
-      if (handle != 0xffffffff) h.close_handle(handle);
-      h.set_field32(pilot, 0x10, 0xffffffff);
+      save_launch_pilot(h, pilot);
       break;
     }
     case 4: {
@@ -179,6 +218,13 @@ bool launch_player() {
     // there is no HUD to reset.
     if (screen || !zfix::options().fixed) h.hud_43d920(h.h(h.low(screen) + 0x14));
   }
+  finish_launch(h, missions);
+  return true;
+}
+
+namespace {
+// The launch's last steps, a spectator's too.
+void finish_launch(LaunchHooks& h, Handle missions) {
   // The list at +0xc0: every entry's object freed, then every entry.
   const Handle list = h.h(h.field32(missions, 0xc0));
   const Handle head = h.h(h.field32(list, 0x08));
@@ -196,7 +242,7 @@ bool launch_player() {
   }
   h.fn_40f0a0();
   h.fn_537520();
-  return true;
 }
+}  // namespace
 
 }  // namespace mech3

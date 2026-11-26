@@ -75,6 +75,8 @@
 #include "mech3/mech_control.h"
 #include "mech3/music.h"
 #include "mech3/player.h"
+#include "mech3/quit_box.h"
+#include "mech3/replay_hooks.h"
 #include "platform/platform.h"
 #include "platform/render3d.h"
 #include "platform/sound_output.h"
@@ -130,7 +132,8 @@ struct WiredOptionsHooks : OptionsHooks {
     // FIX (bug), W40: the registry's read filled the bindings only; without a
     // controls file the reverse tables stayed the defaults' (input.md).
     zin::map_refresh();
-    mech3::controls_repair_mouse_fire();  // ours (W40): an older build's damage undone
+    // Controls load before zInput starts, so consult the platform input directly.
+    mech3::controls_repair_mouse_fire(g_engine ? g_engine->platform_input() : nullptr);
     mech3::controls_keep_saved();         // the map the settings save (W40)
     mech3::settings_keep_mouse();         // and the mouse's values (ours)
   }
@@ -671,6 +674,26 @@ void GameEngine::force_feedback_spring(Handle, int32_t on) {
 }
 void GameEngine::input_set_mode(uint32_t mode) { zin::set_mode(mode); }
 void GameEngine::input_poll(uint8_t callbacks) { zin::poll(callbacks != 0); }
+
+bool GameEngine::replay_on() { return replay_hooks() != nullptr; }
+void GameEngine::replay_start() {
+  if (ReplayHooks* replay = replay_hooks()) replay->start();
+}
+void GameEngine::replay_before_lists() {
+  if (ReplayHooks* replay = replay_hooks()) replay->before_lists(quit_box_ && quit_box_->active);
+}
+void GameEngine::replay_after_lists() {
+  if (ReplayHooks* replay = replay_hooks()) replay->after_lists();
+}
+void GameEngine::replay_camera() {
+  ReplayHooks* replay = replay_hooks();
+  if (!replay || !camera_) return;
+  replay->place_camera(static_cast<zcls::Node*>(object_of(camera_)));
+  program_view_follow_ground();
+}
+void GameEngine::replay_draw() {
+  if (ReplayHooks* replay = replay_hooks()) replay->draw_overlay();
+}
 uint32_t GameEngine::key_state(int32_t key) { return zin::key_state(key); }
 void GameEngine::input_clear() { zin::kbd_reset(); }
 void GameEngine::input_reset() { zin::reset(); }
@@ -1183,6 +1206,9 @@ void GameEngine::replace_state_at(Handle state) {
 // Dummy State (the debriefing's ABORT in Instant Action).
 void GameEngine::fade_to_state(Handle next, uint32_t arg, int32_t direction, int32_t buffer, float seconds,
                                uint8_t r, uint8_t g, uint8_t b) {
+  // Ours (#289): a 3D replay has no lobby to go back to; the quit box's yes
+  // ends the program (quit_box.cpp itself is untouched).
+  if (ReplayHooks* replay = replay_hooks(); replay && next == 0x609848) return replay->quit();
   if (next == 0x6099a0) fade_replace(&states().end_win, arg, direction, buffer, seconds, r, g, b);
   else if (next == 0x609848) fade_replace(&states().multi_exit, arg, direction, buffer, seconds, r, g, b);  // the quit box's (0x0048e390): a second Multi-Exit
   else if (next == states().ia_dummy.addr()) fade_replace(&states().ia_dummy, arg, direction, buffer, seconds, r, g, b);

@@ -308,13 +308,16 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
             if (skin.chassis != binding.chassis || skin.lod != binding.lod)
                 continue;
             if (skin.index < 1 || skin.index > 135 || skin.path.empty() ||
-                !model.skins.emplace(skin.index, skin.path).second)
+                !model.skins.emplace(skin.index, PreparedSkinCache::normalize_key(skin.path)).second)
                 throw std::runtime_error("Invalid or duplicate prepared skin selection");
         }
         int32_t catalog_index = static_cast<int32_t>(platform::prepared::base_skin_count(binding.chassis));
         for (const auto &skin : *platform::prepared::configured_skin_catalog())
             if (skin.chassis == binding.chassis) {
-                if (!model.skins.emplace(catalog_index++, skin.textures[model.distance_lod ? 1 : 0]).second)
+                if (!model.skins.emplace(
+                        catalog_index++,
+                        PreparedSkinCache::normalize_key(
+                            skin.textures[model.distance_lod ? 1 : 0])).second)
                     throw std::runtime_error("Prepared catalog skin overrides a selected skin index");
             }
         if (!selected.insert(model.source_asset).second)
@@ -439,7 +442,15 @@ PreparedModels::resolve_skin(const std::string &source_asset, int32_t index) con
     const auto found = model->skins.find(index);
     if (found != model->skins.end() && !model->failed_skins.count(index)) {
         try {
-            auto textures = skin_cache_.resolve(found->second, model->mesh);
+            const auto prior_evictions = skin_cache_.evictions();
+            auto textures = skin_cache_.resolve_normalized(found->second, model->mesh);
+            if (skin_cache_.evictions() > prior_evictions && !warned_skin_eviction_) {
+                std::fprintf(stderr,
+                             "Prepared skin cache eviction: %zu bytes decoded, budget %zu, %zu evictions\n",
+                             skin_cache_.bytes(), skin_cache_.budget(),
+                             skin_cache_.evictions());
+                warned_skin_eviction_ = true;
+            }
             if (model->logged_skins.insert(index).second)
                 std::fprintf(stderr, "Prepared skin selected: %s index %d\n", model->source_asset.c_str(), index);
             return textures;
@@ -474,6 +485,55 @@ PreparedModels::model_for_asset(const std::string &source_asset) const {
             closest = &model;
     }
     return closest;
+}
+
+PreparedTextureResources
+PreparedModels::resources_for_assets(const std::vector<std::string> &source_assets) const {
+    PreparedTextureResources resources;
+    std::set<std::string> seen_source_assets;
+    std::set<const Model *> seen_models;
+    std::set<const platform::prepared::Image *> seen_textures;
+    std::set<const platform::prepared::NormalImage *> seen_normals;
+
+    for (const auto &source_asset : source_assets) {
+        if (source_asset.empty() || !seen_source_assets.insert(source_asset).second)
+            continue;
+        // Share exact draw selection semantics so mission warmup prepares only
+        // models that subsequent in-mission draws can actually select.
+        const Model *selected = model_for_asset(source_asset);
+        if (!selected)
+            continue;
+        ++resources.matched_source_assets;
+        if (!seen_models.insert(selected).second)
+            continue;
+
+        // Mixed-bone models use a per-frame deformation path, so immutable
+        // buffer warmup must not select any batch from those models.
+        const bool mixed_bone_model = selected->mesh.version == 4 &&
+            std::any_of(selected->mesh.batches.begin(), selected->mesh.batches.end(),
+                        [](const auto &batch) { return !batch.donor_indices.empty(); });
+        if (!mixed_bone_model)
+            for (const auto &batch : selected->mesh.batches)
+                resources.rigid_batches.push_back(&batch);
+
+        for (std::size_t batch_index = 0; batch_index < selected->mesh.batches.size();
+             ++batch_index) {
+            const auto texture_index = selected->textures.bindings.at(batch_index);
+            const auto *texture = &selected->textures.images.at(texture_index);
+            if (seen_textures.insert(texture).second)
+                resources.textures.push_back(texture);
+
+            if (!selected->normals.bindings.empty()) {
+                const auto normal_index = selected->normals.bindings.at(batch_index);
+                if (normal_index != platform::prepared::no_normal) {
+                    const auto *normal = &selected->normals.images.at(normal_index);
+                    if (seen_normals.insert(normal).second)
+                        resources.normals.push_back(normal);
+                }
+            }
+        }
+    }
+    return resources;
 }
 
 PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context,

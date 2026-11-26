@@ -100,7 +100,7 @@ namespace MW3RemasterLauncher
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            var launcherLabel = "Core Critical " + typeof(GameRunner).Assembly.GetName().Version!.ToString(3);
+            var launcherLabel = "Core Critical " + PlaytestDiagnostics.LauncherVersionString();
             TxtLauncherBuild.Text = TxtHeaderBuild.Text = launcherLabel;
             if (_settingsMgr.LoadWarning != null)
                 MessageBox.Show(_settingsMgr.LoadWarning, "Settings recovered", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -122,6 +122,7 @@ namespace MW3RemasterLauncher
                 string.IsNullOrWhiteSpace(_settingsMgr.Current.GamePath) || !_settingsMgr.Current.InitialSetupCompleted)
                 ShowGameSetup();
             StartUpdateNotifications();
+            InitializeAssetPackUpdates();
         }
 
         private void InitializeGamePath()
@@ -168,9 +169,13 @@ namespace MW3RemasterLauncher
                 BtnLaunchGame.IsEnabled = true;
                 try
                 {
-                    if (string.IsNullOrEmpty(_settingsMgr.Current.ModularContentProfile) &&
-                        (NativeRuntimeLayout.IsInstalledApplication(_basePath) || RuntimeUpdates.SelectedRoot(_basePath) != null))
-                        NativeRuntimeLayout.FindInstalled(_basePath);
+                    if (string.IsNullOrEmpty(_settingsMgr.Current.ModularContentProfile))
+                    {
+                        if (NativeGameRunner.UsesBundledMw3Re(_basePath))
+                            _nativeGameRunner.RequireBundledMw3Re();
+                        else if (NativeRuntimeLayout.IsInstalledApplication(_basePath) || RuntimeUpdates.SelectedRoot(_basePath) != null)
+                            NativeRuntimeLayout.FindInstalled(_basePath);
+                    }
                 }
                 catch (Exception error)
                 {
@@ -226,6 +231,8 @@ namespace MW3RemasterLauncher
             ListPacks.ItemsSource = view;
             ListPacks.IsHitTestVisible = ListPacks.Focusable = game.Playable;
             BtnWatchCinematics.IsEnabled = game.Playable;
+            AssetPackUpdateControls.Visibility = game.Id == GameCatalog.Mw3 &&
+                AssetPackUpdateService.IsConfigured(_basePath) ? Visibility.Visible : Visibility.Collapsed;
             BtnInstallPack.IsEnabled = BtnInspectConflicts.IsEnabled = game.Playable && !_nativeSessionActive && !_assetInstallActive;
             TxtEnvironmentMigration.Visibility = Visibility.Collapsed;
             TxtPackEmpty.Text = game.Playable ? "No packs installed for MechWarrior 3. Choose Install New Pack to add one."
@@ -802,6 +809,43 @@ namespace MW3RemasterLauncher
         private string PlayCaption() => string.IsNullOrEmpty(_settingsMgr.Current.ModularContentProfile)
             ? "▶  PLAY" : "▶  PLAY MW3-RE PROFILE";
 
+        private sealed record CrashReportSessionContext(
+            LauncherSettings Settings,
+            PackManifest[] Packs,
+            string? LaunchLog,
+            string RuntimeVersion,
+            int? ExitCode = null);
+
+        private CrashReportSessionContext? _lastReportSession;
+
+        /// <summary>
+        /// Keeps the session's exit code for Export Report. Skipped when a newer launch has
+        /// already replaced the session, so its report isn't given an old exit code.
+        /// </summary>
+        private void RecordSessionExit(CrashReportSessionContext context, int exitCode)
+        {
+            if (ReferenceEquals(_lastReportSession, context))
+                _lastReportSession = context with { ExitCode = exitCode };
+        }
+
+        private static string ResolveD7VkRuntimeVersion(LauncherSettings settings)
+        {
+            try
+            {
+                var validation = GameValidator.Validate(settings.GamePath);
+                if (!string.IsNullOrWhiteSpace(validation.DetectedVersion))
+                    return validation.DetectedVersion;
+                if (!string.IsNullOrWhiteSpace(validation.ExecutablePath) && File.Exists(validation.ExecutablePath))
+                {
+                    var versionInfo = FileVersionInfo.GetVersionInfo(validation.ExecutablePath);
+                    if (versionInfo.FileMajorPart > 0)
+                        return $"{versionInfo.FileMajorPart}.{versionInfo.FileMinorPart}.{versionInfo.FileBuildPart}.{versionInfo.FilePrivatePart}";
+                }
+            }
+            catch { }
+            return "unknown";
+        }
+
         private async void BtnLaunchGame_Click(object sender, RoutedEventArgs e)
         {
             if (_assetInstallActive || _nativeSessionActive || _launchPreparing) return;
@@ -810,6 +854,9 @@ namespace MW3RemasterLauncher
 
             if (settings.EngineMode == "d7vk")
             {
+                var settingsSnapshot = SnapshotCrashReportSettings(settings);
+                var packsSnapshot = SnapshotCrashReportPacks(_packMgr.Packs);
+                var runtimeVersion = ResolveD7VkRuntimeVersion(settingsSnapshot);
                 try
                 {
                     SetLaunchPreparing(true);
@@ -832,8 +879,11 @@ namespace MW3RemasterLauncher
                     var process = await System.Threading.Tasks.Task.Run(() =>
                         _d7vkRunner.LaunchGame(settings, line => Debug.WriteLine(line)));
                     SetLaunchPreparing(false);
+                    var sessionContext = new CrashReportSessionContext(
+                        settingsSnapshot, packsSnapshot, _d7vkRunner.LastLogPath, runtimeVersion);
+                    _lastReportSession = sessionContext;
                     process.EnableRaisingEvents = true;
-                    _ = ObserveD7VkCompletionAsync(process);
+                    _ = ObserveD7VkCompletionAsync(process, sessionContext);
                 }
                 catch (Exception error)
                 {
@@ -858,6 +908,8 @@ namespace MW3RemasterLauncher
                 SettingControl_Changed(sender, e);
                 settings = System.Text.Json.JsonSerializer.Deserialize<LauncherSettings>(
                     System.Text.Json.JsonSerializer.Serialize(_settingsMgr.Current))!;
+                var nativeSettingsSnapshot = SnapshotCrashReportSettings(settings);
+                var nativePacksSnapshot = SnapshotCrashReportPacks(_packMgr.Packs);
                 var activeDirectories = _packMgr.GetActivePackDirectories();
                 _nativeSessionActive = true;
                 SetLaunchPreparing(true);
@@ -870,20 +922,35 @@ namespace MW3RemasterLauncher
                 var process = await System.Threading.Tasks.Task.Run(() =>
                     _nativeGameRunner.Launch(settings, activeDirectories, line =>
                     {
-                        if (line.StartsWith("Scenery distance ", StringComparison.Ordinal) ||
+                        if (line.StartsWith("Startup: ", StringComparison.Ordinal) ||
+                            line.StartsWith("Native progress: ", StringComparison.Ordinal) ||
+                            line.StartsWith("Scenery distance ", StringComparison.Ordinal) ||
                             line.StartsWith("Pack left out: ", StringComparison.Ordinal))
-                            Dispatcher.BeginInvoke(new Action(() => TxtStartupProgress.Text = line));
-                        if (line.StartsWith("MW3-RE PID ", StringComparison.Ordinal))
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                if (!_nativeSessionActive) return;
+                                const string native = "Native progress: ";
+                                // "idle" only means the game's own loading finished; the first
+                                // frame below ends the preparing state.
+                                if (line == native + "idle") return;
+                                TxtStartupProgress.Text = line.StartsWith(native, StringComparison.Ordinal)
+                                    ? line.Substring(native.Length) : line;
+                            }));
+                        if (line.StartsWith("Native first frame: ", StringComparison.Ordinal))
                             Dispatcher.BeginInvoke(new Action(() =>
                             {
                                 if (!_nativeSessionActive) return;
                                 SetLaunchPreparing(false);
                                 BtnLaunchGame.Content = "\u25CF  GAME RUNNING...";
                                 TxtStatusReady.Text = "GAME STATUS: MW3-RE RUNNING";
-                                TxtStartupProgress.Text = "The game process has started.";
+                                TxtStartupProgress.Text = "The game is on screen.";
                             }));
                     }));
-                _ = ObserveNativeGameCompletionAsync(process);
+                var sessionContext = new CrashReportSessionContext(
+                    nativeSettingsSnapshot, nativePacksSnapshot, _nativeGameRunner.LastLogPath,
+                    _nativeGameRunner.LastRuntimeVersion ?? "unknown");
+                _lastReportSession = sessionContext;
+                _ = ObserveNativeGameCompletionAsync(process, _nativeGameRunner.LastSessionCompletion, sessionContext);
             }
             catch (Exception error)
             {
@@ -894,15 +961,19 @@ namespace MW3RemasterLauncher
             }
         }
 
-        private async System.Threading.Tasks.Task ObserveNativeGameCompletionAsync(Process process)
+        private async System.Threading.Tasks.Task ObserveNativeGameCompletionAsync(
+            Process process, Task<int>? sessionCompletion, CrashReportSessionContext context)
         {
             try
             {
-                var exit = await GameRunner.WaitForCompletionAsync(process);
+                var exit = sessionCompletion != null
+                    ? await sessionCompletion
+                    : await GameRunner.WaitForCompletionAsync(process);
+                RecordSessionExit(context, exit);
                 ResetNativeLaunchControls();
                 TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "\u26A0 MW3-RE ENDED WITH AN ERROR";
                 if (exit != 0)
-                    await HandleCrashReportAsync(exit, _nativeGameRunner.LastLogPath);
+                    await HandleCrashReportAsync(exit, context);
             }
             catch (Exception error)
             {
@@ -923,15 +994,16 @@ namespace MW3RemasterLauncher
             BtnLaunchGame.Content = PlayCaption();
         }
 
-        private async Task ObserveD7VkCompletionAsync(Process process)
+        private async Task ObserveD7VkCompletionAsync(Process process, CrashReportSessionContext context)
         {
             try
             {
                 var exit = await GameRunner.WaitForCompletionAsync(process);
+                RecordSessionExit(context, exit);
                 BtnLaunchGame.IsEnabled = true;
                 BtnLaunchGame.Content = "▶  LAUNCH ORIGINAL (D7VK)";
                 TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "⚠ ORIGINAL GAME OR WRAPPER FAILED";
-                if (exit != 0) await HandleCrashReportAsync(exit, _d7vkRunner.LastLogPath);
+                if (exit != 0) await HandleCrashReportAsync(exit, context);
             }
             catch (Exception error)
             {
@@ -943,30 +1015,35 @@ namespace MW3RemasterLauncher
             finally { process.Dispose(); }
         }
 
-        private async Task HandleCrashReportAsync(int exitCode, string? launchLog)
+        private async Task HandleCrashReportAsync(int exitCode, CrashReportSessionContext context)
         {
-            var summary = PlaytestDiagnostics.FailureSummary(launchLog);
-            var automatic = _settingsMgr.Current.AutomaticCrashReports;
-            if (automatic)
+            var settingsSnapshot = context.Settings;
+            var packsSnapshot = context.Packs;
+            var launchLog = context.LaunchLog;
+            var runtimeVersion = context.RuntimeVersion;
+            var summary = PlaytestDiagnostics.FailureSummary(launchLog, exitCode);
+            var engineTitle = settingsSnapshot.EngineMode == "d7vk" ? "Original Game (D7VK)" : "MW3-RE";
+            var exitStatus = PlaytestDiagnostics.FormatExitCode(exitCode);
+            var statusLabel = $"{engineTitle} stopped (exit {exitStatus})";
+            var dialogSummary = summary == PlaytestDiagnostics.GenericFailureSummary
+                ? $"{summary} Exit code: {exitStatus}."
+                : summary;
+
+            if (_settingsMgr.Current.AutomaticCrashReports)
             {
-                MessageBox.Show(summary + "\n\nUse Open Logs or Export Report under Settings & Steam.",
-                    (_settingsMgr.Current.EngineMode == "d7vk" ? "Original Game (D7VK)" : "MW3-RE") + " stopped (exit " + exitCode + ")", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(dialogSummary + "\n\nUse Open Logs or Export Report under Settings & Steam.",
+                    statusLabel, MessageBoxButton.OK, MessageBoxImage.Error);
             }
             else
             {
                 var choice = MessageBox.Show(this,
-                    summary + "\n\nSend the redacted recent launcher and native logs, hardware inventory (CPU, installed memory, graphics adapters and drivers), launcher/runtime details, selected graphics settings and pack metadata to Core Critical for review? The inventory does not request serial numbers or device identifiers. Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. Saves, original media or memory dumps are not included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
-                    (_settingsMgr.Current.EngineMode == "d7vk" ? "Original Game (D7VK)" : "MW3-RE") + " stopped (exit " + exitCode + ")", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+                    dialogSummary + "\n\nSend the redacted recent launcher and native logs, hardware inventory (CPU, installed memory, graphics adapters and drivers), launcher/runtime details, selected graphics settings and pack metadata to Core Critical for review? The inventory does not request serial numbers or device identifiers. Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. Saves, original media or memory dumps are not included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
+                    statusLabel, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
                 if (choice != MessageBoxResult.Yes) return;
             }
 
             try
             {
-                var settingsSnapshot = SnapshotCrashReportSettings(_settingsMgr.Current);
-                var packsSnapshot = SnapshotCrashReportPacks(_packMgr.Packs);
-                var runtimeVersion = settingsSnapshot.EngineMode == "d7vk"
-                    ? GameValidator.Validate(settingsSnapshot.GamePath).DetectedVersion
-                    : OnlineUpdateService.InstalledRuntimeVersion(_basePath, _dataRoot);
                 var hardwareInventory = await Task.Run(HardwareInventory.Capture);
                 var report = PlaytestDiagnostics.CreateCrashReport(settingsSnapshot, packsSnapshot,
                     launchLog, _basePath, runtimeVersion, exitCode, hardwareInventory);
@@ -1032,8 +1109,29 @@ namespace MW3RemasterLauncher
             catch (Exception error) { MessageBox.Show(error.Message, "Save backups", MessageBoxButton.OK, MessageBoxImage.Information); }
         }
 
+        private void BtnAiArena_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_nativeSessionActive || _launchPreparing || _assetInstallActive)
+                    throw new InvalidOperationException("Close the current game session before opening the AI Arena.");
+                var activeDirectories = _packMgr.GetActivePackDirectories();
+                new ArenaWindow(_settingsMgr.Current, activeDirectories, _dataRoot, _nativeGameRunner) { Owner = this }.ShowDialog();
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show(this, error.Message, "AI Arena", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+
         private async void BtnExportReport_Click(object sender, RoutedEventArgs e)
         {
+            var launchLog = CurrentLaunchLog();
+            var matchingSession = _lastReportSession is { LaunchLog: { } sessionLog } session &&
+                string.Equals(sessionLog, launchLog, StringComparison.OrdinalIgnoreCase) ? session : null;
+            var settingsSnapshot = matchingSession?.Settings ?? SnapshotCrashReportSettings(_settingsMgr.Current);
+            var packsSnapshot = matchingSession?.Packs ?? SnapshotCrashReportPacks(_packMgr.Packs);
+            var runtimeVersion = matchingSession?.RuntimeVersion;
             var dialog = new SaveFileDialog
             {
                 Title = "Save playtest troubleshooting report", Filter = "Troubleshooting report (*.zip)|*.zip",
@@ -1042,12 +1140,10 @@ namespace MW3RemasterLauncher
             if (dialog.ShowDialog() != true) return;
             try
             {
-                var settingsSnapshot = SnapshotCrashReportSettings(_settingsMgr.Current);
-                var packsSnapshot = SnapshotCrashReportPacks(_packMgr.Packs);
-                var launchLog = CurrentLaunchLog();
                 var hardwareInventory = await System.Threading.Tasks.Task.Run(HardwareInventory.Capture);
                 PlaytestDiagnostics.Export(dialog.FileName, settingsSnapshot, packsSnapshot,
-                    launchLog, _basePath, hardwareInventory);
+                    launchLog, _basePath, hardwareInventory, runtimeVersion,
+                    exitCode: matchingSession?.ExitCode);
                 MessageBox.Show("Report saved. It contains build/system details, selected settings, pack metadata and redacted recent log tails. Review it before sharing.",
                     "Playtest report saved", MessageBoxButton.OK, MessageBoxImage.Information);
             }
@@ -1060,6 +1156,8 @@ namespace MW3RemasterLauncher
             {
                 GamePath = settings.GamePath,
                 EngineMode = settings.EngineMode,
+                ModularContentProfile = settings.ModularContentProfile,
+                ModularRuntimeExecutable = settings.ModularRuntimeExecutable,
                 Width = settings.Width,
                 Height = settings.Height,
                 WindowMode = settings.WindowMode,
@@ -1072,6 +1170,7 @@ namespace MW3RemasterLauncher
                 InstantReplay = settings.InstantReplay,
                 PerformanceMonitor = settings.PerformanceMonitor,
                 RenderThread = settings.RenderThread,
+                Vsync = settings.Vsync,
                 D7VkResolution = settings.D7VkResolution,
                 D7VkAntiAliasing = settings.D7VkAntiAliasing,
                 D7VkAnisotropicFiltering = settings.D7VkAnisotropicFiltering,

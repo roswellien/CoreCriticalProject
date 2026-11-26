@@ -253,6 +253,11 @@ struct ProgramSensors : ai::SensorHooks {
     return p ? g_w.peek32(g_w.engine, p + 0x14) : 0;
   }
   zgame::Handle view_target() override {
+    // Ours (#287): an arena spectator's view is not a player. The sensor pass
+    // pairs the view's vehicle with everyone like the player (each other
+    // vehicle keeps a contact on it at any range), so none in a match.
+    const World& w = world();
+    if (w.arena_spectating) return 0;
     const uint32_t v = g_w.view ? g_w.view(g_w.engine) : 0;
     return v ? g_w.peek32(g_w.engine, v + 0x64) : 0;
   }

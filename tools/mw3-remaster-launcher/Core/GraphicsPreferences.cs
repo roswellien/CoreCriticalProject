@@ -5,12 +5,12 @@ public sealed record GraphicsPreferences(int Width, int Height, string WindowMod
     string AntiAliasing, int AnisotropicFiltering, int DrawDistance,
     bool DynamicLighting, bool Shadows, bool Headlights = false,
     bool WaterDetail = true, bool CloudDetail = true, string FlareStyle = "modern",
-    string PomQuality = "off")
+    bool LoadCache = true, bool Vsync = false, string PomQuality = "off")
 {
     public static GraphicsPreferences From(LauncherSettings s) => new(s.Width, s.Height,
         s.WindowMode, s.AntiAliasing, s.AnisotropicFiltering, s.DrawDistance,
         s.DynamicLighting, s.Shadows, s.Headlights, s.WaterDetail, s.CloudDetail, s.FlareStyle,
-        s.PomQuality);
+        s.LoadCache, s.Vsync, s.PomQuality);
 
     public void Validate()
     {
@@ -41,5 +41,7 @@ public sealed record GraphicsPreferences(int Width, int Height, string WindowMod
         s.WaterDetail=WaterDetail; s.CloudDetail=CloudDetail;
         s.FlareStyle=FlareStyle;
         s.PomQuality=PomQuality;
+        s.LoadCache=LoadCache;
+        s.Vsync=Vsync;
     }
 }

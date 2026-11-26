@@ -17,6 +17,7 @@
 #include "gamez/zvideo/zvid_format.h"
 #include "mech3/app.h"
 #include "mech3/pilot.h"
+#include "mech3/spectator_seat.h"
 
 namespace mech3 {
 
@@ -31,6 +32,7 @@ States& states() {
 void reset_states() {
   delete g_states;
   g_states = new States;
+  set_launch_spectator(false);  // ours (#287): a spectator launch ends with its run
 }
 
 Engine& State::e() { return app().engine(); }
@@ -275,7 +277,10 @@ bool CoreState::enter() {
   if (a().lock_system_keys()) en.lock_system_keys(1);
   en.options_apply_all();
   const Handle pilot = en.pilot();
-  if (pilot == 0 || en.field32(pilot, 0x14) == 0) a().replace(a().state(2), 0);
+  // Ours (#287): a spectator's launch has no vehicle by design (the arena's
+  // seat), so only the pilot's absence sends it back to the menu.
+  const bool no_vehicle = pilot != 0 && en.field32(pilot, 0x14) == 0;
+  if (pilot == 0 || (no_vehicle && !launch_spectator())) a().replace(a().state(2), 0);
   paused_ = 0;
   en.set_screen_mode(en.in_game_vmode());
   pick_renderer();
@@ -368,6 +373,10 @@ void CoreState::start_mission() {
   }
   if (en.pixel_double() != 0) en.video_double(0, 0);
   en.nav_prebuild();  // ours (W58)
+  // Ours (#287): after the grid, so a bot's first step finds it; a 3D replay
+  // (#289) makes its puppets instead.
+  if (en.replay_on()) en.replay_start();
+  else en.arena_start();
   en.input_reset();
   elapsed_ = 0;
   en.debug_mark(" L e t s  P l a y ! ");
@@ -408,15 +417,20 @@ void CoreState::start_mission() {
 bool CoreState::frame() {
   Engine& en = e();
   elapsed_ = en.frame_dt() + elapsed_;
+  // Ours (#289): a 3D replay polls without the command callbacks, so no game
+  // command fires (replay_hooks.h).
+  const bool replay = en.replay_on();
   if (!paused_) {
-    en.input_poll(1);
+    en.input_poll(replay ? 0 : 1);
     if (!a().fullscreen() && (a().input_mode_ & 0xc) == 8) {
       int32_t x = 0, y = 0;
       en.cursor_pos(&x, &y);
       en.mouse_set_pos(x, y);
     }
   }
+  if (replay) en.replay_before_lists();  // the action lists on the replay's step
   en.lists_update();
+  if (replay) en.replay_after_lists();  // real time back; the replay's time, puppets and camera
   en.sound_update(0, 1);
   const Handle view = en.player_view();
   const Handle target = en.field32(view, 0x64);
@@ -448,6 +462,7 @@ bool CoreState::frame() {
 bool CoreState::update() {
   Engine& en = e();
   if (frame()) a().push(a().state(3), 0);
+  en.arena_tick();  // ours (#287): an arena match's end, after the frame's play
   if (en.vmode() != globals().last_vmode) {
     pick_renderer();
     globals().last_vmode = en.vmode();
@@ -485,6 +500,11 @@ void zoom_pass(Engine& en, Handle veh) {
   en.hud_zoom_pass(en.pilot_hud(en.field32(veh, 0x684)), en.frame_dt());
 }
 void world_tick(Engine& en) {
+  // Ours (#289): a 3D replay simulates nothing; only its camera runs.
+  if (en.replay_on()) {
+    en.camera_update();
+    return en.replay_camera();
+  }
   en.sensors_update();
   en.missions_update(0x6098d0, en.frame_dt());
   en.pilot_update(en.pilot(), en.frame_dt());
@@ -664,6 +684,7 @@ bool CoreState::draw_hardware(Handle veh, bool flag) {
   en.video_begin_3d();
   hud(en);
   hud_static(en, veh);
+  if (en.replay_on()) en.replay_draw();  // ours (#289): the replay's overlays and bar
   // FIX (A), playtest W44/W46: the quit box (the exe's update after the frame,
   // 0x00481e70) draws here, with the HUD's 2D, else nothing showed it.
   en.vcall(message_box_, 0x00, {zgame::bits(en.frame_dt())});

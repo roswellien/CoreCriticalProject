@@ -101,6 +101,7 @@ ALLOWED_EXACT_NAMES = frozenset(
         "Dockerfile",
         "LICENSE",
         "Makefile",
+        "tools/mw3-remaster-launcher/MW3RemasterLauncher.csproj",
     ]
 )
 FORBIDDEN_PREFIXES = (

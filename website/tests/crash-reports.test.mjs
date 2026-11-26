@@ -765,7 +765,69 @@ test("keeps the report archive inaccessible without a valid admin Access token",
         env: adminEnvironment,
     });
     assert.equal(tampered.status, 403);
-    assert.ok(!(await tampered.text()).includes("abcdef1234567890"));
+    const invalidTokenPage = await tampered.text();
+    assert.ok(!invalidTokenPage.includes("abcdef1234567890"));
+
+    const tamperedAgain = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": tamperedToken },
+        }),
+        env: { ...adminEnvironment, CRASH_REPORT_ADMIN_EMAIL: "other@example.com" },
+    });
+    assert.equal(tamperedAgain.status, tampered.status);
+    assert.equal(await tamperedAgain.text(), invalidTokenPage);
+});
+
+test("allows both configured archive admins and rejects a partial match", async () => {
+    const { privateKey, token } = await createAdminAccess();
+    const env = {
+        ...adminEnvironment,
+        CRASH_REPORT_ADMIN_EMAIL: " admin@example.com, SECOND@example.com, ",
+        CRASH_REPORT_DB: { prepare: () => ({ all: async () => ({ results: [] }) }) },
+    };
+
+    const response = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": token },
+        }),
+        env,
+    });
+    assert.equal(response.status, 200);
+
+    const secondToken = await makeAccessToken(privateKey, { email: "second@example.com" });
+    const secondResponse = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": secondToken },
+        }),
+        env,
+    });
+    assert.equal(secondResponse.status, 200);
+
+    const thirdToken = await makeAccessToken(privateKey, { email: "cond@example.com" });
+    const thirdResponse = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": thirdToken },
+        }),
+        env,
+    });
+    assert.equal(thirdResponse.status, 403);
+});
+
+test("rejects an archive admin allowlist containing only separators and whitespace", async () => {
+    const { token } = await createAdminAccess();
+    const env = {
+        ...adminEnvironment,
+        CRASH_REPORT_ADMIN_EMAIL: " , , ",
+        CRASH_REPORT_DB: { prepare: () => ({ all: async () => ({ results: [] }) }) },
+    };
+
+    const response = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports", {
+            headers: { "cf-access-jwt-assertion": token },
+        }),
+        env,
+    });
+    assert.equal(response.status, 503);
 });
 
 test("renders archived reports and log lines only for the configured admin", async () => {
@@ -821,4 +883,462 @@ test("renders archived reports and log lines only for the configured admin", asy
     assert.ok(detailHtml.includes("Recent log excerpts"));
     assert.ok(detailHtml.includes("first line\nsecond line &lt;script&gt;"));
     assert.ok(!detailHtml.includes("<script>"));
+});
+
+test("accepts signed int32 Windows exit codes, camelCase settings/packs, and native_crash/native_run logs", async () => {
+    const calls = githubResponder();
+    const sentBodies = recordSentBodies();
+    const response = await onRequestPost({
+        request: crashRequest({
+            exit_code: -1073741819,
+            launcher_version: "1.0.53-preview",
+            runtime_version: "mw3-re-2026.11 (abcdef123456)",
+            runtime_source_commit: "abcdef1234567890abcdef1234567890abcdef12",
+            os: "Windows 11 23H2 (OS Build 10.0.22631.4317)",
+            failure_summary:
+                "HOST EXCEPTION c0000005 at C:\\Games\\Core Critical\\NativePreview\\bin\\mw3.exe +0x45678 (access 0 address 0000000000000018)",
+            settings: {
+                engineMode: "remaster",
+                width: 2560,
+                height: 1440,
+                windowMode: "fullscreen_windowed",
+                antiAliasing: "fxaa",
+                anisotropicFiltering: 16,
+                drawDistance: 2400,
+                fogDistance: 1600,
+                localCdAudio: true,
+                instantReplay: false,
+                performanceMonitor: true,
+                renderThread: true,
+            },
+            packs: [
+                {
+                    id: "com.mw3remaster.updated-mw3-mechs",
+                    version: "1.4.0",
+                    schemaVersion: 2,
+                    isEnabled: true,
+                    priority: 1,
+                },
+            ],
+            logs: {
+                launcher: "Startup: Checking game files...",
+                native_run:
+                    "mw3: crash details, if any, are written to C:\\Users\\Jane Doe\\AppData\\Local\\MW3Remaster\\mw3-re\\profiles\\native-preview\\crash.txt\nmw3: window 2560x1440 on Vulkan\nC:\\Users\\Jane Doe\\secret\\notes.txt",
+                native_crash:
+                    "HOST EXCEPTION c0000005 at C:\\Games\\Core Critical\\NativePreview\\bin\\mw3.exe +0x45678 (access 0 address 0000000000000018)\nmw3: crashed: exception 0xc0000005 at 00007FF612345678 module base 00007FF612300000 RVA 0x45678\nmw3: access violation: read (0) target 0x0000000000000018\nmw3: minidump: C:\\Users\\Jane Doe\\AppData\\Local\\MW3Remaster\\mw3-re\\profiles\\native-preview\\crash.dmp\n",
+            },
+        }),
+        env: environment,
+    });
+
+    assert.equal(response.status, 200);
+    assert.ok(calls.some((query) => query.includes("createIssue")));
+    assert.equal(archivedReports.length, 1);
+    const archived = JSON.parse(archivedReports[0][7]);
+    assert.equal(archived.exit_code, -1073741819);
+    assert.equal(archived.settings.Width, 2560);
+    assert.equal(archived.settings.Height, 1440);
+    assert.equal(archived.settings.WindowMode, "fullscreen_windowed");
+    assert.equal(archived.settings.RenderThread, true);
+    assert.deepEqual(archived.packs, [
+        {
+            id: "com.mw3remaster.updated-mw3-mechs",
+            version: "1.4.0",
+            schema_version: 2,
+            enabled: true,
+            priority: 1,
+        },
+    ]);
+    assert.ok(
+        archived.failure_summary.includes(
+            "<local-path>/mw3.exe +0x45678 (access 0 address 0000000000000018)",
+        ),
+    );
+    assert.ok(archived.logs.native_crash.includes("RVA 0x45678"));
+    assert.ok(
+        archived.logs.native_crash.includes("access violation: read (0) target 0x0000000000000018"),
+    );
+    assert.ok(archived.logs.native_crash.includes("mw3: minidump: <local-path>"));
+    assert.ok(
+        archived.logs.native_run.includes(
+            "mw3: crash details, if any, are written to <local-path>",
+        ),
+    );
+    assert.ok(!JSON.stringify(archived).includes("Jane Doe"));
+    assert.ok(!JSON.stringify(archived).includes("Core Critical\\NativePreview"));
+
+    assert.equal(sentBodies.length, 1);
+    const crashHeadingIndex = sentBodies[0].indexOf("#### Native crash details (crash.txt)");
+    const runHeadingIndex = sentBodies[0].indexOf("#### Native run log (mw3.log)");
+    const launcherHeadingIndex = sentBodies[0].indexOf("#### Launcher log");
+    assert.ok(crashHeadingIndex >= 0 && runHeadingIndex > crashHeadingIndex);
+    assert.ok(launcherHeadingIndex > runHeadingIndex);
+});
+
+test("groups relocated native faults but distinguishes different relative addresses", async () => {
+    githubResponder();
+    const failures = [
+        "mw3: crashed: exception 0xc0000005 at 00007FF700005234 module base 00007FF700000000 RVA 0x5234 (access violation: write (1) target 0000000000000000)",
+        "mw3: crashed: exception 0xc0000005 at 00007FF600005234 module base 00007FF600000000 RVA 0x5234 (access violation: write (1) target 0000000000000010)",
+        "mw3: crashed: exception 0xc0000005 at 00007FF600005678 module base 00007FF600000000 RVA 0x5678 (access violation: write (1) target 0000000000000010)",
+    ];
+    for (const failure_summary of failures) {
+        const response = await onRequestPost({
+            request: crashRequest({ failure_summary }),
+            env: environment,
+        });
+        assert.equal(response.status, 200);
+    }
+    const fingerprints = archivedReports.map((report) => report[6]);
+    assert.ok(fingerprints[0]);
+    assert.equal(fingerprints[0], fingerprints[1]);
+    assert.notEqual(fingerprints[0], fingerprints[2]);
+});
+
+test("keeps 'No specific failure was recorded.' ungrouped", async () => {
+    const calls = githubResponder();
+    const response = await onRequestPost({
+        request: crashRequest({
+            exit_code: -1073741819,
+            failure_summary: "No specific failure was recorded.",
+        }),
+        env: environment,
+    });
+    assert.equal(response.status, 200);
+    assert.ok(!calls.some((query) => query.includes("matched: search")));
+    assert.ok(calls.some((query) => query.includes("createIssue")));
+    assert.equal(archivedReports.length, 1);
+    assert.equal(archivedReports[0][6], null);
+});
+
+test("renders structured semantic admin detail sections for rich and sparse reports with escaped HTML", async () => {
+    const { token } = await createAdminAccess();
+    const richReport = {
+        format_version: 1,
+        report_id: "report-rich-5678",
+        created_utc: "2026-11-23T12:00:00Z",
+        launcher_version: "1.0.53-preview",
+        runtime_version: "mw3-re-2026.11 (abcdef123456)",
+        mode: "remaster",
+        exit_code: -1073741819,
+        os: "Windows 11 23H2 (OS Build 10.0.22631.4317)",
+        architecture: "X64",
+        dotnet_runtime: ".NET 8.0.10",
+        failure_summary:
+            "mw3: crashed: exception 0xc0000005 RVA 0x45678 <img src=x onerror=alert(1)>",
+        hardware: {
+            Processors: [
+                {
+                    Manufacturer: "AMD",
+                    Model: "Ryzen 7 7800X3D",
+                    PhysicalCores: 8,
+                    LogicalProcessors: 16,
+                },
+            ],
+            Memory: {
+                TotalBytes: 34359738368,
+                Modules: [
+                    {
+                        CapacityBytes: 17179869184,
+                        Type: "DDR5",
+                        ConfiguredSpeedMhz: 6000,
+                    },
+                ],
+            },
+            GraphicsAdapters: [
+                {
+                    Name: "NVIDIA GeForce RTX 4080",
+                    DedicatedVideoMemoryBytes: 17179869184,
+                    SharedSystemMemoryBytes: 17179869184,
+                    DriverVersion: "32.0.15.6094",
+                    DriverDate: "2026-08-14T00:00:00Z",
+                },
+            ],
+        },
+        settings: {
+            Width: 2560,
+            Height: 1440,
+            WindowMode: "fullscreen_windowed",
+            AntiAliasing: "fxaa",
+            AnisotropicFiltering: 16,
+            DrawDistance: 2400,
+            RenderThread: true,
+        },
+        packs: [
+            {
+                id: "com.mw3remaster.updated-mw3-mechs",
+                version: "1.4.0",
+                schema_version: 2,
+                enabled: true,
+                priority: 1,
+            },
+        ],
+        logs: {
+            launcher: "Launcher log line",
+            native_run: "mw3: run log line",
+            native_crash: "mw3: crashed: exception 0xc0000005 RVA 0x45678",
+        },
+    };
+    const richRow = {
+        report_id: richReport.report_id,
+        created_utc: richReport.created_utc,
+        stored_utc: "2026-11-23T12:00:05Z",
+        mode: richReport.mode,
+        exit_code: richReport.exit_code,
+        failure_summary: richReport.failure_summary,
+        crash_fingerprint: "cafebabe1234",
+        report_json: JSON.stringify(richReport),
+    };
+    const adminDb = {
+        prepare() {
+            return {
+                all: async () => ({ results: [richRow] }),
+                bind: () => ({ first: async () => richRow }),
+            };
+        },
+    };
+
+    const detail = await getAdminCrashReports({
+        request: new Request("https://corecritical.dev/admin/crash-reports?id=report-rich-5678", {
+            headers: { "cf-access-jwt-assertion": token },
+        }),
+        env: { ...adminEnvironment, CRASH_REPORT_DB: adminDb },
+    });
+    assert.equal(detail.status, 200);
+    const html = await detail.text();
+    assert.ok(html.includes("-1073741819 (0xC0000005)"));
+    assert.ok(html.includes("1.0.53-preview"));
+    assert.ok(html.includes("mw3-re-2026.11 (abcdef123456)"));
+    assert.ok(html.includes("Windows 11 23H2 (OS Build 10.0.22631.4317)"));
+    assert.ok(html.includes("Ryzen 7 7800X3D"));
+    assert.ok(html.includes("8 physical cores, 16 logical processors"));
+    assert.ok(html.includes("32 GiB total"));
+    assert.ok(html.includes("16 GiB · DDR5 @ 6000 MHz"));
+    assert.ok(html.includes("NVIDIA GeForce RTX 4080"));
+    assert.ok(html.includes("VRAM: 16 GiB"));
+    assert.ok(html.includes("2560 × 1440"));
+    assert.ok(html.includes("Render thread"));
+    assert.ok(html.includes("com.mw3remaster.updated-mw3-mechs"));
+    assert.ok(html.includes("Enabled"));
+    assert.ok(
+        html.indexOf("Native crash details (crash.txt)") < html.indexOf("Native run log (mw3.log)"),
+    );
+    assert.ok(
+        html.includes(
+            '<details class="pane" open><summary>Native crash details (crash.txt)</summary>',
+        ),
+    );
+    assert.ok(html.includes("Raw report metadata (JSON)"));
+    assert.ok(!html.includes("<img src=x"));
+    assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt;"));
+});
+
+test("preserves trailing error text after single-quoted Process.Start paths and groups duplicates", async () => {
+    const calls = githubResponder();
+    const sentBodies = recordSentBodies();
+    const firstSummary =
+        "ERROR: An error occurred trying to start process 'C:\\Games\\Core Critical\\Launcher\\NativePreview\\bin\\mw3.exe' with working directory 'C:\\Games\\Core Critical\\Launcher\\NativePreview\\bin'. An Application Control policy has blocked this file.";
+    const firstResponse = await onRequestPost({
+        request: crashRequest({
+            report_id: "smartapp0001",
+            failure_summary: firstSummary,
+            logs: {
+                launcher: `${firstSummary}\n'\\\\nas01\\users\\Jane Doe\\mw3.exe' was blocked by policy.`,
+                native_crash:
+                    "HOST EXCEPTION c0000005 at C:\\Games\\Core Critical\\mw3.exe +0x45678 (access 0 address 0000000000000018)\nERROR: Process 'C:\\Games\\Core Critical\\mw3.exe' blocked.",
+            },
+        }),
+        env: environment,
+    });
+    assert.equal(firstResponse.status, 200);
+    assert.equal(archivedReports.length, 1);
+    const archived = JSON.parse(archivedReports[0][7]);
+    const expectedSummary =
+        "ERROR: An error occurred trying to start process '<local-path>' with working directory '<local-path>'. An Application Control policy has blocked this file.";
+    assert.equal(archived.failure_summary, expectedSummary);
+    assert.equal(
+        archived.logs.launcher,
+        `${expectedSummary}\n'<network-path>' was blocked by policy.`,
+    );
+    assert.equal(
+        archived.logs.native_crash,
+        "HOST EXCEPTION c0000005 at <local-path>/mw3.exe +0x45678 (access 0 address 0000000000000018)\nERROR: Process '<local-path>' blocked.",
+    );
+    assert.ok(!JSON.stringify(archived).includes("Core Critical"));
+    assert.ok(!JSON.stringify(archived).includes("Jane Doe"));
+    assert.ok(sentBodies[0].includes(expectedSummary));
+
+    const firstFingerprint = archivedReports[0][6];
+    assert.ok(firstFingerprint);
+    const duplicateCalls = githubResponder({
+        matches: [
+            {
+                id: "I_existing",
+                state: "OPEN",
+                body: `<!-- crash-fingerprint:${firstFingerprint} -->`,
+                comments: { totalCount: 0 },
+            },
+        ],
+    });
+    const secondResponse = await onRequestPost({
+        request: crashRequest({
+            report_id: "smartapp0002",
+            failure_summary:
+                "ERROR: An error occurred trying to start process 'D:\\Other Games\\MW3\\NativePreview\\bin\\mw3.exe' with working directory 'D:\\Other Games\\MW3\\NativePreview\\bin'. An Application Control policy has blocked this file.",
+            logs: { launcher: "retry" },
+        }),
+        env: environment,
+    });
+    assert.equal(secondResponse.status, 200);
+    assert.deepEqual(await secondResponse.json(), {
+        report_id: "smartapp",
+        duplicate: true,
+        overflow: false,
+    });
+    assert.equal(archivedReports[1][6], firstFingerprint);
+    assert.ok(calls.some((query) => query.includes("createIssue")));
+    assert.ok(duplicateCalls.some((query) => query.includes("addComment")));
+    assert.ok(!duplicateCalls.some((query) => query.includes("createIssue")));
+});
+
+test("preserves internal apostrophes, mixed separators, delimiters, and prose boundaries in single-quoted paths", async () => {
+    const cases = [
+        [
+            "Apostrophe followed by letter or space",
+            "ERROR: Failed to start 'C:\\Users\\O'Connor\\Players' Choice\\Bob's Mods\\mw3.exe' in 'D:\\Games\\Players' Choice'. Access is denied.",
+            "ERROR: Failed to start '<local-path>' in '<local-path>'. Access is denied.",
+        ],
+        [
+            "Apostrophe followed by punctuation inside filename",
+            "ERROR: Failed to open 'C:\\Users\\v1'.txt' because locked.",
+            "ERROR: Failed to open '<local-path>' because locked.",
+        ],
+        [
+            "Single-quoted UNC with apostrophe and space",
+            "'\\\\nas01\\users\\Players' Choice\\mw3.exe' in '\\\\nas01\\users\\Players' Choice' was blocked.",
+            "'<network-path>' in '<network-path>' was blocked.",
+        ],
+        [
+            "Mixed-separator single-quoted paths with apostrophe and space",
+            "Failed 'D:\\Users\\Players' Choice/mw3.exe' in 'D:\\Users\\Players' Choice/NativePreview/bin' and 'D:/Users/Players' Choice\\bin'.",
+            "Failed '<local-path>' in '<local-path>' and '<local-path>'.",
+        ],
+        [
+            "Contractions, prose slashes, and other single-quoted strings",
+            "ERROR: 'C:\\Games\\a.exe' can't start; 'C:\\Games\\b.exe' failed/errored because users' policy ('reason') blocked it.",
+            "ERROR: '<local-path>' can't start; '<local-path>' failed/errored because users' policy ('reason') blocked it.",
+        ],
+        [
+            "Prose slashes before possessive plurals",
+            "ERROR: 'C:\\Games\\b.exe' read/users' policy and 'C:\\Games\\c.exe' read/write/execute because users' policy blocked it.",
+            "ERROR: '<local-path>' read/users' policy and '<local-path>' read/write/execute because users' policy blocked it.",
+        ],
+        [
+            "Colon and possessive name after quoted path",
+            "ERROR: 'C:\\Games\\a.exe' failed: James' policy blocked it.",
+            "ERROR: '<local-path>' failed: James' policy blocked it.",
+        ],
+        [
+            "Common wrapping delimiters",
+            "('C:\\a\\1.exe') ['C:\\b\\2.exe','C:\\c\\3.exe'] path='C:\\d\\4.exe',dir='\\\\nas01\\s'; {\"exe\":\"'C:\\e\\5.exe'\"} \"'C:\\f\\6.exe' blocked\" `'C:\\g\\7.exe'`",
+            "('<local-path>') ['<local-path>','<local-path>'] path='<local-path>',dir='<network-path>'; {\"exe\":\"'<local-path>'\"} \"'<local-path>' blocked\" `'<local-path>'`",
+        ],
+        [
+            "Multi-line single-quoted paths",
+            "Launcher log:\n'C:\\Games\\Core Critical\\mw3.exe' was blocked.\r\n'\\\\nas01\\share\\Jane Doe\\mw3.exe' was blocked.",
+            "Launcher log:\n'<local-path>' was blocked.\r\n'<network-path>' was blocked.",
+        ],
+        [
+            "Unclosed single-quoted paths do not leak",
+            "ERROR: Could not open 'C:\\Users\\Alice\\secret.txt\nUnclosed 'C:\\Users\\Alice\\secret and \"quoted\" 'C:\\Users\\Bob\\other.exe' failed.",
+            "ERROR: Could not open '<local-path>\nUnclosed '<local-path>\"quoted\" '<local-path>' failed.",
+        ],
+        [
+            "Double-quoted path containing apostrophe and space",
+            '"C:\\Users\\James\' Folder\\mw3.exe" was blocked.',
+            '"<local-path>" was blocked.',
+        ],
+        [
+            "Extended Win32 single-quoted path containing drive colon",
+            "ERROR: Failed to open '\\\\?\\C:\\Users\\Alice\\mw3.exe' because access is denied.",
+            "ERROR: Failed to open '<network-path>' because access is denied.",
+        ],
+        [
+            "Unclosed single-quoted path before colon and closed path",
+            "ERROR: Unclosed 'C:\\Users\\Alice\\secret failed: 'D:\\Users\\Bob\\mw3.exe' done.",
+            "ERROR: Unclosed '<local-path>' done.",
+        ],
+        [
+            "Apostrophe continuation spanning past 4096-char limit of an earlier unclosed quote",
+            `ERROR: '\\\\nas01\\share ${"a".repeat(4070)} '\\\\nas02\\O' Connor\\mw3.exe' done.`,
+            "ERROR: '<network-path>' done.",
+        ],
+    ];
+
+    githubResponder();
+    for (let index = 0; index < cases.length; index++) {
+        const [name, input, expected] = cases[index];
+        const response = await onRequestPost({
+            request: crashRequest({
+                report_id: `redact-case-${index}`,
+                logs: { launcher: input },
+            }),
+            env: environment,
+        });
+        assert.equal(response.status, 200, name);
+        const archived = JSON.parse(archivedReports[index][7]);
+        assert.equal(archived.logs.launcher, expected, name);
+    }
+});
+
+test("bounds scanning time on adversarial repeated unclosed single-quoted paths while redacting later paths", async () => {
+    githubResponder();
+    const driveNoise = " 'C:\\Users\\Alice ".repeat(1500);
+    const uncNoise = " '\\\\nas01\\secret\\share ".repeat(1200);
+    const longSingleLine = `${driveNoise}\n${uncNoise}\n'C:\\Games\\mw3.exe' failed: James' policy 'D:\\Users\\O'Connor\\log.txt' done.`;
+    assert.ok(longSingleLine.length < 64 * 1024);
+
+    const started = performance.now();
+    const response = await onRequestPost({
+        request: crashRequest({
+            report_id: "adversarial-bounded-1",
+            logs: { launcher: longSingleLine },
+        }),
+        env: environment,
+    });
+    const elapsedMs = performance.now() - started;
+
+    assert.equal(response.status, 200);
+    assert.ok(elapsedMs < 1000, `Expected bounded redaction under 1000ms, got ${elapsedMs}ms`);
+    const archived = JSON.parse(archivedReports[0][7]);
+    assert.ok(!archived.logs.launcher.includes("Alice"));
+    assert.ok(!archived.logs.launcher.includes("nas01"));
+    assert.ok(!archived.logs.launcher.includes("O'Connor"));
+    assert.ok(
+        archived.logs.launcher.endsWith(
+            "'<local-path>' failed: James' policy '<local-path>' done.",
+        ),
+    );
+
+    const colonUncChunk = `${" '\\\\".repeat(1020)}:`;
+    const colonUncLog = `${colonUncChunk.repeat(16)}\n'\\\\nas01\\secret\\mw3.exe' failed.`;
+    assert.ok(colonUncLog.length <= 64 * 1024);
+    const colonStarted = performance.now();
+    const colonResponse = await onRequestPost({
+        request: crashRequest({
+            report_id: "adversarial-bounded-2",
+            logs: { launcher: colonUncLog, native_crash: colonUncLog },
+        }),
+        env: environment,
+    });
+    const colonElapsedMs = performance.now() - colonStarted;
+
+    assert.equal(colonResponse.status, 200);
+    assert.ok(
+        colonElapsedMs < 150,
+        `Expected colon-terminated UNC redaction under 150ms, got ${colonElapsedMs}ms`,
+    );
+    const colonArchived = JSON.parse(archivedReports[1][7]);
+    assert.ok(!colonArchived.logs.launcher.includes("nas01"));
+    assert.ok(colonArchived.logs.launcher.endsWith("'<network-path>' failed."));
 });

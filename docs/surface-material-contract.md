@@ -29,7 +29,7 @@ land.
   to `0.0` for metal, armor, and concrete.
 - **No global names or filesystem paths inside binary sidecars:** Distributable
   `BWSFM1` payloads contain only bounded logical identifiers (`asset_id`,
-  `material_name`, `image_name`) and raw linear RGBA8 pixel bytes. Any
+  `material_name`, `image_name`) and raw linear scalar pixel bytes. Any
   identifier containing NUL bytes, path separators (`/` or `\`), `..`, drive
   colons, or control characters is rejected.
 
@@ -78,7 +78,7 @@ All multi-byte integers and IEEE-754 `binary32` floats are little-endian.
 | Offset | Type | Field | Constraints |
 | --- | --- | --- | --- |
 | `0` | `char[8]` | `magic` | Exact bytes `"BWSFM1\0\0"` |
-| `8` | `uint32` | `version` | Must be `1` |
+| `8` | `uint32` | `version` | `1` = legacy RGBA8; `2` = grayscale scalar |
 | `12` | `uint32` | `batch_count` | `1..4096`; must match mesh/albedo batch count |
 | `16` | `uint32` | `record_count` | `0..4096` |
 | `20` | `uint32` | `image_count` | `0..2048` |
@@ -119,21 +119,22 @@ fixed numeric payload:
 
 ### 4. Image table (`image_count` entries)
 
-Images carry linear RGBA8 pixels where the **red channel (`R`)** stores the
-declared scalar quantity (`height` or `thickness` in `[0, 255]` mapped linearly
-to `[0.0, 1.0]`). Green, blue, and alpha channels are preserved verbatim without
-colour conversion. Image entries must appear in strictly ascending UTF-8 `name`
-byte order with no duplicate names.
+Version 2 images store one linear grayscale byte per texel for the declared
+scalar quantity (`height` or `thickness`, mapped linearly from `[0, 255]` to
+`[0.0, 1.0]`). Version 1 remains readable and stores the same scalar in the red
+channel of each RGBA8 texel; its other channels are ignored after the original
+RGBA payload hash is verified. The current writer emits version 2. Image entries
+must appear in strictly ascending UTF-8 `name` byte order with no duplicate names.
 
 | Field | Type | Constraints & Semantics |
 | --- | --- | --- |
 | `name_len` | `uint32` | `1..4096` |
 | `name` | `uint8[name_len]` | Unique safe identifier (`[A-Za-z0-9_.:-]`) |
-| `role` | `uint32` | `1` = linear red-channel height, `2` = linear red-channel thickness |
+| `role` | `uint32` | `1` = height, `2` = thickness |
 | `width` | `uint32` | `1..4096` |
 | `height` | `uint32` | `1..4096` |
-| `hash` | `uint64` | 64-bit FNV-1a digest over all `width * height * 4` pixel bytes |
-| `pixels` | `uint8[width * height * 4]` | Raw linear RGBA8 bytes |
+| `hash` | `uint64` | FNV-1a over stored pixel bytes: `width * height * 4` for v1, `width * height` for v2 |
+| `pixels` | `uint8[width * height]` in v2 | Raw grayscale scalar bytes; v1 stores four bytes per texel |
 
 Every `height_image` index referenced by a record must point to an image with
 `role == 1` (`HEIGHT`), and every `thickness_image` index must point to an image
@@ -145,10 +146,11 @@ with `role == 2` (`THICKNESS`).
 - Maximum batch bindings per sidecar: `4096`
 - Maximum images per sidecar: `2048`
 - Maximum UTF-8 bytes per identifier: `4096`
-- Maximum total sidecar size and decoded image byte budget per sidecar:
-  `256 MiB` (`268,435,456` bytes). Both the Python and C++ readers check all
-  length products (`width * height * 4` and cumulative bytes) before allocating
-  buffers.
+- Maximum total sidecar size and decoded scalar-image byte budget per sidecar:
+  `512 MiB` (`536,870,912` bytes). Both the Python and C++ readers check all
+  version-dependent length products and cumulative bytes before allocating
+  buffers. Legacy v1 files remain subject to the same total file-size cap while
+  their retained runtime image data is normalized to one byte per texel.
 - Truncated streams, trailing bytes after the last image, duplicate `(asset_id,
   material_name)` records, unsorted records, duplicate image names, hash
   mismatches, or out-of-range parameters fail immediately with a visible error.

@@ -37,13 +37,16 @@
 #include "geometry/resource.hpp"
 #include "launcher_display.hpp"
 #include "light_cull_tiled_comp.h"
+#include "menu_ripple_frag.h"
 #include "model_scene_vert.h"
 #include "native_geometry_vert.h"
 #include "native_texture_identity.hpp"
 #include "platform/vk_loader.hpp"
 #include "platform/wsi_surface.hpp"
 #include "platform/wsi_win32_dxgi.hpp"
+#include "preload_budget.hpp"
 #include "renderer_bridge_config.hpp"
+#include "resource_timing.hpp"
 #include "status_model_fit.hpp"
 #include "sun_lighting.hpp"
 #include "sun_model_vert.h"
@@ -60,6 +63,8 @@
 #include "world_scene_vert.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -68,11 +73,14 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <new>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 #include <vulkan/vulkan_core.h>
@@ -92,6 +100,12 @@
 #endif
 
 namespace mw34::vkscene {
+struct MenuRipplePass {
+    float center_u{}, center_v{}, scale_u{}, scale_v{};
+    float inner{}, outer{}, amplitude{}, wavelength{}, phase{};
+    bool has_clip{};
+    float clip_u0{}, clip_v0{}, clip_u1{}, clip_v1{};
+};
 // rgba8888: host-composed straight-alpha RGBA (GPU HUD images: RGB565 colour
 // with the image's alpha mask or colour key), carried in pixels32 (R, G, B, A
 // bytes in memory order).
@@ -145,6 +159,8 @@ struct ModelGeometry {
 struct ModelInstance {
   std::shared_ptr<const ModelGeometry> geometry;
   std::array<float, 12> camera{};
+  std::array<float, 12> world_to_camera{};
+  bool has_world_to_camera{};
   std::array<float, 6> projection{};
   std::uint32_t color{};
   float diagnostic_fog_factor{1.f};
@@ -295,10 +311,13 @@ public:
                     mw34::sun::Settings lighting = {},
                     bool native_geometry = false,
                     cc_mw3_re::RendererBridgeConfig config = {})
-      : require_rgba8(color_target == ColorTarget::rgba8),
+      : use_native_geometry(native_geometry),
+        profile_cpu(config.cpu_profile || sdlfe::cpu_profile_requested()),
+        profile_gpu(config.gpu_profile),
+        require_rgba8(color_target == ColorTarget::rgba8),
         surface_source(std::move(source)), quality_settings(quality),
         use_gpu_models(models), lighting_settings(lighting),
-        use_native_geometry(native_geometry), bridge_config(std::move(config)),
+        bridge_config(std::move(config)),
         effects_settings(mw34::effects::settings(
             bridge_config, lighting_settings.enabled)) {
     if (surface_source.create) {
@@ -357,6 +376,8 @@ public:
                , sdlfe::EditorUi *editor = nullptr
 #endif
                ) {
+    mw34::timing::PresentBoundaryScope<mw34::timing::GpuResourceTiming>
+        gpu_timing_scope(gpu_resource_timing_);
 #if defined(_WIN32)
     const bool requested_editor = editor_requested(editor);
     try {
@@ -649,6 +670,8 @@ public:
                         , sdlfe::EditorUi *editor = nullptr
 #endif
                         ) {
+    mw34::timing::PresentBoundaryScope<mw34::timing::GpuResourceTiming>
+        gpu_timing_scope(gpu_resource_timing_);
 #if defined(_WIN32)
     const bool requested_editor = editor_requested(editor);
     try {
@@ -1158,7 +1181,7 @@ public:
     check(f.vkQueueSubmit(queue, 1, &si, fence), "submit quality");
     scene_pending = true;
   }
-  std::uint64_t fxaa_passes{}, af_samplers{}, mip_levels_uploaded{};
+  std::uint64_t fxaa_passes{}, af_samplers{}, mip_levels_uploaded{}, menu_ripple_passes{};
   void prepare_canvas_textures(const std::vector<TextureRef> &references) {
       // No commands reference these allocations yet. Settle earlier GPU work
       // before resizing shared staging storage or replacing an image.
@@ -1174,7 +1197,7 @@ public:
           if (buffer.buffer)
               f.vkDestroyBuffer(device, buffer.buffer, nullptr);
           if (buffer.memory)
-              f.vkFreeMemory(device, buffer.memory, nullptr);
+              release_memory(device, buffer.memory, nullptr);
           buffer = {};
       };
       try {
@@ -1241,6 +1264,11 @@ public:
   std::uint64_t retired_model_buffers{};
   std::uint64_t model_uploads{}, model_uploaded_bytes{}, model_draws{},
       world_gpu_draws{}, effect_light_peak{}, fixture_light_peak{};
+  // The last rendered scene's tiled-light bookkeeping (checks): views registered for
+  // tiled lists, draws shaded by every effect light (overflow or unusable view), and
+  // each draw's mode (0 no effect lights, 1 its tiled view, 2 every effect light).
+  std::uint64_t tiled_views_last{}, tiled_all_light_draws_last{};
+  std::vector<std::uint8_t> tiled_draw_modes_last;
   std::uint64_t normal_draws{};
   std::uint64_t height_uploads{}, height_uploaded_bytes{}, height_cache_hits{},
       height_retired_images{}, height_draws{};
@@ -1273,9 +1301,9 @@ public:
   // resources, so the game computes the next scene while the GPU renders this
   // one.
   bool scene_pending{};
-  const bool profile_cpu =
-      bridge_config.cpu_profile || sdlfe::cpu_profile_requested();
-  const bool profile_gpu = bridge_config.gpu_profile;
+  const bool profile_cpu;
+  const bool profile_gpu;
+  mw34::timing::GpuResourceTiming gpu_resource_timing_{};
   VkQueryPool profile_queries{};
   bool profile_queries_pending{};
   unsigned profile_timestamp_bits{};
@@ -1302,18 +1330,293 @@ public:
     if (!scene_pending)
       return;
     sdlfe::CpuInterval interval(profile_cpu ? &profile_wait_ticks : nullptr);
-    check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL),
-          "wait previous scene");
+    {
+      mw34::timing::ScopedDuration wait_timer(
+          preload_batch_inflight_ && gpu_resource_timing_.enabled
+              ? &preload_wait_nanoseconds_
+              : nullptr);
+      check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL),
+            "wait previous scene");
+    }
     collect_profile_queries();
     scene_pending = false;
+    if (preload_batch_inflight_)
+      complete_preload_batch();
   }
+    // Finish immutable uploads during loading so first-visible draws reuse the cache.
+    bool preload_model_geometry(const ModelGeometry &geometry) {
+        require_preload();
+        mw34::timing::ScopedDuration geometry_timer(
+            gpu_resource_timing_.enabled ? &preload_geometry_nanoseconds_ : nullptr);
+        if (preload_stopped_)
+            return false;
+        const auto existing = model_buffers.find(geometry.key);
+        if (existing != model_buffers.end() &&
+            (existing->second.uploaded || pending_model(geometry.key))) {
+            model_buffer(geometry); // Keep immutable identity validation.
+            return true;
+        }
+        const VkDeviceSize bytes = geometry.vertices.size() * sizeof(ModelVertex) +
+                                   geometry.indices.size() * sizeof(std::uint32_t);
+        if (!admit_preload_bytes(bytes))
+            return false;
+        try {
+            if (pending_preload_models_.size() == pending_preload_models_.capacity())
+                pending_preload_models_.reserve(
+                    std::max<std::size_t>(16, pending_preload_models_.size() * 2));
+            auto &buffer = model_buffer(geometry, true);
+            ensure(texUpload, preload_batch_cap_, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
+            auto *destination = static_cast<unsigned char *>(texUpload.mapped) + preload_texture_bytes_;
+            std::memcpy(destination, geometry.vertices.data(), size_t(buffer.local.size));
+            if (buffer.indices.buffer)
+                std::memcpy(destination + buffer.local.size, geometry.indices.data(),
+                            size_t(buffer.indices.size));
+            pending_preload_models_.push_back(geometry.key);
+            begin_preload_batch();
+            VkBufferCopy vertex_copy{preload_texture_bytes_, 0, buffer.local.size};
+            f.vkCmdCopyBuffer(cmd, texUpload.buffer, buffer.local.buffer,
+                             1, &vertex_copy);
+            if (buffer.indices.buffer) {
+                VkBufferCopy index_copy{preload_texture_bytes_ + buffer.local.size, 0,
+                                        buffer.indices.size};
+                f.vkCmdCopyBuffer(cmd, texUpload.buffer,
+                                 buffer.indices.buffer, 1, &index_copy);
+            }
+            VkMemoryBarrier memory_barrier{};
+            memory_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            memory_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            memory_barrier.dstAccessMask =
+                VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT;
+            f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                  VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1,
+                                  &memory_barrier, 0, nullptr, 0, nullptr);
+            preload_texture_bytes_ += bytes;
+            account_preload_bytes(bytes);
+            return true;
+        } catch (const PreloadBudgetFailure &) {
+            discard_model_buffer(geometry.key);
+            stop_preload(VK_SUCCESS);
+        } catch (const PreloadAllocationFailure &failure) {
+            discard_model_buffer(geometry.key);
+            stop_preload(failure.result);
+        } catch (const std::bad_alloc &) {
+            pending_preload_models_.erase(
+                std::remove(pending_preload_models_.begin(), pending_preload_models_.end(),
+                            geometry.key), pending_preload_models_.end());
+            discard_model_buffer(geometry.key);
+            stop_preload(VK_ERROR_OUT_OF_HOST_MEMORY);
+        }
+        return false;
+    }
+
+    // Warmup a single texture on the GPU before interactive gameplay without
+    // modifying render targets, camera history, or draw state.
+    bool preload_texture(const TextureRef &texture_ref) {
+        require_preload();
+        if (preload_stopped_)
+            return false;
+        if (!texture_ref.width || !texture_ref.height)
+            throw std::runtime_error(
+                "Vulkan scene renderer: preload texture requires nonzero dimensions");
+        for (const auto &pending : pending_preload_textures_) {
+            if (pending.key != texture_ref.key)
+                continue;
+            if (pending.hash == texture_ref.hash && pending.width == texture_ref.width &&
+                pending.height == texture_ref.height)
+                return true;
+            // A second version must not overwrite an image referenced by this batch.
+            flush_preload();
+            break;
+        }
+        if (texture_completed(texture_ref.key, texture_ref.hash,
+                              texture_ref.width, texture_ref.height))
+            return true;
+        const VkDeviceSize texture_bytes =
+            VkDeviceSize(texture_ref.width) * texture_ref.height * 4;
+        if (!admit_preload_bytes(texture_bytes))
+            return false;
+        try {
+            if (pending_preload_textures_.size() == pending_preload_textures_.capacity())
+                pending_preload_textures_.reserve(
+                    std::max<std::size_t>(16, pending_preload_textures_.size() * 2));
+            auto &cached_texture = textures[texture_ref.key];
+            const bool needs_image_allocation = !cached_texture.image ||
+                                                cached_texture.width != texture_ref.width ||
+                                                cached_texture.height != texture_ref.height;
+            const bool needs_upload = needs_image_allocation ||
+                                      cached_texture.hash != texture_ref.hash ||
+                                      !cached_texture.valid;
+            if (!needs_upload)
+                return true;
+
+            std::uint64_t next_source_rgb565_hash = 0;
+            std::uint64_t next_source_rgba8_hash = 0;
+            {
+                mw34::timing::ScopedDuration texture_allocation_timer(
+                    gpu_resource_timing_.texture_upload_target());
+                const std::size_t expected_pixel_count =
+                    std::size_t(texture_ref.width) * texture_ref.height;
+                if (texture_ref.format == TexFormat::rgba8888) {
+                    if (texture_ref.pixels32.size() != expected_pixel_count)
+                        throw std::runtime_error(
+                            "Vulkan scene renderer: changed texture without pixels");
+                } else if (texture_ref.format == TexFormat::rgb565 ||
+                           texture_ref.format == TexFormat::argb1555 ||
+                           texture_ref.format == TexFormat::argb4444) {
+                    if (texture_ref.pixels.size() != expected_pixel_count)
+                        throw std::runtime_error(
+                            "Vulkan scene renderer: changed texture without pixels");
+                } else {
+                    throw std::runtime_error(
+                        "Vulkan scene renderer: unsupported preload texture format");
+                }
+                mw34::timing::ScopedDuration hash_timer(
+                    gpu_resource_timing_.enabled ? &preload_hash_nanoseconds_ : nullptr);
+                if (bridge_config.parallax_materials) {
+                    if (texture_ref.format == TexFormat::rgba8888) {
+                        const auto *pixels = reinterpret_cast<const unsigned char *>(
+                            texture_ref.pixels32.data());
+                        next_source_rgb565_hash =
+                            mw34::materials::canonical_upload_key(
+                                texture_ref.width, texture_ref.height, pixels, 1)
+                                .hash;
+                        next_source_rgba8_hash = mw34::materials::normal_hash(
+                            pixels, texture_ref.pixels32.size() * 4);
+                    } else if (texture_ref.format == TexFormat::rgb565) {
+                        next_source_rgb565_hash = mw34::materials::normal_hash(
+                            texture_ref.pixels.data(), texture_ref.pixels.size() * 2);
+                    }
+                }
+            }
+            {
+                mw34::timing::ScopedDuration texture_allocation_timer(
+                    gpu_resource_timing_.texture_upload_target());
+                mw34::timing::ScopedDuration allocation_timer(
+                    gpu_resource_timing_.enabled ? &preload_image_nanoseconds_ : nullptr);
+                if (cached_texture.image && needs_image_allocation)
+                    destroy(cached_texture);
+                if (!cached_texture.image)
+                    create(cached_texture, texture_ref.width, texture_ref.height);
+            }
+
+            {
+                mw34::timing::ScopedDuration texture_staging_timer(
+                    gpu_resource_timing_.texture_upload_target());
+                mw34::timing::ScopedDuration staging_timer(
+                    gpu_resource_timing_.enabled ? &preload_staging_nanoseconds_ : nullptr);
+                // Allocate once, then reuse disjoint slices until the batch fence completes.
+                ensure(texUpload, preload_batch_cap_, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
+                auto *staging_destination =
+                    static_cast<unsigned char *>(texUpload.mapped) + preload_texture_bytes_;
+                if (texture_ref.format == TexFormat::rgba8888) {
+                    std::memcpy(staging_destination, texture_ref.pixels32.data(),
+                                texture_ref.pixels32.size() * 4);
+                } else {
+                    const bool staged = !bridge_config.texture_staging.empty() &&
+                                        bridge_config.texture_staging != "0";
+                    if (staged) {
+                        const unsigned format =
+                            texture_ref.format == TexFormat::rgb565     ? 0
+                            : texture_ref.format == TexFormat::argb1555 ? 1
+                                                                        : 2;
+                        mw34::texture_staging::copy(staging_destination,
+                                                    texture_ref.pixels.data(),
+                                                    texture_ref.pixels.size(), format);
+                    } else {
+                        for (std::size_t i = 0; i < texture_ref.pixels.size(); ++i) {
+                            const unsigned pixel = texture_ref.pixels[i];
+                            std::uint32_t red, green, blue, alpha;
+                            if (texture_ref.format == TexFormat::rgb565) {
+                                red = ((pixel >> 11) & 31) * 255 / 31;
+                                green = ((pixel >> 5) & 63) * 255 / 63;
+                                blue = (pixel & 31) * 255 / 31;
+                                alpha = 255;
+                            } else if (texture_ref.format == TexFormat::argb1555) {
+                                red = ((pixel >> 10) & 31) * 255 / 31;
+                                green = ((pixel >> 5) & 31) * 255 / 31;
+                                blue = (pixel & 31) * 255 / 31;
+                                alpha = (pixel & 0x8000) ? 255 : 0;
+                            } else {
+                                red = ((pixel >> 8) & 15) * 17;
+                                green = ((pixel >> 4) & 15) * 17;
+                                blue = (pixel & 15) * 17;
+                                alpha = ((pixel >> 12) & 15) * 17;
+                            }
+                            const std::uint32_t converted =
+                                red | green << 8 | blue << 16 | alpha << 24;
+                            std::memcpy(staging_destination + 4 * i, &converted, 4);
+                        }
+                    }
+                }
+            }
+
+            {
+                mw34::timing::ScopedDuration texture_record_timer(
+                    gpu_resource_timing_.texture_upload_target());
+                mw34::timing::ScopedDuration record_timer(
+                    gpu_resource_timing_.enabled ? &preload_record_nanoseconds_ : nullptr);
+                pending_preload_textures_.push_back(
+                    {texture_ref.key, texture_ref.hash, next_source_rgb565_hash,
+                     next_source_rgba8_hash, texture_ref.width, texture_ref.height});
+                begin_preload_batch();
+                barrier(cached_texture.image,
+                        cached_texture.valid
+                            ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                            : VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        cached_texture.valid ? VK_ACCESS_SHADER_READ_BIT : 0,
+                        VK_ACCESS_TRANSFER_WRITE_BIT,
+                        cached_texture.valid
+                            ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                            : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                        cached_texture.levels);
+                copyIn(texUpload.buffer, preload_texture_bytes_, cached_texture.image, texture_ref.width,
+                       texture_ref.height, VK_IMAGE_ASPECT_COLOR_BIT);
+                const auto previous_mip_uploads = mip_levels_uploaded;
+                generate_mips(cached_texture);
+                // generate_mips records commands; preload counters describe completion.
+                mip_levels_uploaded = previous_mip_uploads;
+            }
+            preload_texture_bytes_ += texture_bytes;
+            account_preload_bytes(texture_bytes);
+            return true;
+        } catch (const PreloadBudgetFailure &) {
+            stop_preload(VK_SUCCESS);
+        } catch (const PreloadAllocationFailure &failure) {
+            stop_preload(failure.result);
+        } catch (const std::bad_alloc &) {
+            pending_preload_textures_.erase(
+                std::remove_if(pending_preload_textures_.begin(), pending_preload_textures_.end(),
+                               [&](const PendingPreloadTexture &pending) {
+                                   return pending.key == texture_ref.key;
+                               }), pending_preload_textures_.end());
+            stop_preload(VK_ERROR_OUT_OF_HOST_MEMORY);
+        }
+        const auto failed = textures.find(texture_ref.key);
+        if (failed != textures.end()) {
+            destroy(failed->second);
+            textures.erase(failed);
+        }
+        // Earlier queued copies still own their staging slices until finalization.
+        if (pending_preload_textures_.empty() && pending_preload_models_.empty())
+            destroy_buffer(texUpload);
+        return false;
+    }
+
   // Record uploads, ordered clears/draws, and optional copy-back as one
   // submission. settle() protects the reusable staging buffers, descriptors and
   // command pool. With copy-back disabled, the GPU may still be working when
   // this call returns.
   void render(Scene &s, bool upload_in = true, bool readback_out = true) {
+    if (preload_active_ || preload_batch_recording_)
+      throw std::runtime_error("Vulkan scene renderer: rendering during preload");
     settle();
     retire_height_images();
+    ++render_frame_;
+    // Stamp before any part of this frame can free (range backdrop captures
+    // render first); its captures and batches reuse this scene's resources.
+    mark_used_this_frame(s);
     // The previous GPU submission has completed. Indexed geometry owns no
     // live engine pointers and can retire once its source and packets expire.
     for (auto it = model_buffers.begin(); it != model_buffers.end();) {
@@ -1327,7 +1630,7 @@ public:
         if (allocation->buffer)
           f.vkDestroyBuffer(device, allocation->buffer, nullptr);
         if (allocation->memory)
-          f.vkFreeMemory(device, allocation->memory, nullptr);
+          release_memory(device, allocation->memory, nullptr);
       }
       sunChecked.erase(it->first);
       ++retired_model_buffers;
@@ -1519,37 +1822,76 @@ private:
         if (!gpu_models() || !d.model->geometry)
           throw std::runtime_error(
               "GPU model draw without the enabled model path");
-        auto &b = model_buffer(*d.model->geometry);
-        if (!b.uploaded && std::find(model_pending.begin(), model_pending.end(),
-                                     &b) == model_pending.end())
-          model_pending.push_back(&b);
+        ModelBuffer *b = model_buffer_or_skip(*d.model->geometry);
+        if (b && !b->uploaded &&
+            std::find(model_pending.begin(), model_pending.end(), b) == model_pending.end())
+          model_pending.push_back(b);
       }
     // Warmup shares the original immutable upload and completion path.
     // It adds no draw and retains exact geometry identity checks.
     for (const auto &geometry : s.model_warmup) {
       if (!gpu_models() || !geometry)
         throw std::runtime_error("Invalid immutable model warmup");
-      auto &b = model_buffer(*geometry);
-      if (!b.uploaded && std::find(model_pending.begin(), model_pending.end(),
-                                   &b) == model_pending.end())
-        model_pending.push_back(&b);
+      ModelBuffer *b = model_buffer_or_skip(*geometry);
+      if (b && !b->uploaded &&
+          std::find(model_pending.begin(), model_pending.end(), b) == model_pending.end())
+        model_pending.push_back(b);
     }
     // Textures: content-hashed cache keyed by guest surface; changed or new
     // ones are uploaded.
     VkDeviceSize texBytes = 0;
     std::vector<std::pair<Tex *, const TextureRef *>> changed;
     std::vector<Tex *> bound(s.textures.size());
+    // Slots drawn with white this frame because their texture is waiting for
+    // pixels or didn't fit in video memory (#496).
+    std::vector<bool> stand_in_slots(s.textures.size());
+    std::set<std::uint64_t> requested_texture_pixels;
     for (size_t i = 0; i < s.textures.size(); ++i) {
       const auto &t = s.textures[i];
+      const bool has_pixels = (t.format == TexFormat::rgba8888 ? t.pixels32.size()
+                                                                : t.pixels.size()) ==
+                              size_t(t.width) * t.height;
+      const auto awaiting = textures_awaiting_pixels_.find(t.key);
+      if (awaiting != textures_awaiting_pixels_.end()) {
+        // A mission preload may have uploaded it again in the meantime.
+        const bool uploaded_again = current(t.key, t.hash, t.width, t.height);
+        const auto retry = texture_retry_at_.find(t.key);
+        const bool backing_off = retry != texture_retry_at_.end() && render_frame_ < retry->second;
+        if ((!has_pixels || backing_off) && !uploaded_again) {
+          // #496: a discarded or queued scene can leave the frontend with a
+          // stale receipt. Ask again once the texture can be uploaded.
+          if (!backing_off) {
+            if (retry != texture_retry_at_.end())
+              texture_retry_at_.erase(retry);
+            if (requested_texture_pixels.insert(t.key).second)
+              mark_texture_awaiting_pixels(t.key);
+          }
+          bound[i] = &white;
+          stand_in_slots[i] = true;
+          continue;
+        }
+        if (retry != texture_retry_at_.end())
+          texture_retry_at_.erase(retry);
+        textures_awaiting_pixels_.erase(awaiting);
+      }
       auto &c = textures[t.key];
+      c.last_used_frame = render_frame_;
+      const bool needs_upload = !c.image || c.width != t.width ||
+                                c.height != t.height || c.hash != t.hash ||
+                                !c.valid;
+      mw34::timing::ScopedDuration texture_allocation_timer(
+          needs_upload ? gpu_resource_timing_.texture_upload_target()
+                       : nullptr);
       if (c.image && (c.width != t.width || c.height != t.height))
         destroy(c);
-      if (!c.image)
-        create(c, t.width, t.height);
+      if (!c.image && !create_play_texture(c, t)) {
+        // create_play_texture erased c; draw white until the pixels come back.
+        bound[i] = &white;
+        stand_in_slots[i] = true;
+        continue;
+      }
       if (c.hash != t.hash || !c.valid) {
-        if ((t.format == TexFormat::rgba8888
-                 ? t.pixels32.size()
-                 : t.pixels.size()) != size_t(t.width) * t.height)
+        if (!has_pixels)
           throw std::runtime_error(
               "Vulkan scene renderer: changed texture without pixels");
         if (bridge_config.parallax_materials) {
@@ -1570,11 +1912,15 @@ private:
       }
       bound[i] = &c;
     }
+    drop_height_on_stand_ins(s, stand_in_slots);
     std::vector<HeightUpload> pending_heights;
     const auto draw_heights = prepare_height_images(s, bound, pending_heights);
-    ensure(texUpload, std::max<VkDeviceSize>(texBytes, 4),
-           VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
     {
+      mw34::timing::ScopedDuration texture_staging_timer(
+          !changed.empty() ? gpu_resource_timing_.texture_upload_target()
+                           : nullptr);
+      ensure(texUpload, std::max<VkDeviceSize>(texBytes, 4),
+             VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
       auto *tp = static_cast<unsigned char *>(texUpload.mapped);
       for (auto &[c, t] : changed) {
         if (t->format == TexFormat::rgba8888) {
@@ -1701,6 +2047,10 @@ private:
           if (!mw34::tiled::try_affine_camera_or_all_lights(
                   camera, tiledDrawViews[at], allEffectLights, tiledAffineFallbackReported,
                   [&] {
+                    if (d.model && d.model->has_world_to_camera &&
+                        mw34::tiled::matches_model_camera(d.model->world_to_camera,
+                                                         d.model->sun_world, d.model->camera))
+                      return d.model->world_to_camera;
                     return d.model
                                ? mw34::tiled::compose_affine(
                                      d.model->camera,
@@ -1710,7 +2060,13 @@ private:
                   report_affine_fallback))
             continue;
           const auto &projection = d.model ? d.model->projection : d.sun_tl->projection;
-          const auto v = mw34::tiled::draw_view(camera, projection, width, height, rw, rh);
+          // Malformed per-draw projection: draw without local effect lights, bounded
+          // warning, never end the game. ~0u is the index every unlit draw uses.
+          mw34::tiled::View v{};
+          if (!mw34::tiled::try_draw_view_or_no_effect_lights(
+                  v, tiledDrawViews[at], ~0u, tiledProjectionFallbackReported,
+                  camera, projection, width, height, rw, rh))
+            continue;
           auto found =
               std::find_if(tiledFrameViews.begin(), tiledFrameViews.end(), [&](const auto &prior) {
                 return std::memcmp(&prior, &v, sizeof(v)) == 0;
@@ -1734,6 +2090,9 @@ private:
         }
       }
       prepare_tiled(tiledFrameViews);
+      tiled_views_last = tiledFrameViews.size();
+      tiled_all_light_draws_last = 0;
+      tiled_draw_modes_last.assign(s.draws.size(), 0);
       effect_light_peak =
           std::max(effect_light_peak, std::uint64_t(fx.params[0]));
       fixture_light_peak =
@@ -1826,7 +2185,10 @@ private:
           s.emissions.apply(draw.emission_index, u);
           if (tiledDrawViews[at] == allEffectLights) {
             u.tiled_lights = {0, 0, 0, 2};
+            ++tiled_all_light_draws_last;
+            tiled_draw_modes_last[at] = 2;
           } else if (tiledDrawViews[at] != ~0u) {
+            tiled_draw_modes_last[at] = 1;
             const auto id = tiledDrawViews[at];
             u.tiled_lights = {tiledFrameViews[id].extent[2], tiledFrameViews[id].extent[3],
                               tiledOffsets[id], 1};
@@ -1915,7 +2277,10 @@ private:
               "Scene normal texture slot out of range: draw=" +
               std::to_string(i) + " slot=" + std::to_string(d.normal_texture) +
               " textures=" + std::to_string(bound.size()));
-        Tex *t = (normal_active && d.normal_texture >= 0)
+        // A normal map waiting for its pixels shades flat rather than white (#496).
+        const bool normal_bound = normal_active && d.normal_texture >= 0 &&
+                                  !stand_in_slots[size_t(d.normal_texture)];
+        Tex *t = normal_bound
                      ? bound[size_t(d.normal_texture)]
                      : &flatNormal;
         const unsigned normal_sampler =
@@ -2048,6 +2413,9 @@ private:
                              nullptr, 0, nullptr);
     }
     {
+      mw34::timing::ScopedDuration texture_record_timer(
+          !changed.empty() ? gpu_resource_timing_.texture_upload_target()
+                           : nullptr);
       VkDeviceSize off = 0;
       for (auto &[c, t] : changed) {
         barrier(c->image,
@@ -2213,6 +2581,8 @@ private:
       }
       const auto &d = s.draws[o.index];
       if (!d.count || !d.scissor.extent.width || !d.scissor.extent.height)
+        continue;
+      if (model_skipped_this_frame(d))
         continue;
       unsigned vertexCount = d.count, logicalDraws = 1;
       if (combine && !d.model && !d.key.points && d.count % 3 == 0) {
@@ -2452,6 +2822,7 @@ public:
     return {properties.limits.maxStorageBufferRange,
             properties.limits.minStorageBufferOffsetAlignment};
   }
+  [[nodiscard]] bool tiled_lists_device_local() const { return tiledLists.device_local; }
   // The frontend drains its render worker before updating this CPU snapshot.
   // Diagnostic readback uses the same producer and synchronization as rendering.
   std::vector<std::vector<uint32_t>> probe_tiled_lists(const std::vector<mw34::tiled::View> &views,
@@ -2463,11 +2834,30 @@ public:
     ensure(effectBuffer, sizeof(lights), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     std::memcpy(effectBuffer.mapped, &lights, sizeof(lights));
     prepare_tiled(views);
+    VkDeviceSize total_readback_bytes = 0;
+    for (size_t i = 0; i < views.size(); ++i)
+      total_readback_bytes = std::max(total_readback_bytes,
+                                     VkDeviceSize(tiledOffsets[i]) * 4 + tiledLengths[i]);
+    if (total_readback_bytes)
+      ensure(tiledReadback, total_readback_bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
     check(f.vkResetCommandPool(device, commandPool, 0), "reset tiled probe pool");
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(f.vkBeginCommandBuffer(cmd, &bi), "begin tiled probe");
     record_tiled(views);
+    if (total_readback_bytes) {
+      const VkBufferCopy region{0, 0, total_readback_bytes};
+      f.vkCmdCopyBuffer(cmd, tiledLists.buffer, tiledReadback.buffer, 1, &region);
+      VkBufferMemoryBarrier barrier{};
+      barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+      barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+      barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier.buffer = tiledReadback.buffer;
+      barrier.size = total_readback_bytes;
+      f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                            0, 0, nullptr, 1, &barrier, 0, nullptr);
+    }
     check(f.vkEndCommandBuffer(cmd), "end tiled probe");
     check(f.vkResetFences(device, 1, &fence), "reset tiled probe fence");
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -2480,7 +2870,7 @@ public:
     for (size_t i = 0; i < views.size(); ++i) {
       result.emplace_back(size_t(tiledLengths[i] / 4));
       std::memcpy(result.back().data(),
-                  static_cast<char *>(tiledLists.mapped) + VkDeviceSize(tiledOffsets[i]) * 4,
+                  static_cast<char *>(tiledReadback.mapped) + VkDeviceSize(tiledOffsets[i]) * 4,
                   size_t(tiledLengths[i]));
     }
     return result;
@@ -2674,7 +3064,7 @@ private:
     X(vkCreateImage) X(vkDestroyImage) X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateSampler) X(vkDestroySampler) X(vkCreateDescriptorSetLayout) \
     X(vkDestroyDescriptorSetLayout) X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool) X(vkResetDescriptorPool) X(vkAllocateDescriptorSets) \
     X(vkUpdateDescriptorSets) X(vkCreateRenderPass) X(vkDestroyRenderPass) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) X(vkCreateShaderModule) \
-    X(vkDestroyShaderModule) X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkDestroyPipeline) X(vkCreateCommandPool) \
+    X(vkDestroyShaderModule) X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) X(vkCreatePipelineCache) X(vkDestroyPipelineCache) X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkDestroyPipeline) X(vkCreateCommandPool) \
     X(vkDestroyCommandPool) X(vkResetCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdPipelineBarrier) \
     X(vkCmdCopyBuffer) X(vkCmdCopyImage) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
     X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdPushConstants) X(vkCmdDraw) X(vkCmdClearAttachments) X(vkCmdBindVertexBuffers) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCreateFence) \
@@ -2693,6 +3083,8 @@ private:
     VkDeviceMemory memory{};
     VkDeviceSize size{};
     void *mapped{};
+    bool device_local{};
+    VkDeviceSize memory_offset{}, memory_size{}, memory_alignment{1};
   };
 #include "tiled_light_gpu.inc"
   struct Image {
@@ -2703,6 +3095,7 @@ private:
   struct Tex {
     VkImage image{};
     VkDeviceMemory memory{};
+    VkDeviceSize memory_offset{}, memory_size{}, memory_alignment{1};
     VkImageView view{};
     unsigned width{}, height{}, levels{1};
     std::uint64_t hash{};
@@ -2710,6 +3103,9 @@ private:
     // which is a monotonically assigned version in native frontend scenes.
     std::uint64_t source_rgb565_hash{}, source_rgba8_hash{};
     bool valid{};
+    // render_frame_ of the last frame that created or drew this texture;
+    // textures unused for long enough are freed when video memory runs out (#496).
+    std::uint64_t last_used_frame{};
   };
 #include "parallax_gpu.inc"
   cc_mw3_re::platform::VulkanLoader loader;
@@ -2963,6 +3359,8 @@ private:
     unsigned ahead = 0, outside = 0;
     for (const auto &d : s.draws) {
       if (!d.model || d.model->world || !d.count || !sun_lit(d))
+        continue;
+      if (model_skipped_this_frame(d))
         continue;
       const auto &i = *d.model;
       const auto &b = model_buffers.at(i.geometry->key);
@@ -3262,11 +3660,52 @@ private:
     std::uint64_t hash{};
     unsigned count{};
     bool uploaded{};
+    // render_frame_ of the last frame that drew or warmed this model; buffers
+    // unused for long enough are freed first when video memory runs out (#496).
+    std::uint64_t last_used_frame{};
   };
   std::map<std::uint64_t, ModelBuffer> model_buffers;
+  // Counts render() calls; the clock for ModelBuffer::last_used_frame.
+  std::uint64_t render_frame_{};
+  // Frames a model or texture must go undrawn before it may be freed to make
+  // room. render_frame_ counts render() calls, and a displayed frame usually
+  // makes two or more (world, HUD, zoom), so this is a few seconds of play:
+  // nothing on screen or just behind the player is freed.
+  static constexpr std::uint64_t kFreeAgeFrames = 300;
+  // Textures freed during play whose pixels haven't come back yet (#496). The
+  // frontend keeps every texture's pixels but sends them only when it holds no
+  // upload receipt; until a frame brings them, the texture draws white.
+  // Touched only by render(), so only on the render worker when one runs.
+  std::set<std::uint64_t> textures_awaiting_pixels_;
+  // Models and textures that still didn't fit, with the render_frame_ from
+  // which they may be tried again. Each try copies the whole model or texture
+  // into staging before the card refuses it, and a frame can ask for one
+  // geometry in hundreds of draws and several passes, so while the card stays
+  // full each is tried once every kRetryAfterFrames.
+  std::map<std::uint64_t, std::uint64_t> model_retry_at_, texture_retry_at_;
+  static constexpr std::uint64_t kRetryAfterFrames = 30;
+  // Whether this frame already freed what it could.
+  std::uint64_t freed_at_frame_{~std::uint64_t(0)};
+  // Keys freed since the frontend last asked, so it can drop their receipts.
+  // render() runs on the render worker while the game thread builds later
+  // frames (up to 8 queued), hence the lock; frames already queued without the
+  // pixels draw white. The flag keeps the common case to one atomic load.
+  std::mutex freed_texture_mutex_;
+  std::vector<std::uint64_t> freed_texture_keys_;
+  std::atomic<bool> freed_textures_waiting_{false};
+  // Play-time video memory figures (#496), logged once and then at most once a minute.
+  std::chrono::steady_clock::time_point video_memory_full_logged_at_{};
+  std::size_t video_memory_full_log_count_{};
 #include "fixture_shadow_stage.inc"
   Image colorImage, depthImage;
   Image qualitySource;
+  Image menuRippleSource;
+  unsigned menu_ripple_rw{}, menu_ripple_rh{};
+  VkDescriptorPool menuRipplePool{};
+  VkDescriptorSet menuRippleSet{};
+  VkPipelineLayout menuRippleLayout{};
+  VkShaderModule menuRippleVert{}, menuRippleFrag{};
+  VkPipeline menuRipplePipeline{};
   VkDescriptorPool qualityPool{};
   VkDescriptorSet qualitySet{};
   VkPipelineLayout qualityLayout{};
@@ -3285,6 +3724,7 @@ private:
   Tex white, flatNormal;
   std::map<std::uint64_t, Tex> textures;
   std::map<std::uint64_t, VkPipeline> pipelines;
+  VkPipelineCache pipelineCache{};
   std::map<unsigned, VkSampler> samplers;
   VkRenderPass renderPass{};
   VkFramebuffer framebuffer{};
@@ -3318,6 +3758,836 @@ private:
 #include "editor_overlay.inc"
 #endif
 
+  // Lazy draws throw this too, so it must stay a std::runtime_error like every
+  // other Vulkan failure: callers that report "rendering failed" catch that type.
+  // The message is formatted into a fixed buffer first, so the only host
+  // allocation during out-of-memory handling is runtime_error's one short copy.
+  struct PreloadAllocationFailure : std::runtime_error {
+    VkResult result;
+    PreloadAllocationFailure(VkResult value, const char *operation)
+        : std::runtime_error(format(value, operation).data()), result(value) {}
+
+  private:
+    static std::array<char, 160> format(VkResult value, const char *operation) {
+      std::array<char, 160> message{};
+      std::snprintf(message.data(), message.size(), "Vulkan scene renderer: %s failed (%d)",
+                    operation, int(value));
+      return message;
+    }
+  };
+  static_assert(std::is_base_of_v<std::runtime_error, PreloadAllocationFailure>,
+                "Allocation failures must reach std::runtime_error handlers");
+  struct PreloadBudgetFailure : std::exception {};
+  struct MemoryAllocation {
+    unsigned heap{};
+    VkDeviceSize bytes{};
+  };
+  std::map<VkDeviceMemory, MemoryAllocation> memory_allocations_;
+  struct PreloadMemoryBlock {
+    unsigned memory_type{};
+    bool optimal_image{};
+    VkDeviceSize capacity{}, next_offset{};
+    std::size_t references{};
+  };
+  // Linear buffers and optimal images never share blocks, avoiding the
+  // bufferImageGranularity aliasing rule. Slices are not reused while any
+  // resource in a block is alive; the final release returns the entire block.
+  std::map<VkDeviceMemory, PreloadMemoryBlock> preload_memory_blocks_;
+  static constexpr VkDeviceSize kPreloadMemoryBlockCap = 64ULL * 1024 * 1024;
+  VkDeviceSize preload_memory_block_cap_{kPreloadMemoryBlockCap};
+  PFN_vkGetImageMemoryRequirements2 image_memory_requirements2_{};
+  PFN_vkGetBufferMemoryRequirements2 buffer_memory_requirements2_{};
+  PFN_vkGetPhysicalDeviceMemoryProperties2 memory_properties2_{};
+  bool memory_budget_supported_{};
+  bool preload_active_{};
+  // Opt-in CPU scopes distinguish producer work, driver allocation, command
+  // recording and fence completion; allocation scopes nest inside resource scopes.
+  std::uint64_t preload_geometry_nanoseconds_{}, preload_hash_nanoseconds_{};
+  std::uint64_t preload_image_nanoseconds_{}, preload_staging_nanoseconds_{};
+  std::uint64_t preload_record_nanoseconds_{}, preload_flush_nanoseconds_{};
+  std::uint64_t preload_wait_nanoseconds_{}, preload_submit_nanoseconds_{};
+  std::uint64_t preload_budget_nanoseconds_{}, preload_allocate_nanoseconds_{};
+  bool preload_stopped_{};
+  PreloadStopInfo preload_stop_{};
+  PreloadFaultInjection preload_fault_{};
+  std::size_t preload_allocation_attempts_{}, preload_allocation_successes_{};
+  struct PendingPreloadTexture {
+    std::uint64_t key{}, hash{}, source_rgb565_hash{}, source_rgba8_hash{};
+    unsigned width{}, height{};
+  };
+  static constexpr VkDeviceSize kPreloadBatchCap = 64ULL * 1024 * 1024;
+  VkDeviceSize preload_batch_cap_{kPreloadBatchCap};
+  VkDeviceSize preload_batch_bytes_{}, preload_texture_bytes_{}, preload_peak_bytes_{};
+  bool preload_batch_recording_{}, preload_batch_inflight_{};
+  std::vector<PendingPreloadTexture> pending_preload_textures_;
+  std::vector<std::uint64_t> pending_preload_models_;
+  std::size_t preload_batch_submissions_{}, preload_peak_pending_{};
+
+  void require_preload() const {
+    if (!preload_active_)
+      throw std::runtime_error("Vulkan scene renderer: upload outside preload phase");
+  }
+  bool pending_model(std::uint64_t key) const {
+    return std::find(pending_preload_models_.begin(), pending_preload_models_.end(), key) !=
+           pending_preload_models_.end();
+  }
+  bool admit_preload_bytes(VkDeviceSize bytes) {
+    if (bytes > preload_batch_cap_) {
+      // Oversized optional uploads keep their lazy draw path. Record why the
+      // warmup stopped instead of reporting it as a failed allocation.
+      stop_preload_oversized(bytes);
+      return false;
+    }
+    if (bytes > preload_batch_cap_ - preload_batch_bytes_)
+      flush_preload();
+    return true;
+  }
+  void begin_preload_batch() {
+    if (preload_batch_recording_)
+      return;
+    settle();
+    check(f.vkResetCommandPool(device, commandPool, 0), "reset preload command pool");
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    check(f.vkBeginCommandBuffer(cmd, &begin_info), "begin preload batch");
+    preload_batch_recording_ = true;
+  }
+  void account_preload_bytes(VkDeviceSize bytes) noexcept {
+    preload_batch_bytes_ += bytes;
+    preload_peak_bytes_ = std::max(preload_peak_bytes_, preload_batch_bytes_);
+    preload_peak_pending_ = std::max(preload_peak_pending_, preload_pending_count());
+  }
+  void complete_preload_batch() noexcept {
+    // Called only after the actual submitted batch fence has completed.
+    for (const auto &pending : pending_preload_textures_) {
+      auto &texture = textures.find(pending.key)->second;
+      texture.hash = pending.hash;
+      texture.source_rgb565_hash = pending.source_rgb565_hash;
+      texture.source_rgba8_hash = pending.source_rgba8_hash;
+      texture.valid = true;
+      mip_levels_uploaded += texture.levels - 1;
+      ++uploads;
+    }
+    for (const auto key : pending_preload_models_) {
+      auto &buffer = model_buffers.find(key)->second;
+      buffer.uploaded = true;
+      ++model_uploads;
+      model_uploaded_bytes += buffer.local.size;
+      // Immutable geometry never uploads again after this fence. Release its
+      // temporary mapped copies so staging cannot accumulate across batches.
+      destroy_buffer(buffer.staging);
+      destroy_buffer(buffer.index_staging);
+    }
+    pending_preload_textures_.clear();
+    pending_preload_models_.clear();
+    preload_batch_inflight_ = false;
+    preload_batch_bytes_ = preload_texture_bytes_ = 0;
+  }
+
+
+  VkDeviceSize tracked_heap_bytes(unsigned heap) const {
+    VkDeviceSize bytes = 0;
+    for (const auto &entry : memory_allocations_)
+      if (entry.second.heap == heap)
+        bytes += entry.second.bytes;
+    return bytes;
+  }
+  // The driver's current usage and budget for one heap (VK_EXT_memory_budget).
+  // Returns false when the extension is unavailable; the budget then shrinks and
+  // grows with other programs' use of the same GPU.
+  bool heap_budget(unsigned heap, VkDeviceSize &usage, VkDeviceSize &budget) const {
+    if (!memory_budget_supported_ || !memory_properties2_)
+      return false;
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT budgets{};
+    budgets.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    VkPhysicalDeviceMemoryProperties2 properties{};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    properties.pNext = &budgets;
+    memory_properties2_(gpu, &properties);
+    usage = budgets.heapUsage[heap];
+    budget = budgets.heapBudget[heap];
+    return true;
+  }
+  // One log line with the figures that explain a play-time allocation failure
+  // (#496): crash reports carry the log, so the next report shows whether the
+  // game's own use or something else filled the card.
+  void log_video_memory_full(const char *kind, VkDeviceSize bytes) {
+    const auto now = std::chrono::steady_clock::now();
+    const bool logged_before = video_memory_full_log_count_ > 0;
+    if (logged_before && now - video_memory_full_logged_at_ < std::chrono::minutes(1))
+      return;
+    video_memory_full_logged_at_ = now;
+    ++video_memory_full_log_count_;
+    constexpr double mib = 1024.0 * 1024.0;
+    for (unsigned heap = 0; heap < memory.memoryHeapCount; ++heap) {
+      if (!(memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT))
+        continue;
+      VkDeviceSize driver_usage = 0, driver_budget = 0;
+      if (heap_budget(heap, driver_usage, driver_budget))
+        std::fprintf(stderr,
+                     "mw3: video memory full: %s %llu bytes; game %.0f MiB in %zu allocations; "
+                     "driver usage %.0f of budget %.0f MiB (heap %u)\n",
+                     kind, (unsigned long long)bytes, tracked_heap_bytes(heap) / mib,
+                     memory_allocations_.size(), driver_usage / mib, driver_budget / mib, heap);
+      else
+        std::fprintf(stderr,
+                     "mw3: video memory full: %s %llu bytes; game %.0f MiB in %zu allocations; "
+                     "driver figures unavailable (heap %u)\n",
+                     kind, (unsigned long long)bytes, tracked_heap_bytes(heap) / mib,
+                     memory_allocations_.size(), heap);
+    }
+  }
+  // Frees model buffers no frame has used for min_age_frames, once the GPU is
+  // done with them. Their ModelGeometry keeps vertices and indices in system
+  // memory, so a freed model uploads again the next time it is drawn.
+  void free_unused_model_buffers(std::uint64_t min_age_frames) {
+    settle();
+    std::vector<std::uint64_t> old_keys;
+    for (const auto &[key, buffer] : model_buffers) {
+      const bool old_enough = render_frame_ - buffer.last_used_frame > min_age_frames;
+      const bool held_by_preload =
+          std::find(pending_preload_models_.begin(), pending_preload_models_.end(), key) !=
+          pending_preload_models_.end();
+      if (old_enough && !held_by_preload)
+        old_keys.push_back(key);
+    }
+    // As for textures: a shared preload block goes back to the card only when
+    // its last buffer is released, so free a model only if every block its
+    // buffers sit in holds nothing but old models' buffers.
+    auto pooled_buffers = [](ModelBuffer &model) {
+      return std::array<Buffer *, 4>{&model.local, &model.staging, &model.indices,
+                                     &model.index_staging};
+    };
+    std::map<VkDeviceMemory, std::size_t> old_in_block;
+    for (const auto key : old_keys)
+      for (const Buffer *buffer : pooled_buffers(model_buffers.at(key)))
+        if (buffer->memory && preload_memory_blocks_.count(buffer->memory))
+          ++old_in_block[buffer->memory];
+    // Decide every key before freeing any: each free lowers its block's count.
+    std::vector<std::uint64_t> freeable_keys;
+    for (const auto key : old_keys) {
+      bool whole_blocks_old = true;
+      for (const Buffer *buffer : pooled_buffers(model_buffers.at(key))) {
+        const auto block = buffer->memory ? preload_memory_blocks_.find(buffer->memory)
+                                          : preload_memory_blocks_.end();
+        if (block != preload_memory_blocks_.end() &&
+            old_in_block[block->first] != block->second.references)
+          whole_blocks_old = false;
+      }
+      if (whole_blocks_old)
+        freeable_keys.push_back(key);
+    }
+    for (const auto key : freeable_keys)
+      discard_model_buffer(key);
+  }
+  // The model's GPU buffer for this frame, or nullptr when video memory stays
+  // full. #496: a player's game ended when a model's buffer did not fit during
+  // play. Now old model buffers are freed and the allocation retried once; if it
+  // still fails, the model is left out of this frame (draw and sun shadow) and
+  // tried again on the next one.
+  ModelBuffer *model_buffer_or_skip(const ModelGeometry &g) {
+    const auto retry = model_retry_at_.find(g.key);
+    if (retry != model_retry_at_.end()) {
+      // A model already resident again (a mission preload) needs no back-off.
+      if (render_frame_ < retry->second && !model_buffers.count(g.key))
+        return nullptr;
+      model_retry_at_.erase(retry);
+    }
+    try {
+      ModelBuffer &b = model_buffer(g);
+      b.last_used_frame = render_frame_;
+      return &b;
+    } catch (const PreloadAllocationFailure &) {
+      // Only render() gets here, and it refuses to run during a preload.
+    }
+    const VkDeviceSize model_bytes = VkDeviceSize(g.vertices.size()) * sizeof(ModelVertex) +
+                                     VkDeviceSize(g.indices.size()) * sizeof(std::uint32_t);
+    log_video_memory_full("model", model_bytes);
+    free_unused_resources();
+    try {
+      ModelBuffer &b = model_buffer(g);
+      b.last_used_frame = render_frame_;
+      return &b;
+    } catch (const PreloadAllocationFailure &) {
+      // model_buffer's own catch has already discarded the half-made buffer.
+      model_retry_at_[g.key] = render_frame_ + kRetryAfterFrames;
+      return nullptr;
+    }
+  }
+  // Frees textures no frame has used for min_age_frames, once the GPU is done
+  // with them. The frontend keeps every texture's pixels, so a freed texture is
+  // uploaded again when a later frame brings them (see textures_awaiting_pixels_).
+  // Textures in a shared preload memory block return memory only once the whole
+  // block is free.
+  void free_unused_textures(std::uint64_t min_age_frames) {
+    settle();
+    std::vector<std::uint64_t> old_keys;
+    // Old textures per shared preload block. A block goes back to the card only
+    // when its last image is released, so freeing part of one returns nothing
+    // and only makes those textures upload again into new memory of their own.
+    std::map<VkDeviceMemory, std::size_t> old_in_block;
+    for (const auto &[key, texture] : textures) {
+      const bool old_enough = render_frame_ - texture.last_used_frame > min_age_frames;
+      const bool held_by_preload =
+          std::any_of(pending_preload_textures_.begin(), pending_preload_textures_.end(),
+                      [key = key](const PendingPreloadTexture &p) { return p.key == key; });
+      if (!old_enough || held_by_preload)
+        continue;
+      old_keys.push_back(key);
+      if (preload_memory_blocks_.count(texture.memory))
+        ++old_in_block[texture.memory];
+    }
+    // Decide every key before freeing any: each free lowers its block's count.
+    std::vector<std::uint64_t> freeable_keys;
+    for (const auto key : old_keys) {
+      const auto block = preload_memory_blocks_.find(textures.at(key).memory);
+      const bool whole_block_old =
+          block == preload_memory_blocks_.end() ||
+          old_in_block[block->first] == block->second.references;
+      if (whole_block_old)
+        freeable_keys.push_back(key);
+    }
+    for (const auto key : freeable_keys)
+      forget_texture(key);
+  }
+  // Destroys and erases a texture during play and waits for its pixels again.
+  // Retained fixture shadow casters keep a Tex pointer across frames, even
+  // while culled, so those using it go too; they are rebuilt when next drawn.
+  void forget_texture(std::uint64_t key) {
+    Tex &texture = textures.at(key);
+    for (auto it = fixtureCasters.begin(); it != fixtureCasters.end();) {
+      if (it->second.texture == &texture) {
+        fixture_atlas_touch();
+        // This frame's caster list points into the map too.
+        fixtureFrameCasters.erase(std::remove(fixtureFrameCasters.begin(),
+                                              fixtureFrameCasters.end(), &it->second),
+                                  fixtureFrameCasters.end());
+        it = fixtureCasters.erase(it);
+      } else
+        ++it;
+    }
+    destroy(texture);
+    textures.erase(key);
+    mark_texture_awaiting_pixels(key);
+  }
+  // Records that a texture's GPU copy is gone and tells the frontend, which
+  // drops its upload receipt so the next frame that draws it sends its pixels.
+  void mark_texture_awaiting_pixels(std::uint64_t key) {
+    textures_awaiting_pixels_.insert(key);
+    std::lock_guard lock(freed_texture_mutex_);
+    freed_texture_keys_.push_back(key);
+    freed_textures_waiting_.store(true, std::memory_order_release);
+  }
+  void free_unused_resources() {
+    // Nothing becomes old enough again within the same frame.
+    if (freed_at_frame_ == render_frame_)
+      return;
+    freed_at_frame_ = render_frame_;
+    free_unused_model_buffers(kFreeAgeFrames);
+    free_unused_textures(kFreeAgeFrames);
+  }
+  // Creates a texture's image during play; false when video memory stays full.
+  // #496: a player's game ended when a texture did not fit during play. Now the
+  // figures are logged, old models and textures are freed and creation is tried
+  // once more; if that fails too, the cache entry is erased, the texture draws
+  // white this frame and is uploaded once a frame brings its pixels again.
+  bool create_play_texture(Tex &c, const TextureRef &t) {
+    auto create_once = [&] {
+      if (take_play_fault(preload_fault_.fail_next_play_texture_allocations))
+        check_allocation(static_cast<VkResult>(preload_fault_.injected_result), "image memory");
+      create(c, t.width, t.height);
+    };
+    try {
+      create_once();
+      return true;
+    } catch (const PreloadAllocationFailure &) {
+      destroy(c);
+      // destroy() clears the age; keep this frame's texture out of the freeing below.
+      c.last_used_frame = render_frame_;
+    }
+    log_video_memory_full("texture base level", VkDeviceSize(t.width) * t.height * 4);
+    free_unused_resources();
+    try {
+      create_once();
+      return true;
+    } catch (const PreloadAllocationFailure &) {
+      forget_texture(t.key);
+      texture_retry_at_[t.key] = render_frame_ + kRetryAfterFrames;
+      return false;
+    }
+  }
+  // Stamps every model and texture this frame uses before anything is freed,
+  // so a video memory failure mid-frame never frees what the frame draws.
+  void mark_used_this_frame(const Scene &s) {
+    auto stamp_model = [&](const ModelGeometry *geometry) {
+      if (!geometry)
+        return;
+      const auto found = model_buffers.find(geometry->key);
+      if (found != model_buffers.end())
+        found->second.last_used_frame = render_frame_;
+    };
+    for (const auto &d : s.draws)
+      if (d.model)
+        stamp_model(d.model->geometry.get());
+    for (const auto &geometry : s.model_warmup)
+      stamp_model(geometry.get());
+    for (const auto &t : s.textures) {
+      const auto found = textures.find(t.key);
+      if (found != textures.end())
+        found->second.last_used_frame = render_frame_;
+    }
+  }
+  // Parallax checks each draw's height image against its real albedo and
+  // normal textures, which a white stand-in isn't. Such a draw renders without
+  // parallax for this frame. The scene is this frame's own packet.
+  static void drop_height_on_stand_ins(Scene &s, const std::vector<bool> &stand_in_slots) {
+    if (std::find(stand_in_slots.begin(), stand_in_slots.end(), true) == stand_in_slots.end())
+      return;
+    auto stand_in = [&](int slot) {
+      return slot >= 0 && size_t(slot) < stand_in_slots.size() && stand_in_slots[size_t(slot)];
+    };
+    for (auto &d : s.draws)
+      if (d.height_binding && (stand_in(d.texture) || stand_in(d.normal_texture)))
+        d.height_binding.reset();
+  }
+  // True for a model draw whose buffer model_buffer_or_skip left out this frame.
+  bool model_skipped_this_frame(const Draw &d) const {
+    return d.model && d.model->geometry &&
+           model_buffers.find(d.model->geometry->key) == model_buffers.end();
+  }
+  VkResult allocate_memory(VkDevice selected_device, const VkMemoryAllocateInfo *info,
+                           const VkAllocationCallbacks *callbacks, VkDeviceMemory *output,
+                           PFN_vkAllocateMemory allocator = nullptr) {
+    const unsigned heap = memory.memoryTypes[info->memoryTypeIndex].heapIndex;
+    const VkDeviceSize tracked = tracked_heap_bytes(heap);
+    if (preload_active_) {
+      ++preload_allocation_attempts_;
+      VkDeviceSize budget = memory.memoryHeaps[heap].size;
+      VkDeviceSize usage = tracked;
+      VkDeviceSize driver_usage = 0, driver_budget = 0;
+      bool driver_figures = false;
+      {
+        mw34::timing::ScopedDuration budget_timer(
+            gpu_resource_timing_.enabled ? &preload_budget_nanoseconds_ : nullptr);
+        driver_figures = heap_budget(heap, driver_usage, driver_budget);
+      }
+      if (driver_figures) {
+        budget = std::min(budget, driver_budget);
+        // The driver estimate can lag a burst of allocations. Our exact ledger
+        // provides a conservative lower bound until the next driver update.
+        usage = std::max(tracked, driver_usage);
+      }
+      if (preload_fault_.override_budget) {
+        budget = preload_fault_.synthetic_heap_budget_bytes;
+        const auto base = preload_fault_.synthetic_base_usage_bytes;
+        usage = base > ~VkDeviceSize{} - tracked ? ~VkDeviceSize{} : base + tracked;
+      }
+      const auto decision = evaluate_preload_budget(budget, usage, info->allocationSize);
+      preload_stop_ = {PreloadStopReason::none, VK_SUCCESS, heap, info->allocationSize,
+                       usage, budget, decision.headroom_bytes, tracked};
+      if ((memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
+          !decision.admitted) {
+        preload_stop_.reason = PreloadStopReason::budget_denied;
+        throw PreloadBudgetFailure{};
+      }
+      if (preload_fault_.fail_on_allocation_attempt == preload_allocation_attempts_)
+        return static_cast<VkResult>(preload_fault_.injected_result);
+    }
+    VkDeviceMemory allocation{};
+    VkResult result;
+    {
+      mw34::timing::ScopedDuration allocation_timer(
+          preload_active_ && gpu_resource_timing_.enabled ? &preload_allocate_nanoseconds_ : nullptr);
+      result = (allocator ? allocator : f.vkAllocateMemory)(
+          selected_device, info, callbacks, &allocation);
+    }
+    if (result != VK_SUCCESS)
+      return result;
+    try {
+      memory_allocations_.emplace(allocation, MemoryAllocation{heap, info->allocationSize});
+    } catch (...) {
+      f.vkFreeMemory(selected_device, allocation, callbacks);
+      throw;
+    }
+    *output = allocation;
+    if (preload_active_)
+      ++preload_allocation_successes_;
+    return result;
+  }
+  void release_memory(VkDevice selected_device, VkDeviceMemory allocation,
+                      const VkAllocationCallbacks *callbacks,
+                      PFN_vkFreeMemory releaser = nullptr) noexcept {
+    const auto pooled = preload_memory_blocks_.find(allocation);
+    if (pooled != preload_memory_blocks_.end()) {
+      if (--pooled->second.references)
+        return;
+      preload_memory_blocks_.erase(pooled);
+    }
+    memory_allocations_.erase(allocation);
+    (releaser ? releaser : f.vkFreeMemory)(selected_device, allocation, callbacks);
+  }
+  void allocate_preload_resource(const VkMemoryRequirements &requirements,
+                                 unsigned memory_type, VkImage image_handle,
+                                 VkBuffer buffer_handle, VkDeviceMemory &allocation,
+                                 VkDeviceSize &offset) {
+    VkMemoryDedicatedRequirements dedicated{};
+    dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
+    bool requirements_available = false;
+    if (image_handle && image_memory_requirements2_) {
+      VkImageMemoryRequirementsInfo2 info{};
+      info.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
+      info.image = image_handle;
+      VkMemoryRequirements2 result{};
+      result.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+      result.pNext = &dedicated;
+      image_memory_requirements2_(device, &info, &result);
+      requirements_available = true;
+    } else if (buffer_handle && buffer_memory_requirements2_) {
+      VkBufferMemoryRequirementsInfo2 info{};
+      info.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2;
+      info.buffer = buffer_handle;
+      VkMemoryRequirements2 result{};
+      result.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+      result.pNext = &dedicated;
+      buffer_memory_requirements2_(device, &info, &result);
+      requirements_available = true;
+    }
+    VkMemoryAllocateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    info.allocationSize = requirements.size;
+    info.memoryTypeIndex = memory_type;
+    const bool pool_allowed = preload_active_ && requirements_available &&
+                              !dedicated.requiresDedicatedAllocation &&
+                              !dedicated.prefersDedicatedAllocation &&
+                              requirements.size <= preload_memory_block_cap_;
+    if (!pool_allowed) {
+      VkMemoryDedicatedAllocateInfo dedicated_info{};
+      dedicated_info.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+      dedicated_info.image = image_handle;
+      dedicated_info.buffer = buffer_handle;
+      if (requirements_available && dedicated.requiresDedicatedAllocation)
+        info.pNext = &dedicated_info;
+      const bool play_model_buffer = !preload_active_ && buffer_handle != VK_NULL_HANDLE;
+      if (play_model_buffer && take_play_fault(preload_fault_.fail_next_play_model_allocations))
+        check_allocation(static_cast<VkResult>(preload_fault_.injected_result),
+                         "immutable resource memory");
+      check_allocation(allocate_memory(device, &info, nullptr, &allocation),
+                       preload_active_ ? "dedicated preload resource memory"
+                                       : "immutable resource memory");
+      offset = 0;
+      return;
+    }
+    const bool optimal_image = image_handle != VK_NULL_HANDLE;
+    for (auto &entry : preload_memory_blocks_) {
+      auto &block = entry.second;
+      if (block.memory_type != memory_type || block.optimal_image != optimal_image)
+        continue;
+      const auto remainder = block.next_offset % requirements.alignment;
+      const auto padding = remainder ? requirements.alignment - remainder : 0;
+      if (padding > block.capacity - block.next_offset)
+        continue;
+      const auto next_offset = block.next_offset + padding;
+      if (requirements.size > block.capacity - next_offset)
+        continue;
+      offset = next_offset;
+      block.next_offset = next_offset + requirements.size;
+      ++block.references;
+      allocation = entry.first;
+      return;
+    }
+    // Admission accounts for the whole native block, including unused tail
+    // space, before allocating it. Existing slices require no extra residency.
+    info.allocationSize = preload_memory_block_cap_;
+    VkDeviceMemory acquired{};
+    check_allocation(allocate_memory(device, &info, nullptr, &acquired),
+                     "preload memory block");
+    try {
+      preload_memory_blocks_.emplace(
+          acquired, PreloadMemoryBlock{memory_type, optimal_image,
+                                       info.allocationSize, requirements.size, 1});
+    } catch (...) {
+      release_memory(device, acquired, nullptr);
+      throw;
+    }
+    allocation = acquired;
+    offset = 0;
+  }
+  // Test hook (#496): true while a play-time fault still has failures left.
+  static bool take_play_fault(std::size_t &remaining) noexcept {
+    if (!remaining)
+      return false;
+    --remaining;
+    return true;
+  }
+  static void check_allocation(VkResult result, const char *what) {
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY || result == VK_ERROR_OUT_OF_HOST_MEMORY ||
+        result == VK_ERROR_MEMORY_MAP_FAILED || result == VK_ERROR_TOO_MANY_OBJECTS)
+      throw PreloadAllocationFailure(result, what);
+    check(result, what);
+  }
+  void destroy_buffer(Buffer &buffer) noexcept {
+    if (buffer.memory && buffer.mapped)
+      f.vkUnmapMemory(device, buffer.memory);
+    if (buffer.buffer)
+      f.vkDestroyBuffer(device, buffer.buffer, nullptr);
+    if (buffer.memory)
+      release_memory(device, buffer.memory, nullptr);
+    buffer = {};
+  }
+  void discard_model_buffer(std::uint64_t key) noexcept {
+    const auto found = model_buffers.find(key);
+    if (found == model_buffers.end())
+      return;
+    for (Buffer *buffer : {&found->second.local, &found->second.staging,
+                           &found->second.indices, &found->second.index_staging})
+      destroy_buffer(*buffer);
+    model_buffers.erase(found);
+  }
+  void stop_preload_oversized(VkDeviceSize bytes) noexcept {
+    preload_stopped_ = true;
+    if (preload_stop_.reason == PreloadStopReason::none) {
+      preload_stop_.reason = PreloadStopReason::oversized_upload;
+      preload_stop_.requested_bytes = bytes;
+    }
+  }
+  void stop_preload(VkResult result) noexcept {
+    preload_stopped_ = true;
+    if (preload_stop_.reason != PreloadStopReason::budget_denied) {
+      preload_stop_.vk_result = result;
+      if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY)
+        preload_stop_.reason = PreloadStopReason::out_of_device_memory;
+      else if (result == VK_ERROR_OUT_OF_HOST_MEMORY)
+        preload_stop_.reason = PreloadStopReason::out_of_host_memory;
+      else
+        preload_stop_.reason = PreloadStopReason::allocation_failed;
+    }
+  }
+
+public:
+  void begin_preload() {
+    settle();
+    if (!device)
+      init(); // Required initialization is not an optional allocation attempt.
+    if (preload_active_)
+      throw std::runtime_error("Vulkan scene renderer: nested preload phase");
+    preload_geometry_nanoseconds_ = preload_hash_nanoseconds_ = 0;
+    preload_image_nanoseconds_ = preload_staging_nanoseconds_ = 0;
+    preload_record_nanoseconds_ = preload_flush_nanoseconds_ = 0;
+    preload_wait_nanoseconds_ = preload_submit_nanoseconds_ = 0;
+    preload_budget_nanoseconds_ = preload_allocate_nanoseconds_ = 0;
+    // A previous lazy scene may have grown the shared buffer beyond this
+    // phase's bound. Its fence is complete before releasing that allocation.
+    if (texUpload.size > preload_batch_cap_)
+      destroy_buffer(texUpload);
+    preload_active_ = true;
+  }
+  void flush_preload() {
+    mw34::timing::ScopedDuration flush_timer(
+        gpu_resource_timing_.enabled ? &preload_flush_nanoseconds_ : nullptr);
+    if (!preload_batch_recording_) {
+      settle();
+      return;
+    }
+    check(f.vkEndCommandBuffer(cmd), "end preload batch");
+    preload_batch_recording_ = false;
+    check(f.vkResetFences(device, 1, &fence), "reset preload batch fence");
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &cmd;
+    {
+      mw34::timing::ScopedDuration submit_timer(
+          gpu_resource_timing_.enabled ? &preload_submit_nanoseconds_ : nullptr);
+      check(f.vkQueueSubmit(queue, 1, &submit_info, fence), "submit preload batch");
+    }
+    ++preload_batch_submissions_;
+    preload_batch_inflight_ = true;
+    scene_pending = true;
+    settle();
+  }
+  void finalize_preload() {
+    require_preload();
+    flush_preload();
+    if (gpu_resource_timing_.enabled)
+      std::fprintf(stderr,
+                   "[PRELOAD_PROFILE] geometry_us=%llu hash_us=%llu image_us=%llu "
+                   "staging_us=%llu record_us=%llu flush_us=%llu budget_us=%llu allocate_us=%llu "
+                   "wait_us=%llu submit_us=%llu\n",
+                   (unsigned long long)(preload_geometry_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_hash_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_image_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_staging_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_record_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_flush_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_budget_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_allocate_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_wait_nanoseconds_ / 1000),
+                   (unsigned long long)(preload_submit_nanoseconds_ / 1000));
+  }
+  void end_preload() noexcept {
+    preload_active_ = false;
+    // Exception cleanup never submits or waits. Submitted resources stay alive
+    // until settle() observes their fence; unsubmitted commands can be abandoned.
+    if (preload_batch_inflight_)
+      return;
+    for (const auto &pending : pending_preload_textures_) {
+      const auto found = textures.find(pending.key);
+      if (found != textures.end()) {
+        destroy(found->second);
+        textures.erase(found);
+      }
+    }
+    for (const auto key : pending_preload_models_)
+      discard_model_buffer(key);
+    pending_preload_textures_.clear();
+    pending_preload_models_.clear();
+    preload_batch_recording_ = false;
+    preload_batch_bytes_ = preload_texture_bytes_ = 0;
+  }
+  void reset_preload() noexcept {
+    preload_stopped_ = false;
+    preload_stop_ = {};
+    preload_allocation_attempts_ = preload_allocation_successes_ = 0;
+    preload_batch_submissions_ = preload_peak_pending_ = 0;
+    preload_peak_bytes_ = 0;
+  }
+  void set_preload_batch_cap_for_test(VkDeviceSize bytes) {
+    if (preload_active_ || preload_pending_count() || bytes < 4 || bytes > kPreloadBatchCap)
+      throw std::runtime_error("Invalid test preload batch cap");
+    settle();
+    preload_batch_cap_ = bytes;
+    if (texUpload.size > bytes)
+      destroy_buffer(texUpload);
+  }
+  void set_preload_memory_block_cap_for_test(VkDeviceSize bytes) {
+    if (preload_active_ || !preload_memory_blocks_.empty() || !bytes ||
+        bytes > kPreloadMemoryBlockCap)
+      throw std::runtime_error("Invalid test preload memory block cap");
+    preload_memory_block_cap_ = bytes;
+  }
+  std::size_t preload_memory_block_count() const { return preload_memory_blocks_.size(); }
+  bool texture_memory_shared_for_test(std::uint64_t first, std::uint64_t second) const {
+    return textures.at(first).memory == textures.at(second).memory;
+  }
+  bool model_texture_memory_separate_for_test(std::uint64_t model_key,
+                                             std::uint64_t texture_key) const {
+    return model_buffers.at(model_key).local.memory != textures.at(texture_key).memory;
+  }
+  std::array<VkDeviceSize, 4> model_memory_for_test(std::uint64_t key) const {
+    const auto &buffer = model_buffers.at(key).local;
+    const auto block = preload_memory_blocks_.find(buffer.memory);
+    return {buffer.memory_offset, buffer.memory_size, buffer.memory_alignment,
+            block == preload_memory_blocks_.end() ? 0 : block->second.capacity};
+  }
+  std::array<VkDeviceSize, 4> texture_memory_for_test(std::uint64_t key) const {
+    const auto &texture = textures.at(key);
+    const auto block = preload_memory_blocks_.find(texture.memory);
+    return {texture.memory_offset, texture.memory_size, texture.memory_alignment,
+            block == preload_memory_blocks_.end() ? 0 : block->second.capacity};
+  }
+  void discard_texture_for_test(std::uint64_t key) {
+    if (preload_active_ || preload_pending_count())
+      throw std::runtime_error("Discarding a texture during preload");
+    settle();
+    const auto found = textures.find(key);
+    if (found != textures.end()) {
+      destroy(found->second);
+      textures.erase(found);
+    }
+  }
+  std::size_t preload_batch_submissions() const { return preload_batch_submissions_; }
+  std::size_t preload_pending_count() const {
+    return pending_preload_textures_.size() + pending_preload_models_.size();
+  }
+  std::size_t preload_peak_pending() const { return preload_peak_pending_; }
+  VkDeviceSize preload_peak_bytes() const { return preload_peak_bytes_; }
+  bool texture_completed(std::uint64_t key, std::uint64_t hash,
+                         unsigned width, unsigned height) const {
+    const auto found = textures.find(key);
+    return found != textures.end() && found->second.valid && found->second.hash == hash &&
+           found->second.width == width && found->second.height == height;
+  }
+  bool preload_stopped() const noexcept { return preload_stopped_; }
+  const PreloadStopInfo &preload_stop_info() const noexcept { return preload_stop_; }
+  void stop_preload_host_allocation() noexcept { stop_preload(VK_ERROR_OUT_OF_HOST_MEMORY); }
+  void set_preload_fault(const PreloadFaultInjection &fault) { preload_fault_ = fault; }
+  std::size_t preload_allocation_attempts() const { return preload_allocation_attempts_; }
+  std::size_t preload_allocation_successes() const { return preload_allocation_successes_; }
+  std::size_t live_allocation_count() const { return memory_allocations_.size(); }
+  std::uint64_t tracked_device_local_bytes() const {
+    std::uint64_t total = 0;
+    for (unsigned heap = 0; heap < memory.memoryHeapCount; ++heap)
+      if (memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+        total += tracked_heap_bytes(heap);
+    return total;
+  }
+  bool texture_resident(std::uint64_t key) const {
+    const auto found = textures.find(key);
+    return found != textures.end() && found->second.valid;
+  }
+  bool partial_texture(std::uint64_t key) const {
+    const auto found = textures.find(key);
+    return found != textures.end() && !found->second.valid;
+  }
+  std::size_t video_memory_full_log_count() const { return video_memory_full_log_count_; }
+  std::uint64_t render_frame() const { return render_frame_; }
+  void free_unused_model_buffers_for_test(std::uint64_t min_age_frames) {
+    free_unused_model_buffers(min_age_frames);
+  }
+  void free_unused_textures_for_test(std::uint64_t min_age_frames) {
+    free_unused_textures(min_age_frames);
+  }
+  // Ages resources without rendering, and marks one texture as just used.
+  void advance_render_frames_for_test(std::uint64_t frames) { render_frame_ += frames; }
+  void mark_texture_used_for_test(std::uint64_t key) {
+    textures.at(key).last_used_frame = render_frame_;
+  }
+  void mark_model_used_for_test(std::uint64_t key) {
+    model_buffers.at(key).last_used_frame = render_frame_;
+  }
+  // A retained shadow caster drawn with this texture, also in this frame's list.
+  void plant_fixture_caster_for_test(std::uint64_t texture_key) {
+    FixtureCaster caster;
+    caster.texture = &textures.at(texture_key);
+    auto &planted = fixtureCasters[{texture_key, 0}] = caster;
+    fixtureFrameCasters.push_back(&planted);
+  }
+  // Retained and this-frame casters still pointing at the texture.
+  std::size_t fixture_casters_using_texture_for_test(std::uint64_t texture_key) const {
+    const auto found = textures.find(texture_key);
+    const Tex *texture = found == textures.end() ? nullptr : &found->second;
+    std::size_t count = fixtureFrameCasters.size();
+    for (const auto &[key, caster] : fixtureCasters)
+      if (key.first == texture_key || (texture && caster.texture == texture))
+        ++count;
+    return count;
+  }
+  bool texture_awaiting_pixels(std::uint64_t key) const {
+    return textures_awaiting_pixels_.count(key) != 0;
+  }
+  // Keys of textures freed since the last call, for the frontend to drop their
+  // upload receipts (#496). Safe to call from the game thread while render()
+  // runs on the render worker.
+  std::vector<std::uint64_t> take_freed_texture_keys() {
+    if (!freed_textures_waiting_.load(std::memory_order_acquire))
+      return {};
+    std::lock_guard lock(freed_texture_mutex_);
+    freed_textures_waiting_.store(false, std::memory_order_relaxed);
+    return std::exchange(freed_texture_keys_, {});
+  }
+  bool model_uploaded(std::uint64_t key) const {
+    const auto found = model_buffers.find(key);
+    return found != model_buffers.end() && found->second.uploaded;
+  }
+  bool partial_model(std::uint64_t key) const {
+    const auto found = model_buffers.find(key);
+    return found != model_buffers.end() && !found->second.uploaded;
+  }
+  VkDeviceSize texture_staging_size() const { return texUpload.size; }
+  bool texture_staging_mapped() const { return texUpload.mapped != nullptr; }
+
+private:
   static void check(VkResult r, const char *what) {
     if (r != VK_SUCCESS)
       throw std::runtime_error(std::string("Vulkan scene renderer: ") + what +
@@ -3403,6 +4673,11 @@ private:
     if (!instanceExtensions.empty()) {
       MW34_VK_WSI_FNS(MW34_VK_OPT)
     }
+    memory_properties2_ = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(
+        get(instance, "vkGetPhysicalDeviceMemoryProperties2"));
+    if (!memory_properties2_)
+      memory_properties2_ = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(
+          get(instance, "vkGetPhysicalDeviceMemoryProperties2KHR"));
     VkSurfaceKHR probe{};
     if (surface_source.create && forPresent) {
       windowSurface = surface_source.create(instance);
@@ -3567,6 +4842,10 @@ private:
         f.vkEnumerateDeviceExtensionProperties(gpu, nullptr, &n, props.data());
       }
       for (const auto &p : props) {
+        if (memory_properties2_ && !std::strcmp(p.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
+          memory_budget_supported_ = true;
+          deviceExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+        }
         if (!std::strcmp(p.extensionName, swapExt)) {
           bool native_surface_supported = false;
 #if defined(_WIN32)
@@ -3650,6 +4929,22 @@ private:
             "present fence");
     }
     f.vkGetDeviceQueue(device, family, 0, &queue);
+    VkPhysicalDeviceProperties allocation_properties{};
+    f.vkGetPhysicalDeviceProperties(gpu, &allocation_properties);
+    if (allocation_properties.apiVersion >= VK_API_VERSION_1_1) {
+      image_memory_requirements2_ = reinterpret_cast<PFN_vkGetImageMemoryRequirements2>(
+          f.vkGetDeviceProcAddr(device, "vkGetImageMemoryRequirements2"));
+      buffer_memory_requirements2_ = reinterpret_cast<PFN_vkGetBufferMemoryRequirements2>(
+          f.vkGetDeviceProcAddr(device, "vkGetBufferMemoryRequirements2"));
+    }
+    // In-memory pipeline cache owned by this device so the Vulkan driver can
+    // reuse compiled shader stages and state across lazy pipeline variants
+    // without disk serialization or pretending cold variants were precreated.
+    VkPipelineCacheCreateInfo pipeline_cache_info{};
+    pipeline_cache_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    check(f.vkCreatePipelineCache(device, &pipeline_cache_info, nullptr,
+                                  &pipelineCache),
+          "pipeline cache");
     if (bridge_requested) {
       const auto properties2 =
           reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
@@ -4040,89 +5335,120 @@ private:
               bool reserve_hint = true) {
     if (b.buffer && b.size >= size)
       return;
-    const auto requested = size;
-    const bool reserve = bridge_config.buffer_reserve;
-    if (b.buffer && reserve && reserve_hint)
+    const VkDeviceSize requested = size;
+    if (b.buffer && bridge_config.buffer_reserve && reserve_hint)
       size = mw34::allocation::stream_capacity(size);
-    if (b.buffer) {
-      const bool trace = bridge_config.buffer_growth_trace;
-      if (trace)
-        std::fprintf(stderr,
-                     "Buffer growth: present=%llu previous=%llu requested=%llu "
-                     "capacity=%llu\n",
-                     (unsigned long long)(presents + 1),
-                     (unsigned long long)b.size, (unsigned long long)requested,
-                     (unsigned long long)size);
-      f.vkDestroyBuffer(device, b.buffer, nullptr);
-      f.vkFreeMemory(device, b.memory, nullptr);
-      b = {};
-    }
-    VkBufferCreateInfo bi{};
-    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bi.size = size;
-    bi.usage = usage;
-    const auto created = f.vkCreateBuffer(device, &bi, nullptr, &b.buffer);
-    if (size != requested && (created == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
-                              created == VK_ERROR_OUT_OF_HOST_MEMORY)) {
-      b = {};
-      ensure(b, requested, usage, false);
-      return;
-    }
-    check(created, "buffer");
-    VkMemoryRequirements r{};
-    f.vkGetBufferMemoryRequirements(device, b.buffer, &r);
-    VkMemoryAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    // Readback buffers are read by the CPU every scene: prefer host-cached
-    // memory (uncached, write-combined memory makes those reads several times
-    // slower). Upload buffers take the first host-visible type.
-    const VkMemoryPropertyFlags visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    ai.allocationSize = r.size;
-    ai.memoryTypeIndex =
-        (usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) &&
-                has_type(r, visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
-            ? type(r, visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
-            : type(r, visible);
-    const auto allocated = f.vkAllocateMemory(device, &ai, nullptr, &b.memory);
-    if (size != requested && (allocated == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
-                              allocated == VK_ERROR_OUT_OF_HOST_MEMORY)) {
-      f.vkDestroyBuffer(device, b.buffer, nullptr);
-      b = {};
-      ensure(b, requested, usage, false);
-      return;
-    }
-    check(allocated, "buffer memory");
-    {
-      const auto result = f.vkBindBufferMemory(device, b.buffer, b.memory, 0);
-      if (size != requested && (result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
-                                result == VK_ERROR_OUT_OF_HOST_MEMORY)) {
-        f.vkDestroyBuffer(device, b.buffer, nullptr);
-        f.vkFreeMemory(device, b.memory, nullptr);
-        b = {};
+    if (b.buffer && bridge_config.buffer_growth_trace)
+      std::fprintf(stderr,
+                   "Buffer growth: present=%llu previous=%llu requested=%llu capacity=%llu\n",
+                   (unsigned long long)(presents + 1), (unsigned long long)b.size,
+                   (unsigned long long)requested,
+                   (unsigned long long)size);
+    // Lazy callers already settle earlier uses and refill this buffer. Preserve
+    // their original peak memory requirement; only optional warmup keeps the
+    // old allocation available when its replacement cannot be admitted.
+    if (!preload_active_)
+      destroy_buffer(b);
+    Buffer replacement{};
+    try {
+      VkBufferCreateInfo info{};
+      info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+      info.size = size;
+      info.usage = usage;
+      check_allocation(f.vkCreateBuffer(device, &info, nullptr, &replacement.buffer), "buffer");
+      VkMemoryRequirements requirements{};
+      f.vkGetBufferMemoryRequirements(device, replacement.buffer, &requirements);
+      VkMemoryAllocateInfo allocation{};
+      allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      allocation.allocationSize = requirements.size;
+      const VkMemoryPropertyFlags visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+      allocation.memoryTypeIndex =
+          (usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) &&
+                  has_type(requirements, visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+              ? type(requirements, visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+              : type(requirements, visible);
+      check_allocation(allocate_memory(device, &allocation, nullptr, &replacement.memory),
+                       "buffer memory");
+      check_allocation(f.vkBindBufferMemory(device, replacement.buffer, replacement.memory, 0),
+                       "bind buffer");
+      check_allocation(f.vkMapMemory(device, replacement.memory, 0, VK_WHOLE_SIZE, 0,
+                                     &replacement.mapped), "map buffer");
+      replacement.size = size;
+    } catch (const PreloadAllocationFailure &) {
+      destroy_buffer(replacement);
+      if (!preload_active_ && size != requested) {
         ensure(b, requested, usage, false);
         return;
       }
-      check(result, "bind buffer");
+      throw;
+    } catch (...) {
+      destroy_buffer(replacement);
+      throw;
     }
-    {
-      const auto result =
-          f.vkMapMemory(device, b.memory, 0, VK_WHOLE_SIZE, 0, &b.mapped);
-      if (size != requested && (result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
-                                result == VK_ERROR_OUT_OF_HOST_MEMORY ||
-                                result == VK_ERROR_MEMORY_MAP_FAILED)) {
-        f.vkDestroyBuffer(device, b.buffer, nullptr);
-        f.vkFreeMemory(device, b.memory, nullptr);
-        b = {};
-        ensure(b, requested, usage, false);
+    destroy_buffer(b);
+    b = replacement;
+  }
+  // GPU-only grow-only storage. Diagnostic CPU access uses a separate staging buffer.
+  void ensure_device_buffer(Buffer &b, VkDeviceSize size, VkBufferUsageFlags usage,
+              bool reserve_hint = false) {
+    if (b.buffer && b.size >= size)
+      return;
+    const VkDeviceSize requested = size;
+    if (b.buffer && bridge_config.buffer_reserve && reserve_hint)
+      size = mw34::allocation::stream_capacity(size);
+    if (b.buffer && bridge_config.buffer_growth_trace)
+      std::fprintf(stderr,
+                   "Buffer growth: present=%llu previous=%llu requested=%llu capacity=%llu\n",
+                   (unsigned long long)(presents + 1), (unsigned long long)b.size,
+                   (unsigned long long)requested,
+                   (unsigned long long)size);
+    // Lazy callers already settle earlier uses and refill this buffer. Preserve
+    // their original peak memory requirement; only optional warmup keeps the
+    // old allocation available when its replacement cannot be admitted.
+    if (!preload_active_)
+      destroy_buffer(b);
+    Buffer replacement{};
+    try {
+      VkBufferCreateInfo info{};
+      info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+      info.size = size;
+      info.usage = usage;
+      check_allocation(f.vkCreateBuffer(device, &info, nullptr, &replacement.buffer), "buffer");
+      VkMemoryRequirements requirements{};
+      f.vkGetBufferMemoryRequirements(device, replacement.buffer, &requirements);
+      VkMemoryAllocateInfo allocation{};
+      allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      allocation.allocationSize = requirements.size;
+      const VkMemoryPropertyFlags visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+      allocation.memoryTypeIndex = has_type(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+                                       ? type(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+                                       : type(requirements, visible);
+      replacement.device_local =
+          (memory.memoryTypes[allocation.memoryTypeIndex].propertyFlags &
+           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+      check_allocation(allocate_memory(device, &allocation, nullptr, &replacement.memory),
+                       "buffer memory");
+      check_allocation(f.vkBindBufferMemory(device, replacement.buffer, replacement.memory, 0),
+                       "bind buffer");
+      replacement.size = size;
+    } catch (const PreloadAllocationFailure &) {
+      destroy_buffer(replacement);
+      if (!preload_active_ && size != requested) {
+        ensure_device_buffer(b, requested, usage, false);
         return;
       }
-      check(result, "map buffer");
+      throw;
+    } catch (...) {
+      destroy_buffer(replacement);
+      throw;
     }
-    b.size = size;
+    destroy_buffer(b);
+    b = replacement;
   }
   // A cached immutable device-local model buffer and its one-time upload.
-  ModelBuffer &model_buffer(const ModelGeometry &g) {
+  ModelBuffer &model_buffer(const ModelGeometry &g, bool shared_staging = false) {
     if (g.vertices.empty() ||
         (g.indices.empty()
              ? (g.vertices.size() > 65535 || g.vertices.size() % 3)
@@ -4136,102 +5462,136 @@ private:
         throw std::runtime_error("GPU model geometry identity changed");
       return b;
     }
-    const VkDeviceSize bytes =
-        VkDeviceSize(g.vertices.size()) * sizeof(ModelVertex);
-    ensure(b.staging, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-    std::memcpy(b.staging.mapped, g.vertices.data(), size_t(bytes));
-    VkBufferCreateInfo ci{};
-    ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    ci.size = bytes;
-    ci.usage =
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    check(f.vkCreateBuffer(device, &ci, nullptr, &b.local.buffer),
-          "model vertex buffer");
-    VkMemoryRequirements r{};
-    f.vkGetBufferMemoryRequirements(device, b.local.buffer, &r);
-    VkMemoryAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ai.allocationSize = r.size;
-    ai.memoryTypeIndex = type(r, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    check(f.vkAllocateMemory(device, &ai, nullptr, &b.local.memory),
-          "model vertex memory");
-    check(f.vkBindBufferMemory(device, b.local.buffer, b.local.memory, 0),
-          "bind model vertex memory");
-    b.local.size = bytes;
-    b.hash = g.hash;
-    b.count = unsigned(g.vertices.size());
-    b.index_count = unsigned(g.indices.size());
-    b.source = g.source;
-    if (!g.indices.empty()) {
-      for (auto index : g.indices)
-        if (index >= g.vertices.size())
-          throw std::runtime_error("GPU geometry index outside vertices");
-      const VkDeviceSize index_bytes = g.indices.size() * sizeof(std::uint32_t);
-      ensure(b.index_staging, index_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-      std::memcpy(b.index_staging.mapped, g.indices.data(),
-                  size_t(index_bytes));
-      ci.size = index_bytes;
+    try {
+      const VkDeviceSize bytes =
+          VkDeviceSize(g.vertices.size()) * sizeof(ModelVertex);
+      if (!shared_staging) {
+        ensure(b.staging, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        std::memcpy(b.staging.mapped, g.vertices.data(), size_t(bytes));
+      }
+      VkBufferCreateInfo ci{};
+      ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+      ci.size = bytes;
       ci.usage =
-          VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-      check(f.vkCreateBuffer(device, &ci, nullptr, &b.indices.buffer),
-            "model index buffer");
-      f.vkGetBufferMemoryRequirements(device, b.indices.buffer, &r);
+          VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+      check_allocation(f.vkCreateBuffer(device, &ci, nullptr, &b.local.buffer),
+            "model vertex buffer");
+      VkMemoryRequirements r{};
+      f.vkGetBufferMemoryRequirements(device, b.local.buffer, &r);
+      VkMemoryAllocateInfo ai{};
+      ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
       ai.allocationSize = r.size;
       ai.memoryTypeIndex = type(r, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-      check(f.vkAllocateMemory(device, &ai, nullptr, &b.indices.memory),
-            "model index memory");
-      check(f.vkBindBufferMemory(device, b.indices.buffer, b.indices.memory, 0),
-            "bind model indices");
-      b.indices.size = index_bytes;
+      allocate_preload_resource(r, ai.memoryTypeIndex, VK_NULL_HANDLE, b.local.buffer,
+                                b.local.memory, b.local.memory_offset);
+      b.local.memory_size = r.size;
+      b.local.memory_alignment = r.alignment;
+      check_allocation(f.vkBindBufferMemory(device, b.local.buffer, b.local.memory,
+                                           b.local.memory_offset),
+            "bind model vertex memory");
+      b.local.size = bytes;
+      b.hash = g.hash;
+      b.count = unsigned(g.vertices.size());
+      b.index_count = unsigned(g.indices.size());
+      b.source = g.source;
+      if (!g.indices.empty()) {
+        for (auto index : g.indices)
+          if (index >= g.vertices.size())
+            throw std::runtime_error("GPU geometry index outside vertices");
+        const VkDeviceSize index_bytes = g.indices.size() * sizeof(std::uint32_t);
+        if (!shared_staging) {
+          ensure(b.index_staging, index_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+          std::memcpy(b.index_staging.mapped, g.indices.data(), size_t(index_bytes));
+        }
+        ci.size = index_bytes;
+        ci.usage =
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        check_allocation(f.vkCreateBuffer(device, &ci, nullptr, &b.indices.buffer),
+              "model index buffer");
+        f.vkGetBufferMemoryRequirements(device, b.indices.buffer, &r);
+        ai.allocationSize = r.size;
+        ai.memoryTypeIndex = type(r, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        allocate_preload_resource(r, ai.memoryTypeIndex, VK_NULL_HANDLE, b.indices.buffer,
+                                  b.indices.memory, b.indices.memory_offset);
+        b.indices.memory_size = r.size;
+        b.indices.memory_alignment = r.alignment;
+        check_allocation(f.vkBindBufferMemory(device, b.indices.buffer, b.indices.memory,
+                                             b.indices.memory_offset),
+              "bind model indices");
+        b.indices.size = index_bytes;
+      }
+      return b;
+    } catch (...) {
+      discard_model_buffer(g.key);
+      throw;
     }
-    return b;
   }
   // Transfer-only images need no view. Sampled/attachment images receive a view
   // spanning every requested mip; initial contents and layout remain undefined.
   void image(VkImage &img, VkDeviceMemory &mem, VkImageView &view, unsigned w,
              unsigned h, VkFormat format, VkImageUsageFlags usage,
-             VkImageAspectFlags aspect, unsigned levels = 1) {
-    VkImageCreateInfo ii{};
-    ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    ii.imageType = VK_IMAGE_TYPE_2D;
-    ii.format = format;
-    ii.extent = {w, h, 1};
-    ii.mipLevels = levels;
-    ii.arrayLayers = 1;
-    ii.samples = VK_SAMPLE_COUNT_1_BIT;
-    ii.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ii.usage = usage;
-    check(f.vkCreateImage(device, &ii, nullptr, &img), "image");
-    VkMemoryRequirements r{};
-    f.vkGetImageMemoryRequirements(device, img, &r);
-    VkMemoryAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ai.allocationSize = r.size;
-    ai.memoryTypeIndex = type(r, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    check(f.vkAllocateMemory(device, &ai, nullptr, &mem), "image memory");
-    check(f.vkBindImageMemory(device, img, mem, 0), "bind image");
-    if (!(usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
-                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                   VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                   VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)))
-      return;
-    VkImageViewCreateInfo vi{};
-    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    vi.image = img;
-    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vi.format = format;
-    vi.subresourceRange = {aspect, 0, levels, 0, 1};
-    check(f.vkCreateImageView(device, &vi, nullptr, &view), "image view");
+             VkImageAspectFlags aspect, unsigned levels = 1, Tex *preload_texture = nullptr) {
+    try {
+      VkImageCreateInfo ii{};
+      ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+      ii.imageType = VK_IMAGE_TYPE_2D;
+      ii.format = format;
+      ii.extent = {w, h, 1};
+      ii.mipLevels = levels;
+      ii.arrayLayers = 1;
+      ii.samples = VK_SAMPLE_COUNT_1_BIT;
+      ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+      ii.usage = usage;
+      check_allocation(f.vkCreateImage(device, &ii, nullptr, &img), "image");
+      VkMemoryRequirements r{};
+      f.vkGetImageMemoryRequirements(device, img, &r);
+      VkMemoryAllocateInfo ai{};
+      ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      ai.allocationSize = r.size;
+      ai.memoryTypeIndex = type(r, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+      VkDeviceSize memory_offset = 0;
+      if (preload_texture) {
+        allocate_preload_resource(r, ai.memoryTypeIndex, img, VK_NULL_HANDLE, mem, memory_offset);
+        preload_texture->memory_offset = memory_offset;
+        preload_texture->memory_size = r.size;
+        preload_texture->memory_alignment = r.alignment;
+      } else {
+        check_allocation(allocate_memory(device, &ai, nullptr, &mem), "image memory");
+      }
+      check_allocation(f.vkBindImageMemory(device, img, mem, memory_offset), "bind image");
+      if (!(usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                     VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)))
+        return;
+      VkImageViewCreateInfo vi{};
+      vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+      vi.image = img;
+      vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+      vi.format = format;
+      vi.subresourceRange = {aspect, 0, levels, 0, 1};
+      check_allocation(f.vkCreateImageView(device, &vi, nullptr, &view), "image view");
+    } catch (...) {
+      if (view)
+        f.vkDestroyImageView(device, view, nullptr);
+      if (img)
+        f.vkDestroyImage(device, img, nullptr);
+      if (mem)
+        release_memory(device, mem, nullptr);
+      img = {}; mem = {}; view = {};
+      throw;
+    }
   }
   void create(Tex &t, unsigned w, unsigned h) {
     t.levels = 1;
+    t.last_used_frame = render_frame_;
     if (anisotropy() > 1)
       for (unsigned n = std::max(w, h); n > 1; n >>= 1)
         ++t.levels;
     image(t.image, t.memory, t.view, w, h, VK_FORMAT_R8G8B8A8_UNORM,
           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
               VK_IMAGE_USAGE_SAMPLED_BIT,
-          VK_IMAGE_ASPECT_COLOR_BIT, t.levels);
+          VK_IMAGE_ASPECT_COLOR_BIT, t.levels, &t);
     t.width = w;
     t.height = h;
     t.valid = false;
@@ -4243,7 +5603,7 @@ private:
     if (t.image)
       f.vkDestroyImage(device, t.image, nullptr);
     if (t.memory)
-      f.vkFreeMemory(device, t.memory, nullptr);
+      release_memory(device, t.memory, nullptr);
     t = {};
   }
   // Target replacement waits for the whole device, including presentation
@@ -4258,14 +5618,14 @@ private:
     if (framebuffer)
       f.vkDestroyFramebuffer(device, framebuffer, nullptr);
     for (Image *i :
-         {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource}) {
-      if (i->view)
-        f.vkDestroyImageView(device, i->view, nullptr);
-      if (i->image)
-        f.vkDestroyImage(device, i->image, nullptr);
-      if (i->memory)
-        f.vkFreeMemory(device, i->memory, nullptr);
-      *i = {};
+         {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource, &menuRippleSource}) {
+        if (i->view)
+            f.vkDestroyImageView(device, i->view, nullptr);
+        if (i->image)
+            f.vkDestroyImage(device, i->image, nullptr);
+        if (i->memory)
+            release_memory(device, i->memory, nullptr);
+        *i = {};
     }
     scale = scale_req;
     if (scale != 1.f || widescreen()) { // scaling needs blits of both formats
@@ -4435,6 +5795,8 @@ private:
     auto it = pipelines.find(key);
     if (it != pipelines.end())
       return it->second;
+    mw34::timing::ScopedDuration pipeline_miss_timer(
+        gpu_resource_timing_.pipeline_target());
     std::array<VkPipelineShaderStageCreateInfo, 2> st{};
     for (int i = 0; i < 2; ++i) {
       st[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -4587,7 +5949,7 @@ private:
     pi.layout = (model || lit) ? modelLayout : pipelineLayout;
     pi.renderPass = renderPass;
     VkPipeline p{};
-    check(f.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pi, nullptr,
+    check(f.vkCreateGraphicsPipelines(device, pipelineCache, 1, &pi, nullptr,
                                       &p),
           "graphics pipeline");
     return pipelines[key] = p;
@@ -4927,7 +6289,7 @@ private:
     if (srcImage.image)
       f.vkDestroyImage(device, srcImage.image, nullptr);
     if (srcImage.memory)
-      f.vkFreeMemory(device, srcImage.memory, nullptr);
+      release_memory(device, srcImage.memory, nullptr);
     srcImage = {};
     image(srcImage.image, srcImage.memory, srcImage.view, w, h,
           rgba32 ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R5G6B5_UNORM_PACK16,
@@ -4980,6 +6342,7 @@ private:
                  "adjacent TL draws combined\n",
                  (unsigned long long)draws, (unsigned long long)submitted_draws,
                  (unsigned long long)combined_draws);
+    destroy_menu_ripple_pipeline();
     if (qualityPipeline)
       f.vkDestroyPipeline(device, qualityPipeline, nullptr);
     if (qualityLayout)
@@ -4997,7 +6360,7 @@ private:
         if (p->buffer)
           f.vkDestroyBuffer(device, p->buffer, nullptr);
         if (p->memory)
-          f.vkFreeMemory(device, p->memory, nullptr);
+          release_memory(device, p->memory, nullptr);
       }
     model_buffers.clear();
     if (emission_draw_records)
@@ -5016,6 +6379,10 @@ private:
     destroy(flatNormal);
     for (auto &[k, p] : pipelines)
       f.vkDestroyPipeline(device, p, nullptr);
+    if (pipelineCache) {
+      f.vkDestroyPipelineCache(device, pipelineCache, nullptr);
+      pipelineCache = VK_NULL_HANDLE;
+    }
     for (auto &[k, s] : samplers)
       f.vkDestroySampler(device, s, nullptr);
     dxgi.detach();
@@ -5028,7 +6395,7 @@ private:
     if (srcImage.image)
       f.vkDestroyImage(device, srcImage.image, nullptr);
     if (srcImage.memory)
-      f.vkFreeMemory(device, srcImage.memory, nullptr);
+      release_memory(device, srcImage.memory, nullptr);
     if (acquired)
       f.vkDestroySemaphore(device, acquired, nullptr);
     if (presentFence)
@@ -5039,7 +6406,7 @@ private:
                       &texUpload, &presentUpload, &sunBuffer, &effectBuffer, &height_upload})
       if (b->buffer) {
         f.vkDestroyBuffer(device, b->buffer, nullptr);
-        f.vkFreeMemory(device, b->memory, nullptr);
+        release_memory(device, b->memory, nullptr);
       }
     if (worldColor.image) {
       std::fprintf(stderr,
@@ -5051,13 +6418,13 @@ private:
     if (framebuffer)
       f.vkDestroyFramebuffer(device, framebuffer, nullptr);
     for (Image *i :
-         {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource}) {
-      if (i->view)
-        f.vkDestroyImageView(device, i->view, nullptr);
-      if (i->image)
-        f.vkDestroyImage(device, i->image, nullptr);
-      if (i->memory)
-        f.vkFreeMemory(device, i->memory, nullptr);
+         {&colorImage, &depthImage, &colorLo, &depthLo, &qualitySource, &menuRippleSource}) {
+        if (i->view)
+            f.vkDestroyImageView(device, i->view, nullptr);
+        if (i->image)
+            f.vkDestroyImage(device, i->image, nullptr);
+        if (i->memory)
+            release_memory(device, i->memory, nullptr);
     }
     f.vkDestroyRenderPass(device, renderPass, nullptr);
     f.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
@@ -5081,7 +6448,7 @@ private:
     if (shadowImage)
       f.vkDestroyImage(device, shadowImage, nullptr);
     if (shadowMemory)
-      f.vkFreeMemory(device, shadowMemory, nullptr);
+      release_memory(device, shadowMemory, nullptr);
     if (shadowVert)
       f.vkDestroyShaderModule(device, shadowVert, nullptr);
     if (sunSetLayout)
@@ -5111,6 +6478,7 @@ private:
     loader.unload();
     device = {};
   }
+#include "menu_ripple_stage.inc"
 #include "quality_stage.inc"
 #include "range_backdrop.inc"
 #include "world_resolution_stage.inc"

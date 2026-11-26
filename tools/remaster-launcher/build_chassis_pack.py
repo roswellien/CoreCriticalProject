@@ -122,7 +122,7 @@ def build(project_path, output):
             row['surface_materials'] = {}
             for lod in ('close', 'distance'):
                 path = resolve(project_path.parent, entry['surface_materials'][lod])
-                if path.stat().st_size > 256 * 1024**2:
+                if path.stat().st_size > 512 * 1024**2:
                     raise ValueError('Chassis surface-material resource exceeds size limit')
                 row['surface_materials'][lod] = add(path.read_bytes(), SURFACE_FORMAT)
         records.append(row)

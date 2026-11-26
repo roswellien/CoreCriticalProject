@@ -9,6 +9,13 @@
 // and its full or low-detail model (+0x690, +0x694 / +0x698).
 namespace mech3 {
 
+// Ours (#287): the arena's detail for every mech: turn pivot, landing
+// effects and the full gait (bits 2..4), no sounds.
+constexpr uint32_t kMidDetail = 0x1c;
+// Ours (#289): a replay puppet's, the arena's plus bit 0, so its footsteps
+// and action sounds play.
+constexpr uint32_t kPuppetDetail = kMidDetail | 1;
+
 // What it calls outside the mech code; unset ones do nothing (the models
 // stay as they are, no target counts).
 struct LodCalls {
@@ -23,6 +30,13 @@ struct LodCalls {
   void (*set_node)(MechPart& p, Handle node) = nullptr;         // vt+0x0c (0x00460190)
   void (*stop_effect)(Handle effect) = nullptr;                 // 0x00506ca0
   Handle (*jets_effect)(Mech& m) = nullptr;  // 0x00432830(1, 0, zero, zero) on +0x684
+  // Ours (#287, docs/arena.md): an arena match's fairness. Set, no mech is cut
+  // down for its distance from the player's mech or the view: every mech
+  // keeps its full model, whose parts are what shots hit, and the mid detail
+  // (0x1c). Stock, a mech beyond its range from the player
+  // swaps to the low model and past 250 m to the gait only, so a side whose
+  // targets stood away from the host landed about half the hits.
+  bool same_detail_for_all = false;
 };
 LodCalls& lod_calls();
 

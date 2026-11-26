@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -282,6 +283,52 @@ TEST(view_distance_restores_render_camera_far_state) {
              "extended 0, default-800 fog-only 1; camera main") !=
          std::string::npos);
   EXPECT(fixture.observed_passes == 6);
+}
+
+// Issue 467: a zoom window clamped at a screen edge can be 0 wide for a frame.
+// Drawing it wrote a zero focal length into the shared projection, and the
+// Vulkan local lights then threw "invalid projection" and ended the game. A
+// camera whose window has no area must draw nothing and leave the shared
+// projection, view and draw state as they were.
+TEST(empty_camera_window_skips_drawing) {
+  CameraFixture fixture;
+  int scene_calls = 0;
+  auto& hooks = zcls::world_render_hooks();
+  hooks.ctx = &scene_calls;
+  hooks.begin_scene = [](void* context) { ++*static_cast<int*>(context); };
+  hooks.end_scene = [](void* context) { ++*static_cast<int*>(context); };
+  EXPECT(zcls::camera_set_fov_angles(&fixture.camera_node, 1.0f, 0.8f) == 0);
+
+  struct WindowSize {
+    int32_t width, height;
+  };
+  constexpr WindowSize empty_sizes[] = {{0, 6}, {6, 0}, {-4, 6}};
+  for (const WindowSize& size : empty_sizes) {
+    // A known, valid projection first, so a skipped draw is told apart from one
+    // that rewrote the same values.
+    fixture.window.put<int32_t>(8, 3440);
+    fixture.window.put<int32_t>(12, 1440);
+    zmod::set_camera(&fixture.camera);
+    fixture.window.put<int32_t>(8, size.width);
+    fixture.window.put<int32_t>(12, size.height);
+    const zmth::Projection projection_before = zmth::projection();
+    const zmth::View view_before = zmth::view();
+    const zmod::DrawState draw_before = zmod::draw_state();
+    scene_calls = 0;
+
+    EXPECT(zcls::render_world(&fixture.camera_node, 0) == 0);
+    EXPECT(zcls::render_subtree(&fixture.camera_node, &fixture.world_node, 1, false) == 0);
+    zmod::set_camera(&fixture.camera);
+
+    EXPECT(scene_calls == 0);
+    EXPECT(std::memcmp(&zmth::projection(), &projection_before, sizeof projection_before) == 0);
+    EXPECT(std::memcmp(&zmth::view(), &view_before, sizeof view_before) == 0);
+    // DrawState has padding, so it is compared by the fields set_camera writes.
+    EXPECT(zmod::draw_state().camera_data == draw_before.camera_data);
+    EXPECT(zmod::draw_state().clip.far_z == draw_before.clip.far_z);
+    EXPECT(std::memcmp(&zmod::draw_state().point_rect, &draw_before.point_rect,
+               sizeof draw_before.point_rect) == 0);
+  }
 }
 
 TEST(default_visual_far_covers_only_full_viewport_fog) {

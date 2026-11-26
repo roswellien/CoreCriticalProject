@@ -2,6 +2,7 @@
 // integrity.
 #include "platform/prepared_environment_bank.hpp"
 #include "platform/sha256.hpp"
+#include "platform/verified_digest.hpp"
 #include <algorithm>
 #include <cfenv>
 #include <cmath>
@@ -24,6 +25,7 @@ constexpr std::uint64_t env_json_limit = 2ULL * 1024 * 1024;
 constexpr std::uint64_t env_total_limit = 16ULL * 1024 * 1024 * 1024;
 constexpr std::uint64_t env_world_limit = 4096ULL * 1024 * 1024;
 constexpr std::uint64_t env_page_limit = 16ULL * 1024 * 1024;
+constexpr std::size_t env_world_page_limit = 512;
 constexpr std::uint64_t env_target_limit = 4ULL * 1024 * 1024;
 [[noreturn]] void env_fail(const std::string &message) {
   throw std::runtime_error("Environment pack: " + message);
@@ -497,7 +499,7 @@ void env_catalog(const EnvPack &pack, const char *role, const char *magic,
     ++pages;
     const bool world = std::string(role) == "world";
     if ((world && (it->second.bytes > env_page_limit ||
-                   bytes > env_world_limit || pages > 256)) ||
+                   bytes > env_world_limit || pages > env_world_page_limit)) ||
         (!world && (bytes > 1536ULL * 1024 * 1024 || pages > 16)))
       env_fail("normal catalog budget exceeded");
   }
@@ -633,8 +635,9 @@ static EnvironmentSelection load_environment_packs_impl(
                env_uint(
                    payload["required_capabilities"]["surface-materials"]) != 1))
             env_fail("surface-materials capability required");
-          if ((pin.format == "BWSFM1" || pin.format == "BWSNR2") &&
-              pin.bytes > 256ULL * 1024 * 1024)
+          if (pin.format == "BWSFM1" && pin.bytes > 512ULL * 1024 * 1024)
+            env_fail("surface-material sidecar byte limit");
+          if (pin.format == "BWSNR2" && pin.bytes > 256ULL * 1024 * 1024)
             env_fail("sidecar byte limit");
           env_header(pin);
         }
@@ -771,7 +774,7 @@ static EnvironmentSelection load_environment_packs_impl(
         const auto &pin = member.second;
         const auto path = efs::u8path(pin.path);
         if (efs::file_size(path) != pin.bytes ||
-            integrity::sha256_file(path) != pin.digest ||
+            verified_digest::sha256_file(path, pin.bytes) != pin.digest ||
             efs::file_size(path) != pin.bytes)
           env_fail("member integrity failure: " + member.first);
         fold(member.first);

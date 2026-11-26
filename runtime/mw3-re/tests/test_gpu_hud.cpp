@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -117,6 +118,19 @@ class Recorder : public sdlfe::FrameRenderer {
   std::vector<std::vector<uint32_t>> images;
   std::vector<ImageRecord> image_records;
   std::vector<int> released;
+  bool gpu_ripple = false;
+  bool ripple_preflight_throws = false;
+  std::vector<sdlfe::MenuRipplePass> ripples;
+  std::vector<char> order;
+  bool supports_gpu_menu_ripple() const override { return gpu_ripple; }
+  void prepare_menu_ripple() override {
+      if (ripple_preflight_throws)
+          throw std::runtime_error("Synthetic ripple preflight failure");
+  }
+  void apply_menu_ripple(const sdlfe::MenuRipplePass &pass) override {
+      ripples.push_back(pass);
+      order.push_back('r');
+  }
   bool flushed = false;
   bool allocation_fails = false;
   bool preflight_throws = false;
@@ -158,11 +172,167 @@ class Recorder : public sdlfe::FrameRenderer {
   void end_scene() override {}
   void draw(platform::Primitive primitive, const platform::TLVertex* vertices, int count,
             const platform::DrawState& state) override {
-    draws.push_back({primitive, {vertices, vertices + count}, state});
+      order.push_back('d');
+      draws.push_back({primitive, {vertices, vertices + count}, state});
   }
   void set_fog_color(uint8_t, uint8_t, uint8_t) override {}
   void present() override {}
 };
+void menu_ripple_checks() {
+    constexpr int width = 120, height = 100, pitch_pixels = 128;
+    sdlfe::HudOptions options;
+    options.mode = "core-critical";
+    std::vector<uint16_t> initial(pitch_pixels * height);
+    for (size_t i = 0; i < initial.size(); ++i)
+        initial[i] = uint16_t(i * 17 + 0x1234);
+    const int32_t clip[4]{0, 1, 110, 95};
+    uint16_t button_pixel = 0xffff;
+    zimg::Texture button{};
+    button.width = button.width_again = button.height = 1;
+    button.pixels = &button_pixel;
+    button.flags = zimg::kTwoBytes;
+    for (bool gpu : {false, true}) {
+        for (bool clipped : {false, true}) {
+            auto baseline = initial, shadow = initial;
+            const auto *rect = clipped ? clip : nullptr;
+            const int x = clipped ? 2 : 65, y = clipped ? 2 : 50;
+            auto run = [&](std::vector<uint16_t> &pixels) {
+                zrndr::target2d() = {reinterpret_cast<uint8_t *>(pixels.data()), width, height,
+                                     pitch_pixels * 2, 6};
+                zrndr::set_finish_target(pixels.data(), width, height, pitch_pixels * 2);
+                zrndr::ripple_state().scratch.assign(width * height, 0x7bef);
+                zrndr::ripple(x, y, 5, 40, 3, 4.f, .5f, rect, zrndr::X87::k24);
+            };
+            run(baseline);
+            const auto expected_scratch = zrndr::ripple_state().scratch;
+            Recorder recorder;
+            recorder.gpu_ripple = gpu;
+            sdlfe::GpuHud hud(recorder, options);
+            zrndr::target2d() = {reinterpret_cast<uint8_t *>(shadow.data()), width, height,
+                                 pitch_pixels * 2, 6};
+            require(hud.begin_menu(shadow.data(), width, height, pitch_pixels * 2, height),
+                    "Ripple menu begin failed");
+            zrndr::draw_observer()->span(shadow.data() + 20 * pitch_pixels + 20, 2, 0xffff);
+            hud.image(&button, 30, 30, 0, nullptr);
+            run(shadow);
+            const auto actual_scratch = zrndr::ripple_state().scratch;
+            zrndr::draw_observer()->span(shadow.data() + 70 * pitch_pixels + 20, 2, 0xf800);
+            hud.image(&button, 30, 70, 0, nullptr);
+            zrndr::ripple(x, y, 5, 5, 3, 4.f, .5f, rect, zrndr::X87::k24);
+            require(shadow == baseline && actual_scratch == expected_scratch,
+                    "Ripple observation changed CPU pixels or persistent scratch");
+            require(hud.seal_menu(), "Ripple menu did not seal");
+            const auto regions = hud.frame_stats().resolved_regions;
+            if (gpu)
+                require(regions == 0 && recorder.images.size() == 1 && hud.has_menu_ripples(),
+                        "GPU ripple allocated resolved textures");
+            else {
+                require(regions > 0 && regions <= 2, "CPU ripple notifications were not coalesced");
+                const int band_width = clipped ? 36 : 80;
+                const int band_rows = clipped ? 36 : 80;
+                require(std::any_of(recorder.image_records.begin(), recorder.image_records.end(),
+                                    [&](const auto &image) {
+                                        return image.width == band_width &&
+                                               image.height == band_rows;
+                                    }),
+                        "CPU ripple band lost copied columns or rows");
+            }
+            platform::MenuBackgroundLayerRect destination{13, 17, 240, 300};
+            require(hud.submit_menu(&destination, false), "Ripple replay failed");
+            require(!hud.has_menu_ripples(), "Submitted ripple commands were retained");
+            if (gpu) {
+                require(recorder.order == std::vector<char>{'d', 'd', 'r', 'd', 'd'} &&
+                            recorder.ripples.size() == 1,
+                        "Ripple lost draw order or recorded the no-op");
+                const auto &pass = recorder.ripples.front();
+                require(pass.center_x == 13 + (x + .5f) * 2 &&
+                            pass.center_y == 17 + (y + .5f) * 3 && pass.scale_x == 2 &&
+                            pass.scale_y == 3 && pass.inner == 5 && pass.outer == 40 &&
+                            pass.amplitude == 3 && pass.wavelength == 4 && pass.phase == .5f &&
+                            pass.has_clip,
+                        "Ripple destination transform or wave parameters changed");
+                if (clipped)
+                    require(pass.clip_left == 13 && pass.clip_top == 20 && pass.clip_right == 233 &&
+                                pass.clip_bottom == 302,
+                            "Ripple clip transform changed");
+                else
+                    require(pass.clip_left == 13 && pass.clip_top == 17 && pass.clip_right == 253 &&
+                                pass.clip_bottom == 317,
+                            "Unclipped ripple lost destination sampling bounds");
+            }
+        }
+    }
+    Recorder recorder;
+    recorder.gpu_ripple = true;
+    sdlfe::GpuHud hud(recorder, options);
+    auto shadow = initial;
+    auto begin = [&] {
+        zrndr::target2d() = {reinterpret_cast<uint8_t *>(shadow.data()), width, height,
+                             pitch_pixels * 2, 6};
+        require(hud.begin_menu(shadow.data(), width, height, pitch_pixels * 2, height),
+                "Ripple fallback begin failed");
+    };
+    // Exercise surface intersections directly; invalid clips must not reach legacy CPU math.
+    const int32_t oversized_clip[4]{-20, -10, width + 30, height + 25};
+    begin();
+    require(hud.ripple(shadow.data(), 20, 20, 1, 10, 3, 4.f, .5f, oversized_clip) &&
+                hud.has_menu_ripples() && hud.seal_menu(),
+            "Oversized ripple clip was not recorded");
+    platform::MenuBackgroundLayerRect destination{13, 17, 240, 300};
+    require(hud.submit_menu(&destination, false) && recorder.ripples.size() == 1,
+            "Oversized ripple clip replay failed");
+    const auto &oversized_pass = recorder.ripples.back();
+    require(oversized_pass.has_clip && oversized_pass.clip_left == 13 &&
+                oversized_pass.clip_top == 17 && oversized_pass.clip_right == 253 &&
+                oversized_pass.clip_bottom == 317,
+            "Oversized ripple clip escaped destination sampling bounds");
+    for (const auto outside_clip : {std::array<int32_t, 4>{width, 0, width + 10, 20},
+                                    std::array<int32_t, 4>{-20, -10, 0, 20}}) {
+        begin();
+        const auto command_count = recorder.order.size();
+        const auto ripple_count = recorder.ripples.size();
+        require(hud.ripple(shadow.data(), 20, 20, 1, 10, 3, 4.f, .5f, outside_clip.data()) &&
+                    !hud.has_menu_ripples(),
+                "Off-surface ripple clip produced a command");
+        require(!hud.seal_menu() && !hud.submit_menu(&destination, false) &&
+                    recorder.order.size() == command_count &&
+                    recorder.ripples.size() == ripple_count,
+                "Off-surface ripple submission emitted commands");
+    }
+    // Validate rejection at the observer boundary without feeding invalid FP into legacy CPU math.
+    for (int failure = 0; failure < 5; ++failure) {
+        begin();
+        uint8_t alpha = 0;
+        if (failure == 0)
+            zrndr::target2d().format = 5;
+        if (failure == 1)
+            zrndr::layer_cover().alpha = &alpha;
+        const float wavelength = failure == 2   ? 0.f
+                                 : failure == 3 ? std::numeric_limits<float>::infinity()
+                                                : 4.f;
+        const float phase = failure == 4 ? std::numeric_limits<float>::quiet_NaN() : .5f;
+        require(hud.ripple(shadow.data(), 20, 20, 1, 10, 3, wavelength, phase, nullptr),
+                "Invalid GPU ripple did not handle fallback");
+        zrndr::layer_cover() = {};
+        require(!hud.seal_menu() && hud.frame_stats().fallback && !hud.has_menu_ripples(),
+                "Invalid GPU ripple did not select native composition");
+    }
+    begin();
+    require(!hud.ripple(initial.data(), 20, 20, 1, 10, 3, 4.f, .5f, nullptr),
+            "Ripple claimed another target surface");
+    const int32_t empty_clip[4]{4, 5, 4, 8};
+    require(hud.ripple(shadow.data(), 20, 20, 1, 10, 3, 4.f, .5f, empty_clip) &&
+                !hud.has_menu_ripples(),
+            "Empty ripple clip produced a command");
+    require(hud.ripple(shadow.data(), 20, 20, 1, 10, 3, 4.f, .5f, nullptr),
+            "Ripple recording failed");
+    require(hud.seal_menu(), "Preflight fixture did not seal");
+    recorder.ripple_preflight_throws = true;
+    require(!hud.submit_menu() && hud.frame_stats().fallback && !hud.has_menu_ripples(),
+            "Ripple preflight failure retained GPU commands");
+    zrndr::target2d() = {};
+    zrndr::set_finish_target(nullptr, 0, 0, 0);
+}
 void artwork_checks(const std::filesystem::path& directory) {
   std::filesystem::create_directories(directory);
   const auto path = directory / "0000000000000001.rgba";
@@ -2751,6 +2921,7 @@ int main(int argc, char** argv) {
   try {
     artwork_checks(directory);
     drawing_checks();
+    menu_ripple_checks();
     menu_background_checks(directory);
     observation_checks();
     stage_b_primitive_checks(directory);

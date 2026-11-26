@@ -90,19 +90,37 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                 self.assertEqual(result["argv"], without_window)
                 self.assertEqual(request, before)
 
+    def test_disk_cache_switch_reaches_only_the_child_environment(self):
+        plan = self.planner()
+        default = plan(self.request())
+        self.assertEqual(default["environment"], {"MW3_DISK_CACHE": "1"})
+        enabled = plan(dict(self.request(), disk_cache=True))
+        disabled = plan(dict(self.request(), disk_cache=False))
+        self.assertEqual(enabled["environment"], {"MW3_DISK_CACHE": "1"})
+        self.assertEqual(disabled["environment"], {"MW3_DISK_CACHE": "0"})
+        # The cache switch never changes the game's own command line.
+        self.assertEqual(enabled["argv"], disabled["argv"])
+        for value in (1, "0", None):
+            with self.subTest(disk_cache=value), self.assertRaisesRegex(ValueError, "disk_cache"):
+                plan(dict(self.request(), disk_cache=value))
+
     def test_verified_indeo_path_is_emitted_and_missing_codec_is_reported(self):
         plan = self.planner()
         verified = plan(dict(self.request(), indeo_codec="D:/Original MW3/native-inputs/Ir50_32.dll"))
         self.assertTrue(verified["ok"])
         index = verified["argv"].index("--indeo-codec")
         self.assertEqual(verified["argv"][index + 1], "D:\\Original MW3\\native-inputs\\Ir50_32.dll")
-        self.assertEqual(verified["skipped_features"], [])
+        self.assertEqual(verified["skipped_features"], [{
+            "feature": "vsync",
+            "reason": "The selected MW3-RE runtime does not advertise support for VSync.",
+        }])
 
         missing = plan(self.request())
         self.assertNotIn("--indeo-codec", missing["argv"])
-        self.assertEqual(len(missing["skipped_features"]), 1)
-        self.assertEqual(missing["skipped_features"][0]["feature"], "Indeo movies")
-        self.assertIn("imported-file fallback", missing["skipped_features"][0]["reason"])
+        self.assertEqual(len(missing["skipped_features"]), 2)
+        self.assertEqual(missing["skipped_features"][0]["feature"], "vsync")
+        self.assertEqual(missing["skipped_features"][1]["feature"], "Indeo movies")
+        self.assertIn("imported-file fallback", missing["skipped_features"][1]["reason"])
         with self.assertRaisesRegex(ValueError, "path component"):
             plan(dict(self.request(), indeo_codec="D:/Original MW3/../Ir50_32.dll"))
 
@@ -289,12 +307,59 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
                      "--assets", "F:/Mods Pack/alpha", "--assets", "F:/Mods/é"],
             "working_directory": "C:\\Runtime\\bin",
             "skipped_features": [{
+                "feature": "vsync",
+                "reason": "The selected MW3-RE runtime does not advertise support for VSync.",
+            }, {
                 "feature": "Indeo movies",
                 "reason": "No original Ir50_32.dll passed the launcher's identity check; movie playback will use the existing imported-file fallback.",
             }],
+            "environment": {"MW3_DISK_CACHE": "1"},
         })
         self.assertEqual(request, before)
         self.assertEqual(dict(os.environ), environment)
+
+    def test_vsync_support_and_strict_wire_types(self):
+        plan = self.planner()
+        for schema in (2, 3, 4):
+            base = dict(self.request(), schema_version=schema)
+            if schema == 4:
+                base["preview"] = {}
+            # Default (both omitted): no --cc-vsync emitted, skipped feature recorded
+            res_default = plan(base)
+            self.assertNotIn("--cc-vsync", res_default["argv"])
+            vsync_skipped = [f for f in res_default["skipped_features"] if f["feature"] == "vsync"]
+            self.assertEqual(len(vsync_skipped), 1)
+            self.assertIn("runtime does not advertise support", vsync_skipped[0]["reason"])
+
+            # Unsupported runtime asked for vsync on: it already presents with vsync, nothing skipped
+            res_unsupported = plan(dict(base, supports_vsync=False, vsync=True))
+            self.assertNotIn("--cc-vsync", res_unsupported["argv"])
+            self.assertFalse(any(f["feature"] == "vsync" for f in res_unsupported["skipped_features"]))
+
+            # Supported runtime: vsync omitted -> emits 0, no vsync skipped feature
+            res_omitted = plan(dict(base, supports_vsync=True))
+            idx = res_omitted["argv"].index("--cc-vsync")
+            self.assertEqual(res_omitted["argv"][idx + 1], "0")
+            self.assertFalse(any(f["feature"] == "vsync" for f in res_omitted["skipped_features"]))
+
+            # Supported runtime: vsync=False -> emits 0
+            res_off = plan(dict(base, supports_vsync=True, vsync=False))
+            idx = res_off["argv"].index("--cc-vsync")
+            self.assertEqual(res_off["argv"][idx + 1], "0")
+            self.assertFalse(any(f["feature"] == "vsync" for f in res_off["skipped_features"]))
+
+            # Supported runtime: vsync=True -> emits 1
+            res_on = plan(dict(base, supports_vsync=True, vsync=True))
+            idx = res_on["argv"].index("--cc-vsync")
+            self.assertEqual(res_on["argv"][idx + 1], "1")
+            self.assertFalse(any(f["feature"] == "vsync" for f in res_on["skipped_features"]))
+
+            # Strict boolean validation
+            for invalid in (1, 0, "true", "false", None, 1.0, [], {}):
+                with self.subTest(schema=schema, vsync=invalid), self.assertRaisesRegex(ValueError, "vsync must be a boolean"):
+                    plan(dict(base, vsync=invalid))
+                with self.subTest(schema=schema, supports_vsync=invalid), self.assertRaisesRegex(ValueError, "supports_vsync must be a boolean"):
+                    plan(dict(base, supports_vsync=invalid))
 
 class NativePreviewPlanTests(unittest.TestCase):
     """Schema 4: the labelled Native preview reads small pack manifests and emits pack arguments."""
@@ -1007,6 +1072,20 @@ class NativePreviewPlanTests(unittest.TestCase):
                 skipped = [item for item in result["skipped_packs"]
                            if item.get("feature") == "surface_materials"]
                 self.assertEqual(len(skipped), 1)
+
+    def test_surface_material_reader_accepts_grayscale_v2_and_rgba_v1(self):
+        from test_surface_materials import _legacy_v1_sidecar_from_v2
+
+        _, _, sidecar = self.surface_sidecar("strider:close")
+        legacy = _legacy_v1_sidecar_from_v2(sidecar)
+        module = importlib.import_module("mw3_re_launch")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "height.bwsfm1"
+            for payload, version in ((sidecar, 2), (legacy, 1)):
+                with self.subTest(version=version):
+                    path.write_bytes(payload)
+                    parsed = module.read_surface_materials_file(path)
+                    self.assertEqual(parsed["version"], version)
 
     def test_invalid_choices_are_refused(self):
         for preview in ({"draw_distance": 1000}, {"draw_distance": "1200"}, {"hud": "neon"},

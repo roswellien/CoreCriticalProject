@@ -372,10 +372,98 @@ void SdlInput::poll_controller() {
 }
 
 uint32_t SdlInput::command_state(int32_t command) {
-  if (!controller_config_ || (!joy_ && !unplugged_) || command < 0 ||
-      command >= static_cast<int32_t>(controller_state_.actions.size()))
-    return 0;
-  return controller_state_.actions[static_cast<size_t>(command)];
+  const auto index = static_cast<size_t>(command);
+  uint32_t state = 0;
+  if (controller_config_ && (joy_ || unplugged_) && index < controller_state_.actions.size())
+    state = controller_state_.actions[index];
+  if (input_poll_eligible_ && index < input_state_.actions.size())
+    state |= input_state_.actions[index];
+  return state;
+}
+
+bool SdlInput::set_input_bindings(const std::string& path, size_t* count_out) {
+  input_config_ = InputBindingConfig::read_file(path);
+  reset_extended_input();
+  bound_wheel_mask_ = input_config_.mouse_wheel_mask() | headlight_wheel_mask_;
+  if (count_out) *count_out = input_config_.binding_count();
+  return true;
+}
+
+void SdlInput::set_headlight_wheel(uint32_t mask) {
+  mask &= 3u;
+  if (headlight_wheel_mask_ == mask) return;
+  headlight_wheel_mask_ = mask;
+  bound_wheel_mask_ = input_config_.mouse_wheel_mask() | mask;
+  reset_extended_input();
+}
+
+void SdlInput::reset_extended_input() {
+  input_poll_eligible_ = false;
+  input_state_.reset_transients();
+  wheel_pending_.fill(0);
+  wheel_frac_up_ = wheel_frac_down_ = 0;
+}
+
+void SdlInput::swallow_held_buttons(size_t first) {
+  for (size_t b = first; b < std::size(buttons_); ++b) {
+    latched_[b] = 0;
+    if (buttons_[b]) buttons_[b] = 0, swallow_[b] = true;
+  }
+}
+
+void SdlInput::route_wheel(bool eligible) {
+  if (!eligible) {
+    dz_ += static_cast<float>((wheel_pending_[0] - wheel_pending_[1]) * 120.0);
+    wheel_frac_up_ = wheel_frac_down_ = 0;
+  } else {
+    for (unsigned direction = 0; direction < wheel_pending_.size(); ++direction) {
+      float& fraction = direction == 0 ? wheel_frac_up_ : wheel_frac_down_;
+      const double total = fraction + wheel_pending_[direction];
+      const double whole = std::floor(total);
+      fraction = static_cast<float>(total - whole);
+      input_state_.enqueue_wheel(6 + direction, static_cast<unsigned>(
+          std::min(whole, static_cast<double>(WheelNotchQueue::kMaxWheelNotches))));
+    }
+  }
+  wheel_pending_.fill(0);
+}
+
+void SdlInput::begin_poll(bool text_entry, bool commands_enabled) {
+  refresh();
+  const bool ready = focused_ && !muted();
+  const bool mouse_ready = ready && acquired_[kMouse];
+  const bool keyboard_ready = ready && acquired_[kKeyboard];
+  input_poll_eligible_ = (mouse_ready || keyboard_ready) && commands_enabled && !text_entry;
+  if (mouse_ready) route_wheel(input_poll_eligible_);
+  InputBindingState::Buttons buttons{};
+  if (mouse_ready) {
+    for (size_t i = 0; i < std::size(buttons_); ++i)
+      buttons[i + 1] = (buttons_[i] | latched_[i]) != 0;
+    latched_[4] = 0;  // the legacy four-slot read drains the other latches
+  }
+  InputBindingState::Keys keys{};
+  if (keyboard_ready) std::copy(std::begin(held_), std::end(held_), keys.begin());
+  input_state_.evaluate(input_config_, keys, buttons, text_entry, input_poll_eligible_);
+}
+
+bool SdlInput::key_suppressed(uint32_t scan) const {
+  return input_poll_eligible_ && input_state_.key_suppressed(scan);
+}
+
+bool SdlInput::mouse_suppressed(int32_t id) const {
+  return input_poll_eligible_ && input_state_.mouse_suppressed(id);
+}
+
+bool SdlInput::extended_command_pressed(int32_t command) const {
+  return input_poll_eligible_ && input_state_.extended_command_pressed(command);
+}
+
+bool SdlInput::mouse_input_down(int32_t mouse_id) const {
+  return input_poll_eligible_ && acquired_[kMouse] && input_state_.mouse_input_down(mouse_id);
+}
+
+bool SdlInput::command_has_extended_binding(int32_t command) const {
+  return input_config_.has_command_binding(command);
 }
 
 // The axis map (W54): a gamepad's is DirectInput's XInput layout (pad_axis);
@@ -422,6 +510,8 @@ bool SdlInput::open(Device d) {
 }
 
 void SdlInput::close(Device d) {
+  if (d == kMouse || d == kKeyboard) reset_extended_input();
+  if (d == kMouse) swallow_held_buttons(3);
   opened_[d] = acquired_[d] = false;
   if (d == kJoystick && controller_config_) controller_state_.update(*controller_config_, ControllerSample{});
   if (d == kJoystick && pad_) SDL_CloseGamepad(pad_), pad_ = nullptr, joy_ = nullptr;
@@ -442,6 +532,8 @@ int32_t SdlInput::acquire(Device d) {
   return 0;
 }
 int32_t SdlInput::unacquire(Device d) {
+  if (d == kMouse || d == kKeyboard) reset_extended_input();
+  if (d == kMouse) swallow_held_buttons(3);
   acquired_[d] = false;
   if (d == kMouse) refresh();
   if (d == kKeyboard) keys_.clear();  // a lost device's buffer is gone
@@ -541,6 +633,7 @@ void SdlInput::refresh() {
     quiet_said_ = true;
     std::printf("mw3: mouse: no motion in 3 s since it was taken%s\n", focus_report ? (" (" + focus_report() + ")").c_str() : "");
   }
+  const bool was_muted = muted();
   win_ = windowed && windowed();
   const bool mission = in_mission && in_mission();
   if (mission != mission_) {
@@ -550,11 +643,8 @@ void SdlInput::refresh() {
     // is not the mission's fire. The exe's load took seconds, so the click
     // was long let go; ours is at once. A latched press is dropped, and a
     // button still held is kept from the game until it is let go.
-    if (mission)
-      for (int b = 0; b < 4; ++b) {
-        latched_[b] = 0;
-        if (buttons_[b]) buttons_[b] = 0, swallow_[b] = true;
-      }
+    reset_extended_input();
+    swallow_held_buttons(mission ? 0 : 3);
   }
   const bool free = mission_ && pointer_free && pointer_free();
   const bool absolute = (win_ && !mission_) || free;
@@ -578,6 +668,10 @@ void SdlInput::refresh() {
       mouse_x = x, mouse_y = y, cursor_moved_ = true;
     }
     if (!free) released_ = false;  // out of the editor: held again
+  }
+  if (was_muted != muted()) {
+    reset_extended_input();
+    swallow_held_buttons(3);
   }
   // The game editor's pointer is the system's cursor.
   const bool hide = (absolute_ && !free_) || captured_;
@@ -620,6 +714,8 @@ void SdlInput::release_chord(SDL_Scancode s, bool down) {
   chord_held_ = static_cast<SDL_Keymod>(chord_held_ & ~m);
   if (chord_armed_ && !chord_spoiled_ && win_ && mission_ && !released_) {
     released_ = true;
+    reset_extended_input();
+    swallow_held_buttons(3);
     std::fill(std::begin(buttons_), std::end(buttons_), 0);
     std::fill(std::begin(latched_), std::end(latched_), 0);
     dx_ = dy_ = dz_ = 0;
@@ -632,6 +728,7 @@ void SdlInput::set_cooperative_level(Device d, uint32_t flags) { coop_[d] = flag
 
 int32_t SdlInput::mouse_state(platform::MouseState* out) {
   refresh();
+  latched_[4] = 0;
   if (!opened_[kMouse] || !acquired_[kMouse]) return lost_[kMouse] ? kInputLost : kNotAcquired;
   if (muted()) {  // let go in a mission: no motion, no buttons
     *out = platform::MouseState{};
@@ -642,6 +739,8 @@ int32_t SdlInput::mouse_state(platform::MouseState* out) {
     absolute_cursor(mouse_x, mouse_y);
     dx_ = dy_ = 0;
   }
+  // Direct device reads outside zInput's poll retain the legacy wheel axis.
+  if (wheel_pending_[0] || wheel_pending_[1]) route_wheel(false);
   out->x = static_cast<int32_t>(dx_), out->y = static_cast<int32_t>(dy_), out->z = static_cast<int32_t>(dz_);
   dx_ -= out->x, dy_ -= out->y, dz_ -= out->z;  // the fractions carry over
   // FIX (A): DirectInput's device state caught a click shorter than a frame
@@ -829,6 +928,9 @@ void SdlInput::focus_lost() {
   // was: no button or key stays down from before.
   std::fill(std::begin(buttons_), std::end(buttons_), 0);
   std::fill(std::begin(latched_), std::end(latched_), 0);
+  std::fill(std::begin(swallow_), std::end(swallow_), false);
+  reset_extended_input();
+  dz_ = 0;
   std::fill(std::begin(held_), std::end(held_), false);
   mouse_buttons = 0;
   for (int d = 0; d < 3; ++d) {
@@ -838,6 +940,21 @@ void SdlInput::focus_lost() {
     }
   }
   refresh();
+}
+
+void SdlInput::discard_loading_input() {
+  keys_.clear();
+  overflow_ = false;
+  std::fill(std::begin(held_), std::end(held_), false);
+  std::fill(std::begin(buttons_), std::end(buttons_), 0);
+  std::fill(std::begin(latched_), std::end(latched_), 0);
+  std::fill(std::begin(swallow_), std::end(swallow_), false);
+  reset_extended_input();
+  dx_ = dy_ = dz_ = raw_dx_ = raw_dy_ = 0;
+  mouse_buttons = 0;
+  chord_held_ = SDL_KMOD_NONE;
+  chord_armed_ = chord_spoiled_ = false;
+  controller_state_ = {};
 }
 
 void SdlInput::on_event(const SDL_Event& e) {
@@ -901,13 +1018,23 @@ void SdlInput::on_event(const SDL_Event& e) {
       }
       break;
     case SDL_EVENT_MOUSE_WHEEL:
-      if (acquired_[kMouse] && !muted()) dz_ += e.wheel.y * 120.0f;  // WHEEL_DELTA a notch
+      // Clear the previous mission's wheel queue before staging a fresh event.
+      refresh();
+      if (focused_ && acquired_[kMouse] && !muted() && std::isfinite(e.wheel.y)) {
+        const unsigned direction = e.wheel.y < 0 ? 1 : 0;
+        // Events arrive before zInput knows whether this poll accepts commands.
+        if (bound_wheel_mask_ & (1u << direction))
+          wheel_pending_[direction] += std::abs(e.wheel.y);
+        else
+          dz_ += e.wheel.y * 120.0f;  // WHEEL_DELTA a notch
+      }
       break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP: {
-      // DirectInput's order: left, right, middle, then the fourth.
+      // DirectInput's order for the first four slots, followed by SDL X2.
       const int b = e.button.button == SDL_BUTTON_LEFT ? 0 : e.button.button == SDL_BUTTON_RIGHT ? 1
-                    : e.button.button == SDL_BUTTON_MIDDLE ? 2 : e.button.button == SDL_BUTTON_X1 ? 3 : -1;
+                    : e.button.button == SDL_BUTTON_MIDDLE ? 2 : e.button.button == SDL_BUTTON_X1 ? 3
+                    : e.button.button == SDL_BUTTON_X2 ? 4 : -1;
       if (b < 0) break;
       const bool down = e.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
       if (down) heal("button", false);  // W4
@@ -921,7 +1048,7 @@ void SdlInput::on_event(const SDL_Event& e) {
         refresh();
       } else if (swallow_[b] && !down) {
         swallow_[b] = false;
-      } else if (!muted() && !swallow_[b]) {
+      } else if (!muted() && !swallow_[b] && (b < 3 || (focused_ && acquired_[kMouse]))) {
         buttons_[b] = down ? 0x80 : 0;
         if (down) latched_[b] = 0x80;
       }

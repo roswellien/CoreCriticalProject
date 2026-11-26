@@ -1,6 +1,10 @@
 #pragma once
+#include <charconv>
 #include <cstdint>
 #include <cstring>
+#include <istream>
+#include <stdexcept>
+#include <string>
 #include <vector>
 #include <memory>
 #include "frontend/core_critical/renderer/geometry/resource.hpp"
@@ -73,6 +77,8 @@ struct ModelDrawContext {
   const void* node = nullptr;
   const float* model_to_world = nullptr;
   const float* model_to_camera = nullptr;
+  // Optional canonical scene view, borrowed only for this synchronous scope.
+  const float* world_to_camera = nullptr;
   float near_z = 0, clip_near = 0, far_z = 0, fx_near = 0, fy_near = 0, cx = 0, cy = 0;
   float opacity = 1;
   float damage_tint_rgb[3] = {};
@@ -104,6 +110,46 @@ struct PlayerHeadlightTick {
   bool shutdown = true;
   uint64_t generation = 0;
 };
+
+struct HeadlightBinding {
+  unsigned key = 0;
+  int button = -1;
+  unsigned mouse = 0;
+
+  static HeadlightBinding read(std::istream& bindings, unsigned key_limit) {
+    auto number = [&bindings](auto& value) {
+      std::string field;
+      if (!(bindings >> field)) return false;
+      const auto end = field.data() + field.size();
+      const auto result = std::from_chars(field.data(), end, value);
+      return result.ec == std::errc{} && result.ptr == end;
+    };
+    HeadlightBinding binding;
+    std::string version, extra;
+    if (!(bindings >> version) ||
+        (version != "CC_MW3_HEADLIGHTS_V1" && version != "CC_MW3_HEADLIGHTS_V2") ||
+        !number(binding.key) || !number(binding.button) ||
+        (version == "CC_MW3_HEADLIGHTS_V2" && !number(binding.mouse)) ||
+        (bindings >> extra) || !bindings.eof() || bindings.bad() ||
+        binding.key >= key_limit || (binding.key && !(binding.key & 255)) ||
+        binding.button < -1 || binding.button > 25 || binding.mouse > 7)
+      throw std::runtime_error("Headlights: invalid input binding");
+    const auto scan = binding.key & 255;
+    if (scan == 0x43 || scan == 0x44 || scan == 0x57)
+      throw std::runtime_error("Headlights: key reserved for capture/replay");
+    return binding;
+  }
+
+  static uint32_t wheel_mask(unsigned mouse) {
+    return mouse == 6 ? 1u : mouse == 7 ? 2u : 0u;
+  }
+};
+
+// A held constituent stays suppressed until it is physically released.
+inline bool headlight_input_down(bool raw, bool suppressed, bool& suppressed_latch) {
+  suppressed_latch = raw && (suppressed || suppressed_latch);
+  return raw && !suppressed_latch;
+}
 
 // Synchronous receiver restoration only. This token never enters a queue/Scene.
 // Cookies belong to one receiver/reset generation; reset must make old tokens inert.
@@ -149,6 +195,7 @@ class Render3D {
   // renderer lights it with its configured stock lighting instead of the mission's
   // campaign profile (Operation 3's red sky tint made every paint look orange).
   virtual void set_lab_preview_lighting(bool) {}
+  virtual uint32_t headlight_wheel_mask() const { return 0; }
   virtual bool wants_player_headlight_ticks() const { return false; }
   virtual void player_headlight_tick(const PlayerHeadlightTick&) {}
   virtual void retire_headlight_node(std::uintptr_t /*node*/) {}
@@ -235,5 +282,15 @@ class Render3D {
   virtual bool restore_frame() { return false; }
   virtual void drop_frame() {}
 };
+
+// Ours (#507): an AI arena match's chosen time of day, as the campaign mission
+// whose lighting profile it borrows ("t1m1" for dawn ...); empty for the map's
+// own lighting. Set by the arena before its mission loads and read by a
+// renderer when the mission changes. Purely visual: nothing in the simulation
+// reads it, so AI sight and the match log are the same at every time of day.
+inline std::string& arena_lighting_mission() {
+  static std::string id;
+  return id;
+}
 
 }  // namespace platform

@@ -19,6 +19,31 @@ public sealed class NativeGameRunner
     /// <summary>Installed folder name, next to the launcher executable.</summary>
     public const string RuntimeFolder = "NativePreview";
     public const string PlannerFolder = "Planner";
+
+    public static bool UsesBundledMw3Re(string applicationDirectory)
+    {
+        var marker = Path.Combine(applicationDirectory, "launcher-installation.json");
+        if (File.Exists(marker))
+        {
+            using var document = JsonDocument.Parse(LauncherUpdates.ReadMetadata(marker));
+            if (document.RootElement.TryGetProperty("native_runtime", out var runtime) &&
+                runtime.GetString() == "mw3-re")
+                return true;
+        }
+
+        return File.Exists(Path.Combine(applicationDirectory, RuntimeFolder, "runtime.json"));
+    }
+
+    public string RequireBundledMw3Re()
+    {
+        var root = FindRuntimeRoot() ?? throw new FileNotFoundException(
+            "The bundled MW3-RE runtime is missing. Repair the Core Critical installation.");
+        var planner = Path.Combine(_basePath, PlannerFolder, "mw3_re_launch.py");
+        if (!File.Exists(planner))
+            throw new FileNotFoundException("The MW3-RE planner is missing. Repair the Core Critical installation.", planner);
+        return root;
+    }
+
     public const string ProfileId = "native-preview";
     /// <summary>The largest scenery distance the native runtime accepts in this release.</summary>
     public const int MaxDrawDistance = 3200;
@@ -33,6 +58,8 @@ public sealed class NativeGameRunner
     }
 
     public string? LastLogPath { get; private set; }
+    public string? LastRuntimeVersion { get; private set; }
+    public Task<int>? LastSessionCompletion { get; private set; }
 
     public static Mw3ReWindowMode WindowModeForSettings(string savedWindowMode) => savedWindowMode switch
     {
@@ -47,6 +74,25 @@ public sealed class NativeGameRunner
     {
         var root = Path.Combine(_basePath, RuntimeFolder);
         return File.Exists(Path.Combine(root, "runtime.json")) ? root : null;
+    }
+
+    public string FindPlannerPython()
+    {
+        var bundled = Path.Combine(_basePath, "Tools", "PlannerPython", "python.exe");
+        if (File.Exists(bundled))
+        {
+            PackStorage.EnsureNoLinks(bundled);
+            if (!D7VkRunner.CanPrepareNativeAssets(bundled, requirePillow: false))
+                throw new InvalidDataException("The bundled planner Python is incomplete. Repair the Core Critical installation.");
+            return bundled;
+        }
+
+        var runtimeDirectory = Path.Combine(_basePath, "Runtime");
+        var legacyPython = File.Exists(Path.Combine(runtimeDirectory, "runtime.json"))
+            ? NativeRuntimeLayout.ReadRoot(runtimeDirectory).Python
+            : null;
+        return legacyPython ?? D7VkRunner.FindPythonExecutable(requirePython311: true)
+            ?? throw new FileNotFoundException("MW3-RE needs Python 3.11 or newer. Repair the Core Critical installation.");
     }
 
     /// <summary>
@@ -162,6 +208,7 @@ public sealed class NativeGameRunner
             AnisotropicFiltering = settings.AnisotropicFiltering,
             WindowMode = WindowModeForSettings(settings.WindowMode),
             RenderThread = settings.RenderThread,
+            Vsync = settings.Vsync,
             Lighting = Mw3ReLighting.Normal,
             FlareStyle = settings.FlareStyle switch
             {
@@ -176,6 +223,8 @@ public sealed class NativeGameRunner
                 "low" or "high" => settings.PomQuality,
                 _ => throw new InvalidOperationException("Unknown parallax occlusion mapping quality: " + settings.PomQuality)
             },
+            // The environment switch stays a support override for a saved "on".
+            DiskCache = settings.LoadCache && Environment.GetEnvironmentVariable("MW3_DISK_CACHE") != "0",
             Preview = new Mw3RePreviewOptions
             {
                 DrawDistance = drawDistance,
@@ -201,7 +250,8 @@ public sealed class NativeGameRunner
     }
 
     /// <summary>Plan and start one MW3-RE session; the caller owns the returned process.</summary>
-    public Process Launch(LauncherSettings settings, IEnumerable<string> activeModDirs, Action<string>? log = null)
+    public Process Launch(LauncherSettings settings, IEnumerable<string> activeModDirs, Action<string>? log = null,
+        IReadOnlyList<string>? extraArguments = null)
     {
         var session = Path.Combine(_dataRoot, "sessions", Guid.NewGuid().ToString("N"));
         // Guards the pending-log buffer shared by process reader threads and the launch thread.
@@ -210,6 +260,7 @@ public sealed class NativeGameRunner
         var logPath = Path.Combine(session, "mw3-re.log");
         var pendingLog = new List<string>();
         var logCreated = false;
+        var launchClock = Stopwatch.StartNew();
         void Log(string line)
         {
             lock (logLock)
@@ -230,7 +281,7 @@ public sealed class NativeGameRunner
                 if (!logCreated)
                 {
                     File.WriteAllText(logPath, "MW3-RE, launcher " +
-                        typeof(NativeGameRunner).Assembly.GetName().Version + Environment.NewLine +
+                        PlaytestDiagnostics.LauncherVersionString(typeof(NativeGameRunner).Assembly) + Environment.NewLine +
                         string.Join(Environment.NewLine, pendingLog) + Environment.NewLine);
                     pendingLog.Clear();
                     logCreated = true;
@@ -239,15 +290,34 @@ public sealed class NativeGameRunner
             }
         }
 
+        LastRuntimeVersion = null;
+        LastSessionCompletion = null;
+        NativeSessionDiagnosticsBaseline? baseline = null;
         // Keep updates and pack changes out of the active MW3-RE session.
         var gate = GameUpdateGate.Acquire(_dataRoot);
         try
         {
-            var process = Start(settings, activeModDirs, Log);
+            Log("Startup: Checking game files...");
+            var process = Start(settings, activeModDirs, line =>
+                Log($"{line} [launcher elapsed {launchClock.ElapsedMilliseconds} ms]"), session,
+                capturedBaseline => baseline = capturedBaseline, extraArguments);
             PublishLog();
-            process.EnableRaisingEvents = true;
-            process.Exited += (_, _) => gate.Dispose();
-            if (process.HasExited) gate.Dispose();
+            async Task<int> ObserveSessionExitAsync()
+            {
+                try
+                {
+                    var exit = await GameRunner.WaitForCompletionAsync(process).ConfigureAwait(false);
+                    if (exit != 0)
+                        PlaytestDiagnostics.CollectNativeSessionArtifacts(baseline, session);
+                    return exit;
+                }
+                finally
+                {
+                    gate.Dispose();
+                }
+            }
+
+            LastSessionCompletion = ObserveSessionExitAsync();
             return process;
         }
         catch (Exception error)
@@ -259,26 +329,36 @@ public sealed class NativeGameRunner
         }
     }
 
-    private Process Start(LauncherSettings settings, IEnumerable<string> activeModDirs, Action<string> log)
+    private Process Start(LauncherSettings settings, IEnumerable<string> activeModDirs, Action<string> log, string session,
+        Action<NativeSessionDiagnosticsBaseline>? onBaseline, IReadOnlyList<string>? extraArguments)
     {
         var validation = GameValidator.Validate(settings.GamePath);
         if (!validation.IsValid) throw new InvalidOperationException("Cannot launch game: " + validation.StatusMessage);
         if (!string.IsNullOrWhiteSpace(settings.ModularContentProfile))
         {
-            var profileProcess = ModProfiles.Launch(settings, validation.GameDirectory, _dataRoot, log);
+            // Modular content profiles launch through ModProfiles.Launch, which builds its own
+            // fixed argument list and cannot accept arena or replay flags.
+            if (extraArguments is { Count: > 0 })
+            {
+                throw new InvalidOperationException(
+                    "Turn off the MW3-RE modular content profile before running an AI Arena match or replay.");
+            }
+            LastRuntimeVersion = DescribeExternalRuntimeVersion(settings.ModularRuntimeExecutable);
+            var profileProcess = ModProfiles.Launch(settings, validation.GameDirectory, _dataRoot, log,
+                writeDir => onBaseline?.Invoke(PlaytestDiagnostics.CaptureNativeBaseline(writeDir)));
             return profileProcess;
         }
 
-        var root = FindRuntimeRoot() ?? throw new FileNotFoundException("This installation has no MW3-RE runtime.");
+        log("Startup: Verifying native runtime...");
+        var root = RequireBundledMw3Re();
         var contract = Mw3ReRuntimeContract.ReadStructure(root);
+        LastRuntimeVersion = PlaytestDiagnostics.FormatRuntimeVersion(contract);
         var controllerProfile = new ControllerProfiles(_dataRoot).Load();
         if (controllerProfile.Enabled && !contract.SupportsControllerProfiles)
             throw new InvalidOperationException("The installed MW3-RE runtime does not support controller profiles.");
+        var launchControls = ReadLaunchControls(contract, _dataRoot, settings);
         var planner = Path.Combine(_basePath, PlannerFolder, "mw3_re_launch.py");
-        if (!File.Exists(planner)) throw new FileNotFoundException("The MW3-RE planner is missing.", planner);
-        var python = NativeRuntimeLayout.FindInstalled(_basePath, _dataRoot)?.Python
-            ?? D7VkRunner.FindPythonExecutable(requirePython311: true)
-            ?? throw new FileNotFoundException("MW3-RE needs Python 3.11 or newer.");
+        var python = FindPlannerPython();
 
         var drawDistance = PreviewDrawDistance(settings.DrawDistance, out _);
         var activePacks = activeModDirs.ToList();
@@ -286,16 +366,17 @@ public sealed class NativeGameRunner
         var uiPacks = SelectUiPacks(activePacks, log);
         var skinPacks = SelectSkinPacks(activePacks, log);
         var writeDirectory = Path.Combine(_dataRoot, "mw3-re", "profiles", ProfileId);
-        Directory.CreateDirectory(writeDirectory);
-        NativeControls.PrepareLaunch(_dataRoot, writeDirectory, validation.GameDirectory, settings, log);
-        var headlightBindings = new HeadlightBindings(_dataRoot)
-            .WriteNativeBinding(writeDirectory, settings.DynamicLighting && settings.Headlights);
+        log("Startup: Preparing controls...");
+        var (inputBindings, headlightBindings) = PrepareLaunchControls(launchControls, _dataRoot,
+            writeDirectory, validation.GameDirectory, settings, controllerProfile, log);
         var options = PlanningOptionsForSettings(settings, contract, drawDistance, models,
             environments, headlightBindings, uiPacks, skinPacks);
         var indeoCodec = GameInstallation.FindVerifiedIndeoCodec(validation.GameDirectory, _dataRoot);
         var request = Mw3ReLaunchRequest.Create(contract, options, validation.GameDirectory, _dataRoot,
             ProfileId, indeoCodec);
-        var plan = RunPlanner(python, planner, request);
+        log("Startup: Checking packs and planning native launch...");
+        using var plan = RunPlanner(python, planner, request);
+        log("Startup: Pack planning complete.");
         if (!plan.RootElement.GetProperty("ok").GetBoolean())
         {
             var reasons = plan.RootElement.GetProperty("reasons").EnumerateArray().Select(item => item.GetString());
@@ -327,9 +408,15 @@ public sealed class NativeGameRunner
                 throw new InvalidOperationException("The enabled controller profile was not exported for this session.");
             argv.AddRange(NativeControls.ControllerArguments(controllerProfile, controllerPath));
         }
+        if (inputBindings != null)
+        {
+            argv.Add("--cc-input");
+            argv.Add(inputBindings);
+        }
         // Music is optional: a broken or locked soundtrack file must not stop the game from starting.
         try
         {
+            log("Startup: Preparing soundtrack...");
             MusicPack.StageForNative(activePacks, writeDirectory, log);
         }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or JsonException)
@@ -344,17 +431,158 @@ public sealed class NativeGameRunner
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        ApplyCacheEnvironment(start, plan.RootElement);
+        // The launcher can show the captured crash and offer a report after the process exits.
+        start.Environment["MW3_LAUNCHER_WATCHES"] = "1";
+        if (extraArguments is { Count: > 0 })
+        {
+            foreach (var extraArgument in extraArguments)
+            {
+                if (extraArgument == null)
+                    throw new ArgumentException("Extra launch arguments cannot contain null entries.", nameof(extraArguments));
+                argv.Add(extraArgument);
+            }
+        }
+        var readyFile = Path.Combine(session, "native-ready");
+        argv.AddRange(new[] { "--ready-file", readyFile });
         foreach (var argument in argv.Skip(1)) start.ArgumentList.Add(argument);
         log($"Starting MW3-RE: {settings.Width}x{settings.Height}, scenery {drawDistance}, " +
             $"{models.Count} model pack(s), {environments.Count} map pack(s).");
         var process = new Process { StartInfo = start };
         process.OutputDataReceived += (_, line) => { if (line.Data != null) log(line.Data); };
         process.ErrorDataReceived += (_, line) => { if (line.Data != null) log(line.Data); };
+        Directory.CreateDirectory(writeDirectory);
+        onBaseline?.Invoke(PlaytestDiagnostics.CaptureNativeBaseline(writeDirectory));
         if (!process.Start()) throw new InvalidOperationException("MW3-RE did not start.");
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         log("MW3-RE PID " + process.Id);
+        _ = ObserveReadinessAsync(process, readyFile, log);
         return process;
+    }
+
+    private static string DescribeExternalRuntimeVersion(string executablePath)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(executablePath))
+            {
+                var full = Path.GetFullPath(executablePath);
+                if (File.Exists(full))
+                {
+                    var info = FileVersionInfo.GetVersionInfo(full);
+                    var version = !string.IsNullOrWhiteSpace(info.ProductVersion) ? info.ProductVersion.Trim()
+                        : !string.IsNullOrWhiteSpace(info.FileVersion) ? info.FileVersion.Trim() : null;
+                    if (!string.IsNullOrEmpty(version))
+                    {
+                        var plus = version.IndexOf('+');
+                        if (plus >= 0) version = version[..plus].Trim();
+                        var label = $"external ({version})";
+                        return label.Length <= 80 ? label : label[..80];
+                    }
+                }
+            }
+        }
+        catch { }
+        return "external";
+    }
+
+    /// <summary>Run the launch preflight and write-profile projection without starting a process.</summary>
+    public static (string? InputBindingsPath, string? HeadlightBindingsPath) PrepareLaunchControls(
+        Mw3ReRuntimeContract contract, string dataRoot, string writeDirectory, string gameDirectory,
+        LauncherSettings settings, ControllerProfile controllerProfile, Action<string> log) =>
+        PrepareLaunchControls(ReadLaunchControls(contract, dataRoot, settings), dataRoot, writeDirectory,
+            gameDirectory, settings, controllerProfile, log);
+
+    private static (ControlProfile? Profile, HeadlightBinding? Headlights) ReadLaunchControls(
+        Mw3ReRuntimeContract contract, string dataRoot, LauncherSettings settings)
+    {
+        var profile = NativeControls.LoadSelectedProfile(dataRoot);
+        var headlights = settings.DynamicLighting && settings.Headlights
+            ? new HeadlightBindings(dataRoot).Load() : null;
+        var needsExtendedInput = (profile != null && ControlProfiles.UsesExtendedInputBindings(profile)) ||
+            headlights?.Mouse > 0;
+        if (needsExtendedInput && !contract.SupportsInputBindings)
+            throw new InvalidOperationException(
+                "The installed MW3-RE runtime does not support extended input bindings. Update MW3-RE to use this controls layout or mouse headlight binding.");
+        return (profile, headlights);
+    }
+
+    private static (string? InputBindingsPath, string? HeadlightBindingsPath) PrepareLaunchControls(
+        (ControlProfile? Profile, HeadlightBinding? Headlights) bindings, string dataRoot,
+        string writeDirectory, string gameDirectory, LauncherSettings settings,
+        ControllerProfile controllerProfile, Action<string> log)
+    {
+        var inputPath = NativeControls.PrepareLaunch(dataRoot, writeDirectory, gameDirectory,
+            settings, bindings.Profile, controllerProfile, log);
+        var headlightPath = HeadlightBindings.WriteNativeBinding(writeDirectory, bindings.Headlights);
+        return (inputPath, headlightPath);
+    }
+
+    /// <summary>Only the planner's typed cache switch may change the child environment.</summary>
+    public static void ApplyCacheEnvironment(ProcessStartInfo start, JsonElement plan)
+    {
+        if (!plan.TryGetProperty("environment", out var environment)) return; // Older planner.
+        if (environment.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("Invalid native cache environment.");
+        foreach (var item in environment.EnumerateObject())
+        {
+            if (item.Name != "MW3_DISK_CACHE" || item.Value.ValueKind != JsonValueKind.String ||
+                item.Value.GetString() is not ("0" or "1"))
+                throw new InvalidDataException("Unsupported native cache environment.");
+            start.Environment[item.Name] = item.Value.GetString();
+        }
+    }
+
+    /// <summary>
+    /// Follows the game's ready/status files (they work even when the GUI native host sends its
+    /// stdout to its own log) until the main menu is on screen, logging timings and progress.
+    /// </summary>
+    public static async Task ObserveReadinessAsync(Process process, string readyFile, Action<string> log)
+    {
+        var clock = Stopwatch.StartNew();
+        string lastStatus = "";
+        bool shown = false, menu = false;
+        try
+        {
+            while (!process.HasExited)
+            {
+                string status = "";
+                try
+                {
+                    var path = readyFile + ".status";
+                    if (File.Exists(path))
+                    {
+                        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                            FileShare.ReadWrite | FileShare.Delete);
+                        if (stream.Length <= 4096) status = await new StreamReader(stream).ReadToEndAsync();
+                    }
+                }
+                catch (IOException) { } // The atomic writer may be replacing the status.
+                if (status != lastStatus)
+                {
+                    log(status.Length == 0 ? "Native progress: idle" : "Native progress: " + status);
+                    lastStatus = status;
+                }
+                if (!shown && File.Exists(readyFile))
+                {
+                    shown = true;
+                    log($"Native first frame: {clock.ElapsedMilliseconds} ms after process start");
+                }
+                if (!menu && File.Exists(readyFile + ".menu"))
+                {
+                    menu = true;
+                    log($"Native menu ready: {clock.ElapsedMilliseconds} ms after process start");
+                    return;  // Startup is over; later mission loads show in the game itself.
+                }
+                await Task.Delay(100);
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            InvalidOperationException or ObjectDisposedException)
+        {
+            log("Native readiness observation ended: " + error.Message);
+        }
     }
 
     /// <summary>Run the shipped planner in isolated mode and parse its one JSON result.</summary>

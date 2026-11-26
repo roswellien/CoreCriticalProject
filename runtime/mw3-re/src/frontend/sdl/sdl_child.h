@@ -24,6 +24,7 @@ bool log_to_file(const std::string& write_dir, const std::string& name = "mw3");
 // two programs): mw3 --ready-file PATH writes PATH once its first frame is
 // shown, and the launcher hides then, so there is no moment with neither.
 void set_ready_file(const std::string& path);
+void mark_menu_ready();  // a presented main-menu frame, distinct from the first frame
 void mark_ready();  // the first call writes it; later ones do nothing
 // What the game is doing before its first frame, for the launcher's status
 // line (PATH.status beside the ready file); "" removes it. Nothing without

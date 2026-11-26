@@ -669,6 +669,18 @@ void Torso::node_changed() {
   MechPart::node_changed();
 }
 
+// Ours (#289): rebuilds the torso's turn and its front vectors from yaw and
+// pitch as set from outside, for a replay puppet that never aims or steers.
+void Torso::refresh_turn() {
+  yaw_pitch(yaw, pitch, turn_q);
+  zmth::Vec3 f;
+  zmth::quat_rotate(quat(turn_q), {0, 0, -1}, f);
+  front = {f.x, f.y, f.z};
+  zmth::Vec3 flat{f.x, 0.0f, f.z};
+  zmth::normalize(flat);
+  flat_front = {flat.x, flat.y, flat.z};
+}
+
 // Mech3.exe 1.2 @ 0x00464e80. Mode 0, the AI: toward the aim by exp(-2 dt)
 // (not while the pitch is locked). Mode 1, the player: the pitch lock, the
 // legs turning under the torso (CMD_CENTER_LEGS), the rate or absolute

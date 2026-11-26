@@ -144,6 +144,17 @@ struct PlayerControls : MechControls {
                  float* look_yaw);
 };
 
+// Ours (#289): a replay puppet's controls. The replay sets the puppet's pose
+// from the match log, so nothing here steers, reacts to a hit or a kill, or
+// runs a pilot: update, on_hit, tick, on_death and on_kill do nothing.
+struct ReplayControls : MechControls {
+  int update(float) override { return 0; }
+  void on_hit(void*) override {}
+  void tick() override {}
+  void on_death() override {}
+  void on_kill(void*) override {}
+};
+
 // The AI's controls (ctor 0x004d8750 over 0x004d8670, 0x320 bytes; docs/ai.md,
 // The AI controls): MechControls, the pilot's brain at +0x5c (a base in the
 // exe, ai::Brain), the IControls virtual base at +0x30c (its owner +0x31c).

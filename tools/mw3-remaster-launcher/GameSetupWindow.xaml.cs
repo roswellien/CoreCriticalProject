@@ -27,7 +27,8 @@ public partial class GameSetupWindow : Window
         ExistingPath.Text = existingPath ?? GameValidator.AutoDetectGameDirectory() ?? "";
         DestinationPath.Text = LauncherPaths.SuggestedGameDirectory();
         ShowStep(0);
-        if (NativeRuntimeLayout.HasPrecompiledRuntime(AppContext.BaseDirectory))
+        if (NativeGameRunner.UsesBundledMw3Re(AppContext.BaseDirectory) ||
+            NativeRuntimeLayout.HasPrecompiledRuntime(AppContext.BaseDirectory))
             PreparationNote.Text = "The native game is already installed. This step only installs or verifies your original game files; no game-code compilation is needed.";
         else if (BundledPreparation.IsAvailable(AppContext.BaseDirectory))
             PreparationNote.Text = "After verifying your files, setup prepares the native game. First-time preparation can take a while. You can cancel and resume it.";
@@ -217,7 +218,17 @@ public partial class GameSetupWindow : Window
             if (GameInstallation.FindSupportFiles(directory, _dataRoot) != null)
                 await Task.Run(() => GameInstallation.PrepareSupportFiles(directory, _dataRoot));
             _verifiedDirectory = Path.GetFullPath(directory);
-            if (NativeRuntimeLayout.HasPrecompiledRuntime(AppContext.BaseDirectory))
+            if (NativeGameRunner.UsesBundledMw3Re(AppContext.BaseDirectory))
+            {
+                Status.Text = "Checking the bundled MW3-RE runtime…";
+                var runner = new NativeGameRunner(AppContext.BaseDirectory, _dataRoot);
+                await Task.Run(() =>
+                {
+                    Mw3ReRuntimeContract.ReadStructure(runner.RequireBundledMw3Re());
+                    runner.FindPlannerPython();
+                });
+            }
+            else if (NativeRuntimeLayout.HasPrecompiledRuntime(AppContext.BaseDirectory))
             {
                 Status.Text = "Checking the installed native game…";
                 await Task.Run(() => RuntimeUpdates.ValidateGeneratedRuntime(

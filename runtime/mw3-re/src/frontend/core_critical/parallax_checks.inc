@@ -43,7 +43,7 @@ binding(const std::vector<vk::ModelVertex> &vertices, const std::vector<std::uin
   const auto uv_hash = mat::compute_mesh_uv_hash(batches, 0, 1);
   const unsigned width = (height == Height::atlas || height == Height::atlas_ramp) ? 64 : 32;
   const unsigned image_height = 32;
-  std::vector<std::uint32_t> pixels(width * image_height);
+  std::vector<std::uint8_t> pixels(width * image_height);
   for (unsigned y = 0; y < image_height; ++y)
     for (unsigned x = 0; x < width; ++x) {
       const unsigned scalar = height == Height::zero ? 0
@@ -53,7 +53,7 @@ binding(const std::vector<vk::ModelVertex> &vertices, const std::vector<std::uin
                               : height == Height::atlas ? (x < 32 ? 0 : 255)
                               : height == Height::atlas_ramp ? (x < 32 ? 4 + 8 * x : 255)
                                                          : 128;
-      pixels[y * width + x] = scalar | scalar << 8 | scalar << 16 | 0xff000000U;
+      pixels[y * width + x] = static_cast<std::uint8_t>(scalar);
     }
   std::ostringstream encoded(std::ios::binary);
   auto u32 = [&](std::uint32_t value) {
@@ -66,7 +66,7 @@ binding(const std::vector<vk::ModelVertex> &vertices, const std::vector<std::uin
     encoded.write(value.data(), std::streamsize(value.size()));
   };
   encoded.write("BWSFM1\0\0", 8);
-  u32(1); u32(1); u32(1); u32(1); u64(uv_hash); u32(0);
+  u32(2); u32(1); u32(1); u32(1); u64(uv_hash); u32(0);
   text("fixture:pom"); text("PomFixture");
   u32(0); u32(mat::no_surface_image);
   scalar(material.height_reference); scalar(material.height_amplitude);
@@ -79,8 +79,8 @@ binding(const std::vector<vk::ModelVertex> &vertices, const std::vector<std::uin
   for (unsigned i = 0; i < 6; ++i) scalar(0);
   scalar(.7f); scalar(.04f); scalar(0);
   text("fixture-height"); u32(mat::surface_role_height); u32(width); u32(image_height);
-  u64(mat::normal_hash(pixels.data(), pixels.size() * 4));
-  encoded.write(reinterpret_cast<const char *>(pixels.data()), std::streamsize(pixels.size() * 4));
+  u64(mat::normal_hash(pixels.data(), pixels.size()));
+  encoded.write(reinterpret_cast<const char *>(pixels.data()), std::streamsize(pixels.size()));
   const auto bytes = encoded.str();
   std::istringstream input(bytes, std::ios::binary);
   auto pack = std::make_shared<mat::SurfaceMaterialPack>(mat::read_surface_materials(
@@ -811,7 +811,7 @@ void descriptor_identity_and_mixed_draws(vk::Renderer &renderer, vk::Renderer &u
     if (invalid == 3) snapshot->source_sha256.clear();
     if (invalid == 4) snapshot->producer_epoch = 0;
     if (invalid == 5) snapshot->texture_version = 0;
-    if (invalid == 6) snapshot->image_version = 2;
+    if (invalid == 6) snapshot->image_version = 3;
     test.draws[0].height_binding = snapshot;
     bool rejected{};
     try { renderer.render(test); } catch (const std::runtime_error &) { rejected = true; }
@@ -823,8 +823,8 @@ void descriptor_identity_and_mixed_draws(vk::Renderer &renderer, vk::Renderer &u
 void immutable_height_reuse_across_admission_stamps(vk::Renderer &renderer) {
   auto source = fixture(Route::tl, Height::ramp_u, .08f, .1f, .7);
   const auto immutable = source.scene.draws[0].height_binding;
-  const auto payload_bytes = immutable->image->pixels.size() * sizeof(std::uint32_t);
-  require(payload_bytes == 4096, "POM shared height fixture has an unexpected size");
+  const auto payload_bytes = immutable->image->pixels.size();
+  require(payload_bytes == 1024, "POM shared height fixture has an unexpected size");
   const auto uploads = renderer.height_uploads;
   const auto uploaded_bytes = renderer.height_uploaded_bytes;
   const auto hits = renderer.height_cache_hits;
@@ -916,6 +916,41 @@ void immutable_height_reuse_across_admission_stamps(vk::Renderer &renderer) {
   std::printf("pom_immutable_height_reuse_across_admission_stamps pass\n");
 }
 
+// #496: a parallax draw whose albedo or normal texture didn't fit in video
+// memory draws with a white stand-in and no parallax for that frame, instead of
+// failing the height check, and gets its parallax back once the texture fits.
+void parallax_stand_in_while_texture_waits(vk::Renderer &renderer) {
+  auto reference = fixture(Route::tl, Height::ramp_u, .08f, .1f, .7);
+  renderer.render(reference.scene);
+  const auto reference_uv = decode(reference.scene);
+  // The same textures under keys the renderer hasn't seen, so it must create
+  // their images now; the height check compares content, not keys.
+  auto with_new_keys = [] {
+    auto moved = fixture(Route::tl, Height::ramp_u, .08f, .1f, .7);
+    for (auto &texture : moved.scene.textures)
+      texture.key += 0x4960000000000000ULL;
+    return moved;
+  };
+  vk::PreloadFaultInjection fault{};
+  fault.fail_next_play_texture_allocations = 2;
+  fault.injected_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+  renderer.set_preload_fault(fault);
+  auto waiting = with_new_keys();
+  renderer.render(waiting.scene);
+  require(!waiting.scene.draws[0].height_binding,
+          "POM draw with a stand-in texture kept its height binding");
+  renderer.set_preload_fault({});
+  // A texture that didn't fit waits 30 render frames before it is tried again.
+  for (int frame = 0; frame < 30; ++frame) {
+    auto backing_off = with_new_keys();
+    renderer.render(backing_off.scene);
+  }
+  auto returned = with_new_keys();
+  renderer.render(returned.scene);
+  require(decode(returned.scene) == reference_uv,
+          "POM did not return once the waiting texture fit again");
+  std::printf("pom_stand_in_while_texture_waits pass\n");
+}
 void height_replacement_and_queued_retirement(vk::Renderer &renderer) {
   auto old = fixture(Route::tl, Height::constant, .04f, 0, .3);
   auto replacement = fixture(Route::tl, Height::ramp_u, .04f, 0, .3);
@@ -1158,6 +1193,7 @@ void check_parallax(SDL_Window *window, sdlfe::RendererBackend backend) {
     descriptor_identity_and_mixed_draws(renderer, uncombined);
     immutable_height_reuse_across_admission_stamps(renderer);
     height_replacement_and_queued_retirement(renderer);
+    parallax_stand_in_while_texture_waits(renderer);
     for (const auto quality : {vk::Renderer::Quality{1, 1, 16, true},
                                vk::Renderer::Quality{2, 1, 16, false},
                                vk::Renderer::Quality{2, 2, 16, false}}) {

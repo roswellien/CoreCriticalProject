@@ -402,8 +402,10 @@ void controls_save(const char* path) {
 // in it (fixes.md), so the mouse never fired again. Only that damage is
 // undone: fire moved to another button, or button 1 given to another
 // command, stays as the player set it.
-bool controls_repair_mouse_fire() {  // after the tables' rebuild (the hook's)
+bool controls_repair_mouse_fire(const platform::Input* di) {  // after the tables' rebuild (the hook's)
   constexpr int32_t kTrigger1 = 0x3d;
+  const platform::Input* active_di = di ? di : zin::state().di;
+  if (active_di && active_di->command_has_extended_binding(kTrigger1)) return false;
   const zin::CmdMap* m = zin::state().map;
   if (!m || m->count < 0xa7 || zin::mouse_of(kTrigger1) != 0) return false;
   for (int32_t c = 1; c < 0xa7; ++c)

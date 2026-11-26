@@ -86,7 +86,8 @@ public sealed class ModProfiles
         return start;
     }
 
-    public static Process Launch(LauncherSettings settings, string gameDirectory, string dataRoot, Action<string>? log)
+    public static Process Launch(LauncherSettings settings, string gameDirectory, string dataRoot, Action<string>? log,
+        Action<string>? beforeStart = null)
     {
         var tool = new ContentToolClient(settings.ModularContentTool);
         tool.RunAsync(new[] { "resolve", Path.GetFullPath(settings.ModularContentProfile), "--store", Path.GetFullPath(settings.ModularContentStore) })
@@ -95,6 +96,7 @@ public sealed class ModProfiles
             Path.GetFileNameWithoutExtension(settings.ModularContentProfile));
         Directory.CreateDirectory(write);
         var start = LaunchInfo(settings, gameDirectory, write);
+        beforeStart?.Invoke(write);
         log?.Invoke("Starting MW3-RE with validated content profile " + settings.ModularContentProfile);
         var process = Process.Start(start) ?? throw new IOException("MW3-RE did not start.");
         log?.Invoke("MW3-RE PID " + process.Id);

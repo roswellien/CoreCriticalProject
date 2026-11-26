@@ -17,7 +17,7 @@ _FIELDS = frozenset({
     "schema_version", "engine", "runtime_root", "executable", "game_dir", "write_dir", "renderer",
     "width", "height", "aa", "af", "window_mode", "render_thread", "lighting", "assets",
 })
-_OPTIONAL_FIELDS = frozenset({"indeo_codec", "flare_style"})
+_OPTIONAL_FIELDS = frozenset({"indeo_codec", "flare_style", "disk_cache", "vsync", "supports_vsync"})
 _AA = {"off": "off", "1": "off", "fxaa": "fxaa", "2": "ssaa2", "4": "ssaa4"}
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_JSON_DEPTH = 64
@@ -49,7 +49,7 @@ _MAX_MATERIAL_NAME_BYTES = 31
 _MAX_SURFACE_RECORDS = 4096
 _MAX_SURFACE_IMAGES = 512
 _MAX_SURFACE_DIMENSION = 4096
-MAX_SIDECAR_BYTES = 256 * 1024 * 1024
+MAX_SIDECAR_BYTES = 512 * 1024 * 1024
 _NO_SURFACE_MATERIAL = 0xFFFFFFFF
 _NO_SURFACE_IMAGE = 0xFFFFFFFF
 _ROLE_HEIGHT = 1
@@ -232,7 +232,7 @@ def read_surface_materials_file(path, *, expected_asset_id=None, expected_mesh_u
     if take(8) != b"BWSFM1\0\0":
         raise ValueError("Unsupported surface material magic")
     version, batch_count, record_count, image_count, mesh_uv_hash = struct.unpack("<IIIIQ", take(24))
-    if version != 1:
+    if version not in (1, 2):
         raise ValueError(f"Unsupported surface material version: {version}")
     if (not 1 <= batch_count <= _MAX_TEXTURE_BATCHES or record_count > _MAX_SURFACE_RECORDS or
             image_count > _MAX_SURFACE_IMAGES):
@@ -315,7 +315,7 @@ def read_surface_materials_file(path, *, expected_asset_id=None, expected_mesh_u
                 not 1 <= width <= _MAX_SURFACE_DIMENSION or
                 not 1 <= height <= _MAX_SURFACE_DIMENSION):
             raise ValueError("Invalid surface material image header")
-        byte_count = width * height * 4
+        byte_count = width * height * (4 if version == 1 else 1)
         if decoded_total + byte_count > max_bytes:
             raise ValueError("Surface material decoded images exceed budget")
         decoded_total += byte_count
@@ -819,6 +819,15 @@ def plan_launch(request):
     """Return complete argv or explicit unsupported reasons; never probe or start anything."""
     if type(request) is not dict:
         raise ValueError("Missing or unknown native request fields")
+    disk_cache = request.get("disk_cache", True)
+    if type(disk_cache) is not bool:
+        raise ValueError("disk_cache must be a boolean")
+    vsync = request.get("vsync", False)
+    if type(vsync) is not bool:
+        raise ValueError("vsync must be a boolean")
+    supports_vsync = request.get("supports_vsync", False)
+    if type(supports_vsync) is not bool:
+        raise ValueError("supports_vsync must be a boolean")
     schema = request.get("schema_version")
     if type(schema) is not int or schema not in (2, 3, 4):
         raise ValueError("Unsupported native request schema")
@@ -915,6 +924,14 @@ def plan_launch(request):
         "--cc-flare-style", flare_style,
     ]
     skipped_features = []
+    if supports_vsync:
+        argv.extend(("--cc-vsync", "1" if vsync else "0"))
+    elif not vsync:
+        # Older runtimes always present with vsync, so only a request to turn it off goes unmet.
+        skipped_features.append({
+            "feature": "vsync",
+            "reason": "The selected MW3-RE runtime does not advertise support for VSync.",
+        })
     if codec is None:
         skipped_features.append({
             "feature": "Indeo movies",
@@ -1137,7 +1154,8 @@ def plan_launch(request):
     for asset in request["assets"]:
         argv.extend(("--assets", asset))
     result = {"ok": True, "argv": argv, "working_directory": str(executable.parent),
-              "skipped_features": skipped_features}
+              "skipped_features": skipped_features,
+              "environment": {"MW3_DISK_CACHE": "1" if disk_cache else "0"}}
     if preview is not None:
         result["skipped_packs"] = skipped
         result["overridden_models"] = overridden_models

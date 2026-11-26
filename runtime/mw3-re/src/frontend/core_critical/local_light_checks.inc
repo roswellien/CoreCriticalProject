@@ -1,7 +1,123 @@
+// adapter_checks.cpp includes this file inside its private namespace.
+}  // namespace
+#include "frontend/sdl/sdl_input.h"
+#include "renderer/mech_headlights.hpp"
+namespace {
 
 void check_local_light_core() {
   using namespace mw34::effects;
   using namespace std;
+
+  {
+    auto parse = [](const char *text) {
+      std::istringstream stream(text);
+      return platform::HeadlightBinding::read(stream, zin::kKeys);
+    };
+    const auto v1 = parse("CC_MW3_HEADLIGHTS_V1 286 25");
+    require(v1.key == 286 && v1.button == 25 && v1.mouse == 0,
+            "V1 headlights lost keyboard or controller metadata");
+    const auto v2 = parse("CC_MW3_HEADLIGHTS_V2 0 -1 6\n");
+    require(v2.key == 0 && v2.button == -1 && v2.mouse == 6,
+            "V2 headlights refused a mouse-only binding");
+    require(platform::HeadlightBinding::wheel_mask(6) == 1 &&
+                platform::HeadlightBinding::wheel_mask(7) == 2 &&
+                platform::HeadlightBinding::wheel_mask(5) == 0 &&
+                platform::HeadlightBinding::wheel_mask(v1.mouse) == 0,
+            "Headlight wheel mask did not isolate its bound direction");
+    for (const char *bad : {"CC_MW3_HEADLIGHTS_V3 0 -1 6",
+                           "CC_MW3_HEADLIGHTS_V2 0 -1 6 extra",
+                           "CC_MW3_HEADLIGHTS_V2 0 -1 8",
+                           "CC_MW3_HEADLIGHTS_V2 0 -1 -1",
+                           "CC_MW3_HEADLIGHTS_V1 0 -1 6",
+                           "CC_MW3_HEADLIGHTS_V2 0 -1",
+                           "CC_MW3_HEADLIGHTS_V1 67 -1",
+                           "CC_MW3_HEADLIGHTS_V1 68 -1",
+                           "CC_MW3_HEADLIGHTS_V2 343 -1 6",
+                           "CC_MW3_HEADLIGHTS_V2 256 -1 6",
+                           "CC_MW3_HEADLIGHTS_V1 2014 -1",
+                           "CC_MW3_HEADLIGHTS_V2 0 26 6",
+                           "CC_MW3_HEADLIGHTS_V1 0-1"}) {
+      bool rejected = false;
+      try {
+        parse(bad);
+      } catch (const std::runtime_error &) {
+        rejected = true;
+      }
+      require(rejected, bad);
+    }
+
+    sdlfe::SdlInput mouse;
+    mouse.set_headlight_wheel(platform::HeadlightBinding::wheel_mask(v2.mouse));
+    require(mouse.open(platform::Input::kMouse) && mouse.acquire(platform::Input::kMouse) == 0,
+            "Could not acquire the headlight mouse fixture");
+    mw34::headlights::PlayerState player;
+    bool mouse_latch = false, key_latch = false;
+    auto sample = [&](uint64_t tick, bool key_down = false, bool key_suppressed = false) {
+      mouse.begin_poll(false, true);
+      platform::MouseState raw{};
+      const bool mouse_ready = mouse.mouse_state(&raw) == 0;
+      require(raw.z == 0, "Headlight wheel leaked to the legacy mouse axis");
+      const bool mouse_down = platform::headlight_input_down(
+          mouse.mouse_input_down(v2.mouse), mouse.mouse_suppressed(v2.mouse), mouse_latch);
+      const bool keyboard_down = platform::headlight_input_down(key_down, key_suppressed, key_latch);
+      player.update(1, 1, tick, 0.016, false, mouse_down || keyboard_down, mouse_ready);
+      return player.owner.envelope.desired;
+    };
+    require(!sample(1), "Mouse-only headlights did not start released");
+    SDL_Event scroll{};
+    scroll.type = SDL_EVENT_MOUSE_WHEEL;
+    scroll.wheel.y = 2;
+    mouse.on_event(scroll);
+    require(sample(2) && sample(3) && !sample(4) && !sample(5),
+            "Two wheel detents did not toggle once each on successive player edges");
+    require(!sample(6, true, true) && !sample(7, true) && !sample(8, false) && sample(9, true),
+            "A chord release toggled headlights before the suppressed key was repressed");
+    require(!platform::headlight_input_down(true, true, mouse_latch) &&
+                !platform::headlight_input_down(true, false, mouse_latch) &&
+                !platform::headlight_input_down(false, false, mouse_latch) &&
+                platform::headlight_input_down(true, false, mouse_latch),
+            "A suppressed mouse button rearmed before release");
+
+    // Exercise the virtual mask through the same renderer factory as startup.
+    int window_count = 0;
+    auto **windows = SDL_GetWindows(&window_count);
+    auto *window = window_count ? windows[0] : nullptr;
+    SDL_free(windows);
+    require(window != nullptr, "Headlight adapter check needs the test window");
+    const auto backend = SDL_GetWindowFlags(window) & SDL_WINDOW_VULKAN
+        ? sdlfe::RendererBackend::core_critical_wsi
+        : sdlfe::RendererBackend::core_critical_dxgi;
+    const auto directory = std::filesystem::u8path(SDL_GetBasePath()) /
+        ("headlight-bindings-" + std::to_string(SDL_GetTicksNS()));
+    std::filesystem::create_directory(directory);
+    struct Cleanup {
+      std::filesystem::path path;
+      ~Cleanup() {
+        std::error_code ignored;
+        std::filesystem::remove_all(path, ignored);
+      }
+    } cleanup{directory};
+    auto write = [&](const char *name, std::string_view bytes) {
+      auto path = directory / name;
+      std::ofstream file(path, std::ios::binary);
+      file.write(bytes.data(), bytes.size());
+      require(bool(file), "Could not write headlight adapter fixture");
+      return path.string();
+    };
+    sdlfe::CoreCriticalAssets assets;
+    assets.lighting = "flat";
+    assets.effect_lights = assets.mech_headlights = true;
+    // One effect light with unit radius, intensity, lifetime and color.
+    assets.effect_light_catalog = write("effect.bin",
+        {"MWFX1\0\0\0\1\0\0\0\1\0\0\0\1\0\0\0\1\0\0\0\1\0\0\0"
+         "\1\0\0\0\0\0\0\0\0\0\x80\x3f\0\0\x80\x3f\0\0\x80\x3f"
+         "\0\0\x80\x3f\0\0\x80\x3f\0\0\x80\x3f", 60});
+    assets.stock_headlights = write("stock.bin", {"MWHDLT1\0\0\0\0\0", 12});
+    assets.headlight_bindings = write("input.txt", "CC_MW3_HEADLIGHTS_V2 0 -1 7");
+    const auto renderer = make_check_renderer(window, backend, {}, assets);
+    const platform::Render3D &render = *renderer;
+    require(render.headlight_wheel_mask() == 2, "Renderer did not expose the V2 wheel direction");
+  }
 
   // Stock and selected-pack catalogs share exact material keys. Composition
   // retains every definition or rejects the whole result on disagreement.

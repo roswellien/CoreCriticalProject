@@ -194,6 +194,8 @@ unusual happens.
 - The rain's and snow's very first frame no longer draws its streaks from unset sizes (it used the screen's size from the second frame on anyway).
 - A picture the menus or the HUD let go of twice is no longer freed twice (which could crash); the rebuild reports it instead.
 - Keypad 0 (the zoom lock) no longer crashes when the mech you are looking at has no HUD; it does nothing then.
+- Opening or closing the zoom view at the edge of the screen no longer ends the game on the Core Critical renderer with dynamic lighting on; for that one frame the zoom view simply draws nothing.
+- A model or texture that doesn't fit in video memory during a mission no longer ends the game on the Core Critical renderer: textures and models not used for a few seconds are freed, and anything that still doesn't fit shows plain or missing for a moment until there's room. The game's log records the video memory figures when it happens.
 - A script that cycles the textures of a model with no material, or turns a scroll off, no longer crashes (neither happens with the shipped scripts).
 - A mission script command that changes an object's model (its colour, priority, facade, back faces, morph or world textures) after the object was not found now does nothing. The original went on with the last object's model, which after a second mission could be one already freed.
 - An edited debriefing dialog missing its buttons' help, its title's, its lance cards' or its rank's lines no longer crashes.
@@ -621,6 +623,13 @@ These change how the game talks to the computer, not how it plays.
 
 - Setting the game up takes whatever you have (ours): one POINT TO YOUR GAME button takes your installed game, the disc, a disc image (.iso, .cue/.bin with its music) or the file you downloaded (.zip, .7z, .rar, even a zip inside a zip) and installs straight from it, with nothing to unpack by hand; it tells MechWarrior 3 from Pirate's Moon by the files themselves. Started directly, the game goes straight in when it finds your install, and shows only this setup screen when it does not.
 - A launcher (ours; its own program, the main icon, which starts the game and steps aside while it runs; the game also starts directly) finds your MechWarrior 3 by itself and, when it cannot, sets it up from buttons instead of command lines: point to your game (with a progress bar and Cancel), apply the official 1.2 patch (offered only for game files of an unknown version), add the music from a disc image.
+
+## Test tools, not in play
+
+- An AI arena for testing the AI (ours, docs/arena.md): bots fight each other on a multiplayer map on one computer, started with `--arena` and a setup file naming the map, time limit and each side's mechs and pilots. On those maps, which have no AI routes, bots walk toward the nearest enemy they know of and then fight with the game's own AI. Each match writes a log of every mech's state, shots, hits and kills, and the same seed replays the same match. Nothing changes in the campaign, Instant Action or multiplayer games with people.
+- The arena's match log (ours, docs/arena.md) also records what replay viewers need: each shot's weapon, target and aim, bullets, missiles and beams while in flight, each bot's route, the enemies its radar knows and whether it detects each now, and a reason each time it changes order or target. Logs carry a format version, and logs from before it are refused. The match plays out exactly as before.
+- A replay viewer for arena matches (ours, docs/arena.md): `--replay` with a match log plays the match back on the map seen from above, with the ground shaded by height, each mech's facing, aim and trail, shots, missiles and beams, and switchable lines for routes, targets, goals, radar contacts and the reasons bots change their minds. Click a mech for its health, heat, target and orders. It runs nothing of the match itself.
+- A 3D replay for arena matches (ours, docs/arena.md): `--replay3d` with a match log plays the match back in the game's own world, each mech the game's own model walking, turning, jumping, falling and losing parts as the log says, with the weapons' own fire and impact effects and sounds. A free camera flies over the map or follows a mech, and the top-down viewer's controls, lines and panel work here too. The game simulates nothing while it plays. Logs now carry format version 2 with what the 3D replay needs; version 1 logs still open in both viewers.
 
 ## Kept as the original, on purpose
 
