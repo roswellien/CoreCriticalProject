@@ -331,6 +331,7 @@ add_library(mw3core STATIC
   src/mech3/force_feedback.cpp
   src/mech3/app_fmv.cpp
   src/mech3/app_movie.cpp
+  src/mech3/hd_movie.cpp
   src/mech3/load_watch.cpp
   src/mech3/movie_shape.cpp
   src/mech3/movie_shape_table.cpp
@@ -719,6 +720,7 @@ add_executable(mw3tests
   tests/test_load_watch.cpp
   tests/test_movie_shape.cpp
   tests/test_fmv_stream.cpp
+  tests/test_hd_movie.cpp
   tests/test_mods.cpp
   tests/test_mod_install.cpp
   tests/test_import_folder.cpp
