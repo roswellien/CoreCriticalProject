@@ -744,7 +744,7 @@ static EnvironmentSelection load_environment_packs_impl(
           selected.resources[pack.region][role_enum] = pack.pins.at(name).path;
           if (role_enum == EnvironmentRole::surface_materials ||
               (role_enum == EnvironmentRole::ground_materials &&
-               !selected.surface_material_digests.count(pack.region)))
+               !selected.resources.at(pack.region).count(EnvironmentRole::surface_materials)))
             selected.surface_material_digests[pack.region] = pack.pins.at(name).digest;
         }
       if (pack.registry.contains("material_targets")) {

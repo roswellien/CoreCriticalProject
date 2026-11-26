@@ -422,34 +422,45 @@ def build_environment_surface_materials(
 def update_environment_pack(pack_dir: Path, sidecar_bytes: bytes) -> dict:
     """Write environment/surface_materials.bin and update environment.json + pack.json hashes."""
     rel_sfm = "environment/surface_materials.bin"
-    sfm_path = pack_dir / rel_sfm
-    sfm_path.write_bytes(sidecar_bytes)
-
-    env_json_path = pack_dir / "environment" / "environment.json"
+    env_rel = "environment/environment.json"
+    env_json_path = pack_dir / env_rel
+    pack_json_path = pack_dir / "pack.json"
     env_json = json.loads(env_json_path.read_text(encoding="utf-8"))
+    manifest = json.loads(pack_json_path.read_text(encoding="utf-8"))
+    if not isinstance(env_json, dict) or not isinstance(manifest, dict):
+        raise ValueError("Environment registry and pack manifest must be objects")
+    files = manifest.setdefault("files", {})
+    native_payload = manifest.setdefault("native_payload", {})
+    if not isinstance(files, dict) or not isinstance(native_payload, dict):
+        raise ValueError("Invalid environment pack file table or native payload")
+    if native_payload.setdefault("registry", env_rel) != env_rel:
+        raise ValueError("Unsupported environment registry path")
+    registry_pin = files.setdefault(env_rel, {})
+    req_formats = native_payload.setdefault("required_formats", [])
+    req_caps = native_payload.get("required_capabilities")
+    if not isinstance(registry_pin, dict) or not isinstance(req_formats, list):
+        raise ValueError("Invalid environment registry pin or required formats")
+    if req_caps is None:
+        req_caps = native_payload["required_capabilities"] = {}
+    if not isinstance(req_caps, dict):
+        raise ValueError("Invalid environment capability requirements")
+
     env_json["surface_materials"] = rel_sfm
     env_json_bytes = (json.dumps(env_json, indent=2) + "\n").encode("utf-8")
-    env_json_path.write_bytes(env_json_bytes)
-
-    pack_json_path = pack_dir / "pack.json"
-    manifest = json.loads(pack_json_path.read_text(encoding="utf-8"))
-    files = manifest.setdefault("files", {})
     files[rel_sfm] = {
         "bytes": len(sidecar_bytes),
         "sha256": hashlib.sha256(sidecar_bytes).hexdigest(),
         "format": "BWSFM1",
     }
-    env_rel = manifest.get("native_payload", {}).get("registry", "environment/environment.json")
-    if env_rel in files:
-        files[env_rel]["bytes"] = len(env_json_bytes)
-        files[env_rel]["sha256"] = hashlib.sha256(env_json_bytes).hexdigest()
-    native_payload = manifest.setdefault("native_payload", {})
-    req_formats = native_payload.setdefault("required_formats", [])
+    registry_pin.update(bytes=len(env_json_bytes), sha256=hashlib.sha256(env_json_bytes).hexdigest())
     if "BWSFM1" not in req_formats:
         req_formats.append("BWSFM1")
-    req_caps = native_payload.setdefault("required_capabilities", {})
     req_caps["surface-materials"] = 1
-    pack_json_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    manifest_bytes = (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
+
+    (pack_dir / rel_sfm).write_bytes(sidecar_bytes)
+    env_json_path.write_bytes(env_json_bytes)
+    pack_json_path.write_bytes(manifest_bytes)
     return manifest
 
 

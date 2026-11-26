@@ -281,7 +281,7 @@ ensure_region_surface_materials(const std::string &region) {
     throw std::runtime_error(
         "Environment surface-material sidecar changed after environment admission");
   // Keep only the active region's catalog decoded to stay within the shared
-  // 256 MiB SurfaceDecodedBudget across multi-region campaign packs.
+  // 512 MiB SurfaceDecodedBudget across multi-region campaign packs.
   surface_normals_.region_surface_materials.clear();
   surface_normals_.region_height_cache.clear();
   std::istringstream stream(raw, std::ios::binary);
@@ -501,52 +501,57 @@ native_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
     }
     // Fall back to the region's admitted BWSFM1 surface-material catalog, bound
     // through the authenticated SurfaceKey -> BWSNR normal image hash/name.
-    surface_normals_load();
-    const auto *catalog = ensure_region_surface_materials(region);
-    if (catalog && texture >= 0 && std::size_t(texture) < textures_.size() &&
-        key.width > 0 && key.height > 0 && key.format == 1U && key.hash != 0) {
-      const auto &slot = textures_[std::size_t(texture)];
-      if (!slot.replacement && slot.width == key.width && slot.height == key.height &&
-          slot.group_load_epoch == group_load_epoch_ && slot.surface_key == key) {
-        const int normal_idx = surface_normal_index(key, true, texture);
-        if (normal_idx >= 0) {
-          const auto source_epoch = zcls::world_source_epoch();
-          RegionHeightCacheKey cache_key{
-              region, source_epoch, group_load_epoch_, texture, slot.version, key, normal_idx};
-          auto cached = surface_normals_.region_height_cache.find(cache_key);
-          if (cached != surface_normals_.region_height_cache.end())
-            return cached->second;
-          const auto &normal = surface_normal_image(normal_idx);
-          std::shared_ptr<const mw34::materials::HeightBinding> resolved;
-          auto rec_it = catalog->by_material_name.end();
-          if (normal.hash != 0) {
-            char hash_name[24];
-            std::snprintf(hash_name, sizeof(hash_name), "n_%016llx",
-                          static_cast<unsigned long long>(normal.hash));
-            rec_it = catalog->by_material_name.find(hash_name);
-          }
-          if (rec_it == catalog->by_material_name.end())
-            rec_it = catalog->by_material_name.find(normal.name);
-          if (rec_it != catalog->by_material_name.end()) {
-            auto binding = mw34::materials::resolve_catalog_height_binding(
-                catalog->pack, rec_it->second, catalog->sha256, key,
-                normal.width, normal.height, normal.hash);
-            if (binding) {
-              auto owned = std::make_shared<mw34::materials::HeightBinding>(*binding);
-              owned->sidecar_path = catalog->path;
-              owned->producer_epoch = group_load_epoch_;
-              owned->texture_version = slot.version;
-              owned->world_source = mw34::materials::HeightWorldSource{
-                  "env-surface-bwsfm1", catalog->path, catalog->bytes, source_epoch, 0};
-              resolved = std::move(owned);
+    try {
+      surface_normals_load();
+      const auto *catalog = ensure_region_surface_materials(region);
+      if (catalog && texture >= 0 && std::size_t(texture) < textures_.size() &&
+          key.width > 0 && key.height > 0 && key.format == 1U && key.hash != 0) {
+        const auto &slot = textures_[std::size_t(texture)];
+        if (!slot.replacement && slot.width == key.width && slot.height == key.height &&
+            slot.group_load_epoch == group_load_epoch_ && slot.surface_key == key) {
+          const int normal_idx = surface_normal_index(key, true, texture);
+          if (normal_idx >= 0) {
+            const auto source_epoch = zcls::world_source_epoch();
+            RegionHeightCacheKey cache_key{
+                region, source_epoch, group_load_epoch_, texture, slot.version, key, normal_idx};
+            auto cached = surface_normals_.region_height_cache.find(cache_key);
+            if (cached != surface_normals_.region_height_cache.end())
+              return cached->second;
+            const auto &normal = surface_normal_image(normal_idx);
+            std::shared_ptr<const mw34::materials::HeightBinding> resolved;
+            auto rec_it = catalog->by_material_name.end();
+            if (normal.hash != 0) {
+              char hash_name[24];
+              std::snprintf(hash_name, sizeof(hash_name), "n_%016llx",
+                            static_cast<unsigned long long>(normal.hash));
+              rec_it = catalog->by_material_name.find(hash_name);
             }
+            if (rec_it == catalog->by_material_name.end())
+              rec_it = catalog->by_material_name.find(normal.name);
+            if (rec_it != catalog->by_material_name.end()) {
+              auto binding = mw34::materials::resolve_catalog_height_binding(
+                  catalog->pack, rec_it->second, catalog->sha256, key,
+                  normal.width, normal.height, normal.hash);
+              if (binding) {
+                auto owned = std::make_shared<mw34::materials::HeightBinding>(*binding);
+                owned->sidecar_path = catalog->path;
+                owned->producer_epoch = group_load_epoch_;
+                owned->texture_version = slot.version;
+                owned->world_source = mw34::materials::HeightWorldSource{
+                    "env-surface-bwsfm1", catalog->path, catalog->bytes, source_epoch, 0};
+                resolved = std::move(owned);
+              }
+            }
+            if (surface_normals_.region_height_cache.size() >= 4096)
+              surface_normals_.region_height_cache.clear();
+            surface_normals_.region_height_cache.emplace(std::move(cache_key), resolved);
+            return resolved;
           }
-          if (surface_normals_.region_height_cache.size() >= 4096)
-            surface_normals_.region_height_cache.clear();
-          surface_normals_.region_height_cache.emplace(std::move(cache_key), resolved);
-          return resolved;
         }
       }
+    } catch (const std::runtime_error &error) {
+      reject_surface_binding(error.what());
+      throw;
     }
   }
   // Diagnostic sidecar bytes never supply a source-aware environment target.

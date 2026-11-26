@@ -45,6 +45,10 @@ proven original producer scale factor.
 
 ## Compatibility identity (`asset_id`, `material_name`, `mesh_uv_hash`)
 
+A region-level environment catalog uses `mesh_uv_hash == 0` to identify a
+catalog whose records are selected through admitted texture and normal
+identities. Model-bound sidecars still require the exact mesh/UV digest.
+
 A surface-material sidecar is bound to a specific replacement asset and LOD
 geometry/UV layout so that switching appearances, skins, or meshes cannot
 silently inherit incompatible surface relief or thickness maps:

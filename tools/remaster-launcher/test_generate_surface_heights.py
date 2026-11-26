@@ -154,6 +154,38 @@ class GenerateSurfaceHeightsTests(unittest.TestCase):
             self.assertIn("environment/surface_materials.bin", manifest["files"])
             self.assertTrue((env_dir / "surface_materials.bin").is_file())
 
+    def test_update_repins_default_registry_and_handles_null_capabilities(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = root / "environment/environment.json"
+            registry.parent.mkdir()
+            registry.write_text("{}", encoding="utf-8")
+            (root / "pack.json").write_text(
+                '{"native_payload":{"required_capabilities":null}}', encoding="utf-8"
+            )
+            updated = gen.update_environment_pack(root, b"fixture")
+            pin = updated["files"]["environment/environment.json"]
+            raw = registry.read_bytes()
+            self.assertEqual(pin["bytes"], len(raw))
+            self.assertEqual(pin["sha256"], hashlib.sha256(raw).hexdigest())
+            self.assertEqual(updated["native_payload"]["required_capabilities"],
+                             {"surface-materials": 1})
+
+    def test_update_rejects_bad_capabilities_before_mutating(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = root / "environment/environment.json"
+            registry.parent.mkdir()
+            registry.write_bytes(b"{}")
+            manifest = root / "pack.json"
+            original = b'{"native_payload":{"required_capabilities":[]}}'
+            manifest.write_bytes(original)
+            with self.assertRaisesRegex(ValueError, "capability requirements"):
+                gen.update_environment_pack(root, b"fixture")
+            self.assertEqual(registry.read_bytes(), b"{}")
+            self.assertEqual(manifest.read_bytes(), original)
+            self.assertFalse((root / "environment/surface_materials.bin").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
