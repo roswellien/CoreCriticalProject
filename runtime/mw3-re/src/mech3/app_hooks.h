@@ -683,6 +683,8 @@ class Engine : public zgame::AppHooks {
   virtual void arena_tick() {}    // ours (#287): an arena match's end, each Core frame (nothing outside one)
   // Ours (#289, replay_hooks.h): a 3D replay's frame. Off outside one.
   virtual bool replay_on() { return false; }
+  virtual bool replay_strict() { return false; }
+  virtual bool replay_advance_lists() { return true; }
   virtual void replay_start() {}
   virtual bool replay_before_lists() { return true; }
   virtual void replay_after_lists() {}

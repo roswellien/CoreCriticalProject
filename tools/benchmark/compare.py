@@ -72,6 +72,7 @@ def require_object(value, description):
 
 def validate_summary(path, scene):
     summary = require_object(read_json(path), path)
+    reject_strict(summary, path)
     version = summary.get("version")
     if type(version) is not int or version != 1 or summary.get("scene_id") != scene:
         raise ValueError(f"{path}: wrong summary version or scene")
@@ -129,6 +130,11 @@ def validate_summary(path, scene):
     return summary
 
 
+def reject_strict(document, path):
+    if document.get("mode") == "strict":
+        raise ValueError(f"{path}: strict diagnostics are unscored. Use strict_compare.py.")
+
+
 def positive_number(value, minimum=None):
     if type(value) not in (int, float) or not math.isfinite(value):
         return False
@@ -152,9 +158,12 @@ def launch_directory(argv, flag):
 
 def read_suite(path, label, previous_end, profiles, summaries):
     if path.is_dir():
+        if (path / "strict.json").is_file():
+            reject_strict(require_object(read_json(path / "strict.json"), path), path)
         path = path / "suite.json"
     path = path.resolve(strict=True)
     manifest = require_object(read_json(path), path)
+    reject_strict(manifest, path)
     root = path.parent
     version = manifest.get("version")
     if type(version) is not int or version != 1 or manifest.get("label") != label:
@@ -190,6 +199,10 @@ def read_suite(path, label, previous_end, profiles, summaries):
         argv = require_object(read_json(plan_path), plan_path)["argv"]
         if not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
             raise TypeError(f"{plan_path}: argv must be a JSON array of strings")
+        if "--benchmark-strict" in argv:
+            raise ValueError(
+                f"{plan_path}: strict diagnostics are unscored. Use strict_compare.py."
+            )
         if launch_directory(argv, "--write-dir") != profile:
             raise ValueError(f"{path}: launch plan does not use its isolated profile: {profile}")
         profiles.add(profile)
@@ -201,6 +214,8 @@ def read_suite(path, label, previous_end, profiles, summaries):
             raise ValueError(
                 f"{path}: summary must be directly in its launch plan --benchmark-out: {summary}"
             )
+        if summary.name == "strict.json":
+            reject_strict(require_object(read_json(summary), summary), summary)
         if summary.name != "summary.json" or sha256(summary) != entry["summary_sha256"]:
             raise ValueError(f"{path}: summary identity mismatch: {summary}")
         summaries.add(summary)

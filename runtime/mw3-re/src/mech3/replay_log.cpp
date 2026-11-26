@@ -386,6 +386,13 @@ bool ReplayLog::covers(double start, double end) const {
          duration_ >= end;
 }
 
+std::vector<float> ReplayLog::state_times(double start, double end) const {
+  std::vector<float> times;
+  for (const auto& state : states_)
+    if (start <= state.t && state.t < end) times.push_back(state.t);
+  return times;
+}
+
 bool ReplayLog::mech_alive_during(int id, double start, double end) const {
   if (!info_of(id) || !covers(start, end)) return false;
   const auto history = history_.find(id);

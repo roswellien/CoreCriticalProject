@@ -104,6 +104,40 @@ equally with a geometric mean. Verdicts use mean frame time. Negative changes ar
 faster. A change must exceed 5% and the applicable spread. A within-arm spread greater
 than 5% in any scene makes the full block inconclusive.
 
+## Developer strict playback
+
+Use `--strict` for single-scene repeatability or renderer parity checks. Each recorded
+`state.t` in `[scene start, scene start + warm-up + measured)` gets one resident worker
+present. The replay uses the recorded time and consecutive tick deltas, with the first
+delta measured from the scene start. Startup and fade are outside this sequence. The
+final tick must complete before the run can succeed.
+
+```powershell
+python tools/benchmark/run.py --launcher-runtime $launcher --exe $exeA --scene c1mp1 `
+  --strict --strict-capture 12 --out local/benchmark/strict-a
+python tools/benchmark/run.py --launcher-runtime $launcher --exe $exeA --scene c1mp1 `
+  --strict --out local/benchmark/strict-b
+python tools/benchmark/strict_compare.py local/benchmark/strict-a local/benchmark/strict-b
+```
+
+The native flags are `--benchmark-strict` and `--benchmark-strict-capture TICK`, used
+with the existing benchmark flags. Tick indices start at zero. Omit the capture flag to
+record hashes only. With a capture, `tick-N.png` contains the selected swapchain image.
+
+`strict.json` records each completed tick's index, recorded time in seconds, and
+FNV-1a 64-bit hash of the full swapchain image after the resident blit and before WSI
+presentation. The hash covers tightly packed BGRA8 bytes in image row order, including
+alpha and any letterbox pixels. RGBA swapchain formats are reordered to BGRA with no
+color conversion. Strict playback requires transfer-source support and an 8-bit BGRA or
+RGBA Vulkan swapchain. The desktop compositor and scanout are outside the capture.
+
+A missing worker receipt, failed acquire or present, or swapchain change fails the run.
+The result retains completed ticks and records the failure reason. `strict_compare.py`
+accepts result directories or `strict.json` files and exits 0 for matching ticks, 1 for
+the first difference, or 2 for invalid or incompatible input. Use the same scene,
+settings, packs, resolution, GPU and driver for repeatability checks. Strict runs are
+unscored, and `compare.py` rejects them from A-B-B-A.
+
 ## Stress qualification
 
 Use the freezer's `candidate_windows` to select a log start 10 s before each candidate's

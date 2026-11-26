@@ -26,6 +26,9 @@ class ReplayHooks {
   // As play starts (in place of the arena's start): the puppets made.
   virtual void start() = 0;
   virtual void scene_load_enter() {}
+  virtual bool strict() const { return false; }
+  // A strict startup frame draws to initialize the presenter with the world paused.
+  virtual bool advance_lists() const { return true; }
   // Before the action lists: the frame clock set to the replay's step (real
   // time times the speed, 0 while paused or `quit_box_open`, capped).
   // False when the replay has stopped and no world frame should be submitted.

@@ -1,12 +1,18 @@
 #include "frontend/sdl/arena_benchmark.h"
 
+#include <chrono>
 #include <cmath>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <thread>
 #include <tuple>
 
 #include "check.h"
+#include "frontend/core_critical/render_worker.hpp"
+#include "mech3/app.h"
+#include "mech3/app_states.h"
+#include "mech3/replay_log.h"
 #include "nlohmann-json/json.hpp"
 #include "platform/sha256.hpp"
 
@@ -48,6 +54,10 @@ const char *kCamera = R"({"version":1,"keys":[
   {"t":3,"pos":[6,16,14],"yaw":-3,"pitch":1}
 ]})";
 
+StrictPresent strict_present(uint64_t sequence) {
+    return {sequence, {true, true, 0, 0, 1, 0}, "0123456789abcdef", {}};
+}
+
 } // namespace
 
 TEST(benchmark_epoch_uses_elapsed_time_at_any_cadence) {
@@ -60,6 +70,276 @@ TEST(benchmark_epoch_uses_elapsed_time_at_any_cadence) {
         EXPECT(std::abs(clock.elapsed() - time) < 1e-9);
     }
 }
+
+TEST(strict_benchmark_waits_for_each_worker_present_and_drains_the_last) {
+    using namespace std::chrono;
+    StrictPlayback playback({10.125f, 10.375f, 10.875f}, 10);
+    std::optional<std::promise<void>> release;
+    std::optional<StrictPresent> present;
+    cc_mw3_re::RenderWorker worker(1, 1024, [&] {
+        // The worker cannot finish until the producer enters its job wait.
+        if (release) {
+            release->set_value();
+            release.reset();
+        }
+    });
+    std::size_t job = 0;
+    uint64_t completions = 0;
+    const auto wait = [&](double deadline) -> std::optional<StrictPresent> {
+        EXPECT(playback.pending_frame().sequence == completions + 1);
+        EXPECT(playback.frames().size() == completions);
+        const auto until = steady_clock::time_point(duration_cast<steady_clock::duration>(
+            duration<double>(deadline)));
+        if (!worker.wait_for_job_until(job, until))
+            return {};
+        ++completions;
+        return std::exchange(present, std::nullopt);
+    };
+    const std::array times{10.125, 10.375, 10.875};
+    const std::array deltas{0.125, 0.25, 0.5};
+    for (size_t index = 0; index < times.size(); ++index) {
+        const auto tick = playback.next(wait);
+        EXPECT(tick && tick->index == index && tick->time == times[index]);
+        EXPECT(tick && tick->elapsed == times[index] - 10 && tick->delta == deltas[index]);
+        EXPECT(completions == index && !playback.finished());
+        release.emplace();
+        const auto ready = release->get_future().share();
+        job = worker.post_numbered([&, ready, sequence = index + 1] {
+            if (ready.wait_for(seconds(2)) != std::future_status::ready)
+                throw std::runtime_error("test did not enter the worker wait");
+            present = strict_present(sequence);
+        });
+    }
+    EXPECT(!playback.next(wait));
+    EXPECT(playback.finished() && completions == times.size());
+    EXPECT(!playback.next(wait) && completions == times.size());
+}
+
+TEST(strict_benchmark_missing_or_late_present_times_out) {
+    for (bool late : {false, true}) {
+        double now = 100;
+        StrictPlayback playback({0, 1}, 0, [&] { return now; });
+        const auto wait = [&](double deadline) -> std::optional<StrictPresent> {
+            now = deadline + 1;
+            if (late)
+                return strict_present(1);
+            return {};
+        };
+        EXPECT(playback.next(wait).has_value());
+        EXPECT(rejects([&] { playback.next(wait); }));
+        EXPECT(playback.frames().empty() && playback.pending_frame().sequence == 1);
+    }
+}
+
+TEST(strict_benchmark_rejects_failed_or_mismatched_worker_presents) {
+    const std::vector<PresentReceipt> invalid = {
+        {true, true, 0, 1000001003, 1, 0}, {true, true, -1000001004, 0, 0, 0},
+        {false, true, 0, 0, 1, 0},        {true, false, 0, 0, 1, 0},
+        {true, true, 0, 0, 0, 0},         {true, true, 0, 0, 2, 0},
+    };
+    for (const auto &receipt : invalid) {
+        StrictPlayback playback({0}, 0);
+        auto sample = strict_present(1);
+        sample.receipt = receipt;
+        const auto wait = [&](double) { return sample; };
+        EXPECT(playback.next(wait).has_value());
+        EXPECT(rejects([&] { playback.next(wait); }));
+        EXPECT(!playback.finished());
+    }
+    auto missing_hash = strict_present(1);
+    missing_hash.pixel_hash.clear();
+    for (const auto &sample : {strict_present(2), missing_hash}) {
+        StrictPlayback playback({0}, 0);
+        const auto wait = [&](double) { return sample; };
+        EXPECT(playback.next(wait).has_value());
+        EXPECT(rejects([&] { playback.next(wait); }));
+        EXPECT(playback.frames().empty() && !playback.finished());
+    }
+}
+
+TEST(strict_benchmark_hashes_and_captures_canonical_bgra_pixels) {
+    const std::vector<uint8_t> rgba{1, 2, 3, 4, 10, 20, 30, 40};
+    const std::vector<uint8_t> bgra{3, 2, 1, 4, 30, 20, 10, 40};
+    auto sample = strict_present(1);
+    for (bool capture : {true, false}) {
+        hash_strict_pixels(sample, rgba.data(), rgba.size(), true, capture);
+        EXPECT(sample.pixel_hash == "b91639bb3d32b0f5");
+        EXPECT(capture ? sample.capture_bgra == bgra : sample.capture_bgra.empty());
+        hash_strict_pixels(sample, bgra.data(), bgra.size(), false, capture);
+        EXPECT(sample.pixel_hash == "b91639bb3d32b0f5");
+        EXPECT(capture ? sample.capture_bgra == bgra : sample.capture_bgra.empty());
+    }
+    for (const size_t bytes : {0, 3}) {
+        hash_strict_pixels(sample, bgra.data(), bytes, false, true);
+        EXPECT(sample.pixel_hash.empty() && sample.capture_bgra.empty());
+    }
+}
+
+TEST(strict_benchmark_selects_recorded_states_and_samples_camera_at_recorded_time) {
+    Files files("benchmark-strict-log");
+    files.write("arena.jsonl", R"({"type":"start","version":1,"map":"fixture","mechs":[]}
+{"type":"state","t":10}
+{"type":"state","t":10.125}
+{"type":"state","t":10.375}
+{"type":"state","t":11}
+{"type":"end","t":11}
+)");
+    mech3::replay::ReplayLog log;
+    std::string error;
+    EXPECT(log.load((files.dir / "arena.jsonl").string(), &error));
+    const auto times = log.state_times(10.0625, 11);
+    const std::vector<float> expected{10.125f, 10.375f};
+    EXPECT(times == expected);
+    if (times != expected)
+        return;
+    StrictPlayback playback(times, 10.0625);
+    const auto wait = [](double) { return strict_present(1); };
+    const CameraTrack track{{0, 0, 0, {0, 0, 0}}, {1, 0, 0, {16, 0, 0}}};
+    const auto first = playback.next(wait);
+    const auto second = playback.next(wait);
+    EXPECT(first && first->delta == 0.0625 && sample_camera(track, first->elapsed).position[0] == 1);
+    EXPECT(second && second->delta == 0.25 && sample_camera(track, second->elapsed).position[0] == 5);
+}
+
+TEST(strict_benchmark_core_frame_places_camera_before_world_draw) {
+    enum Step { lists, pose, camera, draw, flip, restore };
+    struct ReplayEngine : mech3::Engine {
+        std::vector<Step> steps;
+        bool strict = true;
+        bool advance = false;
+
+        bool replay_on() override { return true; }
+        bool replay_strict() override { return strict; }
+        bool replay_advance_lists() override { return advance; }
+        void lists_update() override { steps.push_back(lists); }
+        void replay_after_lists() override { steps.push_back(pose); }
+        void replay_camera() override { steps.push_back(camera); }
+        void replay_after_frame() override { steps.push_back(restore); }
+        void video_flip(int32_t, int32_t, int32_t, int32_t) override { steps.push_back(flip); }
+        uint32_t peek32(uint32_t address) override { return address == 0x5f4c8c ? 1 : 0; }
+        uint32_t vcall(zgame::Handle object, uint32_t slot,
+                       std::initializer_list<zgame::Arg>) override {
+            if (object == player_view() && slot == 0x04)
+                steps.push_back(draw);
+            return 0;
+        }
+    } engine;
+    const auto saved_script = mech3::globals().script;
+    mech3::Mech3App app(&engine);
+    const auto previous_app = mech3::app_if_any();
+    mech3::set_app(&app);
+    mech3::CoreState core;
+    core.renderer_ = mech3::CoreState::kHardware;
+    const auto check_frame = [&](const std::vector<Step> &expected) {
+        engine.steps.clear();
+        EXPECT(!core.frame());
+        EXPECT(engine.steps == expected);
+    };
+    check_frame({camera, draw, flip, restore});  // Unarmed startup only primes the presenter.
+    engine.advance = true;
+    check_frame({lists, pose, camera, draw, flip, restore});
+    engine.strict = false;
+    check_frame({lists, pose, draw, camera, flip, restore});
+    mech3::set_app(previous_app);
+    mech3::globals().script = saved_script;
+}
+
+TEST(strict_benchmark_output_retains_validated_ticks_and_names_the_missing_present) {
+    Files files("benchmark-strict-output");
+    Scene scene;
+    scene.id = "authored";
+    Run run(scene, 10, 640, 480, files.dir / "out", {});
+    run.enable_strict({10, 10.25f}, {});
+    const auto wait = [&](double) { return run.take_strict_present(); };
+    EXPECT(run.next_strict_tick(wait).has_value());
+    run.record_strict_present(strict_present(1));
+    EXPECT(run.next_strict_tick(wait).has_value());
+    EXPECT(!run.next_strict_tick(wait));
+    EXPECT(!run.write_results());
+    const auto result = Json::parse(files.read("out/strict.json"));
+    EXPECT(result["mode"] == "strict" && result["valid"] == false);
+    EXPECT(result["frames"].size() == 1 && result["frames"][0]["tick"] == 0);
+    EXPECT(result["failure"]["tick"] == 1 && result["failure"]["time_seconds"] == 10.25);
+    EXPECT(result["failure"]["reason"] == "timed out waiting for strict worker present");
+    EXPECT(!result.contains("statistics") && !std::filesystem::exists(files.dir / "out/summary.json"));
+}
+
+TEST(strict_benchmark_uses_the_run_clock_for_present_deadlines) {
+    Files files("benchmark-strict-clock");
+    double now = 100;
+    Run run({}, 10, 2, 1, files.dir / "out", {}, [&] { return now; });
+    run.enable_strict({10}, {});
+    const auto wait = [&](double deadline) {
+        EXPECT(deadline == 100 + kStrictPresentTimeoutSeconds);
+        now = 101 + kStrictPresentTimeoutSeconds;
+        return strict_present(1);
+    };
+    EXPECT(run.next_strict_tick(wait).has_value());
+    EXPECT(!run.next_strict_tick(wait));
+    EXPECT(run.failed());
+}
+
+TEST(strict_benchmark_exit_before_final_drain_does_not_accept_an_unconsumed_receipt) {
+    Files files("benchmark-strict-early-exit");
+    Run run({}, 10, 2, 1, files.dir / "out", {});
+    run.enable_strict({10}, {});
+    const auto wait = [&](double) { return run.take_strict_present(); };
+    EXPECT(run.next_strict_tick(wait).has_value());
+    run.record_strict_present(strict_present(1));
+    EXPECT(!run.write_results());
+    const auto result = Json::parse(files.read("out/strict.json"));
+    EXPECT(result["valid"] == false && result["frames"].empty());
+    EXPECT(result["failure"]["tick"] == 0);
+    EXPECT(result["failure"]["reason"] == "strict playback exited before final drain");
+}
+
+TEST(strict_benchmark_invalidation_during_wait_discards_the_tick_and_capture) {
+    Files files("benchmark-strict-invalidation");
+    Run run({}, 10, 1, 1, files.dir / "out", {});
+    run.enable_strict({10, 11}, 0);
+    cc_mw3_re::RenderWorker worker;
+    const auto wait = [&](double) -> std::optional<StrictPresent> {
+        const auto pending = run.next_frame(0);
+        const auto job = worker.post_numbered([&, pending] {
+            auto present = strict_present(pending.sequence);
+            present.capture_bgra = {1, 2, 3, 4};
+            run.record_strict_present(std::move(present));
+            run.invalidate(pending, "video memory pressure during playback");
+        });
+        if (!worker.wait_for_job_until(job, std::chrono::steady_clock::now() +
+                                               std::chrono::seconds(2)))
+            return {};
+        return run.take_strict_present();
+    };
+    EXPECT(run.next_strict_tick(wait).has_value());
+    EXPECT(!run.next_strict_tick(wait));
+    EXPECT(run.next_frame(0).sequence == 1);
+    EXPECT(!run.write_results());
+    const auto result = Json::parse(files.read("out/strict.json"));
+    EXPECT(result["valid"] == false && result["frames"].empty());
+    EXPECT(result["failure"]["tick"] == 0);
+    EXPECT(result["failure"]["reason"] == "video memory pressure during playback");
+    EXPECT(!std::filesystem::exists(files.dir / "out/tick-0.png"));
+}
+
+#ifdef _WIN32
+TEST(strict_benchmark_writes_a_png_for_the_selected_validated_tick) {
+    Files files("benchmark-strict-capture");
+    Run run({}, 10, 2, 1, files.dir / "out", {});
+    run.enable_strict({10}, 0);
+    const auto wait = [&](double) { return run.take_strict_present(); };
+    EXPECT(run.next_strict_tick(wait).has_value() && run.captures(1));
+    auto present = strict_present(1);
+    present.capture_bgra = {0, 0, 255, 255, 255, 0, 0, 255};
+    run.record_strict_present(std::move(present));
+    EXPECT(!run.next_strict_tick(wait));
+    EXPECT(run.write_results());
+    const auto result = Json::parse(files.read("out/strict.json"));
+    EXPECT(result["valid"] == true && result["frames"][0]["capture"] == "tick-0.png");
+    const auto png = files.read("out/tick-0.png");
+    EXPECT(png.substr(0, 8) == "\x89PNG\r\n\x1a\n");
+}
+#endif
 
 TEST(benchmark_camera_validation_and_shortest_arc) {
     Files files("benchmark-camera");

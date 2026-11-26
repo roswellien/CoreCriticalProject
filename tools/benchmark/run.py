@@ -240,11 +240,27 @@ def launch_scene(plan):
     )
 
 
-def run_scene(definition, scene, output, profile, data_root, runtime, executable, settings):
+def run_scene(
+    definition,
+    scene,
+    output,
+    profile,
+    data_root,
+    runtime,
+    executable,
+    settings,
+    *,
+    strict=False,
+    strict_capture=None,
+):
     profile.mkdir(parents=True)
     plan = build_launch(
         definition, scene, output, profile, data_root, runtime, executable, settings
     )
+    if strict:
+        plan["argv"].append("--benchmark-strict")
+        if strict_capture is not None:
+            plan["argv"].extend(("--benchmark-strict-capture", str(strict_capture)))
     (profile / "launch-plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     for item in plan.get("skipped_packs", []):
         print(f"Play planner left out {item['root']}: {item['reason']}", file=sys.stderr)
@@ -347,10 +363,18 @@ def main():
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--scene")
     selection.add_argument("--suite", action="store_true")
+    parser.add_argument("--strict", action="store_true", help="Unscored single-scene playback")
+    parser.add_argument(
+        "--strict-capture", type=int, metavar="TICK", help="Save this tick as a PNG"
+    )
     parser.add_argument("--run-label", choices=(*BLOCK_ORDER, "smoke"))
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     try:
+        if args.strict and args.suite:
+            raise ValueError("Strict diagnostics are single-scene only and excluded from suites")
+        if args.strict_capture is not None and (not args.strict or args.strict_capture < 0):
+            raise ValueError("--strict-capture requires --strict and a nonnegative tick index")
         if args.suite != (args.run_label is not None):
             raise ValueError("--suite and --run-label must be supplied together")
         data_root = (Path(os.environ["LOCALAPPDATA"]) / "MW3Remaster").resolve(strict=True)
@@ -404,6 +428,8 @@ def main():
             launcher_runtime,
             executable,
             settings,
+            strict=args.strict,
+            strict_capture=args.strict_capture,
         )
     except (OSError, KeyError, ValueError) as error:
         print(f"benchmark: {error}", file=sys.stderr)
