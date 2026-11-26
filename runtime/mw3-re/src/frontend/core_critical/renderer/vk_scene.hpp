@@ -338,7 +338,22 @@ public:
       throw std::runtime_error("Invalid Vulkan quality configuration");
   }
   bool alpha_target() const { return rgba; }
+  struct ResidentPresentResult {
+    VkResult acquire = VK_NOT_READY;
+    VkResult present = VK_NOT_READY;
+    double completion{};
+  };
+  struct VideoMemoryPressure {
+    uint64_t recoveries{}, model_omissions{}, texture_substitutions{}, preload_stops{};
+  };
+  VideoMemoryPressure memory_pressure;
   std::string device_name;
+  uint32_t driver_version{};
+  uint64_t swapchain_generation{};
+  VkPresentModeKHR swapchain_mode = VK_PRESENT_MODE_MAX_ENUM_KHR;
+  bool immediate_swapchain() const {
+    return swapchain && swapchain_mode == VK_PRESENT_MODE_IMMEDIATE_KHR;
+  }
   mw34::temporal::History camera_history;
   void invalidate_camera_history(mw34::temporal::Reset reason) {
     if (bridge_config.temporal_inputs)
@@ -669,7 +684,7 @@ public:
 #if defined(_WIN32)
                         , sdlfe::EditorUi *editor = nullptr
 #endif
-                        ) {
+                        , ResidentPresentResult *result = nullptr) {
     mw34::timing::PresentBoundaryScope<mw34::timing::GpuResourceTiming>
         gpu_timing_scope(gpu_resource_timing_);
 #if defined(_WIN32)
@@ -706,6 +721,7 @@ public:
     if (!dxgi.active()) {
       r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired,
                                   VK_NULL_HANDLE, &index);
+      if (result) result->acquire = r;
       if ((r == VK_ERROR_OUT_OF_DATE_KHR ||
            r == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)) {
         dropSwapchain();
@@ -869,6 +885,11 @@ public:
     pi.pSwapchains = &swapchain;
     pi.pImageIndices = &index;
     r = f.vkQueuePresentKHR(queue, &pi);
+    if (result) {
+      result->completion = std::chrono::duration<double>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      result->present = r;
+    }
     if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
       ++presents;
       ++resident_presents;
@@ -1868,6 +1889,7 @@ private:
           }
           bound[i] = &white;
           stand_in_slots[i] = true;
+          ++memory_pressure.texture_substitutions;
           continue;
         }
         if (retry != texture_retry_at_.end())
@@ -1885,6 +1907,7 @@ private:
       if (c.image && (c.width != t.width || c.height != t.height))
         destroy(c);
       if (!c.image && !create_play_texture(c, t)) {
+        ++memory_pressure.texture_substitutions;
         // create_play_texture erased c; draw white until the pixels come back.
         bound[i] = &white;
         stand_in_slots[i] = true;
@@ -3910,6 +3933,7 @@ private:
   // (#496): crash reports carry the log, so the next report shows whether the
   // game's own use or something else filled the card.
   void log_video_memory_full(const char *kind, VkDeviceSize bytes) {
+    ++memory_pressure.recoveries;
     const auto now = std::chrono::steady_clock::now();
     const bool logged_before = video_memory_full_log_count_ > 0;
     if (logged_before && now - video_memory_full_logged_at_ < std::chrono::minutes(1))
@@ -3987,8 +4011,10 @@ private:
     const auto retry = model_retry_at_.find(g.key);
     if (retry != model_retry_at_.end()) {
       // A model already resident again (a mission preload) needs no back-off.
-      if (render_frame_ < retry->second && !model_buffers.count(g.key))
+      if (render_frame_ < retry->second && !model_buffers.count(g.key)) {
+        ++memory_pressure.model_omissions;
         return nullptr;
+      }
       model_retry_at_.erase(retry);
     }
     try {
@@ -4008,6 +4034,7 @@ private:
       return &b;
     } catch (const PreloadAllocationFailure &) {
       // model_buffer's own catch has already discarded the half-made buffer.
+      ++memory_pressure.model_omissions;
       model_retry_at_[g.key] = render_frame_ + kRetryAfterFrames;
       return nullptr;
     }
@@ -4349,6 +4376,7 @@ private:
     }
   }
   void stop_preload(VkResult result) noexcept {
+    if (!preload_stopped_) ++memory_pressure.preload_stops;
     preload_stopped_ = true;
     if (preload_stop_.reason != PreloadStopReason::budget_denied) {
       preload_stop_.vk_result = result;
@@ -4739,6 +4767,7 @@ private:
             gpu = g;
             family = i;
             device_name = p.deviceName;
+            driver_version = p.driverVersion;
           }
           break;
         }
@@ -6120,6 +6149,8 @@ private:
     }
     if (!swapchain)
       return;
+    ++swapchain_generation;
+    swapchain_mode = VK_PRESENT_MODE_MAX_ENUM_KHR;
     f.vkDeviceWaitIdle(device);
     exclusive_fullscreen_.release(device, swapchain);
     f.vkDestroySwapchainKHR(device, swapchain, nullptr);
@@ -6229,13 +6260,20 @@ private:
                                           -caps.supportedCompositeAlpha);
     sc.presentMode = VK_PRESENT_MODE_FIFO_KHR;
     sc.clipped = VK_TRUE;
+    if (bridge_config.require_immediate_present &&
+        (bridge_config.vsync || !f.vkGetPhysicalDeviceSurfacePresentModesKHR))
+      throw std::runtime_error("Benchmark requires native IMMEDIATE presentation with v-sync off");
     if (!bridge_config.vsync && f.vkGetPhysicalDeviceSurfacePresentModesKHR) {
       unsigned pm = 0;
-      f.vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, windowSurface, &pm,
-                                                  nullptr);
+      const VkResult count_result =
+          f.vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, windowSurface, &pm, nullptr);
       std::vector<VkPresentModeKHR> modes(pm);
-      f.vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, windowSurface, &pm,
-                                                  modes.data());
+      const VkResult list_result =
+          f.vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, windowSurface, &pm, modes.data());
+      if (bridge_config.require_immediate_present &&
+          (count_result != VK_SUCCESS || list_result != VK_SUCCESS || modes.empty()))
+        throw std::runtime_error("Benchmark could not enumerate Vulkan present modes");
+      modes.resize(std::min<size_t>(pm, modes.size()));
       auto has = [&](VkPresentModeKHR m) {
         return std::find(modes.begin(), modes.end(), m) != modes.end();
       };
@@ -6243,6 +6281,8 @@ private:
           has(VK_PRESENT_MODE_IMMEDIATE_KHR) ? VK_PRESENT_MODE_IMMEDIATE_KHR
           : has(VK_PRESENT_MODE_MAILBOX_KHR) ? VK_PRESENT_MODE_MAILBOX_KHR
                                              : VK_PRESENT_MODE_FIFO_KHR;
+      if (bridge_config.require_immediate_present && sc.presentMode != VK_PRESENT_MODE_IMMEDIATE_KHR)
+        throw std::runtime_error("Benchmark requires VK_PRESENT_MODE_IMMEDIATE_KHR");
       static bool told = false;
       if (!told) {
         told = true;
@@ -6256,6 +6296,8 @@ private:
     }
     check(f.vkCreateSwapchainKHR(device, &sc, nullptr, &swapchain),
           "swapchain");
+    ++swapchain_generation;
+    swapchain_mode = sc.presentMode;
     check(f.vkGetSwapchainImagesKHR(device, swapchain, &n, nullptr),
           "swapchain images");
     swapImages.resize(n);

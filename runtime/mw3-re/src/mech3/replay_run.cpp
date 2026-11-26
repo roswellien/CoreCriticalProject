@@ -28,6 +28,10 @@ ReplayRun::~ReplayRun() {
 }
 
 bool ReplayRun::read(const std::string& path, std::string* message) {
+  return load_log(path, message) && check_game_files(message);
+}
+
+bool ReplayRun::load_log(const std::string& path, std::string* message) {
   if (!log_.load(path, message)) {
     *message = "--replay3d: " + *message;
     return false;
@@ -36,6 +40,10 @@ bool ReplayRun::read(const std::string& path, std::string* message) {
     *message = refused;
     return false;
   }
+  return true;
+}
+
+bool ReplayRun::check_game_files(std::string* message) const {
   std::string dir;
   int32_t number = 0;
   arena::split_map(log_.map(), &dir, &number);

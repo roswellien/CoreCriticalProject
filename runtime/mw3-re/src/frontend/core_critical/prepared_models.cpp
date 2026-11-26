@@ -297,6 +297,17 @@ std::optional<Matrix> original_headlight_socket(const platform::ModelDrawContext
     return math::product(root_world, socket->second);
 }
 
+PreparedModels::LoadedAssets PreparedModels::loaded_assets() const {
+    LoadedAssets result;
+    result.lods = models_.size();
+    for (const auto& model : models_) {
+        result.normals += !model.normals.images.empty();
+        result.materials += bool(model.surface_materials);
+        result.skins += model.skins.size();
+    }
+    return result;
+}
+
 PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
                                const std::vector<PreparedMaterialBinding> &materials) {
     if (!options.textures.empty()) {

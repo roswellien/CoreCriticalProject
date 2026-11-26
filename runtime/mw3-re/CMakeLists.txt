@@ -22,6 +22,8 @@ execute_process(COMMAND git describe --tags --match "v[0-9]*" --always --dirty W
                 OUTPUT_VARIABLE MW3_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 execute_process(COMMAND git rev-list --count HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                 OUTPUT_VARIABLE MW3_BUILD_NUMBER OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                OUTPUT_VARIABLE MW3_SOURCE_SHA OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 if(NOT MW3_VERSION)
   set(MW3_VERSION "unknown")
 endif()
@@ -45,6 +47,7 @@ if(MSVC)
 endif()
 add_library(mw3core STATIC
   src/mech3/world_mesh.cpp  # ours: mw3view's world loader, shared with the replay viewer (#289)
+  src/frontend/sdl/arena_benchmark.cpp
   src/mech3/replay_log.cpp  # ours (#289): an arena match log read for replay
   src/mech3/replay_terrain.cpp  # ours (#289): an arena map seen from above
   src/mech3/replay_puppet.cpp  # ours (#289): a logged mech posed by the game's own animation
@@ -695,6 +698,7 @@ add_executable(mw3tests
   tests/test_hunt.cpp
   tests/test_arena.cpp
   tests/test_arena_camera.cpp
+  tests/test_arena_benchmark.cpp
   tests/test_replay.cpp
   tests/test_replay_game.cpp
   tests/test_arena_game.cpp
@@ -934,7 +938,7 @@ if(SDL3_FOUND)
     if(MW3_CORE_CRITICAL_VULKAN)
       target_compile_definitions(mw3 PRIVATE CC_MW3_RE_ADAPTER=1)
     endif()
-    target_compile_definitions(mw3 PRIVATE MW3_VERSION="${MW3_VERSION}")
+    target_compile_definitions(mw3 PRIVATE MW3_SOURCE_SHA="${MW3_SOURCE_SHA}" MW3_VERSION="${MW3_VERSION}")
     # The launcher's art (assets/launcher) in a development build; a package
     # carries it beside the exe (tools/windows/package.cmd) or in the app's
     # Resources (tools/macos/make_app.sh), and keeps no path of this machine.
