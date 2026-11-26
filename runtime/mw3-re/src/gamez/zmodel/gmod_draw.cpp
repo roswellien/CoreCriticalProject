@@ -962,7 +962,7 @@ int32_t draw_model(zcls::Node* node, uint32_t mask) {
   if (s.static_lights && type == 0 && field<int32_t>(m, 0xc) < 2 && (needs & 2)) {
     if (node_field<uint32_t>(*node, 0xc0) >= zcls::frames().update_frame) {
       cache = true;
-    } else if (node_field<uint32_t>(*node, 0xc4) <= zcls::frames().frame) {
+    } else if (node_field<uint32_t>(*node, 0xc4) <= zcls::frames().step) {  // ours (#485): steps (cls_node.h)
       // 0x00544ed0 then 0x004ed980: the bake into each polygon's +0x18, the
       // node's cache stamped. Without it the cache is read unfilled: black.
       if (g_hooks.refresh_static) {

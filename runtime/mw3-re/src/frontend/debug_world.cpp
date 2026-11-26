@@ -196,6 +196,7 @@ void world_frame(const float eye[3], float yaw, float pitch, platform::Render3D*
   zcls::camera_set_rotation(cam, -pitch, yaw + 3.14159265f, 0.0f);
   zcls::camera_set_position(cam, eye[0], eye[1], eye[2]);
   ++zcls::frames().frame;
+  ++zcls::frames().step;  // ours (#485): the node stamps count steps; one a frame here
   if (dt >= 0) ztimer::state().dt = dt;
   render->clear(true, 89, 115, 140);
   zcls::render_world(cam, 0);

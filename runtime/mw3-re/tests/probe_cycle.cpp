@@ -53,6 +53,7 @@ int32_t cy_loop(uint32_t v) { return zmod::cycle_set_looping(model(), v); }
 int32_t cy_speed(float v) { return zmod::cycle_set_speed(model(), v); }
 void cy_step(uint32_t frame, float dt) {
   zcls::frames().frame = frame;
+  zcls::frames().step = frame;  // ours (#485): the node stamps count steps; one a frame in the exe
   ztimer::state().dt = dt;
   zmod::material_cycle(mat());
 }

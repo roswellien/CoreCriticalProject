@@ -92,8 +92,8 @@ int list_count(int list) {
 
 // Mech3.exe 1.2 @ 0x004f8080
 int push_front(int list, Node* node) {
-  if (list == kChanged && node->get<uint32_t>(0xc4) <= frames().frame) {
-    frames().expiry = frames().frame + 0xa0;
+  if (list == kChanged && node->get<uint32_t>(0xc4) <= frames().step) {  // ours (#485): steps (cls_node.h)
+    frames().expiry = frames().step + 0xa0;
     set_expiry(node);
   }
   ListItem* item = item_alloc();

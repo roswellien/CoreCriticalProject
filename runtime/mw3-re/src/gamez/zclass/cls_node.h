@@ -133,7 +133,10 @@ struct Frames {
   // Ours (#485, docs/fixed-step.md): the simulation steps run so far. The exe
   // drew one frame per step, so its simulation's once-a-frame checks read
   // `frame`; with several steps to a drawn frame they read this instead, and
-  // `frame` stays the drawn frames' count for the drawing's own checks.
+  // `frame` stays the drawn frames' count for the drawing's own checks. The
+  // node stamps of `expiry` (node +0xc4: changed until then) count steps too:
+  // the shots' static hits read them, so a node is static once unchanged for
+  // 160 steps (5.3 s, as at the exe's 30 fps) at any frame rate.
   uint32_t step = 0;
 };
 Frames& frames();

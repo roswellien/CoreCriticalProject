@@ -183,6 +183,7 @@ void sw_camera_put(int off, uint32_t v) { static_cast<zcls::Camera*>(camera_node
 void sw_globals(uint32_t frame, float dt, int hse_on, int lod_dynamic, int shadows, int zone_mode,
                 int virtual_cells, int cell_filter) {
   zcls::frames().frame = frame;
+  zcls::frames().step = frame;  // ours (#485): the node stamps count steps; one a frame in the exe
   ztimer::state().dt = dt;
   zcls::scene_walk().hidden_surface = hse_on;
   zcls::scene_walk().lod_dynamic = lod_dynamic;

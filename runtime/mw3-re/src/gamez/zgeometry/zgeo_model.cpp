@@ -615,8 +615,8 @@ int clip_node(ClipPolygon& c, zcls::Node* node, zmod::Model** out) {
   if (flags & 0x10000) {
     const int r = clip_model(c, node->model, out);
     zcls::Frames& f = zcls::frames();
-    if (r && node->get<uint32_t>(0xc4) <= f.frame) {
-      f.expiry = f.frame + 0xa0;
+    if (r && node->get<uint32_t>(0xc4) <= f.step) {  // ours (#485): steps (cls_node.h)
+      f.expiry = f.step + 0xa0;
       zcls::set_expiry(node);
     }
     return r;

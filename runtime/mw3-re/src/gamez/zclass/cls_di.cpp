@@ -884,7 +884,8 @@ LineQuery g_lq;
 constexpr uint32_t kIntersect = 0x10, kBoxHit = 0x20;
 
 bool line_done() { return g_opt.first_hit && g_lq.out->count != 0; }
-bool line_static_ok(const Node* n) { return !g_opt.static_only || n->get<uint32_t>(0xc4) <= frames().frame; }
+// Ours (#485): the stamp counts steps (cls_node.h).
+bool line_static_ok(const Node* n) { return !g_opt.static_only || n->get<uint32_t>(0xc4) <= frames().step; }
 int line_result() { return g_lq.out->count == 0; }
 
 // The node itself as the hit (INTERSECT_BBOX, its box crossed).
@@ -1014,7 +1015,7 @@ int line_node(Node* node, int32_t siblings) {
   if (g_opt.exclude & flags) return 1;
   if (line_done()) return 0;
   if (!zmod::zone_visible(node->raw[0x30])) return 1;
-  if (g_opt.static_only && frames().frame < node->get<uint32_t>(0xc4)) return 1;
+  if (g_opt.static_only && frames().step < node->get<uint32_t>(0xc4)) return 1;  // ours (#485): steps
   node->set_flags(node->flags() & ~0x2000000u);
   if (g_lq.out->count > 0x1f) {
     zerr::report(0x200, kFile, 0xa1c, "Database intersections array is full");
@@ -1212,7 +1213,7 @@ int segment_list(Node* world, const float from[3], const float to[3], LineHits* 
       Node* n = world->children[i];
       if (!(n->flags() & kActive) || !(n->flags() & kIntersect)) continue;
       if (!zmod::zone_visible(n->raw[0x30])) continue;
-      if (g_opt.static_only && !(n->get<uint32_t>(0xc4) <= frames().frame)) continue;
+      if (g_opt.static_only && !(n->get<uint32_t>(0xc4) <= frames().step)) continue;  // ours (#485): steps
       line_node(n, world->child_count() + 1);
       if (line_done()) break;
     }
