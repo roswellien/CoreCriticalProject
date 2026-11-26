@@ -140,6 +140,11 @@ class CoreState : public State {
   bool draw_software(Handle veh, bool flag);  // 0x00481290
   bool draw_doubled(Handle veh, bool flag);   // 0x00481a10
   bool draw_hardware(Handle veh, bool flag);  // 0x00481790
+  // Ours (#485, docs/fixed-step.md): frame()'s simulation half, as one
+  // variable step or as fixed 1/30 s steps, and the fixed step's restart.
+  void poll_and_run_lists(bool replay);
+  void run_fixed_steps(bool replay);
+  void restart_fixed_step();
 
   Handle window_rect_ = 0;            // +0x08
   Handle display_rect_ = 0;           // +0x0c

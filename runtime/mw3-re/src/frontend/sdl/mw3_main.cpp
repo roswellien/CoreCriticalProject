@@ -109,6 +109,7 @@
 #include "mech3/game_editor.h"
 #include "mech3/mp_connect.h"
 #include "mech3/options_menu.h"
+#include "mech3/fixed_step.h"
 #include "mech3/step_log.h"
 #include "mech3/game_setup.h"
 #include "frontend/sdl/sdl_force.h"
@@ -455,6 +456,7 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--action-chain" && next(1)) a.modes = argv[++i];
     else if (s == "--frame-ms" && next(1)) a.frame_ms = std::atoi(argv[++i]);
     else if (s == "--step-log" && next(1)) a.step_log = argv[++i];
+    else if (s == "--variable-step") mech3::set_fixed_step_enabled(false);
     else if (s == "--seed" && next(1)) a.seed = std::strtoll(argv[++i], nullptr, 10);
     else if (s == "--window" && next(1)) std::sscanf(argv[++i], "%dx%d", &a.win_w, &a.win_h), a.window_given = true;
     else if (s == "--nosound") a.nosound = true;

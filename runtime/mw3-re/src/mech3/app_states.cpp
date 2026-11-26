@@ -19,6 +19,11 @@
 #include "mech3/pilot.h"
 #include "mech3/spectator_seat.h"
 #include "mech3/step_log.h"
+#include <optional>
+#include "crt/msvc_rand.h"
+#include "gamez/zutil/ztimer.h"
+#include "mech3/app_mech.h"
+#include "mech3/fixed_step.h"
 
 namespace mech3 {
 
@@ -288,6 +293,7 @@ bool CoreState::enter() {
   message_box_ = en.message_box_new("dlgMessage.zrd", "MESSAGEBOX");
   en.vcall(message_box_, 0x04, {0});
   start_mission();
+  restart_fixed_step();  // ours (#485)
   if (Handle ff = en.force_feedback()) en.force_feedback_spring(ff, 1);
   if (en.pixel_double() == 0) {
     en.fade(7, -1, 0, zgame::bits(kFadeSeconds), 0, 0, 0);
@@ -319,6 +325,13 @@ void CoreState::start_mission() {
   en.timer_update();
   en.sleep(30);
   en.timer_update();
+  // Ours (#485): this frame's action lists are a simulation step too, so with
+  // the fixed step they run on 1/30 s, not on the time the sleep measured.
+  if (fixed_step_enabled()) {
+    ztimer::State& timer = ztimer::state();
+    timer.dt = timer.raw_dt = static_cast<float>(FixedStep::kStepSeconds);
+    sync_frame_step(timer.dt, timer.total_scaled);
+  }
   en.debug_mark("Dummy Frame");
   en.video_show_cursor(1);
   en.video_set_clear(0);
@@ -413,14 +426,24 @@ void CoreState::start_mission() {
   }
 }
 
+namespace {
+void world_tick(Engine& en);  // below, with the drawing paths that call it
+// Ours (#485): the steps' own running totals of game time, which the timer's
+// totals read during a step (the frame's are the real clock's).
+struct StepClock {
+  float total_scaled = 0;
+  float total_raw = 0;
+};
+StepClock g_step_clock;
+// False with the fixed step: world_tick has run in the steps already.
+bool g_world_tick_in_draw = true;
+}  // namespace
+
 // Mech3.exe 1.2 @ 0x00481e70, one mission frame. True when command 1 (Escape)
 // asks for the pause menu; in multiplayer the message box asks instead.
-bool CoreState::frame() {
+// The input poll and the action lists, the frame's first half in the exe.
+void CoreState::poll_and_run_lists(bool replay) {
   Engine& en = e();
-  elapsed_ = en.frame_dt() + elapsed_;
-  // Ours (#289): a 3D replay polls without the command callbacks, so no game
-  // command fires (replay_hooks.h).
-  const bool replay = en.replay_on();
   if (!paused_) {
     en.input_poll(replay ? 0 : 1);
     if (!a().fullscreen() && (a().input_mode_ & 0xc) == 8) {
@@ -432,6 +455,58 @@ bool CoreState::frame() {
   if (replay) en.replay_before_lists();  // the action lists on the replay's step
   en.lists_update();
   if (replay) en.replay_after_lists();  // real time back; the replay's time, puppets and camera
+}
+
+// Ours (#485, docs/fixed-step.md): the frame's real time goes into the fixed
+// step, and each whole 1/30 s runs one step: the clock set to the step (the
+// timer and the modules' copies), the input and action lists, then world_tick.
+// The frame's own clock is put back for the drawing that follows.
+void CoreState::run_fixed_steps(bool replay) {
+  Engine& en = e();
+  ztimer::State& timer = ztimer::state();
+  const ztimer::State frame_clock = timer;
+  const int steps = mission_fixed_step().feed(frame_clock.dt);
+  const float step_seconds = static_cast<float>(FixedStep::kStepSeconds);
+  for (int i = 0; i < steps; ++i) {
+    g_step_clock.total_scaled += step_seconds;
+    g_step_clock.total_raw += step_seconds;
+    timer.dt = timer.raw_dt = step_seconds;
+    timer.total_scaled = g_step_clock.total_scaled;
+    timer.total_raw = g_step_clock.total_raw;
+    sync_frame_step(timer.dt, timer.total_scaled);
+    poll_and_run_lists(replay);
+    world_tick(en);
+  }
+  timer.dt = frame_clock.dt, timer.raw_dt = frame_clock.raw_dt;
+  timer.total_scaled = frame_clock.total_scaled, timer.total_raw = frame_clock.total_raw;
+  sync_frame_step(timer.dt, timer.total_scaled);
+}
+
+// Ours (#485): no time built up carries over a mission start or a return
+// from the pause menu; the steps' clock starts from the timer's.
+void CoreState::restart_fixed_step() {
+  mission_fixed_step().reset();
+  g_step_clock.total_scaled = ztimer::state().total_scaled;
+  g_step_clock.total_raw = ztimer::state().total_raw;
+}
+
+bool CoreState::frame() {
+  Engine& en = e();
+  elapsed_ = en.frame_dt() + elapsed_;
+  // Ours (#289): a 3D replay polls without the command callbacks, so no game
+  // command fires (replay_hooks.h).
+  const bool replay = en.replay_on();
+  // Ours (#485): with the fixed step, world_tick runs in the steps, not in the
+  // drawing paths, and the drawing's random numbers come from their own state.
+  const bool fixed = fixed_step_enabled();
+  std::optional<crt::DrawnFrameRandom> drawn_frame_random;
+  g_world_tick_in_draw = !fixed;
+  if (fixed) {
+    run_fixed_steps(replay);
+    drawn_frame_random.emplace();
+  } else {
+    poll_and_run_lists(replay);
+  }
   en.sound_update(0, 1);
   const Handle view = en.player_view();
   const Handle target = en.field32(view, 0x64);
@@ -534,7 +609,7 @@ bool CoreState::draw_software(Handle veh, bool flag) {
     if (flag && veh) en.node_set_active(en.vehicle_node(veh), 1);
     return true;
   }
-  world_tick(en);
+  if (g_world_tick_in_draw) world_tick(en);
   en.weather_rect(0, render);
   en.video_lock();
   en.weather_tick(en.frame_dt());
@@ -659,7 +734,7 @@ bool CoreState::draw_hardware(Handle veh, bool flag) {
     if (flag && veh) en.node_set_active(en.vehicle_node(veh), 1);
     return true;
   }
-  world_tick(en);
+  if (g_world_tick_in_draw) world_tick(en);
   en.weather_rect(0, window);
   en.video_begin_3d();
   en.weather_tick(en.frame_dt());
@@ -762,7 +837,7 @@ bool CoreState::draw_doubled(Handle veh, bool flag) {
     draw_part(en, mech_torso(en, veh));
     en.scene_draw(scene);
   }
-  world_tick(en);
+  if (g_world_tick_in_draw) world_tick(en);
   en.weather_rect(0, render);
   en.video_begin_3d();
   en.weather_tick(en.frame_dt());
@@ -824,6 +899,7 @@ void CoreState::suspend(uint32_t) {
 // goes on the mech), 7 is the start of the mission.
 void CoreState::resume(uint32_t arg) {
   Engine& en = e();
+  restart_fixed_step();  // ours (#485): the pause's time is not caught up
   en.mouse_set_accel(en.mouse_accel_x(), en.mouse_accel_y());
   en.set_screen_mode(en.in_game_vmode());
   pick_renderer();

@@ -236,6 +236,7 @@ add_library(mw3core STATIC
   src/mech3/veh_controls.cpp
   src/mech3/veh_move.cpp
   src/mech3/step_log.cpp  # ours (#485): --step-log, one record per simulation step
+  src/mech3/fixed_step.cpp  # ours (#485): the mission simulation's fixed 1/30 s step
   src/mech3/veh_stealth.cpp
   src/mech3/game_editor.cpp
   src/mech3/game_editor_net.cpp
@@ -681,6 +682,7 @@ add_executable(mw3tests
   tests/test_mech_reader.cpp
   tests/test_msvc_rand.cpp
   tests/test_ztimer.cpp
+  tests/test_fixed_step.cpp
   tests/test_zgameapp.cpp
   tests/test_app.cpp
   tests/test_mainmenu.cpp
