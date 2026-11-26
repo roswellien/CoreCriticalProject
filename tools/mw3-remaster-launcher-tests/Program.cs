@@ -2,6 +2,15 @@ using System.IO;
 using MW3RemasterLauncher.Core;
 using System.Text.Json.Nodes;
 
+// Manual check (#503): run one AI Arena match through the launcher's own catalog,
+// validation and native launch path, with the player's saved settings and packs.
+// Usage: --run-arena-match SETUP.ccarena.json LAUNCHER_DIR
+if (args.Length == 3 && args[0] == "--run-arena-match")
+{
+    await ArenaSetupChecks.RunManualMatch(args[1], args[2]);
+    return;
+}
+
 if (args.Length == 2 && args[0] == "--modular-content-only") { await ModProfilesChecks.Run(args[1]); return; }
 
 if(args.Length==3 && args[0]=="--check-update-notification") { UpdateNotificationUiChecks.Run(args[1],args[2]); return; }
@@ -131,6 +140,10 @@ if (args.Length == 1 && args[0] == "--controllers-only")
 if (args.Length == 1 && args[0] == "--joystick-only")
 {
     JoystickSelectionChecks.Run(); return;
+}
+if (args.Length == 1 && args[0] == "--arena-only")
+{
+    ArenaSetupChecks.Run(); return;
 }
 if (args.Length == 2 && args[0] == "--preview-controller")
 {
@@ -439,6 +452,7 @@ finally { tempUi.Delete(recursive: true); }
 ControllerChecks.Run();
 JoystickSelectionChecks.Run();
 SaveBackupChecks.Run();
+ArenaSetupChecks.Run();
 NativeRuntimeLayoutChecks.Run();
 NativePreviewSigningChecks.Run();
 await RuntimeUpdateChecks.Run();

@@ -1106,6 +1106,21 @@ namespace MW3RemasterLauncher
             catch (Exception error) { MessageBox.Show(error.Message, "Save backups", MessageBoxButton.OK, MessageBoxImage.Information); }
         }
 
+        private void BtnAiArena_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_nativeSessionActive || _launchPreparing || _assetInstallActive)
+                    throw new InvalidOperationException("Close the current game session before opening the AI Arena.");
+                var activeDirectories = _packMgr.GetActivePackDirectories();
+                new ArenaWindow(_settingsMgr.Current, activeDirectories, _dataRoot, _nativeGameRunner) { Owner = this }.ShowDialog();
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show(this, error.Message, "AI Arena", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+
         private async void BtnExportReport_Click(object sender, RoutedEventArgs e)
         {
             var launchLog = CurrentLaunchLog();
