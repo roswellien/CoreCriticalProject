@@ -676,6 +676,25 @@ void Replay3dView::State::start_effects(const Event& e) {
     effect = &def->impacts[zwep::kSoilDefault];
     position = e.at;
   }
+  // A hit on a mech plays the weapon's damage animation instead of the soil
+  // impact, as apply_damage (zweapon.cpp, 0x00583480) chooses one or the
+  // other. The log has no health after the hit, so the game's starting value
+  // (1.0) picks the first entry at or above it; none matching plays nothing.
+  if (e.type == "hit" && e.has_at && def->damage_anim_count > 0) {
+    constexpr int32_t kDamageAnimSlots = 4;  // WeaponDef::damage_anims
+    const int32_t count = std::min<int32_t>(def->damage_anim_count, kDamageAnimSlots);
+    for (int32_t i = 0; i < count; ++i) {
+      const bool reached = !(1.0f > def->damage_anims[i].health);
+      if (!reached) continue;
+      if (zwep::Handle damage_anim = def->damage_anims[i].anim) {
+        const float at[3] = {e.at.x, e.at.y, e.at.z};
+        zeff::AnimDef* damage = zeff::anim_start_at(static_cast<zeff::AnimDef*>(damage_anim),
+                                                    nullptr, at, kZero, kZero);
+        if (damage && benchmark_run) impact_animations.insert(damage);
+      }
+      return;
+    }
+  }
   if (!effect) return;
   const float pos[3] = {position.x, position.y, position.z};
   zeff::AnimDef* playing = nullptr;
