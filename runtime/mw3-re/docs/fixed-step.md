@@ -26,6 +26,29 @@ scene (smoke puffs), and the frame's timing in `mw3_main.cpp`.
 Not in the mission frame and unchanged: menus, briefing, mech lab, editors,
 debug views and the stand-alone replay viewer.
 
+## Drawing between steps
+
+At 144 fps about five frames are drawn per step. Without blending, everything
+would move in 30 Hz jumps. `gamez/zclass/interp` keeps each object3d's local
+transform (data +0x30) and, while valid, its cached world transform (+0x60)
+after every step. Before a frame is drawn it writes each moved node's blend at
+`alpha`, how far the frame is towards the next step: position and per-row scale
+in a straight line, rotation by quaternion slerp. A node that moved more than
+50 m in one step (spawned, placed, a camera cut) is drawn where it is. Right
+after the draw the exact transforms go back, and every world cache that was
+stale before the draw is marked stale again (the draw rebuilds those from the
+blended chain), so the simulation never reads a blended value. The picture is
+up to one step (33 ms) behind the newest simulation state, the usual cost of
+this method.
+
+## Input
+
+The poll runs once at the start of each step, as the original reads input at
+30 fps, because it fires the game's command callbacks (fire, target and so on),
+which are simulation work. Nothing is lost between steps: the SDL host sums the
+mouse's motion between reads and latches buttons pressed in between
+(`frontend/sdl/sdl_input.cpp`).
+
 ## Random numbers
 
 The game draws every random number from one MSVCRT-compatible generator
