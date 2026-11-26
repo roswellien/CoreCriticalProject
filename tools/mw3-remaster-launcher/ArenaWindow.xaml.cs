@@ -24,7 +24,6 @@ public partial class ArenaWindow : Window
     /// </summary>
     public sealed class BotRowViewModel : INotifyPropertyChanged
     {
-        private readonly Action _onRemoveStateChanged;
         private ArenaCatalogMech? _selectedMech;
         private ArenaCatalogLoadout? _selectedLoadout;
         private ArenaCatalogPreset? _selectedPreset;
@@ -41,12 +40,10 @@ public partial class ArenaWindow : Window
             IReadOnlyList<ArenaCatalogPreset> presets,
             ArenaCatalogMech? initialMech,
             int initialLoadoutIndex,
-            ArenaCatalogPreset? initialPreset,
-            Action onRemoveStateChanged)
+            ArenaCatalogPreset? initialPreset)
         {
             AvailableMechs = mechs;
             AvailablePresets = presets;
-            _onRemoveStateChanged = onRemoveStateChanged;
 
             _selectedMech = initialMech ?? mechs.FirstOrDefault();
             RebuildLoadouts(initialLoadoutIndex);
@@ -231,8 +228,7 @@ public partial class ArenaWindow : Window
             catalog.Presets,
             mech,
             loadoutIndex,
-            preset,
-            UpdateSideCountsAndButtons);
+            preset);
     }
 
     private void UpdateSideCountsAndButtons()
