@@ -405,7 +405,9 @@ bool arena_viewed_label(int* id, std::string* label) {
   if (!g_started || g_viewed < 0 || g_viewed >= static_cast<int>(g_mechs.size())) return false;
   const ArenaMech& entry = g_mechs[static_cast<size_t>(g_viewed)];
   *id = entry.id;
-  *label = g_names[static_cast<size_t>(g_viewed)];
+  // From the entry: a bot that failed to be made leaves its name in g_names
+  // but no entry, so the two lists need not line up.
+  *label = entry.name ? entry.name : "";
   return true;
 }
 
@@ -477,6 +479,7 @@ void arena_start() {
       }
       ArenaMech entry;
       entry.mech = mech, entry.id = id, entry.side = side, entry.spot = spot;
+      entry.name = g_names.back().c_str();
       g_mechs.push_back(entry);
     }
   }

@@ -37,6 +37,7 @@ void ArenaCameraView::release_input() {
     for (bool &key : held_)
         key = false;
     set_looking(false);
+    last_ns_ = 0; // after a pause or lost focus, the next frame starts from a standstill
     look_dx_ = look_dy_ = zoom_ = 0;
 }
 
@@ -62,6 +63,13 @@ bool ArenaCameraView::handle(const SDL_Event &event) {
     }
     // Before a match starts and after it ends (loading, the lobby) the input
     // is the game's, and nothing piles up for the next match's first frame.
+    // place_camera may stop running after a match (a 2D screen), so the
+    // match is asked here too, and anything held is let go when it ends.
+    if (match_live_ && mech3::arena::arena_mechs().empty()) {
+        release_input();
+        camera_.reset();
+        match_live_ = false;
+    }
     if (!match_live_)
         return false;
     switch (event.type) {
