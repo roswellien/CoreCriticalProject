@@ -2,7 +2,7 @@
 // docs/fmv.md section 9). Two Source Readers on one local file: the sound,
 // read on the game's thread as the movie player asks for it (an AAC second
 // costs a few milliseconds), and the pictures, decoded and converted to
-// 32-bit RGB on a thread of their own into a queue of at most four frames.
+// 32-bit RGB on a thread of their own into a queue of at most three frames.
 // Built on Windows only (CMakeLists.txt sets MW3_HD_MOVIE_MF); nothing here
 // is downloaded or bundled: the decoders are Windows' own, and a Windows N
 // edition without the Media Feature Pack is told so and plays the original.
@@ -153,19 +153,34 @@ class MfHdMovieSource : public HdMovieSource {
       sound_ended_ = true;
       return true;
     }
-    ComPtr<IMFMediaType> pcm;
-    MFCreateMediaType(&pcm);
-    pcm->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
-    pcm->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
-    pcm->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
-    hr = audio_->SetCurrentMediaType(kFirstAudio, nullptr, pcm.Get());
+    UINT32 file_rate = 0;
+    ComPtr<IMFMediaType> native;
+    if (SUCCEEDED(audio_->GetNativeMediaType(kFirstAudio, 0, &native)))
+      file_rate = MFGetAttributeUINT32(native.Get(), MF_MT_AUDIO_SAMPLES_PER_SECOND, 0);
+    // The file's own rate asked for first; without it Windows' AAC decoder
+    // gives a 22050 Hz AAC-LC stream at 44100 (it allows for HE-AAC's hidden
+    // second layer), which is then halved here (next_audio_sample).
+    hr = E_FAIL;
+    for (const bool ask_file_rate : {true, false}) {
+      if (ask_file_rate && !file_rate) continue;
+      ComPtr<IMFMediaType> pcm;
+      MFCreateMediaType(&pcm);
+      pcm->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+      pcm->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
+      pcm->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+      if (ask_file_rate) pcm->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, file_rate);
+      hr = audio_->SetCurrentMediaType(kFirstAudio, nullptr, pcm.Get());
+      if (SUCCEEDED(hr)) break;
+    }
     if (FAILED(hr)) return *reason = hresult_text("decoding its sound", hr), false;
     ComPtr<IMFMediaType> actual;
     hr = audio_->GetCurrentMediaType(kFirstAudio, &actual);
     if (FAILED(hr)) return *reason = hresult_text("reading its sound format", hr), false;
     channels_ = static_cast<int>(MFGetAttributeUINT32(actual.Get(), MF_MT_AUDIO_NUM_CHANNELS, 0));
+    const UINT32 decoded_rate = MFGetAttributeUINT32(actual.Get(), MF_MT_AUDIO_SAMPLES_PER_SECOND, 0);
+    halve_rate_ = file_rate && decoded_rate == 2 * file_rate;
     info->channels = channels_;
-    info->audio_rate = static_cast<int>(MFGetAttributeUINT32(actual.Get(), MF_MT_AUDIO_SAMPLES_PER_SECOND, 0));
+    info->audio_rate = static_cast<int>(halve_rate_ ? file_rate : decoded_rate);
     return true;
   }
 
@@ -175,6 +190,7 @@ class MfHdMovieSource : public HdMovieSource {
     // The reader's own YUV -> RGB32 conversion (software). Measured in the
     // #559 runs; NV12 and a shader are the follow-up if it is too slow.
     attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+    attributes->SetUINT32(MF_LOW_LATENCY, TRUE);  // fewer frames held in the decoder
     HRESULT hr = MFCreateSourceReaderFromURL(path.c_str(), attributes.Get(), &video_);
     if (FAILED(hr)) return *reason = hresult_text("opening its picture", hr), false;
     video_->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE);
@@ -229,11 +245,31 @@ class MfHdMovieSource : public HdMovieSource {
     leftover_.resize(length / sizeof(int16_t));
     std::memcpy(leftover_.data(), data, leftover_.size() * sizeof(int16_t));
     buffer->Unlock();
+    if (halve_rate_) halve(&leftover_);
     return true;
   }
 
+  // The decoder's doubled rate back to the file's: each pair of sample frames
+  // averaged into one (a frame left over waits for the next sample). An
+  // AAC-LC stream at 22050 Hz holds nothing above 11 kHz, so the doubling
+  // added no sound there; averaging dulls only its top octave slightly.
+  void halve(std::vector<int16_t>* samples) {
+    const size_t channels = static_cast<size_t>(channels_ > 0 ? channels_ : 1);
+    std::vector<int16_t> joined(halve_carry_);
+    joined.insert(joined.end(), samples->begin(), samples->end());
+    const size_t frames = joined.size() / channels;
+    const size_t pairs = frames / 2;
+    samples->resize(pairs * channels);
+    for (size_t pair = 0; pair < pairs; ++pair)
+      for (size_t c = 0; c < channels; ++c) {
+        const int first = joined[(2 * pair) * channels + c], second = joined[(2 * pair + 1) * channels + c];
+        (*samples)[pair * channels + c] = static_cast<int16_t>((first + second) / 2);
+      }
+    halve_carry_.assign(joined.begin() + static_cast<std::ptrdiff_t>(2 * pairs * channels), joined.end());
+  }
+
   // The worker: every picture, decoded in order, copied top row first with
-  // its alpha set, into the queue (which waits while four are waiting).
+  // its alpha set, into the queue (which waits while it is full).
   void decode_pictures() {
     const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     uint64_t serial = 0;
@@ -309,6 +345,8 @@ class MfHdMovieSource : public HdMovieSource {
   ComPtr<IMFSourceReader> audio_, video_;
   int channels_ = 0;
   bool sound_ended_ = false;
+  bool halve_rate_ = false;           // the decoder gives twice the file's rate
+  std::vector<int16_t> halve_carry_;  // a sample frame waiting for its pair
   std::vector<int16_t> leftover_;  // decoded sound not yet handed out
   size_t leftover_at_ = 0;
   int width_ = 0, height_ = 0;

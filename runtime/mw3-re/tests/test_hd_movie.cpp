@@ -147,19 +147,19 @@ TEST(hd_movie_stand_in_serves_sound_in_order_then_silence) {
 
 TEST(hd_movie_frame_queue_picks_by_time_and_stops) {
   HdFrameQueue queue;
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < 3; ++i) {
     HdFrame f;
     f.pts = i / 24.0, f.serial = static_cast<uint64_t>(i + 1);
     EXPECT(queue.push(f));
   }
   HdFrame picked;
   EXPECT(!queue.pick(-0.01, &picked));
-  EXPECT(queue.pick(2.5 / 24.0, &picked) && picked.serial == 3);  // the newest due; 1 and 2 dropped
-  EXPECT(queue.pick(10.0, &picked) && picked.serial == 4);
+  EXPECT(queue.pick(1.5 / 24.0, &picked) && picked.serial == 2);  // the newest due; 1 dropped
+  EXPECT(queue.pick(10.0, &picked) && picked.serial == 3);
   EXPECT(!queue.pick(10.0, &picked));
   // A full queue's push waits until stop() wakes it, then refuses.
   HdFrameQueue full;
-  for (int i = 0; i < 4; ++i) EXPECT(full.push(HdFrame{}));
+  for (size_t i = 0; i < HdFrameQueue::kCapacity; ++i) EXPECT(full.push(HdFrame{}));
   bool refused = false;
   std::thread pusher([&] { refused = !full.push(HdFrame{}); });
   full.stop();

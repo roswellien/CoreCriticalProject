@@ -67,10 +67,11 @@ HdMovieFactory default_hd_movie_factory();
 
 // The decoded pictures waiting to be shown, at most `kCapacity` of them: a
 // decoder thread pushes, the game's thread picks by time. Bounded so a fast
-// decoder never holds more than a few 1280x960 frames (about 5 MB each).
+// decoder never holds more than a few 1280x960 frames (about 5 MB each);
+// three is 125 ms ahead at 24 a second, kept low for #559's memory budget.
 class HdFrameQueue {
  public:
-  static constexpr size_t kCapacity = 4;
+  static constexpr size_t kCapacity = 3;
   // Waits while full; false once stopped (the frame is dropped).
   bool push(HdFrame frame);
   // The newest frame at or before `seconds`, the older ones dropped. False
