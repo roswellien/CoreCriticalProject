@@ -1522,7 +1522,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   sdlfe::SdlZinHost zin_host(&input);
   sdlfe::FrontendInputLifetime input_lifetime(zin_host);
   sdlfe::SdlClock clock;
-  // A watched arena match (ours, #510) keeps the wall clock, as Play and
+  // A watched arena match (ours, #516) keeps the wall clock, as Play and
   // Training do: the game steps by the real time between frames, so it plays
   // at real speed whatever the frame rate. With the fixed --frame-ms step a
   // slow window was slow motion and a fast one fast-forward. A hidden match
@@ -1530,7 +1530,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   clock.frame_ms = watched_arena(a) ? 0u : static_cast<uint32_t>(a.frame_ms);
   // A network run's frames keep the wall clock too: the peers' packets come in
   // real time, and a build that draws fast ran its game clock far ahead of them.
-  clock.paced = a.frame_ms > 0 && (a.net_host || !a.net_join.empty() || a.net_port >= 0 || !a.net_lan.empty() || a.net_soak);
+  clock.paced = clock.frame_ms > 0 && (a.net_host || !a.net_join.empty() || a.net_port >= 0 || !a.net_lan.empty() || a.net_soak);
   // --seed: every srand(time()) takes N instead (with --frame-ms a run repeats).
   if (a.seed >= 0) {
     crt::rand_fixed_seed() = static_cast<uint32_t>(a.seed);
