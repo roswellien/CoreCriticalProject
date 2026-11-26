@@ -15,6 +15,9 @@ public sealed record PackInstallProgress(string Stage, long CompletedBytes, long
         ? Math.Min(IsComplete ? 100 : 99, 100.0 * CompletedBytes / TotalBytes) : 0;
 }
 
+/// <summary>The verified catalog identity expected for an installed-pack update.</summary>
+public sealed record PackUpdateExpectation(string Id, string Version);
+
 /// <summary>Bounded pack extraction. Content is verified before replacing an owned installation.</summary>
 public static class PackStorage
 {
@@ -171,8 +174,45 @@ public static class PackStorage
         }
     }
 
+    internal static Version ParseOnlineVersion(string value)
+    {
+        if (value.Length > 48 || !Regex.IsMatch(value, @"\A[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?\z") ||
+            !Version.TryParse(value, out var parsed))
+        {
+            throw new InvalidDataException("Invalid numeric asset pack version.");
+        }
+        return new Version(parsed.Major, parsed.Minor, parsed.Build, Math.Max(0, parsed.Revision));
+    }
+
+    private static void RequireOnlineUpgrade(string root, string gameId, PackManifest incoming,
+        PackUpdateExpectation expected)
+    {
+        var id = ValidateId(expected.Id);
+        if (incoming.SchemaVersion != 2 || incoming.Id != id ||
+            ParseOnlineVersion(incoming.Version) != ParseOnlineVersion(expected.Version))
+        {
+            throw new InvalidDataException("Asset pack archive does not match the signed update identity.");
+        }
+
+        var installedPath = Resolve(root, id + "/pack.json");
+        if (!File.Exists(installedPath))
+        {
+            throw new InvalidDataException("The asset pack is no longer installed.");
+        }
+        var installed = ReadManifest(installedPath);
+        GameCatalog.RequirePackTarget(installed.GameId, gameId);
+        if (installed.Id != id)
+        {
+            throw new InvalidDataException("Installed asset pack has a different identity.");
+        }
+        if (ParseOnlineVersion(incoming.Version) <= ParseOnlineVersion(installed.Version))
+        {
+            throw new InvalidDataException("The asset pack update is not newer than the installed version.");
+        }
+    }
+
     public static PackManifest Install(string root, string archivePath, string gameId = GameCatalog.Mw3,
-        IProgress<PackInstallProgress>? progress = null)
+        IProgress<PackInstallProgress>? progress = null, PackUpdateExpectation? expectation = null)
     {
         root = Path.GetFullPath(root);
         EnsureNoLinks(root);
@@ -191,6 +231,10 @@ public static class PackStorage
             ExtractBounded(manifestEntry, Path.Combine(stage, "pack.json"));
             var manifest = ReadManifest(Path.Combine(stage, "pack.json"));
             GameCatalog.RequirePackTarget(manifest.GameId, gameId, archivePath);
+            if (expectation != null)
+            {
+                RequireOnlineUpgrade(root, gameId, manifest, expectation);
+            }
             long expandedBytes = 0;
             foreach (var member in archive.Entries.Where(e => !e.FullName.EndsWith('/')))
                 expandedBytes = checked(expandedBytes + member.Length);
