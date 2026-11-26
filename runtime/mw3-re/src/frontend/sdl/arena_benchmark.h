@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -75,6 +76,7 @@ void require_empty_output(const std::filesystem::path &path);
 
 double monotonic_seconds();
 std::optional<double> process_creation_epoch();
+inline constexpr double kStrictPresentTimeoutSeconds = 20;
 
 class EpochClock {
   public:
@@ -83,6 +85,7 @@ class EpochClock {
     bool armed() const { return epoch_.has_value(); }
     double epoch() const { return epoch_.value(); }
     double elapsed() const;
+    double now() const { return now_(); }
 
   private:
     std::function<double()> now_;
@@ -113,6 +116,47 @@ struct PresentSample {
 struct InvalidFrame {
     FrameTag frame;
     std::string reason;
+};
+
+struct StrictTick {
+    size_t index;
+    double time, elapsed, delta;
+};
+
+struct StrictPresent {
+    uint64_t sequence;
+    PresentReceipt receipt;
+    std::string pixel_hash;
+    std::vector<uint8_t> capture_bgra;
+};
+
+void hash_strict_pixels(StrictPresent &present, const uint8_t *pixels, size_t pixel_bytes,
+                        bool rgba, bool capture);
+
+// The source waits for the pending worker job until the supplied monotonic
+// deadline. Calling next() at the end still consumes the final receipt.
+class StrictPlayback {
+  public:
+    using PresentSource = std::function<std::optional<StrictPresent>(double deadline)>;
+    StrictPlayback(std::vector<float> times, double start,
+                   std::function<double()> now = monotonic_seconds);
+    std::optional<StrictTick> next(const PresentSource &wait);
+    FrameTag pending_frame() const;
+    bool finished() const { return frames_.size() == times_.size(); }
+    size_t size() const { return times_.size(); }
+    const auto &frames() const { return frames_; }
+    double time(size_t index) const { return times_.at(index); }
+
+  private:
+    friend class Run;
+    std::optional<StrictPresent> wait_for_pending(const PresentSource &wait) const;
+    std::optional<StrictTick> advance(std::optional<StrictPresent> present);
+
+    std::vector<float> times_;
+    double start_;
+    std::function<double()> now_;
+    size_t issued_{};
+    std::vector<StrictPresent> frames_;
 };
 
 struct Statistics {
@@ -165,17 +209,31 @@ class Run {
     void arm() { clock_.arm(); }
     bool armed() const { return clock_.armed(); }
     double elapsed() const { return clock_.elapsed(); }
-    FrameTag next_frame(double replay_time) const { return {submitted_ + 1, replay_time, {}}; }
+    double now() const { return clock_.now(); }
+    FrameTag next_frame(double replay_time) const {
+        if (strict_)
+            return strict_->pending_frame();
+        return {submitted_ + 1, replay_time, {}};
+    }
     FrameTag submit(double replay_time, EffectCounts effects = {}) {
         return {++submitted_, replay_time, effects};
     }
     void record_present(FrameTag frame, const PresentReceipt &receipt);
+    void enable_strict(std::vector<float> times, std::optional<size_t> capture);
+    bool strict() const { return strict_.has_value(); }
+    bool captures(uint64_t sequence) const {
+        return capture_tick_ && *capture_tick_ == sequence - 1;
+    }
+    void record_strict_present(StrictPresent present);
+    std::optional<StrictPresent> take_strict_present();
+    std::optional<StrictTick> next_strict_tick(const StrictPlayback::PresentSource &wait);
     void invalidate(FrameTag frame, std::string reason);
     bool failed() const;
     void finish_window() { reached_end_ = true; }
     bool write_results();
 
   private:
+    bool write_strict_results();
     std::filesystem::path output_;
     std::optional<double> process_epoch_;
     EpochClock clock_;
@@ -183,6 +241,10 @@ class Run {
     bool reached_end_{};
     mutable std::mutex mutex_;
     Measurements measurements_;
+    std::optional<StrictPlayback> strict_;
+    std::optional<size_t> capture_tick_;
+    std::deque<StrictPresent> strict_presents_;
+    std::optional<InvalidFrame> strict_failure_;
 };
 
 } // namespace sdlfe::benchmark

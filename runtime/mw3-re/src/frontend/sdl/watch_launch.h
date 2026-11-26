@@ -2,6 +2,7 @@
 #include <SDL3/SDL.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "frontend/sdl/arena_benchmark.h"
@@ -45,6 +46,8 @@ struct WatchArgs {
   std::string catalog_dir;
   std::string benchmark_path, benchmark_scene, benchmark_output;
   std::string benchmark_resolution, benchmark_window_mode;
+  bool benchmark_strict = false;
+  std::optional<size_t> benchmark_strict_capture;
   std::vector<std::string> benchmark_packs;
   std::shared_ptr<benchmark::Run> benchmark_run;
   // Either watched run: the host's seat is a spectator's.

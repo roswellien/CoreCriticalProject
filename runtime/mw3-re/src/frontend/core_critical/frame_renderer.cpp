@@ -585,7 +585,18 @@ public:
   }
 
   bool benchmark_ready() override {
-    drain();
+    if (benchmark_run_ && benchmark_run_->strict()) {
+      if (!wait_benchmark_idle()) {
+        benchmark_run_->invalidate({}, "timed out waiting for strict benchmark startup");
+        return false;
+      }
+      last_present_job_ = 0;
+      // Startup runs outside the recorded window. Tick zero starts with
+      // fresh observation IDs and no retained fixtures or effect lights.
+      local_lights_clear();
+    } else {
+      drain();
+    }
     if (!benchmark_run_ || !worker_ || !native_wsi_ || !window_bound_ ||
         bridge_config_.vsync || !renderer_->immediate_swapchain())
       return false;
@@ -750,6 +761,39 @@ public:
   void set_benchmark_time(double time) override {
     benchmark_time_ = time;
     benchmark_effects_ = {};
+  }
+  bool wait_benchmark_present(double deadline) override {
+    if (!last_present_job_ || !wait_strict_job(last_present_job_, deadline)) return false;
+    last_present_job_ = 0;
+    return true;
+  }
+
+  bool wait_benchmark_idle() override {
+    if (!worker_) return true;
+    const auto job = worker_->statistics().submitted;
+    const double deadline = benchmark_run_->now() + sdlfe::benchmark::kStrictPresentTimeoutSeconds;
+    return wait_strict_job(job, deadline);
+  }
+
+  bool wait_strict_job(std::size_t job, double deadline) {
+    // A timeout fails the run, so later waits return immediately to keep shutdown bounded.
+    if (strict_wait_timed_out_) return false;
+    using Clock = std::chrono::steady_clock;
+    // The run can use an injected clock with a different epoch.
+    const auto remaining = std::chrono::duration<double>(std::max(0.0, deadline - benchmark_run_->now()));
+    const auto until = Clock::now() + std::chrono::duration_cast<Clock::duration>(remaining);
+    strict_wait_timed_out_ = !worker_->wait_for_job_until(job, until);
+    return !strict_wait_timed_out_;
+  }
+
+  void record_strict_present(sdlfe::benchmark::FrameTag tag,
+                             sdlfe::benchmark::PresentReceipt receipt,
+                             const vk::Renderer::ResidentPresentResult& status) {
+    sdlfe::benchmark::StrictPresent sample{tag.sequence, receipt, {}, {}};
+    sdlfe::benchmark::hash_strict_pixels(sample, status.pixels.data(), status.pixels.size(),
+                                       status.rgba_pixels,
+                                       benchmark_run_->captures(tag.sequence));
+    benchmark_run_->record_strict_present(std::move(sample));
   }
   void set_benchmark_effects(unsigned beams, unsigned explosions) override {
     benchmark_effects_.beams = beams;
@@ -3199,6 +3243,7 @@ private:
   // Submission number of the last queued resident present (0 = none), so the producer keeps at
   // most one presented frame in flight.
   std::size_t last_present_job_ = 0;
+  bool strict_wait_timed_out_ = false;
   std::mutex recycle_mutex_;
   std::vector<vk::Scene> recycled_scenes_;
   std::map<std::uint64_t, std::array<std::uint64_t, 3>> submitted_textures_;
@@ -3357,6 +3402,7 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   // from it.
   if (assets.benchmark_run) config.vsync = false;
   config.require_immediate_present = assets.benchmark_run != nullptr;
+  config.strict_swapchain_readback = assets.benchmark_run && assets.benchmark_run->strict();
   if (assets.benchmark_run && (config.cpu_profile || config.gpu_profile ||
                               config.vk_validation || config.detail_fixed_time ||
                               config.buffer_growth_trace || config.trace_native_bindings))

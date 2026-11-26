@@ -2,14 +2,14 @@
 
 #include "frontend/sdl/arena_benchmark.h"
 
-#include <limits>
-
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <string_view>
 #include <vector>
@@ -265,8 +265,21 @@ struct Replay3dView::State {
   Overlays overlays;
   uint64_t last_ns = 0;
   float real_dt = 0, real_elapsed = 0;
+  std::optional<ztimer::State> saved_timer;
+  float saved_game_time = 0;
   float posed_t = -1;  // the replay time the puppets show, -1 before the first
   bool started = false, quit_box_open = false, seek_pending = false;
+
+  void set_strict_time(double time, double delta) {
+    auto& timer = ztimer::state();
+    saved_timer = timer;
+    saved_game_time = mech3::mech_game_time();
+    timer.dt = timer.raw_dt = float(delta);
+    timer.total_scaled = timer.total_raw = timer.now_s = float(time);
+    mech3::sync_frame_step(timer.dt, timer.total_scaled);
+    mech3::mech_set_game_time(float(time));
+    render->set_benchmark_time(time);
+  }
 
   std::map<int, std::unique_ptr<Puppet>> puppets;  // by mech id
   Frame frame;
@@ -394,6 +407,14 @@ void Replay3dView::start() {
   std::printf("mw3: replay3d: %zu puppets, %.1f s of match\n", s.puppets.size(), s.clock.duration);
 }
 
+bool Replay3dView::strict() const {
+  return s_->benchmark_run && s_->benchmark_run->strict();
+}
+
+bool Replay3dView::advance_lists() const {
+  return !strict() || s_->benchmark_run->armed();
+}
+
 bool Replay3dView::before_lists(bool quit_box_open) {
   State& s = *s_;
   if (auto* run = s.benchmark_run) {
@@ -401,6 +422,7 @@ bool Replay3dView::before_lists(bool quit_box_open) {
       // Present the initial pose and camera once outside the scoring epoch.
       s.startup_frame = false;
       s.real_dt = ztimer::state().dt;
+      if (run->strict()) s.set_strict_time(run->log_start_time, 0);
       return true;
     }
     if (!run->armed() && !run->failed()) {
@@ -412,8 +434,12 @@ bool Replay3dView::before_lists(bool quit_box_open) {
         const float previous = run->scene.start_seconds
             ? std::nextafter(s.event_cursor, -std::numeric_limits<float>::infinity())
             : -std::numeric_limits<float>::infinity();
-        for (const Event& event : s.log->fire_between(previous, s.event_cursor))
-          s.start_effects(event);
+        if (run->strict()) {
+          s.event_cursor = previous;
+        } else {
+          for (const Event& event : s.log->fire_between(previous, s.event_cursor))
+            s.start_effects(event);
+        }
       } else {
         run->invalidate({}, "benchmark presenter was not ready after startup");
       }
@@ -421,6 +447,21 @@ bool Replay3dView::before_lists(bool quit_box_open) {
     if (run->failed()) {
       s.request_quit();
       return false;
+    }
+    if (run->strict()) {
+      const auto tick = run->next_strict_tick([&](double deadline) {
+        if (!s.render->wait_benchmark_present(deadline))
+          return std::optional<benchmark::StrictPresent>{};
+        return run->take_strict_present();
+      });
+      if (!tick || run->failed()) {
+        s.request_quit();
+        return false;
+      }
+      s.playback_elapsed = tick->elapsed;
+      s.clock.t = float(tick->time);
+      s.set_strict_time(tick->time, tick->delta);
+      return true;
     }
     const double elapsed = run->elapsed();
     if (elapsed >= run->scene.end()) {
@@ -473,7 +514,14 @@ void Replay3dView::after_lists() {
 }
 
 void Replay3dView::after_frame() {
-  if (s_->benchmark_run) ztimer::state().dt = s_->real_dt;
+  if (s_->saved_timer) {
+    ztimer::state() = *s_->saved_timer;
+    mech3::sync_frame_step(s_->saved_timer->dt, s_->saved_timer->total_scaled);
+    mech3::mech_set_game_time(s_->saved_game_time);
+    s_->saved_timer.reset();
+  } else if (s_->benchmark_run) {
+    ztimer::state().dt = s_->real_dt;
+  }
 }
 
 void Replay3dView::State::pose() {

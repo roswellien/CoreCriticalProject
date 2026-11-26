@@ -105,6 +105,8 @@ class FrameRenderer : public platform::Render3D {
   virtual bool ok() const = 0;
   virtual void benchmark_load() {}
   virtual bool benchmark_ready() { return false; }
+  virtual bool wait_benchmark_present(double) { return false; }
+  virtual bool wait_benchmark_idle() { return true; }
   virtual void set_benchmark_time(double) {}
   virtual void set_benchmark_effects(unsigned, unsigned) {}
   virtual void benchmark_finish() {}

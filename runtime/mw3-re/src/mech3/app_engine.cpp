@@ -677,6 +677,14 @@ void GameEngine::input_set_mode(uint32_t mode) { zin::set_mode(mode); }
 void GameEngine::input_poll(uint8_t callbacks) { zin::poll(callbacks != 0); }
 
 bool GameEngine::replay_on() { return replay_hooks() != nullptr; }
+bool GameEngine::replay_strict() {
+  const ReplayHooks* replay = replay_hooks();
+  return replay && replay->strict();
+}
+bool GameEngine::replay_advance_lists() {
+  const ReplayHooks* replay = replay_hooks();
+  return !replay || replay->advance_lists();
+}
 void GameEngine::replay_start() {
   if (ReplayHooks* replay = replay_hooks()) replay->start();
 }

@@ -363,6 +363,7 @@ void usage() {
       "    [--cc-input FILE] (launcher-exported extended mouse and combo bindings)\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [--benchmark DEF.json --benchmark-scene ID --benchmark-out DIR]\n"
+      "    [--benchmark-strict [--benchmark-strict-capture TICK]]\n"
       "    [--arena SETUP.json --seed N --frame-ms N [--arena-record-every-update]] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
@@ -1002,7 +1003,10 @@ std::string flat(const std::string& s) {
 
 void prepare_benchmark(Args& a, std::optional<double> process_epoch) {
   auto& watch = a.watch;
-  if (watch.benchmark_path.empty() && watch.benchmark_scene.empty() && watch.benchmark_output.empty())
+  if (watch.benchmark_strict_capture && !watch.benchmark_strict)
+    throw std::runtime_error("--benchmark-strict-capture requires --benchmark-strict");
+  if (watch.benchmark_path.empty() && watch.benchmark_scene.empty() && watch.benchmark_output.empty() &&
+      !watch.benchmark_strict)
     return;
   if (watch.benchmark_path.empty() || watch.benchmark_scene.empty() || watch.benchmark_output.empty())
     throw std::runtime_error("--benchmark, --benchmark-scene and --benchmark-out are required together");
@@ -1060,6 +1064,9 @@ void prepare_benchmark(Args& a, std::optional<double> process_epoch) {
   watch.benchmark_run = std::make_shared<sdlfe::benchmark::Run>(
       std::move(*scene), start, size.width, size.height, watch.benchmark_output,
       process_epoch);
+  if (watch.benchmark_strict)
+    watch.benchmark_run->enable_strict(log.state_times(start, start + watch.benchmark_run->scene.end()),
+                                       watch.benchmark_strict_capture);
   a.cc_assets.benchmark_run = watch.benchmark_run.get();
   a.nosound = a.no_import = a.no_launcher = true;
   a.original += " -nofmv";
@@ -1115,8 +1122,8 @@ int program(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IOLBF, 0);
 #endif
   Args a;
-  if (!parse(argc, argv, a)) return 2;
   try {
+    if (!parse(argc, argv, a)) return 2;
     prepare_benchmark(a, process_epoch);
   } catch (const std::exception& error) {
     std::fprintf(stderr, "mw3: benchmark: %s\n", error.what());
@@ -2809,17 +2816,43 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         sdlfe::SdlPump& pump;
         ~WatchDetach() { sdlfe::watch_detach(pump); }
       } watch_detach{pump};
+      auto* strict_run = a.watch.benchmark_run && a.watch.benchmark_run->strict()
+          ? a.watch.benchmark_run.get() : nullptr;
+      const auto wait_for_strict_shutdown = [&] {
+        if (!strict_run) return;
+        const auto frame = strict_run->next_frame(0);
+        try {
+          if (window.render()->wait_benchmark_idle()) return;
+          strict_run->invalidate(frame, "timed out draining strict worker on exit");
+        } catch (const std::exception& error) {
+          strict_run->invalidate(frame, error.what());
+        } catch (...) {
+          strict_run->invalidate(frame, "strict worker threw a non-standard exception on exit");
+        }
+        try {
+          strict_run->write_results();
+        } catch (const std::exception& error) {
+          std::fprintf(stderr, "mw3: benchmark output failed: %s\n", error.what());
+        }
+        // Cleanup could join a stuck worker or rethrow its stored failure.
+        // Leave renderer resources to process teardown.
+        std::fflush(stdout);
+        std::fflush(stderr);
+        std::_Exit(1);
+      };
       try {
         result = app.run(pump);
       } catch (...) {
         // Report before OverlayOff and the renderer owners unwind. Their
         // cleanup may encounter the same stored worker failure.
         log_loop_exception(std::current_exception());
+        wait_for_strict_shutdown();
         throw;
       }
       // An arena match that could not start exits 1 (arena.h, Result::failed).
       if (result == 0 && !a.watch.arena_path.empty() && mech3::arena::arena_result().failed) result = 1;
-      window.render()->drain();
+      if (strict_run) wait_for_strict_shutdown();
+      else window.render()->drain();
       if (a.watch.benchmark_run) window.render()->benchmark_finish();
       if (!frame_ms.empty()) {  // --frame-times: the frames' wall times
         std::vector<double> s = frame_ms;

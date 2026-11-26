@@ -937,6 +937,10 @@ void local_lights_begin() {
   local_fixture_sources_.clear();
   local_active_ = false;
   local_native_.clear();
+  // The strict warm-up views populate render resources only. Their camera
+  // and wall-clock time must not seed the tick-zero lighting selection.
+  if (benchmark_run_ && benchmark_run_->strict() && !benchmark_run_->armed())
+    return;
   // A multiplayer or IA map has no campaign profile. Admit its camera's
   // world pass, since the preceding fade and tint passes have no projection.
   if (!bridge_config_.effect_lights ||

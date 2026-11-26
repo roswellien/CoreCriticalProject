@@ -386,6 +386,16 @@ bool ReplayLog::covers(double start, double end) const {
          duration_ >= end;
 }
 
+std::vector<float> ReplayLog::state_times(double start, double end) const {
+  // Match the replay cursor's timestamp precision at both edges of the window.
+  const auto first = static_cast<float>(start);
+  const auto past_last = static_cast<float>(end);
+  std::vector<float> times;
+  for (const auto& state : states_)
+    if (first <= state.t && state.t < past_last) times.push_back(state.t);
+  return times;
+}
+
 bool ReplayLog::mech_alive_during(int id, double start, double end) const {
   if (!info_of(id) || !covers(start, end)) return false;
   const auto history = history_.find(id);

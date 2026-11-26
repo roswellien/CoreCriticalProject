@@ -163,6 +163,7 @@ class ReplayLog {
   bool complete() const { return terminal_end_; }
   std::optional<float> first_state_time() const;
   bool covers(double start, double end) const;
+  std::vector<float> state_times(double start, double end) const;
   bool mech_alive_during(int id, double start, double end) const;
   Frame frame_at(float t) const;
   // A mech's positions from its state lines in [t - seconds, t], oldest first.

@@ -1,8 +1,12 @@
 """Asset-free checks for the benchmark's Play settings and argv."""
 
 import json
+import os
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -253,6 +257,68 @@ class BenchmarkLaunchTest(unittest.TestCase):
         self.assertTrue((self.profile / "catalog.bin").is_file())
         self.assertTrue((self.profile / "launch-plan.json").is_file())
         self.assertEqual(launch.call_count, 1)
+
+    def test_strict_cli_rejects_suite_and_invalid_capture(self):
+        required = ["run.py", "--launcher-runtime", str(self.runtime), "--out", str(self.output)]
+        for flags, message in (
+            (["--strict", "--suite", "--run-label", "A1"], "single-scene only"),
+            (["--strict-capture", "0"], "requires --strict and a nonnegative tick index"),
+            (
+                ["--strict", "--strict-capture", "-1"],
+                "requires --strict and a nonnegative tick index",
+            ),
+        ):
+            with (
+                self.subTest(flags=flags),
+                patch.object(sys, "argv", required + flags),
+                redirect_stderr(StringIO()) as stderr,
+            ):
+                self.assertEqual(run.main(), 2)
+                self.assertIn(message, stderr.getvalue())
+
+    def test_strict_cli_adds_native_flags_to_saved_and_executed_argv(self):
+        data = self.root / "MW3Remaster"
+        self.write(data / "settings.json", self.saved)
+        (data / "mods").mkdir()
+        reader = Path(self.saved["GamePath"]) / "zbd" / "reader.zbd"
+        reader.parent.mkdir(parents=True)
+        reader.touch()
+        self.exe.parent.mkdir()
+        self.exe.touch()
+        required = [
+            "run.py",
+            "--launcher-runtime",
+            str(self.runtime),
+            "--out",
+            str(self.output),
+            "--definition",
+            str(self.definition),
+            "--exe",
+            str(self.exe),
+            "--strict",
+        ]
+        for capture in ([], ["--strict-capture", "0"]):
+            output = self.output.with_name(f"run-{len(capture)}")
+            argv = required.copy()
+            argv[argv.index("--out") + 1] = str(output)
+            with (
+                self.subTest(capture=capture),
+                patch.dict(os.environ, {"LOCALAPPDATA": str(self.root)}),
+                patch.object(sys, "argv", argv + capture),
+                patch.object(run, "BENCHMARK_ROOT", self.root),
+                patch.object(run, "plan_launch", return_value={"ok": True, "argv": ["mw3"]}),
+                patch.object(run, "launch_scene", return_value=0) as launch,
+                redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(run.main(), 0)
+                executed = launch.call_args.args[0]["argv"]
+                expected = ["--benchmark-strict"]
+                if capture:
+                    expected.extend(("--benchmark-strict-capture", "0"))
+                native_strict = executed[executed.index("--benchmark-strict") :]
+                self.assertEqual(native_strict, expected)
+                plan = output.with_name(output.name + "-profile") / "launch-plan.json"
+                self.assertEqual(run.read_json(plan)["argv"], executed)
 
 
 if __name__ == "__main__":
