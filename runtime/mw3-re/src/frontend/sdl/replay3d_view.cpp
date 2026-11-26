@@ -11,11 +11,13 @@
 #include <filesystem>
 #include <map>
 #include <set>
+#include <string_view>
 #include <vector>
 
 #include "frontend/sdl/replay_ui.h"
 #include "frontend/sdl/sdl_render3d.h"
 #include "gamez/zclass/camera.h"
+#include "gamez/zeffect/zeff_anim_init.h"
 #include "gamez/zeffect/zeff_anim_run.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_draw.h"
@@ -307,6 +309,7 @@ struct Replay3dView::State {
   bool make_round(zwep::WeaponDef* def, LiveRound* made);
   void free_round(LiveRound& r);
   void start_effects(const Event& e);
+  void start_missile_explosion(const float pos[3]);
   void fly(float dt);
   void seek_at(float window_x);
   void pick(float window_x, float window_y);
@@ -658,6 +661,29 @@ void Replay3dView::State::free_round(LiveRound& r) {
   if (rh.node_destroy) rh.node_destroy(r.node);
 }
 
+// Whether an impact is a missile's: every missile weapon's soil impact is
+// impact_missle_mech or impact_lrm_min (weapons.zrd), animations that only
+// tint the screen within 20 m of the player (docs/anim-run.md) and draw
+// nothing in the world.
+static bool is_missile_impact(const zwep::Effect& effect) {
+  const auto* animation = static_cast<const zeff::AnimDef*>(effect.animation);
+  if (!animation) return false;
+  const std::string_view name = animation->name();
+  return name.rfind("impact_missle", 0) == 0 || name.rfind("impact_lrm", 0) == 0;
+}
+
+// Ours (replay only, not the original): a missile impact also plays the
+// game's own small fireball, fire_explode_tiny, so a replay watched from a
+// chase camera shows where the missiles land.
+void Replay3dView::State::start_missile_explosion(const float pos[3]) {
+  // Looked up each time: a map load replaces the animation table.
+  zeff::AnimDef* const fireball = zeff::anim_find("fire_explode_tiny");
+  if (!fireball) return;
+  static const float kZero[3] = {};
+  zeff::AnimDef* playing = zeff::anim_start_at(fireball, nullptr, pos, kZero, kZero);
+  if (playing && benchmark_run) impact_animations.insert(playing);
+}
+
 // A logged shot's fire effect and sound at its muzzle, or a hit's impact
 // effect where it struck (the default soil), from the weapon's own def.
 void Replay3dView::State::start_effects(const Event& e) {
@@ -714,6 +740,7 @@ void Replay3dView::State::start_effects(const Event& e) {
     zwep::hit_hooks().impact_effect(effect->effect, &point);
   }
   if (impact && playing && benchmark_run) impact_animations.insert(playing);
+  if (impact && is_missile_impact(*effect)) start_missile_explosion(pos);
   if (effect->sound_count > 0 && effect->sounds[0])
     zsnd::play_at(static_cast<zsnd::Object*>(effect->sounds[0]), pos, 1.0f, nullptr);
 }
