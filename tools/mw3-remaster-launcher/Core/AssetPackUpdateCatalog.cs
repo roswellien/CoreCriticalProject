@@ -5,7 +5,8 @@ using System.Text.Json;
 namespace MW3RemasterLauncher.Core;
 
 public sealed record AssetPackRelease(string Id, string GameId, string Version,
-    string MinimumRuntimeVersion, ReleaseArtifact Archive, string[] InstalledManifestSha256s);
+    string MinimumRuntimeVersion, ReleaseArtifact Archive, string[] InstalledManifestSha256s,
+    Dictionary<string, int>? BundledRuntimeCapabilities = null);
 
 public sealed record AssetPackCatalogDocument(int SchemaVersion, string Type, string Channel,
     long Sequence, DateTimeOffset IssuedUtc, DateTimeOffset ExpiresUtc, AssetPackRelease[] Packs);
@@ -30,6 +31,7 @@ public static class AssetPackUpdateCatalog
 
         using var doc = JsonDocument.Parse(envelope);
         var root = doc.RootElement;
+        PackStorage.ValidateUniqueProperties(root);
         if (!root.TryGetProperty("key_id", out var keyIdProp) ||
             !trust.PublicKeys.TryGetValue(keyIdProp.GetString() ?? "", out var pem))
             throw new InvalidDataException("Untrusted asset pack catalog signing key.");
@@ -46,7 +48,9 @@ public static class AssetPackUpdateCatalog
         if (rsa.KeySize < 3072 || !rsa.VerifyData(payload, signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pss))
             throw new InvalidDataException("Asset pack catalog signature verification failed.");
 
-        var catalog = JsonSerializer.Deserialize<AssetPackCatalogDocument>(payload, RuntimeUpdates.Json)
+        using var payloadDocument = JsonDocument.Parse(payload);
+        PackStorage.ValidateUniqueProperties(payloadDocument.RootElement);
+        var catalog = payloadDocument.RootElement.Deserialize<AssetPackCatalogDocument>(RuntimeUpdates.Json)
             ?? throw new InvalidDataException("Empty asset pack catalog.");
 
         if (catalog.SchemaVersion != 1 || catalog.Type != "corecritical-asset-pack-catalog-v1" ||
@@ -85,6 +89,17 @@ public static class AssetPackUpdateCatalog
             throw new InvalidDataException("Invalid game identity in asset pack catalog.");
         PackStorage.ParseOnlineVersion(pack.Version);
         PackStorage.ParseOnlineVersion(pack.MinimumRuntimeVersion);
+        if (pack.BundledRuntimeCapabilities is { } capabilities)
+        {
+            if (capabilities.Count is < 1 or > 16)
+                throw new InvalidDataException("Invalid bundled runtime capability requirements.");
+            foreach (var (name, version) in capabilities)
+            {
+                PackStorage.ValidateId(name);
+                if (version < 1)
+                    throw new InvalidDataException("Invalid bundled runtime capability version.");
+            }
+        }
 
         ValidateArchive(pack.Archive, game.PackExtension, config);
 
@@ -123,7 +138,8 @@ public static class AssetPackUpdateCatalog
     }
 
     public static IReadOnlyList<AssetPackRelease> Plan(VerifiedAssetPackCatalog catalog,
-        IReadOnlyList<InstalledAssetPack> installed, string gameId, Version runtimeVersion)
+        IReadOnlyList<InstalledAssetPack> installed, string gameId, Version? runtimeVersion,
+        IReadOnlyDictionary<string, IReadOnlyList<int>>? bundledCapabilities = null)
     {
         var result = new List<AssetPackRelease>();
         foreach (var release in catalog.Document.Packs)
@@ -155,9 +171,23 @@ public static class AssetPackUpdateCatalog
                 !release.InstalledManifestSha256s.Contains(current.ManifestSha256, StringComparer.OrdinalIgnoreCase))
                 continue;
 
-            var minimumRuntime = PackStorage.ParseOnlineVersion(release.MinimumRuntimeVersion);
-            if (new Version(runtimeVersion.Major, runtimeVersion.Minor, Math.Max(0, runtimeVersion.Build), Math.Max(0, runtimeVersion.Revision)) < minimumRuntime)
-                continue;
+            if (bundledCapabilities != null)
+            {
+                if (release.BundledRuntimeCapabilities is not { } required ||
+                    !required.All(capability => bundledCapabilities.TryGetValue(capability.Key, out var versions) &&
+                                               versions.Contains(capability.Value)))
+                    continue;
+            }
+            else
+            {
+                if (runtimeVersion == null)
+                    continue;
+                var minimumRuntime = PackStorage.ParseOnlineVersion(release.MinimumRuntimeVersion);
+                var installedRuntime = new Version(runtimeVersion.Major, runtimeVersion.Minor,
+                    Math.Max(0, runtimeVersion.Build), Math.Max(0, runtimeVersion.Revision));
+                if (installedRuntime < minimumRuntime)
+                    continue;
+            }
 
             result.Add(release);
         }

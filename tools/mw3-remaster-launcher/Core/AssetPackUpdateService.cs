@@ -21,6 +21,7 @@ public sealed class AssetPackUpdateService : IDisposable
     private VerifiedAssetPackCatalog? _catalog;
 
     private sealed record CatalogWatermark(long Sequence, string Sha256);
+    private sealed record PackRuntime(Version? LegacyVersion, Mw3ReRuntimeContract? Bundled);
 
     public AssetPackUpdateService(string application, string dataRoot, PackManager manager,
         HttpMessageHandler? handler = null)
@@ -57,9 +58,10 @@ public sealed class AssetPackUpdateService : IDisposable
             _catalog = verified;
         }
 
-        var runtime = CompatibleRuntimeVersion();
+        var runtime = ReadSelectedRuntime();
         if (runtime == null) return Array.Empty<AssetPackRelease>();
-        return AssetPackUpdateCatalog.Plan(_catalog, ReadInstalled(), _game, runtime);
+        return AssetPackUpdateCatalog.Plan(_catalog, ReadInstalled(), _game,
+            runtime.LegacyVersion, runtime.Bundled?.Capabilities);
     }
 
     public PackManifest InstallDownloaded(string id, string archive,
@@ -72,9 +74,10 @@ public sealed class AssetPackUpdateService : IDisposable
         }
 
         using var gameGate = GameUpdateGate.Acquire(_dataRoot);
-        var runtime = CompatibleRuntimeVersion()
+        var runtime = ReadSelectedRuntime()
             ?? throw new InvalidDataException("The selected runtime does not support managed asset pack updates.");
-        var release = AssetPackUpdateCatalog.Plan(catalog, ReadInstalled(), _game, runtime)
+        var release = AssetPackUpdateCatalog.Plan(catalog, ReadInstalled(), _game,
+            runtime.LegacyVersion, runtime.Bundled?.Capabilities)
             .SingleOrDefault(item => item.Id == id)
             ?? throw new InvalidDataException("This asset pack update is no longer applicable.");
         using (PackStorage.Lock(Path.GetDirectoryName(_watermark)!))
@@ -85,19 +88,45 @@ public sealed class AssetPackUpdateService : IDisposable
             {
                 throw new InvalidDataException("The asset pack catalog changed. Check for updates again.");
             }
-            var root = RuntimeUpdates.SelectedRoot(_application, _dataRoot) ?? Path.Combine(_application, "Runtime");
-            var profile = PackStorage.Resolve(root, "profile.json");
-            var native = JsonNode.Parse(LauncherUpdates.ReadMetadata(profile))?["native"] as JsonObject
-                ?? throw new InvalidDataException("The selected runtime does not advertise asset pack support.");
+            var native = runtime.Bundled is { } bundled
+                ? PackStorageProfile(bundled) : ReadLegacyPackStorageProfile();
             return PackStorage.Install(_modsRoot, archive, _game, progress,
                 new(release.Id, release.Version, release.InstalledManifestSha256s, release.Archive, native));
         }
     }
 
-    private Version? CompatibleRuntimeVersion()
+    private PackRuntime? ReadSelectedRuntime()
     {
+        if (NativeGameRunner.UsesBundledMw3Re(_application))
+        {
+            var root = new NativeGameRunner(_application, _dataRoot).FindRuntimeRoot();
+            return root == null ? null : new(null, Mw3ReRuntimeContract.ReadStructure(root));
+        }
+
         var version = OnlineUpdateService.InstalledRuntimeVersion(_application, _dataRoot);
-        return Version.TryParse(version, out var numeric) && numeric.Build >= 0 ? numeric : null;
+        return Version.TryParse(version, out var numeric) && numeric.Build >= 0 ? new(numeric, null) : null;
+    }
+
+    private JsonObject ReadLegacyPackStorageProfile()
+    {
+        var root = RuntimeUpdates.SelectedRoot(_application, _dataRoot) ?? Path.Combine(_application, "Runtime");
+        var profile = PackStorage.Resolve(root, "profile.json");
+        return JsonNode.Parse(LauncherUpdates.ReadMetadata(profile))?["native"] as JsonObject
+            ?? throw new InvalidDataException("The selected runtime does not advertise asset pack support.");
+    }
+
+    private static JsonObject PackStorageProfile(Mw3ReRuntimeContract bundled)
+    {
+        // Keep the archive compatibility check identical for both engines.
+        JsonArray Formats(string name) => bundled.Capabilities.TryGetValue(name, out var versions)
+            ? new JsonArray(versions.Select(version => (JsonNode?)JsonValue.Create(version)).ToArray())
+            : new JsonArray();
+        return new JsonObject
+        {
+            ["content_capabilities"] = JsonSerializer.SerializeToNode(bundled.Capabilities),
+            ["mesh_payload_versions"] = Formats("mesh-payload"),
+            ["normal_map_formats"] = Formats("normal-map")
+        };
     }
 
     private List<InstalledAssetPack> ReadInstalled()

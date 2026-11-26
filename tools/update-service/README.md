@@ -84,7 +84,9 @@ updater. The channel serves an RSA-PSS signed
 key. Its signed payload includes `schema_version: 1`, `channel`, `sequence`,
 `issued_utc`, `expires_utc`, and a `packs` list. Each entry declares:
 
-- `id`, `game_id`, `version`, and `minimum_runtime_version`
+- `id`, `game_id`, `version`, and `minimum_runtime_version` for the legacy runtime
+- Optional `bundled_runtime_capabilities` maps capability IDs to required versions
+  for MW3-RE, for example `{"prepared-mechs":1,"mesh-payload":7}`
 - `archive` with `url`, `filename`, `bytes`, and `sha256`
 - `installed_manifest_sha256s` with the exact `pack.json` digests of eligible
   published predecessor archives
@@ -101,9 +103,11 @@ enablement and priority, retains one rollback version and refuses activation
 while a game holds its launch lease.
 
 The option is off by default and appears in the MechWarrior 3 pack library
-when the asset configuration is installed. It applies to the versioned
-managed runtime layout. A runtime with a separate engine layout and no
-reported managed runtime version is skipped. The current public runtime feed
+when the asset configuration is installed. The launcher uses the managed runtime
+version for legacy installations. Bundled MW3-RE offers require an explicit
+`bundled_runtime_capabilities` entry that matches the verified local runtime
+descriptor. The package must also pass the runtime's format checks before
+activation. The current public runtime feed
 configuration and runtime archive size limit are unchanged. Run
 `LauncherChecks --asset-pack-updates-only` for signed discovery and an
 end-to-end in-place fixture upgrade with authored pack data.

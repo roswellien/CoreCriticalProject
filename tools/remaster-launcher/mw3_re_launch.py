@@ -95,16 +95,23 @@ def _mesh_uv_identity_file(path):
             return chunk
 
         magic = take(8)
+        guard = magic == b"BWMESH7\0"
         donor = magic == b"BWMESH4\0"
         anchored = magic == b"BWMESH6\0"
         layered = anchored or magic == b"BWMESH5\0"
         placement = layered or magic == b"BWMESH3\0"
-        visibility = donor or placement or magic == b"BWMESH2\0"
+        visibility = guard or donor or placement or magic == b"BWMESH2\0"
         if not visibility and magic != b"BWMESH1\0":
             raise ValueError("Unsupported mesh payload format for UV identity")
         count = struct.unpack("<I", take(4))[0]
         if not 1 <= count <= _MAX_MESH_BATCHES:
             raise ValueError("Invalid mesh batch count for UV identity")
+        if guard:
+            samples = struct.unpack("<I", take(4))[0]
+            if not 4 <= samples <= 4096:
+                raise ValueError("Invalid Orion guard fit sample count")
+            # Clearance moves the rigid batch at draw time; it does not alter UV identity.
+            take(24 + 104 * samples)
         if donor:
             bones, refs, flags = struct.unpack("<III", take(12))
             if not 1 <= bones <= 256 or not 1 <= refs <= 128 or flags > 3:
@@ -122,6 +129,8 @@ def _mesh_uv_identity_file(path):
             take(32)
             if visibility:
                 take(32)
+            if guard and struct.unpack("<I", take(4))[0] > 2:
+                raise ValueError("Invalid Orion guard side")
             if placement:
                 take(32 + 12)
             if layered:
