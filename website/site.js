@@ -132,3 +132,20 @@ if (document.body.hasAttribute("data-project-page")) {
     };
     document.title = `Core Critical — ${titles[active]}`;
 }
+// Before/after slider: the range input sets how much of the frame shows the stock image.
+// The input stays native so keyboards, touch and screen readers work without extra code.
+document.querySelectorAll(".compare-frame").forEach((frame) => {
+    const range = frame.querySelector(".compare-range");
+    if (!range) return;
+    function showSplit() {
+        const stockPercent = Number(range.value);
+        const upgradedPercent = 100 - stockPercent;
+        frame.style.setProperty("--split", `${stockPercent}%`);
+        range.setAttribute(
+            "aria-valuetext",
+            `${stockPercent}% stock MW3, ${upgradedPercent}% Core Critical`,
+        );
+    }
+    range.addEventListener("input", showSplit);
+    showSplit();
+});

@@ -10,8 +10,8 @@
         <meta name="theme-color" content="#141717" />
         <title>Core Critical — MW3</title>
         <link rel="icon" href="assets/plates/brand-mark-64.png" type="image/png" />
-        <link rel="stylesheet" href="styles.css?v=20261126" />
-        <script src="site.js" defer></script>
+        <link rel="stylesheet" href="styles.css?v=20261127" />
+        <script src="site.js?v=20261127" defer></script>
         <link
             rel="preload"
             href="assets/fonts/Orbitron.woff2"
@@ -156,6 +156,69 @@
                         allowfullscreen
                     ></iframe>
                 </div>
+            </section>
+            <section class="compare section-shell" aria-labelledby="compare-title">
+                <div class="compare-copy">
+                    <h2 id="compare-title">Same battle. New core.</h2>
+                    <p>
+                        One replayed arena match, captured on the same frame twice: once with the
+                        stock MW3 assets, once with Core Critical's upgraded mechs, textures,
+                        lighting and shadows. Drag the handle to compare.
+                    </p>
+                </div>
+                <figure class="compare-figure">
+                    <div class="compare-frame" style="--split: 50%">
+                        <img
+                            class="compare-after"
+                            src="assets/plates/compare-core-critical.webp"
+                            srcset="
+                                assets/plates/compare-core-critical-1280.webp 1280w,
+                                assets/plates/compare-core-critical.webp      2560w
+                            "
+                            sizes="(max-width: 1600px) 100vw, 1600px"
+                            width="2560"
+                            height="1080"
+                            alt="Core Critical: upgraded mechs under dynamic lighting and shadows"
+                            loading="lazy"
+                            decoding="async"
+                        />
+                        <img
+                            class="compare-before"
+                            src="assets/plates/compare-stock.webp"
+                            srcset="
+                                assets/plates/compare-stock-1280.webp 1280w,
+                                assets/plates/compare-stock.webp      2560w
+                            "
+                            sizes="(max-width: 1600px) 100vw, 1600px"
+                            width="2560"
+                            height="1080"
+                            alt="Stock MW3: the same frame with the original assets"
+                            loading="lazy"
+                            decoding="async"
+                        />
+                        <span class="compare-label compare-label-before" aria-hidden="true"
+                            >Stock MW3</span
+                        >
+                        <span class="compare-label compare-label-after" aria-hidden="true"
+                            >Core Critical</span
+                        >
+                        <span class="compare-handle" aria-hidden="true"></span>
+                        <input
+                            class="compare-range"
+                            type="range"
+                            min="0"
+                            max="100"
+                            value="50"
+                            step="1"
+                            aria-label="Share of the frame showing stock MW3"
+                            aria-valuetext="50% stock MW3, 50% Core Critical"
+                        />
+                    </div>
+                    <figcaption>
+                        Matched frame from a replayed c1mp1 arena match. Work in progress; final
+                        visuals may change.
+                    </figcaption>
+                </figure>
             </section>
             <section class="playtest section-shell" aria-labelledby="playtest-title">
                 <div class="playtest-intro">
