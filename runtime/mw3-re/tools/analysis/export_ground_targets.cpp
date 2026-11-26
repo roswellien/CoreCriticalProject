@@ -7,13 +7,14 @@
 int main(int argc, char **argv) {
     try {
         const bool inspect = argc == 4 && std::string(argv[1]) == "--inspect";
-        if ((!inspect && argc != 3) || (argc == 4 && !inspect)) {
-            std::fprintf(stderr, "Usage: mw3ground_targets [--inspect] <pinned-request.json> "
+        const bool bulk = argc == 4 && std::string(argv[1]) == "--bulk";
+        if (argc != 3 && !inspect && !bulk) {
+            std::fprintf(stderr, "Usage: mw3ground_targets [--inspect|--bulk] <pinned-request.json> "
                                  "<fresh-output-directory>\n");
             return 2;
         }
-        const auto request = std::filesystem::u8path(argv[inspect ? 2 : 1]);
-        const auto output = std::filesystem::u8path(argv[inspect ? 3 : 2]);
+        const auto request = std::filesystem::u8path(argv[inspect || bulk ? 2 : 1]);
+        const auto output = std::filesystem::u8path(argv[inspect || bulk ? 3 : 2]);
         constexpr std::size_t maximum = 4 * 1024 * 1024;
         std::ifstream stream(request, std::ios::binary);
         std::string input(maximum + 1, '\0');
@@ -28,6 +29,8 @@ int main(int argc, char **argv) {
             const auto selected = mw3::ground_targets::read_inspection_request(input);
             const auto result = mw3::ground_targets::inspect_source(selected);
             mw3::ground_targets::write_inspection(result, output);
+        } else if (bulk) {
+            mw3::ground_targets::write_result(mw3::ground_targets::export_bulk(input), output);
         } else {
             const auto selected = mw3::ground_targets::read_request(input);
             const auto result = mw3::ground_targets::export_target(selected);

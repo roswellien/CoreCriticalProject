@@ -668,6 +668,53 @@ TEST(ground_export_cpu_closed_request_schema) {
   catch (const std::exception&) { rejected=true; } EXPECT(rejected);
 }
 
+TEST(ground_export_cpu_bulk_binding_matches_single_and_rejects_bad_pins) {
+  GroundFixture fixture;
+  GroundFixtureScope scope(fixture, false);
+  auto request = ground_export_request(fixture, authored_ground_bank());
+  const auto single = mw3::ground_targets::export_target(request);
+  request.member = "zbd/c1/gamez.zbd";
+  request.region = "c1";
+  request.asset_id = "c1-model-0";
+  fs::create_directories(request.data_root / "zbd/c1");
+  fs::copy_file(request.data_root / "zbd/t1/gamez.zbd", request.data_root / request.member);
+  const auto row = ground_request_json(request);
+  GroundJson bulk{{"schema_version", 1}, {"requests", GroundJson::array({row})}};
+  const auto result = mw3::ground_targets::export_bulk(bulk.dump());
+  const auto result_targets = GroundJson::parse(result.material_targets);
+  const auto& target = result_targets.at("targets").at(0);
+  const auto single_targets = GroundJson::parse(single.material_targets);
+  const auto& original = single_targets.at("targets").at(0);
+  EXPECT(target.at("mesh_uv_hash") == original.at("mesh_uv_hash"));
+  EXPECT(target.at("surface_keys") == original.at("surface_keys"));
+  EXPECT(target.at("polygon_materials") == original.at("polygon_materials"));
+  EXPECT(GroundJson::parse(result.receipt).at("models").at(0).at("status") == "bound");
+
+  bulk["requests"][0]["textures"] = GroundJson::array();
+  const auto missing = mw3::ground_targets::export_bulk(bulk.dump());
+  EXPECT(GroundJson::parse(missing.material_targets).at("targets").empty());
+  EXPECT(GroundJson::parse(missing.receipt).at("models").at(0).at("status") ==
+         "missing_exact_bank_selector");
+
+  for (const auto* field : {"source", "bank", "duplicate"}) {
+    bulk["requests"] = GroundJson::array({row});
+    const std::string kind(field);
+    if (kind == "source")
+      bulk["requests"][0]["source"]["sha256"] = std::string(64, '0');
+    else if (kind == "bank")
+      bulk["requests"][0]["textures"][0]["sha256"] = std::string(64, '0');
+    else
+      bulk["requests"].push_back(row);
+    bool rejected = false;
+    try {
+      (void)mw3::ground_targets::export_bulk(bulk.dump());
+    } catch (const std::exception&) {
+      rejected = true;
+    }
+    EXPECT(rejected);
+  }
+}
+
 TEST(bounded_mechlib_reads_the_shipped_trees_whole) {
   const std::string path = std::string(MW3_GAME_DIR) + "/zbd/mechlib.zbd";
   std::error_code ec;
