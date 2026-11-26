@@ -42,7 +42,10 @@ class InstalledPreparationTests(unittest.TestCase):
         import stage_mw3_re_runtime as producer
 
         repo_caps = producer._source_capabilities(Path(__file__).resolve().parents[2])
-        self.assertEqual(repo_caps, producer._DEFAULT_CAPABILITIES)
+        self.assertEqual(repo_caps, producer._DEFAULT_CAPABILITIES + (
+            ("prepared-mechs", (1,)), ("mesh-payload", (1, 2, 3, 4, 5, 6, 7)),
+            ("normal-map", (1, 2, 3)), ("surface-materials", (1,)),
+        ))
         with tempfile.TemporaryDirectory() as temporary:
             old_source = Path(temporary)
             (old_source / "runtime/mw3-re/src/frontend/sdl").mkdir(parents=True)
