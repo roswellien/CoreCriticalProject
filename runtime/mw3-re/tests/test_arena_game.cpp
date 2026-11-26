@@ -76,6 +76,8 @@ ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
   mech3::player_controls_instance() = nullptr;
   // Ensure slow deaths start with a new-process collapse direction.
   arena_counts::set_death_anim_toggle(false);
+  // Fall pairing must not see the last action from a previous match.
+  arena_counts::reset_last_action();
   mech3::options() = mech3::Options{};
   FakeWindow window;
   FakeAlert alert;
@@ -762,6 +764,7 @@ TEST(arena_log_detail_c1mp1_4v4_headless) {
 
   // #289 step 3 (version 2): each new field is written at least once.
   int actions = 0, hits_at = 0, round_ends_at = 0, voices = 0, voices_tagged = 0, phased = 0, blended = 0;
+  int slow_death_samples = 0;
   for (const nlohmann::json& mech : log.records[0]["mechs"])
     if (mech.contains("voice")) ++voices_tagged;
   for (const nlohmann::json& record : log.records) {
@@ -773,11 +776,15 @@ TEST(arena_log_detail_c1mp1_4v4_headless) {
     if (type == "state")
       for (const nlohmann::json& mech : record["mechs"]) {
         const nlohmann::json& anim = mech["anim"];
+        const int anim_index = anim.value("index", -1);
+        if (anim_index == 7 || anim_index == 8) ++slow_death_samples;
         EXPECT(anim.contains("phase") && anim.contains("cps") && anim.contains("weight") && anim.contains("limp"));
         if (anim.value("phase", 0.0) > 0.0) ++phased;
         if (anim.value("weight", 0.0) > 0.0) ++blended;
       }
   }
+  std::printf("  slow-death state samples: %d\n", slow_death_samples);
+  EXPECT(slow_death_samples > 0);
   std::printf("  version 2: actions %d, hits with at %d, round ends with at %d, voices %d (%d tagged), phased %d, blended %d\n",
               actions, hits_at, round_ends_at, voices, voices_tagged, phased, blended);
   EXPECT(hits_at > 0 && round_ends_at > 0 && phased > 0 && blended > 0);
