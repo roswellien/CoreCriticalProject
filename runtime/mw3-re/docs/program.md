@@ -524,7 +524,8 @@ apart. Everything else is a real gap and stays listed.
   failed only in Release (2026-11-08). Single-process runs stay free.
   In a mission the simulation runs its fixed 1/30 s steps underneath
   (#485, fixed-step.md): `--frame-ms 7` draws about five frames a step and
-  plays exactly as `--frame-ms 33` does; `--frame-ms 33` (0.033 s) runs no
+  simulates exactly as `--frame-ms 33` does (scripted inputs such as `--tap
+  DIK@N` still count drawn frames); `--frame-ms 33` (0.033 s) runs no
   step on about one frame in a hundred.
 - `--variable-step` (ours, #485): one simulation step per frame drawn, with
   the frame's own time, as before the fixed step; for side-by-side checks

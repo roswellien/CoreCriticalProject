@@ -85,6 +85,15 @@ which are simulation work. Nothing is lost between steps: the SDL host sums the
 mouse's motion between reads and latches buttons pressed in between
 (`frontend/sdl/sdl_input.cpp`).
 
+A drawn frame follows none, one or several polls, so drawn-frame code that
+checks a key for a fresh press (its state 1) uses `key_pressed_this_frame`,
+which keeps every plain key pressed at any poll since the mission frame began
+(`frame_keys_begin`): the multiplayer quit box's Escape, Y and N
+(`quit_box.cpp`), and Escape's stop in the three drawing paths. Read as the
+raw state, a press counted on every frame between two steps at 60 fps and up
+(the box toggled open and shut) and could be missed below 30. The menus poll
+once a drawn frame and are unchanged.
+
 ## Random numbers
 
 The game draws every random number from one MSVCRT-compatible generator
@@ -150,8 +159,8 @@ as `--variable-step` does.
 - `--variable-step`: one simulation step per drawn frame with the frame's own
   time, as before #485, for side-by-side comparison.
 - `--frame-ms N`: each drawn frame is N ms of game clock; the 1/30 s steps run
-  underneath, so `--frame-ms 7` plays exactly like a 144 fps player and
-  repeats. The step is exactly 1/30 s, so a `--frame-ms 33` run (0.033 s
+  underneath, so `--frame-ms 7` simulates exactly like a 144 fps player and
+  repeats (scripted inputs such as `--tap DIK@N` still count drawn frames). The step is exactly 1/30 s, so a `--frame-ms 33` run (0.033 s
   frames) runs no step on about one frame in a hundred.
 - `--step-log FILE`: one record per step (a hash of every object's local
   transform, then each vehicle's position, forward row and supports in the

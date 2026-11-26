@@ -47,6 +47,28 @@ TEST(interp_blend_matrix_keeps_scale) {
   EXPECT(near(std::sqrt(out[3] * out[3] + out[4] * out[4] + out[5] * out[5]), 1.0f));
 }
 
+// Ours (#485): a node scaled to nothing on an axis at either end (hidden, or
+// grown from 0 by an effect animation) has no rotation to blend: it is drawn
+// with the newer rows, its position still blended, and never with a bogus
+// rotation or a NaN.
+TEST(interp_blend_matrix_a_flattened_row_takes_the_newer_rows) {
+  float from[12], to[12], out[12];
+  yaw_at(0, 0, from);
+  yaw_at(30, 2, to);
+  for (int i = 0; i < 3; ++i) from[i] = 0.0f;  // the right axis scaled to 0 at the start
+  zcls::interp::blend_matrix(from, to, 0.5f, out);
+  bool rows_are_newer = true;
+  for (int c = 0; c < 9; ++c) rows_are_newer = rows_are_newer && out[c] == to[c];
+  EXPECT(rows_are_newer);
+  EXPECT(near(out[9], 0.5f * (from[9] + to[9])) && near(out[11], 0.5f * (from[11] + to[11])));
+  yaw_at(0, 0, from);
+  for (int c = 3; c < 6; ++c) to[c] = std::nanf("");  // the newer up axis not a number
+  zcls::interp::blend_matrix(from, to, 0.5f, out);
+  bool same_as_newer = true;
+  for (int c = 0; c < 9; ++c) same_as_newer = same_as_newer && (out[c] == to[c] || (std::isnan(out[c]) && std::isnan(to[c])));
+  EXPECT(same_as_newer);
+}
+
 TEST(interp_apply_blends_restore_gives_back_the_exact_matrix) {
   zcls::interp::clear();
   zcls::Node* node = zcls::object3d_create();

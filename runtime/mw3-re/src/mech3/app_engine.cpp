@@ -688,8 +688,10 @@ void GameEngine::input_poll(uint8_t callbacks) {
   for (int32_t key = 0; key < 0x100; ++key)
     if (zin::key_state(key) == 1) fresh_keys_[key] = true;
 }
+// Only the plain keys (DIK codes below 0x100) are kept; a key with Alt, Ctrl
+// or Shift (0x100 and up) is never fresh here.
 bool GameEngine::key_pressed_this_frame(int32_t key) {
-  if (key < 0 || key >= 0x100) return key_state(key) == 1;
+  if (key < 0 || key >= 0x100) return false;
   return fresh_keys_[key];
 }
 void GameEngine::frame_keys_begin() {

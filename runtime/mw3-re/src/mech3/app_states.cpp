@@ -476,7 +476,8 @@ void CoreState::run_fixed_steps() {
     en.arena_tick();                      // an arena match's log and end, on the step's time (#287)
     zcls::interp::prepare_cameras();      // the cameras' part of the draw the simulation reads
     zcls::interp::settle_world_caches();  // the caches the original's draw rebuilt each frame
-    zcls::interp::record();               // the step's transforms, for drawing between steps
+    // The step's transforms, for drawing between steps (none drawn in a hidden arena run).
+    if (!arena::arena_headless()) zcls::interp::record();
     if (after_each_step()) after_each_step()();  // the tests' look at each step
   }
   timer.dt = frame_clock.dt, timer.raw_dt = frame_clock.raw_dt;
@@ -628,7 +629,9 @@ bool CoreState::draw_software(Handle veh, bool flag) {
   en.vcall(en.player_view(), 0x04, {});
   en.scene_draw(scene);
   if (veh) zoom_pass(en, veh);
-  if (en.key_state(1) & 3) {
+  // Ours (#485): or pressed at a step's poll since the frame began, though
+  // let go again by a later step of the same frame (three or more steps).
+  if ((en.key_state(1) & 3) || en.key_pressed_this_frame(1)) {
     if (flag && veh) en.node_set_active(en.vehicle_node(veh), 1);
     return true;
   }
@@ -753,7 +756,9 @@ bool CoreState::draw_hardware(Handle veh, bool flag) {
   const Handle scene = en.scene_begin();
   en.vcall(en.player_view(), 0x04, {});
   if (veh) zoom_pass(en, veh);
-  if (en.key_state(1) & 3) {
+  // Ours (#485): or pressed at a step's poll since the frame began, though
+  // let go again by a later step of the same frame (three or more steps).
+  if ((en.key_state(1) & 3) || en.key_pressed_this_frame(1)) {
     if (flag && veh) en.node_set_active(en.vehicle_node(veh), 1);
     return true;
   }
@@ -847,7 +852,9 @@ bool CoreState::draw_doubled(Handle veh, bool flag) {
   const Handle scene = en.scene_begin();
   en.vcall(en.player_view(), 0x04, {});
   en.scene_draw(scene);
-  if (en.key_state(1) & 3) {
+  // Ours (#485): or pressed at a step's poll since the frame began, though
+  // let go again by a later step of the same frame (three or more steps).
+  if ((en.key_state(1) & 3) || en.key_pressed_this_frame(1)) {
     if (flag && veh) en.node_set_active(en.vehicle_node(veh), 1);
     return true;
   }
