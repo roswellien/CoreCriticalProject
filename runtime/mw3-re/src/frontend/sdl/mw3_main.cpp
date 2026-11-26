@@ -1388,7 +1388,10 @@ int program(int argc, char** argv) {
   }
   // --arena (ours, #287): a lone host's session on the in-process hub, never
   // the ENet transport above (refused with --host and --join).
-  if (!sdlfe::open_watch_session(a.watch, a.seed, a.frame_ms, a.hidden && a.shot.empty())) {
+  // A watched match runs on the wall clock (below), so its log says 0: no fixed step.
+  const bool watched_arena = !a.watch.arena_path.empty() && !a.hidden;
+  const int arena_log_frame_ms = watched_arena ? 0 : a.frame_ms;
+  if (!sdlfe::open_watch_session(a.watch, a.seed, arena_log_frame_ms, a.hidden && a.shot.empty())) {
     SDL_Quit();
     return 1;
   }
@@ -1516,7 +1519,13 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   sdlfe::SdlZinHost zin_host(&input);
   sdlfe::FrontendInputLifetime input_lifetime(zin_host);
   sdlfe::SdlClock clock;
-  clock.frame_ms = static_cast<uint32_t>(a.frame_ms);
+  // A watched arena match (ours, #510) keeps the wall clock, as Play and
+  // Training do: the game steps by the real time between frames, so it plays
+  // at real speed whatever the frame rate. With the fixed --frame-ms step a
+  // slow window was slow motion and a fast one fast-forward. A hidden match
+  // keeps the fixed step, so its log repeats byte for byte.
+  const bool watched_arena = !a.watch.arena_path.empty() && !a.hidden;
+  clock.frame_ms = watched_arena ? 0u : static_cast<uint32_t>(a.frame_ms);
   // A network run's frames keep the wall clock too: the peers' packets come in
   // real time, and a build that draws fast ran its game clock far ahead of them.
   clock.paced = a.frame_ms > 0 && (a.net_host || !a.net_join.empty() || a.net_port >= 0 || !a.net_lan.empty() || a.net_soak);

@@ -42,6 +42,12 @@ any machine. With `--hidden` and no screenshots the match draws
 nothing; without `--hidden` a window follows one bot, and the camera-cycle
 key moves the view to the next bot still standing.
 
+A hidden match steps the game clock by exactly `--frame-ms` each frame, so
+the same setup and seed write the same log byte for byte. A watched match
+uses the wall clock instead, as Play and Training do: it plays at real
+speed and draws as fast as the computer allows, and its log's `start` line
+records `frame_ms` 0. A watched match can't be repeated exactly (#294).
+
 The run ends once the match is decided: one side with no mech standing loses,
 both at once is a draw, and at the time limit the side with more standing
 wins. It prints the result, for example
