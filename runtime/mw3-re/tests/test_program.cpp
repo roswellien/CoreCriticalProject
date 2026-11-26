@@ -26356,9 +26356,11 @@ struct OptionsPlace {
 // them by default, with MW3_MENU_WIDE as `menu_wide_env`; otherwise the menus'
 // 4:3 frame is pinned with wide_menus off. `walk_all_pages` loads the shipped
 // images (DistinctImageHost) and walks every page and back to the mission,
-// recording each page's backdrop and the menu background source.
+// recording each page's backdrop and the menu background source. With
+// `quit_on_gfx` it stops on Graphics & Audio instead and tears the engine down
+// with that page still on top.
 OptionsPlace c1m1_options_place(int32_t mode, bool keep_wide_menus = false, const char* menu_wide_env = nullptr,
-                                bool walk_all_pages = false) {
+                                bool walk_all_pages = false, bool quit_on_gfx = false) {
   OptionsPlace out;
   ScopedMenuWideEnv wide_env(menu_wide_env);
   const zfix::Options saved_fix = zfix::options();
@@ -26513,7 +26515,7 @@ OptionsPlace c1m1_options_place(int32_t mode, bool keep_wide_menus = false, cons
         out.gfx_origin = g->origin_x;
         out.gfx_objects = object_places(g);
         rect(g->resolution, out.resolution);
-        if (walk_all_pages) g->back.on_left_up(), step = 4;
+        if (walk_all_pages && !quit_on_gfx) g->back.on_left_up(), step = 4;
         else step = 3;
       }
     };
@@ -26811,6 +26813,19 @@ TEST(mission_c1m1_options_background_source_headless) {
   if (v.upgrades_page.backdrop) EXPECT(shows_own(v.upgrades_page) && shows_own(v.game_after_upgrades));
   EXPECT(v.game.backdrop != v.gfx.backdrop && v.game.backdrop != v.controls.backdrop);
   EXPECT(v.resumed && v.source_after_resume == nullptr && v.source_after_teardown == nullptr);
+}
+
+// Ours (issue 519): quitting with an in-mission options page still on top frees
+// its backdrop with the screens, so the engine clears the menu background
+// source as it deletes them; nothing is left pointing at the freed picture.
+TEST(mission_c1m1_options_quit_on_a_page_clears_the_background_source_headless) {
+  if (!have_game()) return;
+  const OptionsPlace v = c1m1_options_place(13, true, nullptr, true, true);
+  const bool gfx_was_the_source = v.gfx.backdrop && v.gfx.source == v.gfx.backdrop;
+  std::printf("quit on gfx: source was its backdrop %d, after teardown %p\n", gfx_was_the_source,
+              static_cast<const void*>(v.source_after_teardown));
+  EXPECT(gfx_was_the_source);
+  EXPECT(v.source_after_teardown == nullptr);
 }
 
 // Ours (16:9 menus, wide_menus with any_resolution; resolution.md): at mode
