@@ -407,7 +407,7 @@ bool arena_viewed_label(int* id, std::string* label) {
   *id = entry.id;
   // From the entry: a bot that failed to be made leaves its name in g_names
   // but no entry, so the two lists need not line up.
-  *label = entry.name ? entry.name : "";
+  *label = entry.name;
   return true;
 }
 
@@ -479,9 +479,7 @@ void arena_start() {
       }
       ArenaMech entry;
       entry.mech = mech, entry.id = id, entry.side = side, entry.spot = spot;
-      // Stable: g_names is a deque (push_back never moves its strings) and is
-      // cleared only with g_mechs, as the mech itself already holds this pointer.
-      entry.name = g_names.back().c_str();
+      entry.name = g_names.back();
       g_mechs.push_back(entry);
     }
   }
