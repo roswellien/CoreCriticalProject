@@ -1125,8 +1125,11 @@ static class NativeRuntimeLayoutChecks
                             throw new Exception("VSync argv did not respect the setting and installed runtime.");
                         var skipped = planned["skipped_features"]!.AsArray()
                             .Any(feature => feature!["feature"]!.GetValue<string>() == "vsync");
-                        if (skipped == supported)
-                            throw new Exception("Unsupported runtime VSync was not reported as skipped.");
+                        // Only a request to turn vsync off goes unmet on an older runtime,
+                        // which always presents with vsync.
+                        var expectSkipped = !supported && !enabled;
+                        if (skipped != expectSkipped)
+                            throw new Exception("VSync off on an unsupported runtime was not reported as skipped.");
                     }
                 }
             }
