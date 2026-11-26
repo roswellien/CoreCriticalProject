@@ -310,12 +310,10 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
             self.assertEqual(len(vsync_skipped), 1)
             self.assertIn("runtime does not advertise support", vsync_skipped[0]["reason"])
 
-            # Unsupported runtime: supports_vsync=False (even with vsync=True)
+            # Unsupported runtime asked for vsync on: it already presents with vsync, nothing skipped
             res_unsupported = plan(dict(base, supports_vsync=False, vsync=True))
             self.assertNotIn("--cc-vsync", res_unsupported["argv"])
-            vsync_skipped = [f for f in res_unsupported["skipped_features"] if f["feature"] == "vsync"]
-            self.assertEqual(len(vsync_skipped), 1)
-            self.assertIn("runtime does not advertise support", vsync_skipped[0]["reason"])
+            self.assertFalse(any(f["feature"] == "vsync" for f in res_unsupported["skipped_features"]))
 
             # Supported runtime: vsync omitted -> emits 0, no vsync skipped feature
             res_omitted = plan(dict(base, supports_vsync=True))

@@ -78,16 +78,18 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
     std::printf("mw3 benchmark: backend=%s adapter=%s present=immediate\n",
                 SDL_GetGPUDeviceDriver(device_),
                 SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device_), SDL_PROP_GPU_DEVICE_NAME_STRING, "unknown"));
-  } else if (!hidden_ && assets.vsync_explicit && !assets.vsync) {
+  } else if (!hidden_ && !assets.vsync) {
     SDL_GPUPresentMode mode = SDL_GPU_PRESENTMODE_VSYNC;
     if (SDL_WindowSupportsGPUPresentMode(device_, window_, SDL_GPU_PRESENTMODE_IMMEDIATE)) {
       mode = SDL_GPU_PRESENTMODE_IMMEDIATE;
     } else if (SDL_WindowSupportsGPUPresentMode(device_, window_, SDL_GPU_PRESENTMODE_MAILBOX)) {
       mode = SDL_GPU_PRESENTMODE_MAILBOX;
     }
-    // VSync off is a preference, not a requirement: a driver that refuses the
-    // mode keeps SDL's default vsync swapchain rather than ending the launch.
-    if (!SDL_SetGPUSwapchainParameters(device_, window_, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
+    // VSync off is a preference, not a requirement: without a supported mode, or
+    // when the driver refuses it, SDL's default vsync swapchain stays.
+    if (mode == SDL_GPU_PRESENTMODE_VSYNC)
+      std::fprintf(stderr, "mw3: vsync off unavailable on this display, keeping vsync\n");
+    else if (!SDL_SetGPUSwapchainParameters(device_, window_, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
       std::fprintf(stderr, "mw3: vsync off unavailable, keeping vsync: %s\n", SDL_GetError());
   }
   render_ = std::make_unique<SdlRender3D>(device_, window_);

@@ -914,7 +914,8 @@ def plan_launch(request):
     skipped_features = []
     if supports_vsync:
         argv.extend(("--cc-vsync", "1" if vsync else "0"))
-    else:
+    elif not vsync:
+        # Older runtimes always present with vsync, so only a request to turn it off goes unmet.
         skipped_features.append({
             "feature": "vsync",
             "reason": "The selected MW3-RE runtime does not advertise support for VSync.",
