@@ -584,7 +584,7 @@ TEST(replay_puppet_follows_a_live_mech_headless) {
 // 60 frames in the middle of an arena match, no mech is updated (none moves
 // and no gait clip runs), the game time is the replay's clock every frame,
 // the frame clock is real time again after each frame, and the hooks run
-// once a frame each.
+// once a simulation step each (#485).
 TEST(replay_frame_branch_simulates_nothing_headless) {
   if (!have_game()) return;
   const std::string json = R"({"map": "c1mp1", "minutes": 3, "out": "arena-out", "sides": [[)" +
@@ -595,7 +595,9 @@ TEST(replay_frame_branch_simulates_nothing_headless) {
   std::printf("  replay frames: %d, moved %d, off clock %d, clock not real %d, hooks %d/%d\n", r.frames,
               r.mechs_moved, r.time_off_clock, r.clock_not_real, r.before, r.after);
   EXPECT(r.frames == 60 && r.mechs_moved == 0 && r.time_off_clock == 0 && r.clock_not_real == 0);
-  EXPECT(r.before == 60 && r.after == 60);
+  // The hooks run once per 1/30 s simulation step (#485): 60 frames of the
+  // fake clock's 16 ms are 0.96 s, 28 or 29 steps, each with both hooks.
+  EXPECT(r.before == r.after && r.before >= 28 && r.before <= 29);
   // The control: the same frames without the hooks, where the bots move.
   replay_game::FrameProbe control(200, 60, false);
   arena_headless_run(json, 300, [&](int frame) { control.frame(frame); });

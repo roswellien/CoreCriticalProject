@@ -170,6 +170,13 @@ void apply(float alpha) {
     if (!is_live_object3d(node)) continue;
     if (object_data(node)->get<uint32_t>(kFlagsOffset) & kWorldStale) g_stale_before_draw.push_back(node);
     if (!r.has_previous) continue;
+    // Moved since its last record, outside a step (a placement between frames,
+    // a tool): the records are out of date, so it is drawn as it is and its
+    // records start again at the next step.
+    if (!same_matrix(object_data(node)->floats(kLocalOffset), r.current.local)) {
+      r.has_previous = false;
+      continue;
+    }
     const bool local_moved = !same_matrix(r.previous.local, r.current.local);
     const bool world_moved = r.previous.world_valid && r.current.world_valid &&
                              !same_matrix(r.previous.world, r.current.world);
@@ -194,16 +201,24 @@ void restore() {
     auto found = g_records.find(node);
     if (found == g_records.end() || !is_live_object3d(node)) continue;
     Record& r = found->second;
-    Object3d* data = object_data(node);
-    if (same_matrix(data->floats(kLocalOffset), r.applied_local))
-      std::memcpy(data->floats(kLocalOffset), r.current.local, kMatrixBytes);
-    if (same_matrix(data->floats(kWorldOffset), r.applied_world))
-      std::memcpy(data->floats(kWorldOffset), r.current.world, kMatrixBytes);
-    // The draw may have rebuilt the cache from the blended chain and marked it
-    // valid; its validity goes back to what it was before the draw.
-    const uint32_t stale_before = r.flags_before_draw & kWorldStale;
-    data->put<uint32_t>(kFlagsOffset, (data->get<uint32_t>(kFlagsOffset) & ~kWorldStale) | stale_before);
     r.blended = false;
+    Object3d* data = object_data(node);
+    // Something during the draw moved the node itself (a camera, a placed
+    // mech): its new transform stands. Some movers write the local floats
+    // without marking the cache, which still holds apply's blend, so the cache
+    // is marked stale and rebuilt from the new transform.
+    if (!same_matrix(data->floats(kLocalOffset), r.applied_local)) {
+      data->put<uint32_t>(kFlagsOffset, data->get<uint32_t>(kFlagsOffset) | kWorldStale);
+      continue;
+    }
+    std::memcpy(data->floats(kLocalOffset), r.current.local, kMatrixBytes);
+    // A cache valid before the draw and still holding apply's blend goes back
+    // to the exact one. A stale one is never marked valid here: the loop below
+    // marks every cache stale before the draw stale again.
+    const bool valid_before = (r.flags_before_draw & kWorldStale) == 0;
+    const bool valid_now = (data->get<uint32_t>(kFlagsOffset) & kWorldStale) == 0;
+    if (valid_before && valid_now && same_matrix(data->floats(kWorldOffset), r.applied_world))
+      std::memcpy(data->floats(kWorldOffset), r.current.world, kMatrixBytes);
   }
   for (Node* node : g_stale_before_draw) {
     if (!is_live_object3d(node)) continue;

@@ -87,6 +87,29 @@ TEST(interp_snaps_a_jump_and_a_new_node) {
   zcls::interp::clear();
 }
 
+// A node placed between frames (outside a step) is drawn where it was put and
+// keeps that place; the blend of its older records never overwrites it.
+TEST(interp_node_moved_outside_a_step_keeps_its_place) {
+  zcls::interp::clear();
+  zcls::Node* node = zcls::object3d_create();
+  EXPECT(node != nullptr);
+  if (!node) return;
+  float m[12];
+  yaw_at(0, 0, m);
+  zcls::object3d_set_matrix(node, m);
+  zcls::interp::record();
+  yaw_at(0, 1, m);
+  zcls::object3d_set_matrix(node, m);
+  zcls::interp::record();
+  yaw_at(0, 20, m);  // placed by something outside the step
+  zcls::object3d_set_matrix(node, m);
+  zcls::interp::apply(0.5f);
+  EXPECT(local_of(node)[9] == 20.0f);
+  zcls::interp::restore();
+  EXPECT(local_of(node)[9] == 20.0f);
+  zcls::interp::clear();
+}
+
 TEST(interp_forgotten_node_starts_fresh) {
   zcls::interp::clear();
   zcls::Node* node = zcls::object3d_create();
