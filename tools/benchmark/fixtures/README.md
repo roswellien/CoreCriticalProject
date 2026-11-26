@@ -77,8 +77,18 @@ takes priority over MW5 on shared chassis. The planner reports pack
 compatibility exclusions. It writes generated catalogs and the launch plan to
 the isolated profile under local/benchmark.
 
+The scored scene now replays `c1mp1-8v8-reference.json`: 16 different
+chassis (Mad Cat, Thor, Vulture, Avatar, Owens, Strider, Daishi, Shadow Cat
+against Black Hawk, Bushwacker, Champion, Cauldron-Born, Puma, Sunder,
+Supernova, Orion), recorded with the command above into
+`local/benchmark/reference-16/match-7.jsonl` (SHA-256
+`003521ae20a0e503cc7b9946e050a89e0b9037c9aca365572dd5ad40bf5d2f54` on
+2026-11-26). Each camera shot follows its own `mech`, so every cut shows a
+different chassis. The 4v4 notes above describe the original reference.
+
 Use a fresh output directory for each attempt. This scene starts at log time
-30 seconds, warms up over [30, 40), and scores [40, 70). The measured
+20 seconds, warms up over [20, 40) (the first frame loads all 16 chassis and
+can take over 10 s), and scores [40, 70). The measured
 span contains 593 shots and hits, with the heaviest fighting from 45 to 55 seconds.
 
 The sequence follows mech ID 3, an Orion that survives the full span. Among
