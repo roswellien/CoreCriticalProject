@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <vector>
 #include "gamez/zclass/visual_distance.h"
 
 #include "gamez/zclass/cls_node.h"
@@ -149,5 +150,16 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw,
 // its light (first hit, kind 0x40000 left out) meets something.
 int camera_draw_flares(Camera* camera, int32_t from);
 int render_world(Node* camera_node, int32_t after);  // 0x004f7030 ECX camera node, EDX
+
+// Ours (#485, docs/fixed-step.md): the part of render_world's set-up that the
+// simulation reads afterward, without drawing: the camera's matrices and world
+// position (camera_update), the horizon moved to it, and the zone list the
+// weapons' casts start from. Run after each fixed step for the cameras the
+// last draw drew, from their exact places, as the original's draw after each
+// of its frames did; the draws themselves, from blended places, are undone.
+void camera_prepare(Node* camera_node);
+// The cameras render_world drew since this was last emptied, in the order
+// first drawn (interp's apply empties it at each draw).
+std::vector<Node*>& rendered_cameras();
 
 }  // namespace zcls

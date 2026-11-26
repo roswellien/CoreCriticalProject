@@ -34,7 +34,31 @@ transform (data +0x30) and, while valid, its cached world transform (+0x60)
 after every step. Before a frame is drawn it writes each moved node's blend at
 `alpha`, how far the frame is towards the next step: position and per-row scale
 in a straight line, rotation by quaternion slerp. A node that moved more than
-50 m in one step (spawned, placed, a camera cut) is drawn where it is. Before
+50 m in one step (spawned, placed, a camera cut) is drawn where it is.
+
+Cameras are no object3d: the player's view places its camera in the world
+each step (`PlayerView::place`, a position and three angles), so `interp`
+records and blends cameras too, through their own setters, angles the short
+way round; a turn past 90 degrees in a step is a cut, drawn where it is. Without
+this the outside world moved in 30 Hz jumps at any frame rate while the
+cockpit model in front of it was blended (#485's shot check: at 7 ms frames
+the world changed only on every fifth frame). A camera given a whole matrix is
+drawn as it is.
+
+The draw also works out from each camera's place what the simulation reads
+afterward: the camera's matrices and world position, the horizon moved to it,
+and the zone list the weapons' casts and the turrets start from. From a blended
+camera those would differ with the frame rate, so each draw puts every camera's
+whole data, the horizon and the zone list back as it found them, and after
+each step `prepare_cameras` runs that part of the draw's set-up
+(`zcls::camera_prepare`, taken out of `render_world`) for the cameras the last
+draw drew, from their exact places, as the original's draw after each of its
+frames did. Below 30 fps, when a frame runs two steps, the step between them
+gets it too. One exception: the zoom window's camera is placed by the HUD
+during the draw, from the drawn view, so with the zoom window open its own
+state follows the drawn (blended) view.
+
+Before
 the draw every node's local transform, world cache and its stale flag are
 kept, and right after it each node gets them back exactly; a node the draw
 moved itself (a camera) keeps its new transform with its cache stale. So the
@@ -88,14 +112,19 @@ shown, never the simulation.
 
 The engine's frame number (`zcls::frames().frame`, exe 0x0072f338) still goes
 up once per drawn world frame, as the original's camera draw counts it; the
-draw caches use it (a node unchanged for 160 drawn frames is static), and so do
-the camera's sound listener and the debug views. A second counter,
-`zcls::frames().step`, goes up at the start of each step (`poll_and_run_lists`).
-Simulation work the original timed "once a frame" counts steps: the vehicles'
-and turrets' frame numbers, the mech's sunlight shade turns, the network
-collision check and the texture scroll (`model_scroll_tick`). On the drawn-frame
-counter these ran once per drawn frame, so at 15 fps (two steps a frame) the
-horizon scrolled at half speed.
+materials' texture cycles, the camera's sound listener and the debug views use
+it. A second counter, `zcls::frames().step`, goes up at the start of each step
+(`poll_and_run_lists`). Simulation work the original timed "once a frame"
+counts steps: the vehicles' and turrets' frame numbers, the mech's sunlight
+shade turns, the network collision check and the texture scroll
+(`model_scroll_tick`). On the drawn-frame counter these ran once per drawn
+frame, so at 15 fps (two steps a frame) the horizon scrolled at half speed.
+The nodes' changed stamps (node +0xc4: changed until then, `frames().expiry`)
+count steps too: the shots' static hits (`zwep_shot.cpp`, the static-only
+queries in `cls_di.cpp`) read them, so a node is static once unchanged for 160
+steps (5.3 s, as at the exe's 30 fps) at any frame rate; the static lighting
+bake (`gmod_draw.cpp`) reads the same stamps. On drawn frames a shot fired at
+20 fps found other static hits than at 30 (#485's c2m1 runs).
 
 ## Tests
 

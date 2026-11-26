@@ -28,6 +28,10 @@ constexpr float kSnapDistance = 50.0f;
 // vehicle's turret turn), so this runs once a step however many frames are
 // drawn; `restore` keeps the draws themselves out of the caches.
 void settle_world_caches();
+// After each step's camera placing (world_tick): camera_prepare for each camera
+// the last draw drew, from its exact place, as the original's draw after each
+// frame did; `restore` puts each draw's own, from blended places, back.
+void prepare_cameras();
 void record();
 void apply(float alpha);
 void restore();

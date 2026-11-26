@@ -6,11 +6,13 @@
 #include <unordered_map>
 #include <vector>
 
+#include "gamez/zclass/camera.h"
 #include "gamez/zclass/class.h"
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/list.h"
 #include "gamez/zmath/zmth_matrix.h"
+#include "gamez/zmodel/gmod_cull.h"
 
 namespace zcls::interp {
 
@@ -69,6 +71,146 @@ Record* find_record(const Node* node, std::size_t i) {
   if (i < g_order.size() && g_order[i].first == node) return g_order[i].second;
   auto found = g_records.find(node);
   return found == g_records.end() ? nullptr : &found->second;
+}
+
+// Cameras (class 1) are placed in the world each step on their own (the
+// player's view: PlayerView::place, a position at data +0x14 and angles at
+// +0x20), not through an object3d's transform, so they are blended here too:
+// set through their setters (0x004f36b0, 0x004f3870), as the game moves them.
+// Unblended, the view moved in 30 Hz jumps at any frame rate while the cockpit
+// in front of it was blended. A camera given a whole matrix (+0x10 bit 1) is
+// drawn as it is.
+constexpr int kCameraFlags = 0x10;
+constexpr int kCameraPosition = 0x14;
+constexpr int kCameraAngles = 0x20;
+constexpr uint32_t kCameraGivenMatrix = 2;
+// A turn past this in one step is a cut (a new view mode), drawn where it is.
+constexpr float kCameraSnapAngle = 1.5707964f;
+
+struct CameraPose {
+  float position[3];
+  float angles[3];
+};
+struct CameraRecord {
+  CameraPose previous;
+  CameraPose current;
+  CameraPose applied;  // what apply set; restore puts back only what still holds it
+  bool has_previous = false;
+  bool blended = false;
+  unsigned pass = 0;
+};
+std::unordered_map<const Node*, CameraRecord> g_cameras;
+std::vector<Node*> g_blended_cameras;
+
+bool is_live_camera(const Node* node) { return node && node->cls() == 1 && node->data; }
+
+// False for a camera given a whole matrix.
+bool read_camera(Node* node, CameraPose* out) {
+  const auto* d = static_cast<const Camera*>(node->data);
+  if (d->get<uint32_t>(kCameraFlags) & kCameraGivenMatrix) return false;
+  for (int i = 0; i < 3; ++i) {
+    out->position[i] = d->get<float>(kCameraPosition + 4 * i);
+    out->angles[i] = d->get<float>(kCameraAngles + 4 * i);
+  }
+  return true;
+}
+
+bool same_pose(const CameraPose& a, const CameraPose& b) { return std::memcmp(&a, &b, sizeof a) == 0; }
+
+void set_camera(Node* node, const CameraPose& p) {
+  camera_set_rotation(node, p.angles[0], p.angles[1], p.angles[2]);
+  camera_set_position(node, p.position[0], p.position[1], p.position[2]);
+}
+
+// The short way from one angle to another, in -pi..pi.
+float angle_step(float from, float to) {
+  constexpr float kTurn = 6.2831853f;
+  return std::remainder(to - from, kTurn);
+}
+
+void record_camera(Node* node) {
+  CameraPose now;
+  if (!read_camera(node, &now)) {
+    g_cameras.erase(node);
+    return;
+  }
+  CameraRecord& r = g_cameras[node];
+  r.pass = g_pass;
+  r.previous = (r.blended || !r.has_previous) ? now : r.current;
+  r.current = now;
+  r.has_previous = true;
+  r.blended = false;
+}
+
+void apply_camera(Node* node, float alpha) {
+  auto found = g_cameras.find(node);
+  if (found == g_cameras.end()) return;
+  CameraRecord& r = found->second;
+  CameraPose now;
+  if (!r.has_previous || !read_camera(node, &now)) return;
+  if (!same_pose(now, r.current)) {  // moved outside a step: drawn as it is
+    r.has_previous = false;
+    return;
+  }
+  if (same_pose(r.previous, r.current)) return;
+  const float* a = r.previous.position;
+  const float* b = r.current.position;
+  const float moved = std::sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]) + (b[2] - a[2]) * (b[2] - a[2]));
+  if (moved > kSnapDistance) return;
+  CameraPose blend;
+  for (int i = 0; i < 3; ++i) {
+    const float turn = angle_step(r.previous.angles[i], r.current.angles[i]);
+    if (std::fabs(turn) > kCameraSnapAngle) return;
+    blend.angles[i] = r.previous.angles[i] + turn * alpha;
+    blend.position[i] = a[i] + (b[i] - a[i]) * alpha;
+  }
+  set_camera(node, blend);
+  read_camera(node, &r.applied);
+  r.blended = true;
+  g_blended_cameras.push_back(node);
+}
+
+// Every camera as the draw found it, its whole data: the draw derives from its
+// place its matrices, world position (+0x2c) and zone list (+0x1e4), which the
+// simulation reads (the weapons' casts, the turrets); restore puts it all
+// back. Each step's camera_prepare works them out from the exact place.
+struct CameraBefore {
+  Node* node;
+  bool posed;          // a camera placed by position and angles (not a whole matrix)
+  CameraPose left;     // as apply left it: its blend, or as found
+  uint8_t data[sizeof(Camera::raw)];
+};
+std::vector<CameraBefore> g_cameras_before;
+// The nodes that follow a camera, moved by the draw (horizon_follow, the
+// camera's +0x08 and +0x0c): put back as they were too.
+std::vector<Node*> g_followers;
+uint8_t g_zones_before[4];  // the zone list the weapons' casts read (zmod::zones)
+
+void keep_camera(Node* node) {
+  auto* d = static_cast<Camera*>(node->data);
+  CameraBefore& c = g_cameras_before.emplace_back();
+  c.node = node;
+  std::memcpy(c.data, d->raw, sizeof c.data);
+  for (Node* follower : {d->nodes[2], d->nodes[3]})
+    if (follower) g_followers.push_back(follower);
+}
+
+void restore_cameras() {
+  for (Node* node : g_blended_cameras) {
+    auto found = g_cameras.find(node);
+    if (found != g_cameras.end()) found->second.blended = false;
+  }
+  g_blended_cameras.clear();
+  for (const CameraBefore& c : g_cameras_before) {
+    if (!is_live_camera(c.node)) continue;
+    // Placed again during the draw (the zoom window's view, by the HUD): its
+    // new place and what was worked out from it stand.
+    CameraPose now;
+    if (c.posed && read_camera(c.node, &now) && !same_pose(now, c.left)) continue;
+    std::memcpy(static_cast<Camera*>(c.node->data)->raw, c.data, sizeof c.data);
+  }
+  g_cameras_before.clear();
+  std::memcpy(zmod::zones().list, g_zones_before, sizeof g_zones_before);
 }
 
 Object3d* object_data(Node* node) { return static_cast<Object3d*>(node->data); }
@@ -176,6 +318,10 @@ void record() {
   order.reserve(g_order.size());
   for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
     Node* node = item->node;
+    if (is_live_camera(node)) {
+      record_camera(node);
+      continue;
+    }
     if (!is_live_object3d(node)) continue;
     Record* known = find_record(node, order.size());
     Record& r = known ? *known : g_records[node];
@@ -198,6 +344,10 @@ void record() {
       else ++it;
     }
   g_order = std::move(order);
+  for (auto it = g_cameras.begin(); it != g_cameras.end();) {
+    if (it->second.pass != g_pass) it = g_cameras.erase(it);
+    else ++it;
+  }
 }
 
 void settle_world_caches() {
@@ -215,12 +365,28 @@ void settle_world_caches() {
   }
 }
 
+void prepare_cameras() {
+  for (Node* camera : rendered_cameras())
+    if (is_live_camera(camera)) camera_prepare(camera);
+}
+
 void apply(float alpha) {
   g_before_draw.clear();
+  g_cameras_before.clear();
+  g_followers.clear();
+  rendered_cameras().clear();
+  std::memcpy(g_zones_before, zmod::zones().list, sizeof g_zones_before);
   // Walked from list 6, never from the records: only a node on the list is
   // known to be live, so a record is only ever read through a live node.
   for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
     Node* node = item->node;
+    if (is_live_camera(node)) {
+      keep_camera(node);
+      apply_camera(node, alpha);
+      CameraBefore& c = g_cameras_before.back();
+      c.posed = read_camera(node, &c.left);
+      continue;
+    }
     if (!is_live_object3d(node)) continue;
     const Transforms now = read_transforms(node);
     Record* known = find_record(node, g_before_draw.size());
@@ -270,7 +436,10 @@ void restore() {
     // Something during the draw moved the node itself (a camera, a placed
     // mech): its new transform stands. Some movers write the local floats
     // without marking the cache, so the cache is marked stale and rebuilt.
-    if (!same_matrix(data->floats(kLocalOffset), left)) {
+    // (Not a node following a camera, the horizon: that the draw moves to the
+    // drawn camera, and each step's camera_prepare to the exact one.)
+    const bool moved = !same_matrix(data->floats(kLocalOffset), left);
+    if (moved && std::find(g_followers.begin(), g_followers.end(), node) == g_followers.end()) {
       data->put<uint32_t>(kFlagsOffset, flags | kWorldStale);
       continue;
     }
@@ -282,11 +451,20 @@ void restore() {
     data->put<uint32_t>(kFlagsOffset, b.world_stale ? (flags | kWorldStale) : (flags & ~kWorldStale));
   }
   g_before_draw.clear();
+  restore_cameras();
 }
 
 void forget(const Node* node) {
   g_records.erase(node);
   g_order.clear();
+  g_cameras.erase(node);
+  g_blended_cameras.erase(std::remove(g_blended_cameras.begin(), g_blended_cameras.end(), node), g_blended_cameras.end());
+  g_cameras_before.erase(std::remove_if(g_cameras_before.begin(), g_cameras_before.end(),
+                                        [node](const CameraBefore& c) { return c.node == node; }),
+                         g_cameras_before.end());
+  g_followers.erase(std::remove(g_followers.begin(), g_followers.end(), node), g_followers.end());
+  std::vector<Node*>& drawn = rendered_cameras();
+  drawn.erase(std::remove(drawn.begin(), drawn.end(), node), drawn.end());
   g_before_draw.erase(std::remove_if(g_before_draw.begin(), g_before_draw.end(),
                                      [node](const BeforeDraw& b) { return b.node == node; }),
                       g_before_draw.end());
@@ -295,6 +473,11 @@ void forget(const Node* node) {
 void clear() {
   g_records.clear();
   g_order.clear();
+  g_cameras.clear();
+  g_blended_cameras.clear();
+  g_cameras_before.clear();
+  g_followers.clear();
+  rendered_cameras().clear();
   g_before_draw.clear();
 }
 

@@ -479,6 +479,7 @@ void CoreState::run_fixed_steps(bool replay) {
     sync_frame_step(timer.dt, timer.total_scaled);
     poll_and_run_lists(replay);
     world_tick(en);
+    zcls::interp::prepare_cameras();      // the cameras' part of the draw the simulation reads
     zcls::interp::settle_world_caches();  // the caches the original's draw rebuilt each frame
     zcls::interp::record();               // the step's transforms, for drawing between steps
     if (after_each_step()) after_each_step()();  // the tests' look at each step
