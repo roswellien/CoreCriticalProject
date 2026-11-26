@@ -26,7 +26,7 @@ Vec3 vec3(const Json& j) {
 
 float lerp(float a, float b, float f) { return a + (b - a) * f; }
 Vec3 lerp(const Vec3& a, const Vec3& b, float f) { return {lerp(a.x, b.x, f), lerp(a.y, b.y, f), lerp(a.z, b.z, f)}; }
-// Between two angles the short way round, so a heading crossing ±pi doesn't
+// Between two angles the short way round, so a heading crossing Â±pi doesn't
 // spin the long way.
 float lerp_angle(float a, float b, float f) {
   float d = std::fmod(b - a, 2 * kPi);
@@ -248,6 +248,8 @@ bool ReplayLog::load(const std::string& path, std::string* error) {
     return false;
   }
   bool ended = false;
+  std::map<int, std::string> round_weapons;
+  terminal_end_ = read.complete && !read.bad_lines;
   // The reader checks only the start line; a field of the wrong type further
   // on (a hand-edited or damaged log) throws, and is refused like a bad start.
   try {
@@ -299,7 +301,10 @@ bool ReplayLog::load(const std::string& path, std::string* error) {
         for (const Json& round : list(r, "rounds")) {
           RoundAt at{round.value("id", -1), round.value("by", -1), round.value("weapon", ""),
                      vec3(round.value("pos", Json()))};
-          if (in_world(at.pos)) s.rounds.push_back(std::move(at));
+          if (in_world(at.pos)) {
+            if (!at.weapon.empty()) round_weapons[at.id] = at.weapon;
+            s.rounds.push_back(std::move(at));
+          }
           else ++skipped_;
         }
         for (const Json& beam : list(r, "beams")) {
@@ -308,6 +313,9 @@ bool ReplayLog::load(const std::string& path, std::string* error) {
           if (in_world(at.from) && in_world(at.to)) s.beams.push_back(std::move(at));
           else ++skipped_;
         }
+        if (!r.contains("t") || !r.at("t").is_number() || !std::isfinite(t) ||
+            (!states_.empty() && t <= states_.back().t))
+          ordered_states_ = false;
         states_.push_back(std::move(s));
       } else if (type == "shot" || type == "hit") {
         fire_.push_back(read_event(r, &skipped_));
@@ -328,6 +336,10 @@ bool ReplayLog::load(const std::string& path, std::string* error) {
         round_end_at_[r.value("round", -1)] = t;
         // Version 2: where it struck, shown as an impact like a hit.
         Event impact = read_event(r, &skipped_);
+        if (impact.weapon.empty()) {
+          const auto weapon = round_weapons.find(r.value("round", -1));
+          if (weapon != round_weapons.end()) impact.weapon = weapon->second;
+        }
         if (impact.has_at) fire_.push_back(std::move(impact));
       } else if (type == "beam_end") {
         beam_ends_.push_back({t, r.value("id", -1), r.value("weapon", "")});
@@ -337,6 +349,8 @@ bool ReplayLog::load(const std::string& path, std::string* error) {
         for (const Json& p : list(r, "points")) route.points.push_back(vec3(p));
         history_[r.value("id", -1)].routes.push_back(std::move(route));
       } else if (type == "end") {
+        if (ended || !r.contains("t") || !r.at("t").is_number() || !std::isfinite(t))
+          terminal_end_ = false;
         duration_ = t;
         ended = true;
       }
@@ -358,6 +372,43 @@ bool ReplayLog::load(const std::string& path, std::string* error) {
   derive_from_states();
   if (!ended) duration_ = states_.empty() ? 0.0f : states_.back().t;
   has_end_ = ended;
+  return true;
+}
+
+std::optional<float> ReplayLog::first_state_time() const {
+  if (states_.empty()) return {};
+  return states_.front().t;
+}
+
+bool ReplayLog::covers(double start, double end) const {
+  return complete() && ordered_states_ && !skipped_ && !states_.empty() &&
+         states_.front().t <= start && states_.back().t >= end &&
+         duration_ >= end;
+}
+
+std::vector<float> ReplayLog::state_times(double start, double end) const {
+  // Match the replay cursor's timestamp precision at both edges of the window.
+  const auto first = static_cast<float>(start);
+  const auto past_last = static_cast<float>(end);
+  std::vector<float> times;
+  for (const auto& state : states_)
+    if (first <= state.t && state.t < past_last) times.push_back(state.t);
+  return times;
+}
+
+bool ReplayLog::mech_alive_during(int id, double start, double end) const {
+  if (!info_of(id) || !covers(start, end)) return false;
+  const auto history = history_.find(id);
+  if (history != history_.end() && history->second.destroyed_at <= end) return false;
+  const auto alive = [id](const auto& mechs) {
+    return std::any_of(mechs.begin(), mechs.end(), [id](const MechPose& pose) {
+      return pose.id == id && pose.standing;
+    });
+  };
+  const auto next = std::upper_bound(states_.begin(), states_.end(), start,
+                                     [](double time, const State& state) { return time < state.t; });
+  for (auto state = next - 1; state != states_.end() && state->t <= end; ++state)
+    if (!alive(state->mechs)) return false;
   return true;
 }
 

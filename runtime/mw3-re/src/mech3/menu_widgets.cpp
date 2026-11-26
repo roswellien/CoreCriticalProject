@@ -149,6 +149,12 @@ MenuScreen::MenuScreen(Engine& e, Handle s) : e_(e), state(s), background(e) {
   origin_y = ztwod::dialog_origin().y;
 }
 
+// Ours (#552): an opaque baked screen hides the registered source from live HD composition.
+// Keep the original bake whenever the frontend cannot provide the HD background.
+bool MenuScreen::bake_fast_menu() {
+  return e_.fast_menu() && !e_.hd_menu_background_ready();
+}
+
 // Mech3.exe 1.2 @ 0x0040a520
 uint8_t MenuScreen::set_busy(uint8_t on) {
   const uint8_t old = busy_;

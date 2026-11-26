@@ -21,6 +21,8 @@
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
 #include "render_worker.hpp"
+
+#include "frontend/sdl/arena_benchmark.h"
 #include "renderer/campaign_sun_settings.hpp"
 #include "renderer/effect_light_observations.hpp"
 #include "renderer/flare_alpha.hpp"
@@ -37,6 +39,7 @@
 #include "renderer/native_fixture_sources.hpp"
 #include "renderer/fixture_observation_emission.hpp"
 #include "platform/loading.hpp"
+#include "platform/render3d.h"
 #include "platform/prepared_visuals.h"
 #include "platform/sha256.hpp"
 #include "renderer/surface_detail_bindings.hpp"
@@ -480,6 +483,7 @@ public:
         sun_explicit_(assets.sun_explicit),
         environment_(assets.environment),
         bridge_config_(configure_bridge(backend, quality, assets)),
+        benchmark_run_(assets.benchmark_run),
         prepared_(sanitize_prepared_assets(assets), assets.materials),
         geometry_mode_(parse_geometry(assets.geometry)),
         geometry_debug_(assets.geometry_debug_normals),
@@ -575,6 +579,238 @@ public:
       worker_->drain();
     return presented_frames_.load();
   }
+  void benchmark_load() override {
+    drain();
+    renderer_->memory_pressure = {};
+  }
+
+  bool benchmark_ready() override {
+    if (benchmark_run_ && benchmark_run_->strict()) {
+      if (!wait_benchmark_idle()) {
+        benchmark_run_->invalidate({}, "timed out waiting for strict benchmark startup");
+        return false;
+      }
+      last_present_job_ = 0;
+      // Startup runs outside the recorded window. Tick zero starts with
+      // fresh observation IDs and no retained fixtures or effect lights.
+      local_lights_clear();
+    } else {
+      drain();
+    }
+    if (!benchmark_run_ || !worker_ || !native_wsi_ || !window_bound_ ||
+        bridge_config_.vsync || !renderer_->immediate_swapchain())
+      return false;
+
+    int width = 0, height = 0, drawable_width = 0, drawable_height = 0;
+    SDL_GetWindowSize(window_, &width, &height);
+    SDL_GetWindowSizeInPixels(window_, &drawable_width, &drawable_height);
+    const auto size = [](unsigned width, unsigned height) {
+      return std::to_string(width) + "x" + std::to_string(height);
+    };
+    const auto& config = bridge_config_;
+    const auto loaded = prepared_.loaded_assets();
+    const auto detail_role = [&](unsigned role) {
+      const auto& bindings = surface_normals_.detail_bindings;
+      return std::any_of(bindings.begin(), bindings.end(),
+                         [role](const auto& entry) { return entry.second.role == role; });
+    };
+    const bool lights = config.effect_lights && !local_catalog_.empty();
+    const bool fixtures = fixture_producer_enabled() && lights;
+    const bool headlights = config.mech_headlights && !headlight_catalog_.empty() &&
+                            (headlight_key_ || headlight_mouse_);
+    const bool water = config.water_detail && detail_role(1) && detail_role(2);
+    const bool clouds = config.cloud_detail && detail_role(3);
+    try {
+      sdlfe::benchmark::require_loaded_models(benchmark_run_->expected_model_lods, loaded.lods);
+    } catch (const std::exception& error) {
+      benchmark_run_->invalidate({}, error.what());
+      return false;
+    }
+    for (const auto& pack : benchmark_run_->packs)
+      benchmark_run_->prepared_chassis += pack.model_chassis;
+    benchmark_run_->settings.merge(sdlfe::benchmark::Settings{
+        {"backend", "vulkan-wsi"}, {"present_mode", "IMMEDIATE"}, {"vsync", "off"},
+        {"render_worker", "on"}, {"window", size(width, height)},
+        {"drawable", size(drawable_width, drawable_height)},
+        {"internal", size(resident_width_, resident_height_)},
+        {"antialiasing", config.antialiasing}, {"anisotropy", config.anisotropy},
+        {"draw_distance", std::to_string(config.draw_distance)},
+        {"geometry", config.geometry}, {"lighting", config.lighting},
+        {"sun", std::to_string(lighting_.enabled)}, {"sun_shadows", std::to_string(lighting_.shadows)},
+        {"dynamic_lighting", std::to_string(lights && fixtures)},
+        {"water_detail", std::to_string(water)}, {"cloud_detail", std::to_string(clouds)},
+        {"effect_lights", std::to_string(lights)}, {"fixture_lights", std::to_string(fixtures)},
+        {"mech_headlights", std::to_string(headlights)},
+        {"prepared_model_lods", std::to_string(loaded.lods)},
+        {"prepared_normal_lods", std::to_string(loaded.normals)},
+        {"prepared_material_lods", std::to_string(loaded.materials)},
+        {"prepared_skin_bindings", std::to_string(loaded.skins)},
+        {"environment_regions", std::to_string(environment_ ? environment_->regions.size() : 0)},
+        {"effect_catalog_entries", std::to_string(local_catalog_.size())},
+        {"headlight_catalog_entries", std::to_string(headlight_catalog_.size())},
+        {"surface_detail_bindings", std::to_string(surface_normals_.detail_bindings.size())},
+        {"hdr", std::to_string(display_hdr_)},
+        {"samples_x", std::to_string(config.samples_x)},
+        {"samples_y", std::to_string(config.samples_y)},
+        {"fxaa", std::to_string(config.fxaa)},
+        {"af_level", std::to_string(config.af_level)},
+        {"buffer_reserve", std::to_string(config.buffer_reserve)},
+        {"tl_combine", std::to_string(config.tl_combine)},
+        {"fixture_shadows", std::to_string(config.fixture_shadows)},
+        {"fixture_atlas_reuse", std::to_string(config.fixture_atlas_reuse)},
+        {"fixture_atlas_tracked", std::to_string(config.fixture_atlas_tracked)},
+        {"fixture_atlas_audit", std::to_string(config.fixture_atlas_audit)},
+        {"shadow_batch", std::to_string(config.shadow_batch)},
+        {"world_scale_percent", std::to_string(config.world_scale_percent)},
+        {"geometry_debug_normals", std::to_string(config.geometry_debug_normals)},
+        {"temporal_inputs", std::to_string(config.temporal_inputs)},
+        {"environment_packs_explicit", std::to_string(config.environment_packs_explicit)},
+        {"texture_staging", config.texture_staging}, {"sky_debug", config.sky_debug},
+        {"parallax", std::to_string(config.parallax_materials)},
+        {"prepared_cache", std::to_string(prepared_cache_enabled_)},
+        {"flare_style_modern", std::to_string(modern_flare_style_)}});
+    benchmark_lighting_settings();
+    benchmark_run_->gpu = renderer_->device_name;
+    benchmark_run_->driver = renderer_->driver_version;
+    benchmark_swapchain_ = renderer_->swapchain_generation;
+    const bool fullscreen = (SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN) != 0;
+    benchmark_run_->settings["window_mode_effective"] = fullscreen ? "desktop-fullscreen" : "windowed";
+    if (fullscreen != (benchmark_run_->settings.at("window_mode_requested") != "windowed")) {
+      benchmark_run_->invalidate({}, "effective window mode differs from request");
+      return false;
+    }
+    const int expected_width = benchmark_run_->width;
+    const int expected_height = benchmark_run_->height;
+    if (width != expected_width || height != expected_height ||
+        drawable_width != expected_width || drawable_height != expected_height ||
+        resident_width_ != unsigned(expected_width) || resident_height_ != unsigned(expected_height)) {
+      benchmark_run_->invalidate({}, "effective window, drawable or internal size differs from request");
+      return false;
+    }
+    if (!(SDL_GetWindowFlags(window_) & SDL_WINDOW_INPUT_FOCUS)) {
+      benchmark_run_->invalidate({}, "benchmark window lacks input focus");
+      return false;
+    }
+    benchmark_finish();
+    return !benchmark_run_->failed();
+  }
+
+  void benchmark_lighting_settings() {
+    const auto lighting = display_lighting();
+    const auto detail = surface_detail_settings();
+    auto& settings = benchmark_run_->settings;
+    const auto record = [&](const char* key, auto value) {
+      char buffer[48];
+      const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+      settings[key] = std::string(buffer, result.ptr);
+    };
+    const auto record_color = [&](const char* key, const std::array<float, 3>& color) {
+      for (size_t channel = 0; channel < color.size(); ++channel) {
+        const auto name = std::string(key) + "." + std::to_string(channel);
+        record(name.c_str(), color[channel]);
+      }
+    };
+    record("sun_azimuth", lighting.azimuth);
+    record("sun_elevation", lighting.elevation);
+    record("sun_strength", lighting.strength);
+    record("ambient", lighting.ambient);
+    record("normal_strength", lighting.normal_strength);
+    record("ground_normal_strength", lighting.ground_normal_strength);
+    record("shadow_range", lighting.shadow_range);
+    record("shadow_bias", lighting.shadow_bias);
+    record("shadow_darkness", lighting.shadow_darkness);
+    record("shadow_size", lighting.shadow_size);
+    record("sky_source", lighting.sky_source);
+    record("sky_brightness", lighting.sky_brightness);
+    record("glow_strength", lighting.glow_strength);
+    record("glow_focus", lighting.glow_focus);
+    record("anti_brightness", lighting.anti_brightness);
+    record("anti_saturation", lighting.anti_saturation);
+    record("anti_haze", lighting.anti_haze);
+    record("horizon_low", lighting.horizon_low);
+    record("horizon", lighting.horizon);
+    record("rain_wetness", lighting.rain_wetness);
+    record("dust_intensity", lighting.dust_intensity);
+    record("heat_shimmer", lighting.heat_shimmer);
+    record("lava_glow", lighting.lava_glow);
+    record("valley_fog_density", lighting.valley_fog_density);
+    record("valley_fog_altitude", lighting.valley_fog_altitude);
+    record("night_world_gain", lighting.night_world_gain);
+    record("sdr_shadow_lift", lighting.sdr_shadow_lift);
+    record("sdr_extra_shadow_lift", lighting.sdr_extra_shadow_lift);
+    record("weather_enabled", int(lighting.weather_enabled));
+    record("shadow_debug", int(lighting.shadow_debug));
+    record("sky_active", int(lighting.sky_active));
+    record("haze_active", int(lighting.haze_active));
+    record("sky_manual", int(lighting.sky_manual));
+    record("haze_manual", int(lighting.haze_manual));
+    record("sky_shading", int(lighting.sky_shading));
+    record("suppress_sky", int(lighting.suppress_sky));
+    record_color("sun_color", lighting.color);
+    record_color("ambient_color", lighting.ambient_color);
+    record_color("sky_tint", lighting.sky_tint);
+    record_color("haze_scale", lighting.haze_scale);
+    record_color("haze_color", lighting.haze_color);
+    record_color("glow_color", lighting.glow_color);
+    record("water_strength", detail.water_strength);
+    record("cloud_strength", detail.cloud_strength);
+    record("detail_scale", detail.scale);
+    record("detail_speed", detail.speed);
+  }
+
+  void set_benchmark_time(double time) override {
+    benchmark_time_ = time;
+    benchmark_effects_ = {};
+  }
+  bool wait_benchmark_present(double deadline) override {
+    if (!last_present_job_ || !wait_strict_job(last_present_job_, deadline)) return false;
+    last_present_job_ = 0;
+    return true;
+  }
+
+  bool wait_benchmark_idle() override {
+    if (!worker_) return true;
+    const auto job = worker_->statistics().submitted;
+    const double deadline = benchmark_run_->now() + sdlfe::benchmark::kStrictPresentTimeoutSeconds;
+    return wait_strict_job(job, deadline);
+  }
+
+  bool wait_strict_job(std::size_t job, double deadline) {
+    // A timeout fails the run, so later waits return immediately to keep shutdown bounded.
+    if (strict_wait_timed_out_) return false;
+    using Clock = std::chrono::steady_clock;
+    // The run can use an injected clock with a different epoch.
+    const auto remaining = std::chrono::duration<double>(std::max(0.0, deadline - benchmark_run_->now()));
+    const auto until = Clock::now() + std::chrono::duration_cast<Clock::duration>(remaining);
+    strict_wait_timed_out_ = !worker_->wait_for_job_until(job, until);
+    return !strict_wait_timed_out_;
+  }
+
+  void record_strict_present(sdlfe::benchmark::FrameTag tag,
+                             sdlfe::benchmark::PresentReceipt receipt,
+                             const vk::Renderer::ResidentPresentResult& status) {
+    sdlfe::benchmark::StrictPresent sample{tag.sequence, receipt, {}, {}};
+    sdlfe::benchmark::hash_strict_pixels(sample, status.pixels.data(), status.pixels.size(),
+                                       status.rgba_pixels,
+                                       benchmark_run_->captures(tag.sequence));
+    benchmark_run_->record_strict_present(std::move(sample));
+  }
+  void set_benchmark_effects(unsigned beams, unsigned explosions) override {
+    benchmark_effects_.beams = beams;
+    benchmark_effects_.explosions = explosions;
+  }
+
+  void benchmark_finish() override {
+    const auto pressure = renderer_->memory_pressure;
+    benchmark_run_->pressure = {{"recoveries", pressure.recoveries},
+                                {"model_omissions", pressure.model_omissions},
+                                {"texture_substitutions", pressure.texture_substitutions},
+                                {"preload_stops", pressure.preload_stops}};
+    if (pressure.recoveries || pressure.model_omissions ||
+        pressure.texture_substitutions || pressure.preload_stops)
+      benchmark_run_->invalidate({}, "video memory pressure during scene");
+  }
+
   void drain() override {
     if (!producer_failed_) {
       flush();
@@ -833,9 +1069,11 @@ public:
     fixture_model_scope(context);
     if(fixture_trace_run().open()) fixture_trace_model(context);
     ensure_extent();
-    const auto draws = prepared_.draw(context);
+    const auto draws = prepared_.draw(context, false, lab_preview_lighting_);
     if (!draws.replace)
       return;
+    if (benchmark_run_ && benchmark_run_->armed())
+      ++benchmark_run_->prepared_model_draws;
     if (scene_.hud && !scene_.draws.empty()) {
       flush();
       ensure_extent();
@@ -853,6 +1091,10 @@ public:
   // Typed mission-change callback from the native missions object: owns the
   // canonical mission ID and the resolved campaign lighting/policy. Unknown or
   // failed identities clear any prior state (no stale profile).
+  void mission_scene_changed(const ::platform::MissionIdentity& identity, bool world_loaded) override {
+    mission_world_loaded_ = world_loaded;
+    mission_changed(identity);
+  }
   void mission_changed(const ::platform::MissionIdentity &identity) override {
     VisualFloatScope fp_guard;
     // Drop unsubmitted CPU work before the old drain path can publish it. The
@@ -878,12 +1120,18 @@ public:
     staging_first_flush_pending_ = true;
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
+    // An arena match (#507) may borrow a campaign mission's lighting for its
+    // chosen time of day. Only the lighting uses the borrowed id: the mission
+    // identity (terrain materials, effect lights) stays the arena map's own.
+    const std::string &arena_lighting = ::platform::arena_lighting_mission();
+    const std::string lighting_id =
+        arena_lighting.empty() ? id : arena_lighting;
     mw34::campaign::ResolvedMissionLighting resolved{};
-    if (!id.empty())
-      resolved = mw34::campaign::resolve_mission_lighting(id);
+    if (!lighting_id.empty())
+      resolved = mw34::campaign::resolve_mission_lighting(lighting_id);
     lighting_ = mw34::campaign::mission_sun_settings(
         base_lighting_, resolved, campaign_enabled_, sun_explicit_,
-        environment_.get(), id);
+        environment_.get(), lighting_id);
     display_hdr_ = window_hdr_enabled();
     if (renderer_)
       renderer_->update_lighting_settings(display_lighting());
@@ -966,7 +1214,9 @@ public:
     surface_normals_.preload_pending = false;
     prepared_preload_pending_ = false;
     // Reset the owned mission identity/result via the callback with the empty
-    // identity before the scene resources are reset.
+    // identity before the scene resources are reset. The torn-down world no
+    // longer gates local lights on (non-campaign maps rely on this flag).
+    mission_world_loaded_ = false;
     mission_changed(::platform::MissionIdentity{});
     first_world_preload_pending_ = false;
     prepared_preload_pending_ = true;
@@ -2274,6 +2524,11 @@ private:
   void ensure_extent() {
     require_producer_live();
     if (reset_pending_) {
+      if (benchmark_run_ && benchmark_run_->armed()) {
+        benchmark_run_->invalidate(benchmark_run_->next_frame(benchmark_time_.value_or(0)),
+                                   "renderer reset during playback");
+        throw std::runtime_error("Benchmark renderer reset during playback");
+      }
       drain();
       retired_draws_ += renderer_->draws;
       retired_presents_ += renderer_->resident_presents;
@@ -2285,7 +2540,9 @@ private:
                             renderer_->sun_tl_draws;
       retired_normal_draws_ += renderer_->normal_draws;
       retired_geometry_buffers_ += renderer_->retired_model_buffers;
+      const auto pressure = renderer_->memory_pressure;
       initialize_renderer();
+      if (benchmark_run_) renderer_->memory_pressure = pressure;
       submitted_textures_.clear();
       receipts_to_restore_.clear();
       window_bound_ = false;
@@ -2297,7 +2554,7 @@ private:
     }
     scene_.detail_settings = surface_detail_settings();
     scene_.detail_time = mw34::detail::presentation_time(
-        detail_frame_++, bridge_config_.detail_fixed_time);
+        detail_frame_++, bridge_config_.detail_fixed_time, benchmark_time_);
     if (scene_.width) {
       return;
     }
@@ -2961,9 +3218,14 @@ private:
   // profile database (no borrowed native pointers).
   ::platform::MissionIdentity current_mission_identity_{};
   std::string current_mission_id_;
+  bool mission_world_loaded_{};
   mw34::campaign::ResolvedMissionLighting current_mission_lighting_{};
   // Validate the original request before sanitizing or loading prepared models.
   const RendererBridgeConfig bridge_config_;
+  sdlfe::benchmark::Run* benchmark_run_{};
+  std::optional<double> benchmark_time_;
+  sdlfe::benchmark::EffectCounts benchmark_effects_;
+  uint64_t benchmark_swapchain_{};
   PreparedModels prepared_;
   const cc::geometry::Mode geometry_mode_;
   const bool geometry_debug_;
@@ -2981,6 +3243,7 @@ private:
   // Submission number of the last queued resident present (0 = none), so the producer keeps at
   // most one presented frame in flight.
   std::size_t last_present_job_ = 0;
+  bool strict_wait_timed_out_ = false;
   std::mutex recycle_mutex_;
   std::vector<vk::Scene> recycled_scenes_;
   std::map<std::uint64_t, std::array<std::uint64_t, 3>> submitted_textures_;
@@ -3133,7 +3396,17 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.world_scale_percent = 100;
   config.remaster_width = 0;
   config.remaster_height = 0;
-  config.vsync = true;
+  config.vsync = assets.vsync;
+  // A scored benchmark needs v-sync off whatever the player chose. The line
+  // above stays verbatim: stage_mw3_re_runtime.py detects the vsync capability
+  // from it.
+  if (assets.benchmark_run) config.vsync = false;
+  config.require_immediate_present = assets.benchmark_run != nullptr;
+  config.strict_swapchain_readback = assets.benchmark_run && assets.benchmark_run->strict();
+  if (assets.benchmark_run && (config.cpu_profile || config.gpu_profile ||
+                              config.vk_validation || config.detail_fixed_time ||
+                              config.buffer_growth_trace || config.trace_native_bindings))
+    throw std::runtime_error("Benchmark does not allow active renderer diagnostics");
   config.temporal_inputs = false;
   config.gpu_models = (assets.geometry != "legacy");
   config.geometry = assets.geometry;

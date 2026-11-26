@@ -155,6 +155,34 @@ Rig read_rig(Reader &reader) {
             Reader::fail("bone names an unknown source control");
     return rig;
 }
+mw34::orion_guard::Fit read_orion_guard_fit(Reader &reader) {
+    const auto count = reader.u32();
+    if (count < 4 || count > 4096)
+        Reader::fail("invalid Orion guard sample count");
+    mw34::orion_guard::Fit fit;
+    reader.need(24 + uint64_t(count) * 104);
+    for (auto &shift : fit.shifts)
+        for (auto &value : shift) {
+            value = reader.f32();
+            if (std::abs(value) > 0.5f)
+                Reader::fail("invalid Orion guard shift");
+        }
+    fit.samples.resize(count);
+    for (auto &sample : fit.samples) {
+        for (auto &feature : sample.key) {
+            feature = reader.f32();
+            if (std::abs(feature) > 16.0f)
+                Reader::fail("invalid Orion guard pose feature");
+        }
+        for (auto &weight : sample.weights) {
+            weight = reader.f32();
+            if (weight < 0.0f || weight > 1.0f)
+                Reader::fail("invalid Orion guard weight");
+        }
+    }
+    return fit;
+}
+
 } // namespace
 
 Mesh read_mesh(std::istream &input) {
@@ -162,7 +190,7 @@ Mesh read_mesh(std::istream &input) {
     Reader reader(input);
     char magic[8];
     reader.bytes(magic, sizeof magic);
-    if (std::string_view(magic, 6) != "BWMESH" || magic[6] < '1' || magic[6] > '6' || magic[7])
+    if (std::string_view(magic, 6) != "BWMESH" || magic[6] < '1' || magic[6] > '7' || magic[7])
         Reader::fail("unsupported mesh format");
     Mesh mesh;
     mesh.version = unsigned(magic[6] - '0');
@@ -171,13 +199,28 @@ Mesh read_mesh(std::istream &input) {
         Reader::fail("invalid mesh batch count");
     if (mesh.version == 4)
         mesh.rig = read_rig(reader);
+    if (mesh.version == 7)
+        mesh.guard_fit = read_orion_guard_fit(reader);
+    std::array<bool, 2> seen_guards{};
     for (uint32_t i = 0; i < count; ++i) {
         Batch batch;
         batch.owner = reader.name();
-        batch.visibility = mesh.version == 1 ? batch.owner : reader.name(true);
-        if (mesh.version == 3 || mesh.version >= 5)
+        batch.visibility = mesh.version == 1 ? batch.owner : reader.name(mesh.version != 7);
+        if (mesh.guard_fit) {
+            batch.guard_side = reader.u32();
+            if (batch.guard_side > seen_guards.size())
+                Reader::fail("invalid Orion guard side");
+            if (batch.guard_side) {
+                auto &seen = seen_guards[batch.guard_side - 1];
+                if (seen || batch.owner != "hip" || batch.visibility != "hip_polys")
+                    Reader::fail("invalid Orion guard batch");
+                seen = true;
+            }
+        }
+        // BWMESH7 extends BWMESH2 with the two guard batches and a fit table.
+        if (mesh.version == 3 || mesh.version == 5 || mesh.version == 6)
             placement(reader, batch.placement_frame, batch.placement_offset);
-        if (mesh.version >= 5)
+        if (mesh.version == 5 || mesh.version == 6)
             placement(reader, batch.joint_frame, batch.joint_offset);
         if (mesh.version == 6) {
             placement(reader, batch.anchor_control, batch.anchor_position);
@@ -216,6 +259,8 @@ Mesh read_mesh(std::istream &input) {
         }
         mesh.batches.push_back(std::move(batch));
     }
+    if (mesh.guard_fit && !(seen_guards[0] && seen_guards[1]))
+        Reader::fail("missing Orion guard batch");
     reader.finish();
     return mesh;
 }

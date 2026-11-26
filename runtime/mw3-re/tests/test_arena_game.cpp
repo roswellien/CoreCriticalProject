@@ -35,6 +35,8 @@
 #include "mech3/mp_lobby.h"
 #include "mech3/options.h"
 #include "mech3/pilot.h"
+#include "mech3/patch_import.h"
+#include "mech3/replay_log.h"
 #include "mech3/replay_terrain.h"
 #include "mech3/zai_brain.h"
 #include "mech3/zai_params.h"
@@ -51,11 +53,12 @@ namespace {
 struct ArenaRunResult {
   int core_frames = 0;
   bool setup_read = false;
-  std::string log_path;  // the run's match log, as mw3 --arena writes it (seed 1, 16 ms)
+  std::string log_path;  // the run's match log, as mw3 --arena writes it
 };
 ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
                                   const std::function<void(int)>& on_core,
-                                  const std::function<bool()>& stop = nullptr) {
+                                  const std::function<bool()>& stop = nullptr,
+                                  int frame_ms = 16, int seed = 1) {
   ArenaRunResult result;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -81,7 +84,13 @@ ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
   mech3::options() = mech3::Options{};
   FakeWindow window;
   FakeAlert alert;
-  FakeClock clock;
+  // Benchmark runs mirror SdlClock: reads within a loop pass see one time.
+  struct ArenaClock : FakeClock {
+    bool fixed = false;
+    uint32_t ticks_ms() override { return fixed ? now : FakeClock::ticks_ms(); }
+    void sleep(uint32_t ms) override { if (fixed) now += ms; }
+  } clock;
+  clock.fixed = frame_ms != 16;
   // Use a local MovieClock to ensure consistent Intro loop ticks across runs
   MovieClock movie_clock;
   FakeScreen screen;
@@ -95,11 +104,11 @@ ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
   static int s_run = 0;
   setup.out = temp_dir("arena_run_log") + "/" + std::to_string(++s_run);
   std::filesystem::remove_all(setup.out);
-  mech3::arena::LogFile log = mech3::arena::create_arena_log(setup, 1, &result.log_path, &error);
+  mech3::arena::LogFile log = mech3::arena::create_arena_log(setup, seed, &result.log_path, &error);
   EXPECT(log != nullptr);
   mech3::arena::set_arena_setup(&setup);
-  mech3::arena::set_arena_log(log.get(), 16);
-  mech3::arena::set_arena_seed(1);
+  mech3::arena::set_arena_log(log.get(), frame_ms);
+  mech3::arena::set_arena_seed(seed);
   {
     mech3::GameEngine engine(p, "mech3.exe -nofmv");
     engine.quiet = true;
@@ -129,7 +138,16 @@ ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
       ++result.core_frames;
       on_core(result.core_frames);
     };
-    CountingPump pump;
+    struct ArenaPump : CountingPump {
+      ArenaClock* clock = nullptr;
+      int frame_ms = 0;
+      bool peek() override {
+        if (clock->fixed) clock->now += frame_ms;
+        return CountingPump::peek();
+      }
+    } pump;
+    pump.clock = &clock;
+    pump.frame_ms = frame_ms;
     pump.limit = max_core_frames + 2600;
     pump.stop = [&] { return result.core_frames >= max_core_frames || left_core || (stop && stop()); };
     app.run(pump);
@@ -793,6 +811,72 @@ TEST(arena_log_detail_c1mp1_4v4_headless) {
   // enemy presets the arena uses have none (checked 2026-11-13), so none here.
 }
 
+// #514: recording observes every simulation update without changing the fight.
+TEST(arena_record_every_update_c1mp1_4v4_headless) {
+  if (!have_game()) return;
+  const auto fixture = std::filesystem::path(MW3_SOURCE_DIR).parent_path().parent_path() /
+                       "tools/benchmark/fixtures/c1mp1-4v4-reference.json";
+  const std::string json = file_text(fixture.string());
+  auto setup = nlohmann::json::parse(json);
+  setup["record_every_update"] = true;
+  mech3::arena::set_arena_headless(true);
+  const auto first = arena_headless_run(setup.dump(), 190000 / 33, [](int) {}, nullptr, 33, 7);
+  const std::string bytes = file_text(first.log_path);
+  const auto dense = mech3::arena::read_arena_log(first.log_path);
+  const std::string hash = mech3::sha256_file_hex(first.log_path);
+  mech3::replay::ReplayLog replay;
+  std::string error;
+  EXPECT(replay.load(first.log_path, &error));
+  const auto again = arena_headless_run(setup.dump(), 190000 / 33, [](int) {}, nullptr, 33, 7);
+  EXPECT(!bytes.empty() && bytes == file_text(again.log_path));
+  const auto control = arena_headless_run(json, 190000 / 33, [](int) {}, nullptr, 33, 7);
+  mech3::arena::set_arena_headless(false);
+  const auto sampled = mech3::arena::read_arena_log(control.log_path);
+  const std::string default_bytes = file_text(control.log_path);
+  setup["record_every_update"] = false;
+  mech3::arena::set_arena_headless(true);
+  const auto explicit_off = arena_headless_run(setup.dump(), 190000 / 33, [](int) {}, nullptr, 33, 7);
+  mech3::arena::set_arena_headless(false);
+  EXPECT(explicit_off.setup_read && default_bytes == file_text(explicit_off.log_path));
+  EXPECT(first.setup_read && again.setup_read && control.setup_read);
+  EXPECT(dense.error.empty() && dense.complete && sampled.error.empty() && sampled.complete);
+  if (dense.records.empty() || sampled.records.empty()) return;
+  EXPECT(dense.records.front().value("record_every_update", false));
+  auto start = dense.records.front();
+  start.erase("record_every_update");
+  EXPECT(start == sampled.records.front());
+  EXPECT(start.value("version", 0) == 2 && !sampled.records.front().contains("record_every_update"));
+  EXPECT(dense.records.back() == sampled.records.back());
+  auto cadence = [&](const mech3::arena::LogRead& log, bool every_update) {
+    double previous = -1, minimum = 1, maximum = 0;
+    int count = 0;
+    for (const auto& record : log.records) {
+      if (record.value("type", "") != "state") continue;
+      EXPECT(record["mechs"].size() == 8);
+      // The default version-2 state shape is unchanged; only dense timestamps
+      // and the opt-in start marker differ in the recording format.
+      EXPECT(record.size() == 5 && record.contains("t"));
+      EXPECT(record.contains("rounds") && record.contains("beams"));
+      if (previous >= 0) {
+        const double delta = record["t"].get<double>() - previous;
+        minimum = std::min(minimum, delta);
+        maximum = std::max(maximum, delta);
+        EXPECT(delta > 0);
+        EXPECT(every_update ? (delta > 0.0329 && delta < 0.0331) : (delta >= 0.098 && delta <= 0.133));
+      }
+      previous = record["t"].get<double>();
+      ++count;
+      if (every_update) EXPECT(replay.frame_at(static_cast<float>(previous)).mechs.size() == 8);
+    }
+    std::printf("  %s: %d states, delta %.9f..%.9f s\n", every_update ? "every update" : "default", count, minimum, maximum);
+    EXPECT(count > 100);
+    if (every_update) EXPECT(std::abs(count - first.core_frames) <= 2);
+  };
+  cadence(dense, true);
+  cadence(sampled, false);
+  std::printf("  recording: SHA-256 %s, %zu bytes, %d core frames\n", hash.c_str(), bytes.size(), first.core_frames);
+}
+
 // #287: the time limit ends the match by it, and a match that reaches it goes
 // to the side with more mechs standing, equal a draw. Whether the 2v2 is
 // still on at one minute depends on the fight, so the rule is checked either
@@ -854,6 +938,8 @@ TEST(arena_catalog_lists_the_game_headless) {
     if (p.value("world", "") == "c1" && p.value("mission", "") == "ia1" && p.value("record", "") == "Enemy_01")
       enemy_01 = p["numbers"].value("attack_m", 0.0) > 0;
   EXPECT(enemy_01);
+  // #507: the setup's time_of_day values.
+  EXPECT(c["times_of_day"] == nlohmann::json({"dawn", "day", "dusk", "night"}));
   // The picture's PPM header matches its placement file.
   std::ifstream ppm(dir + "/terrain/c3mp1.ppm", std::ios::binary);
   std::string magic;

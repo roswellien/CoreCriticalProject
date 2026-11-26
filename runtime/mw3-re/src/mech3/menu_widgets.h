@@ -70,6 +70,10 @@ class MenuScreen : public ztwod::Dialog {
   // Mech3.exe 1.2 @ 0x00486ed0: everything drawn once without the cursor and
   // grabbed; the grab becomes the static background and the first object (FastMenu).
   void bake();
+  // Ours (#552): bake FastMenu unless the presenter can replace its background with HD art.
+  // Constructors use moving || !bake_menu for no_draw to avoid low-res restore grabs on that path.
+  // Redrawing live layers does not enable motion: fast_menu still gates scrolling, titles and ripples.
+  bool bake_fast_menu();
   // The shell state's +0x28 (its Escape: most pop themselves), as the BACK
   // buttons call it ([screen+0x10fec]->+0x28).
   void state_escape() { e_.vcall(state, 0x28, {}); }

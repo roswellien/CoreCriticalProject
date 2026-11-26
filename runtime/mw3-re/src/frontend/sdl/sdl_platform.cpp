@@ -1,3 +1,4 @@
+#include "gamez/zmodel/gmod_fog.h"
 #include "frontend/sdl/sdl_platform.h"
 #include "gamez/zclass/visual_distance.h"
 #include "upgrades/game_boxes.h"
@@ -25,6 +26,15 @@
 
 namespace sdlfe {
 
+bool SdlWindow::open_benchmark(int width, int height, bool fullscreen) {
+  fullscreen_ = fullscreen;
+  window_ = SDL_CreateWindow("MechWarrior 3 - Loading benchmark", width, height,
+                             SDL_WINDOW_HIDDEN | SDL_WINDOW_VULKAN);
+  if (!window_) return false;
+  show();
+  return true;
+}
+
 bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend backend,
                      const CoreCriticalQuality& quality, const CoreCriticalAssets& assets) {
   if (backend == RendererBackend::sdl && quality.draw_distance != 800)
@@ -32,6 +42,7 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
                         "mw3: --cc-draw-distance requires a Core Critical Vulkan backend\n"),
            false;
   zcls::set_visual_far_request(quality.draw_distance);
+  zmod::set_render_fog_distance(quality.fog_distance);
   if (backend == RendererBackend::sdl &&
       (quality.antialiasing != "off" || quality.anisotropy != "1" || !assets.empty()))
     return std::fprintf(stderr, "mw3: Core Critical quality requires a Core Critical Vulkan backend\n"), false;
@@ -41,7 +52,7 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
     if (adopt) return std::fprintf(stderr, "mw3: Core Critical Vulkan requires its own window\n"), false;
     auto flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;
     if (backend == RendererBackend::core_critical_wsi) flags |= SDL_WINDOW_VULKAN;
-    window_ = SDL_CreateWindow("MechWarrior 3", 1280, 960, flags);
+    if (!window_) window_ = SDL_CreateWindow("MechWarrior 3", 1280, 960, flags);
     if (!window_) return std::fprintf(stderr, "mw3: SDL_CreateWindow: %s\n", SDL_GetError()), false;
     try {
       render_ = cc_mw3_re::make_renderer(window_, backend, quality, assets);
@@ -78,6 +89,19 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
     std::printf("mw3 benchmark: backend=%s adapter=%s present=immediate\n",
                 SDL_GetGPUDeviceDriver(device_),
                 SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device_), SDL_PROP_GPU_DEVICE_NAME_STRING, "unknown"));
+  } else if (!hidden_ && !assets.vsync) {
+    SDL_GPUPresentMode mode = SDL_GPU_PRESENTMODE_VSYNC;
+    if (SDL_WindowSupportsGPUPresentMode(device_, window_, SDL_GPU_PRESENTMODE_IMMEDIATE)) {
+      mode = SDL_GPU_PRESENTMODE_IMMEDIATE;
+    } else if (SDL_WindowSupportsGPUPresentMode(device_, window_, SDL_GPU_PRESENTMODE_MAILBOX)) {
+      mode = SDL_GPU_PRESENTMODE_MAILBOX;
+    }
+    // VSync off is a preference, not a requirement: without a supported mode, or
+    // when the driver refuses it, SDL's default vsync swapchain stays.
+    if (mode == SDL_GPU_PRESENTMODE_VSYNC)
+      std::fprintf(stderr, "mw3: vsync off unavailable on this display, keeping vsync\n");
+    else if (!SDL_SetGPUSwapchainParameters(device_, window_, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
+      std::fprintf(stderr, "mw3: vsync off unavailable, keeping vsync: %s\n", SDL_GetError());
   }
   render_ = std::make_unique<SdlRender3D>(device_, window_);
   render_->set_shape(&shape_);
@@ -821,13 +845,28 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   render_->set_viewport(vx, vy, vw, vh);
 }
 
-bool SdlScreen2D::live_menu_gpu_enabled() const {
+// Ours (#552): constructors can run before the new menu becomes the app's current state.
+// Share the configuration gate, while recording/presentation still reject active Core gameplay.
+bool SdlScreen2D::menu_gpu_configured() const {
   if (!render_ || !hud_ || !menu_use_gpu_ || menu_observation_enabled_) return false;
+  return mw3_menu_gpu_env() == 1;
+}
+
+bool SdlScreen2D::live_menu_gpu_enabled() const {
+  if (!menu_gpu_configured()) return false;
   // The engine arms menu recording for every canvas, mission modes included. Gating here keeps
   // recording, the menu layout and present_16's menu canvas off for the whole mission.
   const bool mission_running = in_mission && in_mission();
-  if (mission_running) return false;
-  return mw3_menu_gpu_env() == 1;
+  return !mission_running;
+}
+
+// Ours (#552): the decision precedes the first menu frame, so use the presenter's readiness,
+// not last frame's blits. Live GPU frames need the uploaded HD texture. Disabling live replay
+// (or selecting CPU composition) still permits Stage C's HD compositor in present_16.
+bool SdlScreen2D::hd_menu_background_ready() const {
+  if (!render_ || !menu_background_) return false;
+  if (!menu_gpu_configured()) return true;
+  return menu_gpu_available_ && menu_hd_texture_ >= 0;
 }
 
 void SdlScreen2D::set_menu_layout_active(bool active) noexcept {

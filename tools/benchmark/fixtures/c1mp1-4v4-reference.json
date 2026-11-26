@@ -1,0 +1,83 @@
+{
+  "map": "c1mp1",
+  "minutes": 3,
+  "out": "local/benchmark/reference",
+  "sides": [
+    [
+      {
+        "mech": "madcat",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "madcat",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "orion",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "orion",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      }
+    ],
+    [
+      {
+        "mech": "madcat",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "madcat",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "orion",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "orion",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      }
+    ]
+  ]
+}

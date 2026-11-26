@@ -21,9 +21,10 @@ struct Follower;
 
 // Ours, not the exe's (#287, docs/arena.md): the arena match log, one JSON
 // object a line. A "start" line (the setup, seed and frame time), "state"
-// lines ten times a second of game time (every mech's pose, heat, parts,
-// target and AI order), "shot", "hit" and "destroyed" lines as they happen,
-// and an "end" line once the match is decided. Every line is flushed as it
+// lines ten times a second of game time, or on every update when opted in
+// (every mech's pose, heat, parts, target and AI order), "shot", "hit" and
+// "destroyed" lines as they happen, and an "end" line once the match is
+// decided. Every line is flushed as it
 // is written, so a run that stops early leaves a readable log with no end
 // line, which the reader reports as incomplete. Ids are each mech's index in
 // setup order (ArenaMech::id), never a handle, and times are game seconds
@@ -31,7 +32,8 @@ struct Follower;
 
 namespace mech3::arena {
 
-// Seconds between state lines.
+// Seconds between default state lines. Setup::record_every_update bypasses
+// this scheduler and records the update time without timestamp rounding.
 constexpr float kLogStatePeriod = 0.1f;
 
 // The log's format version, in the start line (#289). The reader refuses a

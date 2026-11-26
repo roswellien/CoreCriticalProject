@@ -25,12 +25,18 @@ class ReplayHooks {
   virtual ~ReplayHooks() = default;
   // As play starts (in place of the arena's start): the puppets made.
   virtual void start() = 0;
+  virtual void scene_load_enter() {}
+  virtual bool strict() const { return false; }
+  // A strict startup frame draws to initialize the presenter with the world paused.
+  virtual bool advance_lists() const { return true; }
   // Before the action lists: the frame clock set to the replay's step (real
   // time times the speed, 0 while paused or `quit_box_open`, capped).
-  virtual void before_lists(bool quit_box_open) = 0;
+  // False when the replay has stopped and no world frame should be submitted.
+  virtual bool before_lists(bool quit_box_open) = 0;
   // After them: the real step back on the clock, then the game time set to
   // the replay's, the puppets posed, the log's events shown, the camera.
   virtual void after_lists() = 0;
+  virtual void after_frame() {}
   // The quit box answered yes: end the program, not fade to the lobby.
   virtual void quit() = 0;
   // In the world's tick, after the view's frame placed `camera` (the

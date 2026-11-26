@@ -22,6 +22,8 @@ execute_process(COMMAND git describe --tags --match "v[0-9]*" --always --dirty W
                 OUTPUT_VARIABLE MW3_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 execute_process(COMMAND git rev-list --count HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                 OUTPUT_VARIABLE MW3_BUILD_NUMBER OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                OUTPUT_VARIABLE MW3_SOURCE_SHA OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 if(NOT MW3_VERSION)
   set(MW3_VERSION "unknown")
 endif()
@@ -45,6 +47,7 @@ if(MSVC)
 endif()
 add_library(mw3core STATIC
   src/mech3/world_mesh.cpp  # ours: mw3view's world loader, shared with the replay viewer (#289)
+  src/frontend/sdl/arena_benchmark.cpp
   src/mech3/replay_log.cpp  # ours (#289): an arena match log read for replay
   src/mech3/replay_terrain.cpp  # ours (#289): an arena map seen from above
   src/mech3/replay_puppet.cpp  # ours (#289): a logged mech posed by the game's own animation
@@ -302,6 +305,7 @@ add_library(mw3core STATIC
   src/mech3/arena_setup.cpp
   src/mech3/arena_catalog.cpp
   src/mech3/arena.cpp
+  src/mech3/arena_camera.cpp  # ours (#529): spectator camera motion
   src/mech3/arena_log.cpp
   src/mech3/zai_repair.cpp
   src/mech3/zai_node.cpp
@@ -397,6 +401,9 @@ add_library(mw3core STATIC
 )
 target_include_directories(mw3core PUBLIC src)
 target_link_libraries(mw3core PUBLIC cc_geometry_resources)
+if(WIN32)
+  target_link_libraries(mw3core PRIVATE ole32 windowscodecs)
+endif()
 if(MSVC)
   target_compile_options(mw3core PRIVATE /EHsc)
 endif()
@@ -693,6 +700,8 @@ add_executable(mw3tests
   tests/test_nav.cpp
   tests/test_hunt.cpp
   tests/test_arena.cpp
+  tests/test_arena_camera.cpp
+  tests/test_arena_benchmark.cpp
   tests/test_replay.cpp
   tests/test_replay_game.cpp
   tests/test_arena_game.cpp
@@ -740,7 +749,7 @@ add_executable(mw3tests
 if(WIN32)
   target_sources(mw3tests PRIVATE tools/windows/utf8.manifest)
 endif()
-target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export)
+target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export Threads::Threads)
 target_include_directories(mw3tests PRIVATE third_party)  # nlohmann-json, among others the arena log's records (#287)
 # Tests that read the player's install skip themselves when it is not there.
 target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
@@ -905,6 +914,7 @@ if(SDL3_FOUND)
       src/frontend/sdl/replay_view.cpp
       src/frontend/sdl/replay_ui.cpp
       src/frontend/sdl/replay3d_view.cpp
+      src/frontend/sdl/arena_camera_view.cpp  # ours (#529): the watched arena's spectator camera
       src/frontend/sdl/watch_launch.cpp
     )
     target_link_libraries(mw3 PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
@@ -931,7 +941,7 @@ if(SDL3_FOUND)
     if(MW3_CORE_CRITICAL_VULKAN)
       target_compile_definitions(mw3 PRIVATE CC_MW3_RE_ADAPTER=1)
     endif()
-    target_compile_definitions(mw3 PRIVATE MW3_VERSION="${MW3_VERSION}")
+    target_compile_definitions(mw3 PRIVATE MW3_SOURCE_SHA="${MW3_SOURCE_SHA}" MW3_VERSION="${MW3_VERSION}")
     # The launcher's art (assets/launcher) in a development build; a package
     # carries it beside the exe (tools/windows/package.cmd) or in the app's
     # Resources (tools/macos/make_app.sh), and keeps no path of this machine.

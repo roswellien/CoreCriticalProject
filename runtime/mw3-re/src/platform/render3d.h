@@ -190,6 +190,10 @@ class Render3D {
   // Typed mission-change callback from the native missions object. The
   // default is a no-op so renderers that do not care are unaffected.
   virtual void mission_changed(const MissionIdentity &) {}
+  // Multiplayer and IA loads have a world even without a campaign identity.
+  virtual void mission_scene_changed(const MissionIdentity& identity, bool) {
+    mission_changed(identity);
+  }
   // The Mech Lab preview: a briefing loads its mission before the Lab opens, but the
   // chassis on the turntable is not part of that mission's scene. While this is on, a
   // renderer lights it with its configured stock lighting instead of the mission's
@@ -282,5 +286,15 @@ class Render3D {
   virtual bool restore_frame() { return false; }
   virtual void drop_frame() {}
 };
+
+// Ours (#507): an AI arena match's chosen time of day, as the campaign mission
+// whose lighting profile it borrows ("t1m1" for dawn ...); empty for the map's
+// own lighting. Set by the arena before its mission loads and read by a
+// renderer when the mission changes. Purely visual: nothing in the simulation
+// reads it, so AI sight and the match log are the same at every time of day.
+inline std::string& arena_lighting_mission() {
+  static std::string id;
+  return id;
+}
 
 }  // namespace platform

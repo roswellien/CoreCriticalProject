@@ -26845,6 +26845,10 @@ struct WideMenus {
   int32_t campaign = -1, credits = -1, credits_line = -1, accept = -1, gfx = -1, level = -1;
   int32_t lines_w = -1, lines_x = -1, width = -1, width_after = -1;
   int32_t still_w = 0;  // the main menu's baked picture (FastMenu), 0 none
+  int32_t options_still_w = 0;  // ours (#552): also check the original OPTIONS bake when HD is off
+  bool main_background = false, options_background = false, background_still = false;  // ours (#552)
+  bool main_baked = false, options_baked = false, ripples_still = false;  // ours (#552)
+  bool restores_clear = false;  // ours (#552): live layers must not erase from a low-res grab
   int32_t gfx_accept = -1, gfx_resolution = -1, shadows_value = -1;  // the value: from its cycle
   int32_t ctl_accept = -1, ctl_reset = -1, ctl_keys = -1, ctl_lines_w = -1;
   int32_t popup_bar = -1, popup_label_dx = -1, popup_label_dy = -1;  // the load/save popup's name bar, its label from it
@@ -26869,8 +26873,19 @@ struct WideMenus {
   std::vector<std::pair<int32_t, int32_t>> mp_ripples;  // the multiplayer screens' ripple buttons: the ripple less the button's place
   int32_t tm_ok = -1, tm_backdrop = -1;  // the new team's dialog
 };
-WideMenus wide_menus_run(bool wide, int32_t frame_width = 0, int32_t frame_height = 0, bool fast = false) {
-  ScopedMenuWideEnv wide_env("1");
+// Ours (#552): test the real blits used by HD presentation, not just the image stored on the screen.
+// A baked picture can retain that image pointer while never drawing the source again.
+bool menu_frame_has_background(const mech3::GameEngine& engine, const mech3::MainMenu* menu) {
+  const zimg::Texture* source = zrndr::menu_background_source();
+  if (!menu || !source || source != menu->background.image) return false;
+  const auto& blits = zrndr::menu_background_blits();
+  int64_t area = 0;
+  for (const auto& blit : blits) area += int64_t(blit.width) * blit.height;
+  return !blits.empty() && area == int64_t(engine.buffer_width()) * engine.buffer_height();
+}
+WideMenus wide_menus_run(bool wide, int32_t frame_width = 0, int32_t frame_height = 0, bool fast = false,
+                        const char* menu_wide = "1", bool hd_background = false) {
+  ScopedMenuWideEnv wide_env(menu_wide);
   WideMenus out;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -26904,7 +26919,12 @@ WideMenus wide_menus_run(bool wide, int32_t frame_width = 0, int32_t frame_heigh
   FakeWindow window;
   FakeAlert alert;
   FakeClock clock;
-  FakeScreen screen;
+  // Ours (#552): control presenter admission; shipped images still use the real blitter.
+  struct MenuOutput : FakeScreen {
+    bool hd_ready = false;
+    bool hd_menu_background_ready() const override { return hd_ready; }
+  } screen;
+  screen.hd_ready = hd_background;
   platform::SilentSoundOutput sound;
   mech3::MountFiles files;
   mech3::Platform p;
@@ -27059,6 +27079,18 @@ WideMenus wide_menus_run(bool wide, int32_t frame_width = 0, int32_t frame_heigh
         auto* os = dynamic_cast<mech3::OptionsState*>(now);
         auto* g = os ? dynamic_cast<mech3::GameOptionsScreen*>(engine.screen_of(os->screen_)) : nullptr;
         if (!g) return;
+        // Ours (#552): cached background blits last two frames. Wait past them so a bake cannot pass.
+        if (++wait <= 4) return;
+        wait = 0;
+        out.options_background = menu_frame_has_background(engine, mm);
+        out.options_still_w = g->still.image ? g->still.image->width : 0;
+        out.options_baked = g->behind && g->still.image && g->static_bg == g->still.image &&
+                            !g->background.owner && g->back.stashed;
+        out.restores_clear = !g->static_bg && !g->behind;
+        if (fast) {
+          g->back.restart_ripple();
+          out.ripples_still = !g->back.rippling;
+        }
         out.width = engine.buffer_width();
         out.accept = g->accept.get_rect()->left;
         out.gfx = g->gfx_audio.get_rect()->left;
@@ -27104,7 +27136,19 @@ WideMenus wide_menus_run(bool wide, int32_t frame_width = 0, int32_t frame_heigh
         mech3::options().in_game_vmode = 5;  // 640x480 picked in the menus (GRAPHICS' ACCEPT): for the next start
         g->back.on_left_up();
         stage = 2;
-      } else if (stage == 2 && now == &st.main && mm && ++wait > 3) {
+      } else if (stage == 2 && now == &st.main && mm && ++wait > 4) {
+        out.main_background = menu_frame_has_background(engine, mm);
+        out.background_still = mm->background.moving == 0 && !mm->title.image;
+        out.restores_clear = out.restores_clear && !mm->static_bg && !mm->behind;
+        out.main_baked = mm->behind && mm->still.image && mm->static_bg == mm->still.image &&
+                         !mm->background.owner && mm->buttons[mech3::MainMenuButton::kOptions].stashed &&
+                         (mm->still.flags & ztwod::kManaged) != 0;
+        if (fast) {
+          for (mech3::MainMenuButton& button : mm->buttons) {
+            button.restart_ripple();
+            out.ripples_still = out.ripples_still && !button.rippling;
+          }
+        }
         out.campaign = mm->buttons[mech3::MainMenuButton::kNewCampaign].get_rect()->left;
         out.credits = mm->buttons[mech3::MainMenuButton::kCredits].get_rect()->left;
         out.credits_line = mm->buttons[mech3::MainMenuButton::kCredits].line.get_x();
@@ -27575,6 +27619,37 @@ TEST(menus_wide_with_fast_menu_bake_after_the_layout_headless) {
   EXPECT(fast.ctl_accept == on.ctl_accept && fast.ctl_lines_w == on.ctl_lines_w && fast.ctl_keys == on.ctl_keys);
   EXPECT(fast.pil_accept == on.pil_accept && fast.pil_lines_w == on.pil_lines_w && fast.games_up == on.games_up);
   EXPECT(fast.cr_lines_w == on.cr_lines_w && fast.cr_back == on.cr_back);
+}
+
+// Ours (#552): wait past cached blits on the actual main/OPTIONS frames. A baked picture cannot
+// provide these source matches. Exercise the default centered 4:3 layout and MW3_MENU_WIDE=1.
+TEST(menus_fast_menu_hd_background_headless) {
+  if (!have_game()) return;
+  const char* layouts[] = {nullptr, "1"};
+  for (const char* layout : layouts) {
+    const WideMenus fast = wide_menus_run(true, 0, 0, true, layout, true);
+    const int32_t width = layout ? 853 : 640;
+    EXPECT(fast.width == width && fast.width_after == width);
+    EXPECT(fast.still_w == 0 && fast.options_still_w == 0 && fast.restores_clear);
+    EXPECT(fast.main_background);
+    EXPECT(fast.options_background);
+    EXPECT(fast.background_still && fast.ripples_still);
+  }
+}
+
+// Ours (#552): without HD admission both screens must retain the original snapshot, removal and
+// managed redraw behavior. This catches an unconditional bake removal even when the HD test passes.
+TEST(menus_fast_menu_without_hd_still_bakes_headless) {
+  if (!have_game()) return;
+  const char* layouts[] = {nullptr, "1"};
+  for (const char* layout : layouts) {
+    const WideMenus fast = wide_menus_run(true, 0, 0, true, layout, false);
+    const int32_t width = layout ? 853 : 640;
+    EXPECT(fast.still_w == width && fast.options_still_w == width);
+    EXPECT(fast.main_baked && fast.options_baked && !fast.restores_clear);
+    EXPECT(!fast.main_background && !fast.options_background);
+    EXPECT(fast.background_still && fast.ripples_still);
+  }
 }
 
 TEST(menus_wide_spread_by_their_groups_headless) {

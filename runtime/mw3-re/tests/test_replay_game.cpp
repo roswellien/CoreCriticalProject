@@ -175,10 +175,11 @@ class TestHooks : public mech3::ReplayHooks {
   float real_dt = 0;
   int before = 0, after = 0;
   void start() override {}
-  void before_lists(bool) override {
+  bool before_lists(bool) override {
     ++before;
     real_dt = ztimer::state().dt;
     ztimer::state().dt = kStep;
+    return true;
   }
   void after_lists() override {
     ++after;
