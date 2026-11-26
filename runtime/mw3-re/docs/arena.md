@@ -96,9 +96,14 @@ A match log grows by every mech's state ten times a second: a few minutes of
   the sun, ambient, sky and haze of one outdoor campaign mission's lighting
   profile (`kTimesOfDay` in `arena_setup.h`: dawn Training 1, day c3m1 at
   noon, dusk Training 4, night c1m3). It is purely visual: only the renderer
-  reads it, AI sight and sensors never do, so one seed gives the same match
-  log at every time of day. Any other value is refused (exit 2) naming the
-  field. `--arena-catalog` lists the values as `times_of_day`.
+  reads it, and AI sight and sensors never do, so a `--hidden` run of one seed
+  writes the same match log at every time of day. A watched match is not
+  repeatable anyway (#294). The lighting shows only with the Core Critical
+  renderer and `--cc-lighting` set to something other than `off` (the
+  launcher's settings). The default SDL renderer and `--cc-lighting off`
+  accept the field but draw the map's own lighting. Any other value is
+  refused (exit 2) naming the field. `--arena-catalog` lists the values as
+  `times_of_day`.
 
 Whatever the preset says, a bot is awake from the start, engages any enemy,
 is no one's lancemate and starts powered up: a campaign record can start its

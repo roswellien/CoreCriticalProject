@@ -877,19 +877,20 @@ public:
     staging_early_logged_ = false;
     staging_oversized_logged_ = false;
     staging_first_flush_pending_ = true;
+    const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
+                                                         identity.number);
     // An arena match (#507) may borrow a campaign mission's lighting for its
-    // chosen time of day; its multiplayer map has no profile of its own.
+    // chosen time of day. Only the lighting uses the borrowed id: the mission
+    // identity (terrain materials, effect lights) stays the arena map's own.
     const std::string &arena_lighting = ::platform::arena_lighting_mission();
-    const auto id = !arena_lighting.empty()
-                        ? arena_lighting
-                        : mw34::campaign::canonical_mission_id(
-                              identity.world_index, identity.number);
+    const std::string lighting_id =
+        arena_lighting.empty() ? id : arena_lighting;
     mw34::campaign::ResolvedMissionLighting resolved{};
-    if (!id.empty())
-      resolved = mw34::campaign::resolve_mission_lighting(id);
+    if (!lighting_id.empty())
+      resolved = mw34::campaign::resolve_mission_lighting(lighting_id);
     lighting_ = mw34::campaign::mission_sun_settings(
         base_lighting_, resolved, campaign_enabled_, sun_explicit_,
-        environment_.get(), id);
+        environment_.get(), lighting_id);
     display_hdr_ = window_hdr_enabled();
     if (renderer_)
       renderer_->update_lighting_settings(display_lighting());
