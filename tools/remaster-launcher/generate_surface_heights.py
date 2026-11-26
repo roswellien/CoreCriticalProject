@@ -366,8 +366,7 @@ def build_environment_surface_materials(
     total_image_bytes = 0
     budget_limit = MAX_SIDECAR_BYTES - 1024 * 1024
 
-    for _, key_name, orig_name, width, height, pixels in sorted(selected, key=lambda item: item[1]):
-        dw, dh, reduced = _downsample_rgba(pixels, width, height, max_dimension)
+    for _, key_name, orig_name, dw, dh, reduced in sorted(selected, key=lambda item: item[1]):
         if dw < 2 or dh < 2:
             continue
         image_bytes = dw * dh * 4

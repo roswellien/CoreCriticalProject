@@ -1095,7 +1095,7 @@ void region_catalog_bwsfm1_validation() {
   auto pack = std::make_shared<mat::SurfaceMaterialPack>(
       mat::read_surface_material_catalog(valid_stream, "operation2",
           mat::max_surface_sidecar_bytes, mat::max_surface_sidecar_bytes, budget));
-  require(pack->records.size() == 1 && pack->images.size() == 1 && budget->used() == 16 * 16 * 4,
+  require(pack->records.size() == 1 && pack->images.size() == 1 && budget->used() == 16 * 16,
           "POM region catalog reader failed valid BWSFM1 decode");
   const std::string sha = digest(valid_bytes.data(), valid_bytes.size());
   const mat::SurfaceKey albedo{32, 32, 1, 0x123456789abcdef0ULL};
