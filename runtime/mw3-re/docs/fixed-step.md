@@ -34,10 +34,17 @@ transform (data +0x30) and, while valid, its cached world transform (+0x60)
 after every step. Before a frame is drawn it writes each moved node's blend at
 `alpha`, how far the frame is towards the next step: position and per-row scale
 in a straight line, rotation by quaternion slerp. A node that moved more than
-50 m in one step (spawned, placed, a camera cut) is drawn where it is. Right
-after the draw the exact transforms go back, and every world cache that was
-stale before the draw is marked stale again (the draw rebuilds those from the
-blended chain), so the simulation never reads a blended value. The picture is
+50 m in one step (spawned, placed, a camera cut) is drawn where it is. Before
+the draw every node's local transform, world cache and its stale flag are
+kept, and right after it each node gets them back exactly; a node the draw
+moved itself (a camera) keeps its new transform with its cache stale. So the
+draws never reach the simulation. The game reads a cached world matrix
+whether or not it is marked stale (a vehicle's turret turn reads its turret's),
+and the original's draw rebuilt the stale ones after each frame; so at the end
+of each step `settle_world_caches` rebuilds them from the exact transforms,
+once a step however many frames are drawn. Before this, c2m3 ran differently
+at 7 and 33 ms frames: a Harasser's turret turned against a matrix the last
+draw had rebuilt from its blended hull. The picture is
 up to one step (33 ms) behind the newest simulation state, the usual cost of
 this method.
 

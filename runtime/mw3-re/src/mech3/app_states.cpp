@@ -479,7 +479,8 @@ void CoreState::run_fixed_steps(bool replay) {
     sync_frame_step(timer.dt, timer.total_scaled);
     poll_and_run_lists(replay);
     world_tick(en);
-    zcls::interp::record();  // the step's transforms, for drawing between steps
+    zcls::interp::settle_world_caches();  // the caches the original's draw rebuilt each frame
+    zcls::interp::record();               // the step's transforms, for drawing between steps
     if (after_each_step()) after_each_step()();  // the tests' look at each step
   }
   timer.dt = frame_clock.dt, timer.raw_dt = frame_clock.raw_dt;

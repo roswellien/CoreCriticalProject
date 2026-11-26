@@ -6,9 +6,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "gamez/zclass/class.h"
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/list.h"
+#include "gamez/zmath/zmth_matrix.h"
 
 namespace zcls::interp {
 
@@ -19,6 +21,8 @@ constexpr int kFlagsOffset = 0x00;
 constexpr int kLocalOffset = 0x30;
 constexpr int kWorldOffset = 0x60;
 constexpr uint32_t kWorldStale = 0x20;
+// Node flag: in the world tree, so node_to_world keeps its cache (0x004ed280).
+constexpr uint32_t kInWorldTree = 0x80000;
 constexpr std::size_t kMatrixBytes = 12 * sizeof(float);
 
 struct Transforms {
@@ -31,23 +35,28 @@ struct Record {
   Transforms previous;
   Transforms current;
   bool has_previous = false;
-  // Set by apply when this node was drawn blended, so restore writes it back.
+  // Set by apply when this node was drawn blended, until restore.
   bool blended = false;
   unsigned pass = 0;  // the record() pass that last found this node on list 6
-  uint32_t flags_before_draw = 0;
-  // What apply wrote. The draw itself may move a node (a camera, for one);
-  // restore puts back only what still holds apply's blend.
-  float applied_local[12];
-  float applied_world[12];
 };
 
 std::unordered_map<const Node*, Record> g_records;
-std::vector<Node*> g_blended;  // the nodes apply wrote, for restore
 unsigned g_pass = 0;
-// Every node whose cached world matrix was stale when the draw began. The draw
-// rebuilds those from the (blended) chain and marks them valid; restore marks
-// them stale again, so the simulation rebuilds them from the exact chain.
-std::vector<Node*> g_stale_before_draw;
+// Every node as the draw found it: its local transform, its cached world
+// matrix and whether that was stale. The draw rebuilds world caches from the
+// (blended) chain, of nodes apply did not blend too (a turret whose hull
+// moved); restore puts each back as it was, so the simulation never reads one.
+struct BeforeDraw {
+  Node* node;
+  bool world_stale;
+  bool blended = false;  // apply wrote applied_local (and maybe the cache)
+  float local[12];
+  float world[12];
+  // What apply wrote. The draw itself may move a node (a camera, for one);
+  // restore puts back only what still holds apply's blend.
+  float applied_local[12];
+};
+std::vector<BeforeDraw> g_before_draw;
 
 Object3d* object_data(Node* node) { return static_cast<Object3d*>(node->data); }
 
@@ -172,26 +181,42 @@ void record() {
   }
 }
 
+void settle_world_caches() {
+  for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
+    Node* node = item->node;
+    if (!is_live_object3d(node) || !(node->flags() & kInWorldTree)) continue;
+    if (!(object_data(node)->get<uint32_t>(kFlagsOffset) & kWorldStale)) continue;
+    // As class.cpp's world_matrix: the chain onto a matrix of its own, which
+    // brings each stale cache on it up to date (0x004ed280).
+    zmth::Mat34 scratch;
+    zmth::push(&scratch);
+    zmth::load_identity();
+    node_to_world(node, 1);
+    zmth::pop();
+  }
+}
+
 void apply(float alpha) {
-  g_blended.clear();
-  g_stale_before_draw.clear();
+  g_before_draw.clear();
   // Walked from list 6, never from the records: only a node on the list is
   // known to be live, so a record is only ever read through a live node.
   for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
     Node* node = item->node;
     if (!is_live_object3d(node)) continue;
+    const Transforms now = read_transforms(node);
+    BeforeDraw& b = g_before_draw.emplace_back();
+    b.node = node;
+    b.world_stale = !now.world_valid;
+    std::memcpy(b.local, now.local, kMatrixBytes);
+    std::memcpy(b.world, now.world, kMatrixBytes);
     auto found = g_records.find(node);
-    if (found == g_records.end()) {
-      if (object_data(node)->get<uint32_t>(kFlagsOffset) & kWorldStale) g_stale_before_draw.push_back(node);
-      continue;
-    }
+    if (found == g_records.end()) continue;
     Record& r = found->second;
-    if (object_data(node)->get<uint32_t>(kFlagsOffset) & kWorldStale) g_stale_before_draw.push_back(node);
     if (!r.has_previous) continue;
     // Moved since its last record, outside a step (a placement between frames,
     // a tool): the records are out of date, so it is drawn as it is and its
     // records start again at the next step.
-    if (!same_matrix(object_data(node)->floats(kLocalOffset), r.current.local)) {
+    if (!same_matrix(now.local, r.current.local)) {
       r.has_previous = false;
       continue;
     }
@@ -203,61 +228,53 @@ void apply(float alpha) {
                         (world_moved && distance(r.previous.world, r.current.world) > kSnapDistance);
     if (jumped) continue;
     Object3d* data = object_data(node);
-    r.flags_before_draw = data->get<uint32_t>(kFlagsOffset);
     if (local_moved) blend_matrix(r.previous.local, r.current.local, alpha, data->floats(kLocalOffset));
-    if (world_moved && (r.flags_before_draw & kWorldStale) == 0)
-      blend_matrix(r.previous.world, r.current.world, alpha, data->floats(kWorldOffset));
-    std::memcpy(r.applied_local, data->floats(kLocalOffset), kMatrixBytes);
-    std::memcpy(r.applied_world, data->floats(kWorldOffset), kMatrixBytes);
+    if (world_moved && now.world_valid) blend_matrix(r.previous.world, r.current.world, alpha, data->floats(kWorldOffset));
+    std::memcpy(b.applied_local, data->floats(kLocalOffset), kMatrixBytes);
+    b.blended = true;
     r.blended = true;
-    g_blended.push_back(node);
   }
 }
 
 void restore() {
-  for (Node* node : g_blended) {
-    auto found = g_records.find(node);
-    if (found == g_records.end() || !is_live_object3d(node)) continue;
-    Record& r = found->second;
-    r.blended = false;
+  for (const BeforeDraw& b : g_before_draw) {
+    Node* node = b.node;
+    if (!is_live_object3d(node)) continue;
+    if (b.blended) {
+      auto found = g_records.find(node);
+      if (found != g_records.end()) found->second.blended = false;
+    }
     Object3d* data = object_data(node);
+    const uint32_t flags = data->get<uint32_t>(kFlagsOffset);
+    // What apply left in the local transform: its blend, or the node as found.
+    const float* left = b.blended ? b.applied_local : b.local;
     // Something during the draw moved the node itself (a camera, a placed
     // mech): its new transform stands. Some movers write the local floats
-    // without marking the cache, which still holds apply's blend, so the cache
-    // is marked stale and rebuilt from the new transform.
-    if (!same_matrix(data->floats(kLocalOffset), r.applied_local)) {
-      data->put<uint32_t>(kFlagsOffset, data->get<uint32_t>(kFlagsOffset) | kWorldStale);
+    // without marking the cache, so the cache is marked stale and rebuilt.
+    if (!same_matrix(data->floats(kLocalOffset), left)) {
+      data->put<uint32_t>(kFlagsOffset, flags | kWorldStale);
       continue;
     }
-    std::memcpy(data->floats(kLocalOffset), r.current.local, kMatrixBytes);
-    // A cache valid before the draw and still holding apply's blend goes back
-    // to the exact one. A stale one is never marked valid here: the loop below
-    // marks every cache stale before the draw stale again.
-    const bool valid_before = (r.flags_before_draw & kWorldStale) == 0;
-    const bool valid_now = (data->get<uint32_t>(kFlagsOffset) & kWorldStale) == 0;
-    if (valid_before && valid_now && same_matrix(data->floats(kWorldOffset), r.applied_world))
-      std::memcpy(data->floats(kWorldOffset), r.current.world, kMatrixBytes);
+    // As the draw found it, the cache's content and its stale flag both: the
+    // game reads a cache's matrix stale or not (a vehicle's turret turn), so a
+    // stale one the draw rebuilt from the blended chain must not stay either.
+    std::memcpy(data->floats(kLocalOffset), b.local, kMatrixBytes);
+    std::memcpy(data->floats(kWorldOffset), b.world, kMatrixBytes);
+    data->put<uint32_t>(kFlagsOffset, b.world_stale ? (flags | kWorldStale) : (flags & ~kWorldStale));
   }
-  for (Node* node : g_stale_before_draw) {
-    if (!is_live_object3d(node)) continue;
-    Object3d* data = object_data(node);
-    data->put<uint32_t>(kFlagsOffset, data->get<uint32_t>(kFlagsOffset) | kWorldStale);
-  }
-  g_blended.clear();
-  g_stale_before_draw.clear();
+  g_before_draw.clear();
 }
 
 void forget(const Node* node) {
   g_records.erase(node);
-  g_blended.erase(std::remove(g_blended.begin(), g_blended.end(), node), g_blended.end());
-  g_stale_before_draw.erase(std::remove(g_stale_before_draw.begin(), g_stale_before_draw.end(), node),
-                            g_stale_before_draw.end());
+  g_before_draw.erase(std::remove_if(g_before_draw.begin(), g_before_draw.end(),
+                                     [node](const BeforeDraw& b) { return b.node == node; }),
+                      g_before_draw.end());
 }
 
 void clear() {
   g_records.clear();
-  g_blended.clear();
-  g_stale_before_draw.clear();
+  g_before_draw.clear();
 }
 
 }  // namespace zcls::interp
