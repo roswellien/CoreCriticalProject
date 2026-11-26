@@ -637,6 +637,7 @@ class GameEngine : public Engine {
   int buffer_width() const { return width_; }
   void widen_screen(class MenuScreen* s, uint32_t ctor);  // ours: a menu screen spread over a wide canvas (app_menus.cpp)
   void widen_before_bake(class MenuScreen* s) override;   // ours: the same ahead of a FastMenu bake, by the screen being made
+  void menu_screen_backdrop(Handle screen, bool show) override;  // ours: register or drop a screen's backdrop (issue 519)
   uint32_t making_ctor_ = 0;                              // the constructor construct() is in (0 none)
   int buffer_height() const { return height_; }
 

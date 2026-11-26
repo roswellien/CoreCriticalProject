@@ -93,6 +93,7 @@ class Engine : public zgame::AppHooks {
   virtual void set_fast_menu(int32_t on);              // 0x0040ce90
   virtual int32_t fast_menu();                         // 0x0040cec0
   virtual void widen_before_bake(MenuScreen*) {}       // ours: the wide layout ahead of a FastMenu bake (app_menus.cpp)
+  virtual void menu_screen_backdrop(Handle, bool) {}  // ours: an option page's backdrop as the menu background (app_menus.cpp)
   virtual int32_t display_width();                     // 0x0040d760
   virtual int32_t display_height();                    // 0x0040d770
   virtual void options_apply_all();                    // 0x0040cb30
