@@ -5,12 +5,12 @@ public sealed record GraphicsPreferences(int Width, int Height, string WindowMod
     string AntiAliasing, int AnisotropicFiltering, int DrawDistance,
     bool DynamicLighting, bool Shadows, bool Headlights = false,
     bool WaterDetail = true, bool CloudDetail = true, string FlareStyle = "modern",
-    bool LoadCache = true, bool Vsync = false)
+    bool LoadCache = true, bool Vsync = false, string PomQuality = "off")
 {
     public static GraphicsPreferences From(LauncherSettings s) => new(s.Width, s.Height,
         s.WindowMode, s.AntiAliasing, s.AnisotropicFiltering, s.DrawDistance,
         s.DynamicLighting, s.Shadows, s.Headlights, s.WaterDetail, s.CloudDetail, s.FlareStyle,
-        s.LoadCache, s.Vsync);
+        s.LoadCache, s.Vsync, s.PomQuality);
 
     public void Validate()
     {
@@ -26,6 +26,8 @@ public sealed record GraphicsPreferences(int Width, int Height, string WindowMod
             throw new InvalidOperationException("Choose a supported scenery setting.");
         if (FlareStyle is not ("modern" or "original"))
             throw new InvalidOperationException("Choose a supported lens flare style.");
+        if (PomQuality is not ("off" or "low" or "high"))
+            throw new InvalidOperationException("Choose a supported parallax occlusion mapping quality.");
     }
 
     public void ApplyTo(LauncherSettings s)
@@ -38,6 +40,7 @@ public sealed record GraphicsPreferences(int Width, int Height, string WindowMod
         s.DynamicLighting=DynamicLighting; s.Shadows=Shadows; s.Headlights=Headlights;
         s.WaterDetail=WaterDetail; s.CloudDetail=CloudDetail;
         s.FlareStyle=FlareStyle;
+        s.PomQuality=PomQuality;
         s.LoadCache=LoadCache;
         s.Vsync=Vsync;
     }
