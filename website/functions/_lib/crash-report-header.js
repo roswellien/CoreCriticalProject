@@ -44,23 +44,26 @@ export function validateHeader(header, redactText) {
     keepText(kept, "vulkan_api_version", source.vulkan_api_version, 40, redactText);
     keepText(kept, "vulkan_driver_version", source.vulkan_driver_version, 80, redactText);
     if (Array.isArray(source.heaps)) {
-        kept.heaps = source.heaps.slice(0, 16).map(validateHeap).filter(Boolean);
+        const heaps = source.heaps.slice(0, 16).map(validateHeap).filter(Boolean);
+        if (heaps.length > 0) kept.heaps = heaps;
     }
     keepText(kept, "resolution", source.resolution, 40, redactText);
     keepText(kept, "window_mode", source.window_mode, 40, redactText);
     if (isCount(source.refresh_hz, 1000)) kept.refresh_hz = source.refresh_hz;
     if (typeof source.hdr === "boolean") kept.hdr = source.hdr;
     if (Array.isArray(source.pack_texture_bytes)) {
-        kept.pack_texture_bytes = source.pack_texture_bytes
+        const packs = source.pack_texture_bytes
             .slice(0, 64)
             .map((pack) => validatePackTextures(pack, redactText))
             .filter(Boolean);
+        if (packs.length > 0) kept.pack_texture_bytes = packs;
     }
     if (Array.isArray(source.input_devices)) {
-        kept.input_devices = source.input_devices
+        const devices = source.input_devices
             .slice(0, 16)
             .filter((name) => typeof name === "string")
             .map((name) => redactText(name.slice(0, 80)));
+        if (devices.length > 0) kept.input_devices = devices;
     }
     return kept;
 }

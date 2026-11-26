@@ -1498,7 +1498,14 @@ test("drops header fields of the wrong type", async () => {
     githubResponder();
     const response = await onRequestPost({
         request: crashRequest({
-            header: { refresh_hz: "60", hdr: 1, heaps: {}, resolution: 2560, input_devices: "pad" },
+            header: {
+                refresh_hz: "60",
+                hdr: 1,
+                heaps: [1, 2],
+                pack_texture_bytes: [null],
+                resolution: 2560,
+                input_devices: [7],
+            },
         }),
         env: environment,
     });
