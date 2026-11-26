@@ -154,6 +154,14 @@ class CoreState : public State {
   uint8_t active_ = 0;                // +0x19
   int renderer_ = kNone;              // +0x1c
   Handle message_box_ = 0;            // +0x20
+
+  // Ours (#485): the steps' own running totals of game time, which the
+  // timer's totals read during a step (the frame's are the real clock's).
+  float step_total_scaled_ = 0;
+  float step_total_raw_ = 0;
+  // False with the fixed step: world_tick and the arena's tick have run in
+  // the steps already, not in the drawing paths.
+  bool world_tick_in_draw_ = true;
 };
 
 // 10, unnamed (0x00608ea0, vtable 0x005c40a0): a list of the 0xa7 input

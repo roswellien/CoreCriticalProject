@@ -286,15 +286,24 @@ void slerp(const float a[4], const float b[4], float t, float out[4]) {
 void blend_matrix(const float from[12], const float to[12], float t, float out[12]) {
   // Each row's length is that axis's scale; the rotation is blended on the unit rows.
   float unit_from[9], unit_to[9], scale_from[3], scale_to[3];
+  bool flattened = false;  // a row of zero length at either end: no rotation to blend
   for (int row = 0; row < 3; ++row) {
     const float* a = from + 3 * row;
     const float* b = to + 3 * row;
     scale_from[row] = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
     scale_to[row] = std::sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+    flattened = flattened || !(scale_from[row] > 0.0f) || !(scale_to[row] > 0.0f);
     for (int c = 0; c < 3; ++c) {
       unit_from[3 * row + c] = scale_from[row] > 0.0f ? a[c] / scale_from[row] : 0.0f;
       unit_to[3 * row + c] = scale_to[row] > 0.0f ? b[c] / scale_to[row] : 0.0f;
     }
+  }
+  // A node scaled to nothing (hidden, or grown from 0 by an effect animation)
+  // has no rotation to take a quaternion of: drawn with the newer rows.
+  if (flattened) {
+    for (int c = 0; c < 9; ++c) out[c] = to[c];
+    for (int c = 9; c < 12; ++c) out[c] = from[c] + (to[c] - from[c]) * t;
+    return;
   }
   float quaternion_from[4], quaternion_to[4], quaternion[4], rows[9];
   quaternion_of(unit_from, quaternion_from);

@@ -23,6 +23,7 @@
 #include "crt/msvc_rand.h"
 #include "gamez/zutil/ztimer.h"
 #include "mech3/app_mech.h"
+#include "mech3/arena.h"
 #include "mech3/fixed_step.h"
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/interp.h"
@@ -430,15 +431,6 @@ void CoreState::start_mission() {
 
 namespace {
 void world_tick(Engine& en);  // below, with the drawing paths that call it
-// Ours (#485): the steps' own running totals of game time, which the timer's
-// totals read during a step (the frame's are the real clock's).
-struct StepClock {
-  float total_scaled = 0;
-  float total_raw = 0;
-};
-StepClock g_step_clock;
-// False with the fixed step: world_tick has run in the steps already.
-bool g_world_tick_in_draw = true;
 }  // namespace
 
 // Mech3.exe 1.2 @ 0x00481e70, one mission frame. True when command 1 (Escape)
@@ -473,11 +465,11 @@ void CoreState::run_fixed_steps() {
   const int steps = mission_fixed_step().feed(frame_clock.dt);
   const float step_seconds = static_cast<float>(FixedStep::kStepSeconds);
   for (int i = 0; i < steps; ++i) {
-    g_step_clock.total_scaled += step_seconds;
-    g_step_clock.total_raw += step_seconds;
+    step_total_scaled_ += step_seconds;
+    step_total_raw_ += step_seconds;
     timer.dt = timer.raw_dt = step_seconds;
-    timer.total_scaled = g_step_clock.total_scaled;
-    timer.total_raw = g_step_clock.total_raw;
+    timer.total_scaled = step_total_scaled_;
+    timer.total_raw = step_total_raw_;
     sync_frame_step(timer.dt, timer.total_scaled);
     poll_and_run_lists(false);
     world_tick(en);
@@ -497,12 +489,13 @@ void CoreState::run_fixed_steps() {
 void CoreState::restart_fixed_step() {
   mission_fixed_step().reset();
   zcls::interp::clear();
-  g_step_clock.total_scaled = ztimer::state().total_scaled;
-  g_step_clock.total_raw = ztimer::state().total_raw;
+  step_total_scaled_ = ztimer::state().total_scaled;
+  step_total_raw_ = ztimer::state().total_raw;
 }
 
 bool CoreState::frame() {
   Engine& en = e();
+  en.frame_keys_begin();  // ours (#485): the presses polled in this frame's steps
   elapsed_ = en.frame_dt() + elapsed_;
   // Ours (#289): a 3D replay polls without the command callbacks, so no game
   // command fires (replay_hooks.h).
@@ -514,7 +507,7 @@ bool CoreState::frame() {
   // one pass of the lists a drawn frame, as before #485.
   const bool fixed = fixed_step_enabled() && !replay;
   std::optional<crt::DrawnFrameRandom> drawn_frame_random;
-  g_world_tick_in_draw = !fixed;
+  world_tick_in_draw_ = !fixed;
   if (fixed) {
     run_fixed_steps();
     drawn_frame_random.emplace();
@@ -538,15 +531,17 @@ bool CoreState::frame() {
     flag = cam && en.field32(cam, 0x4) == 1;
   }
   bool stop = false;
-  // Ours (#485): drawn between the last two steps, then the exact transforms back.
-  if (fixed) zcls::interp::apply(mission_fixed_step().alpha());
+  // Ours (#485): drawn between the last two steps, then the exact transforms
+  // back. A hidden arena run draws no world (app_mission.cpp), so none of it.
+  const bool blend = fixed && !arena::arena_headless();
+  if (blend) zcls::interp::apply(mission_fixed_step().alpha());
   switch (renderer_) {
     case kSoftware: stop = draw_software(veh, flag); break;
     case kDoubled: stop = draw_doubled(veh, flag); break;
     case kHardware: stop = draw_hardware(veh, flag); break;
     default: break;  // the original calls through a null object here
   }
-  if (fixed) zcls::interp::restore();
+  if (blend) zcls::interp::restore();
   if (stop) {
     if (en.vcall(en.field32(en.pilot(), 0x6c), 0x2c, {}) != 3) return true;
     en.message_box_quit_prompt(message_box_);
@@ -565,7 +560,7 @@ bool CoreState::update() {
   // Ours (#287): an arena match's log and end, after the frame's play; with the
   // fixed step it runs in each step instead (#485: its log records every
   // simulation update, and the match ends on the steps' time).
-  if (g_world_tick_in_draw) en.arena_tick();
+  if (world_tick_in_draw_) en.arena_tick();
   if (en.vmode() != globals().last_vmode) {
     pick_renderer();
     globals().last_vmode = en.vmode();
@@ -637,7 +632,7 @@ bool CoreState::draw_software(Handle veh, bool flag) {
     if (flag && veh) en.node_set_active(en.vehicle_node(veh), 1);
     return true;
   }
-  if (g_world_tick_in_draw) world_tick(en);
+  if (world_tick_in_draw_) world_tick(en);
   en.weather_rect(0, render);
   en.video_lock();
   en.weather_tick(en.frame_dt());
@@ -762,7 +757,7 @@ bool CoreState::draw_hardware(Handle veh, bool flag) {
     if (flag && veh) en.node_set_active(en.vehicle_node(veh), 1);
     return true;
   }
-  if (g_world_tick_in_draw) world_tick(en);
+  if (world_tick_in_draw_) world_tick(en);
   en.weather_rect(0, window);
   en.video_begin_3d();
   en.weather_tick(en.frame_dt());
@@ -865,7 +860,7 @@ bool CoreState::draw_doubled(Handle veh, bool flag) {
     draw_part(en, mech_torso(en, veh));
     en.scene_draw(scene);
   }
-  if (g_world_tick_in_draw) world_tick(en);
+  if (world_tick_in_draw_) world_tick(en);
   en.weather_rect(0, render);
   en.video_begin_3d();
   en.weather_tick(en.frame_dt());

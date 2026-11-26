@@ -9622,7 +9622,8 @@ ParkRun c2m1_park_run(bool bugs) {
             dominic = ai[i].mech;
             brain = static_cast<mech3::AiControls*>(ai[i].controls)->brain.get();
           }
-        out.dominic = dominic && brain;      }
+        out.dominic = dominic && brain;
+      }
       if (!out.bases || !out.dominic) return;
       if (frames == 5 || frames == 6) mech3::program_mcb_command(player);  // the pick, then the call
       if (frames == 7) {
@@ -13100,6 +13101,84 @@ TEST(mission_c1m1_lrm_homes_on_the_lock_headless) {
   EXPECT(r.targeted && r.lock_frame > 0 && r.locked);
   EXPECT(std::fabs(r.turned) > 0.14f);  // the reticle off the Owens (8 degrees: 20 m at 150 m)
   EXPECT(r.armor1 < r.armor0);          // and the missiles found it
+}
+
+// Ours (#485): a mission polls input once per 1/30 s step, so a drawn frame
+// follows none, one or several polls. A fresh key press (state 1 at a poll)
+// counts once for the drawn frame however many polls it ran, and not again in
+// the next frame while the key is held: the multiplayer quit box's Escape,
+// Y and N (quit_box.cpp), which toggled on every frame between two steps at
+// 60 fps and above, and could be missed below 30.
+TEST(engine_key_pressed_this_frame_counts_a_press_once) {
+  if (!have_game()) return;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  zutl::set_write_dir(temp_dir("key_frame_write"));
+  mech3::reset_states();
+  reset_process_state();
+  mech3::options() = mech3::Options{};
+  struct Keys : platform::Input {
+    std::vector<platform::KeyEvent> queue;
+    uint32_t t = 0;
+    void key(uint32_t dik, bool down) { queue.push_back({dik, down ? 0x80u : 0u, ++t, t}); }
+    bool open(Device d) override { return d == kKeyboard; }
+    void close(Device) override {}
+    int32_t acquire(Device) override { return 0; }
+    int32_t unacquire(Device) override { return 0; }
+    int32_t keyboard_data(platform::KeyEvent* out, uint32_t* count) override {
+      const uint32_t n = std::min<uint32_t>(*count, static_cast<uint32_t>(queue.size()));
+      std::copy(queue.begin(), queue.begin() + n, out);
+      queue.erase(queue.begin(), queue.begin() + n);
+      *count = n;
+      return 0;
+    }
+    int32_t mouse_state(platform::MouseState*) override { return kNotAcquired; }
+    int32_t joystick_state(platform::JoyState*) override { return kNotAcquired; }
+  } keys;
+  FakeWindow window;
+  FakeAlert alert;
+  FakeClock clock;
+  FakeScreen screen;
+  platform::SilentSoundOutput sound;
+  mech3::MountFiles files;
+  mech3::Platform p;
+  p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
+  p.input = &keys;
+  {
+    mech3::GameEngine engine(p, "mech3.exe -nofmv");
+    engine.quiet = true;
+    mech3::Mech3App app(&engine);
+    mech3::set_app(&app);
+    EXPECT(app.init_instance());
+    constexpr int32_t kEscape = 0x01;
+    // A frame of two steps: pressed at the first poll, held at the second.
+    engine.frame_keys_begin();
+    keys.key(kEscape, true);
+    engine.input_poll(0);
+    engine.input_poll(0);
+    const bool raw_held = engine.key_state(kEscape) == 2;
+    EXPECT(raw_held && engine.key_pressed_this_frame(kEscape));
+    // The next frame, still held: no fresh press.
+    engine.frame_keys_begin();
+    engine.input_poll(0);
+    EXPECT(!engine.key_pressed_this_frame(kEscape));
+    // A frame of no step after a press: nothing counted twice.
+    keys.key(kEscape, false);
+    engine.input_poll(0);
+    engine.frame_keys_begin();
+    EXPECT(!engine.key_pressed_this_frame(kEscape));
+    // A frame of one step, as before the fixed step: key_state's own 1.
+    keys.key(kEscape, true);
+    engine.input_poll(0);
+    EXPECT(engine.key_state(kEscape) == 1 && engine.key_pressed_this_frame(kEscape));
+    app.exit_instance();
+    mech3::set_app(nullptr);
+  }
+  zrdr::close_archives(true);
+  mech3::reset_states();
+  reset_process_state();
+  mech3::options() = mech3::Options{};
 }
 
 // The Options screen's Difficulty reaches the damage (0x00608e5c, one store, options().intensity[2]; the differential

@@ -522,6 +522,17 @@ apart. Everything else is a real gap and stays listed.
   Release build ran its game about 20 times faster than its peers (a
   Debug one draws at about 33 ms anyway), and the two-process checks
   failed only in Release (2026-11-08). Single-process runs stay free.
+  In a mission the simulation runs its fixed 1/30 s steps underneath
+  (#485, fixed-step.md): `--frame-ms 7` draws about five frames a step and
+  plays exactly as `--frame-ms 33` does; `--frame-ms 33` (0.033 s) runs no
+  step on about one frame in a hundred.
+- `--variable-step` (ours, #485): one simulation step per frame drawn, with
+  the frame's own time, as before the fixed step; for side-by-side checks
+  (fixed-step.md).
+- `--step-log FILE` (ours, #485): per simulation step, a hash of every
+  object's local transform and each vehicle's position, forward row and
+  supports in the air. Runs that simulate alike write the same file at any
+  frame rate.
 - `--frame-times N` (ours, for measuring; performance.md): from the N-th
   frame shown, each frame's wall time (present to present), summed up at
   the end: mean, median, p95, p99, max.

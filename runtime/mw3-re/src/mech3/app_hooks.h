@@ -421,6 +421,13 @@ class Engine : public zgame::AppHooks {
   // Input (zInput).
   virtual void input_poll(uint8_t a) { unported("0x0051b360", {a}); }
   virtual uint32_t key_state(int32_t key) { return unported("0x0051a9b0", {key}); }  // a DIK code's state, zin::key_state
+  // Ours (#485, docs/fixed-step.md): a plain key (a DIK code below 0x100)
+  // pressed afresh (state 1) at any input poll since the mission frame began
+  // (frame_keys_begin). A mission polls once per 1/30 s step, so a drawn frame
+  // follows none, one or several polls; the drawn frame's one-shot checks (the
+  // quit box) see each press once. Here, key_state's own 1.
+  virtual bool key_pressed_this_frame(int32_t key) { return key_state(key) == 1; }
+  virtual void frame_keys_begin() {}
   virtual void input_clear() { unported("0x0051a300", {}); }
   virtual void input_reset() { unported("0x0051b1c0", {}); }
   virtual void input_capture() { unported("0x0051b310", {}); }

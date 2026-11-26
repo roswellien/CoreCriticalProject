@@ -683,7 +683,18 @@ void GameEngine::force_feedback_spring(Handle, int32_t on) {
   if (force_) force_->spring(on != 0);
 }
 void GameEngine::input_set_mode(uint32_t mode) { zin::set_mode(mode); }
-void GameEngine::input_poll(uint8_t callbacks) { zin::poll(callbacks != 0); }
+void GameEngine::input_poll(uint8_t callbacks) {
+  zin::poll(callbacks != 0);
+  for (int32_t key = 0; key < 0x100; ++key)
+    if (zin::key_state(key) == 1) fresh_keys_[key] = true;
+}
+bool GameEngine::key_pressed_this_frame(int32_t key) {
+  if (key < 0 || key >= 0x100) return key_state(key) == 1;
+  return fresh_keys_[key];
+}
+void GameEngine::frame_keys_begin() {
+  for (bool& fresh : fresh_keys_) fresh = false;
+}
 
 bool GameEngine::replay_on() { return replay_hooks() != nullptr; }
 void GameEngine::replay_start() {

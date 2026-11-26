@@ -22,7 +22,10 @@ Never commit generated logs, catalog exports or game media.
 
 Observed on 2026-11-26, Windows x64 Release, MSVC 19.51.36260.0,
 SDL 3.4.18 and SDL_ttf 3.2.2. Two fresh executable runs of the command above
-produced byte-identical logs.
+produced byte-identical logs. These figures predate #485's fixed 1/30 s
+simulation step: a build with it records one state per 1/30 s step (spacing
+about 33.33 ms) and writes a different log, so the reference needs recording
+again with it.
 
 - SHA-256: `73c806026cea91abd99ec16f20f8a3d1cab70510718bae15c5896280436596f7`
 - Size: **50,647,064 bytes**.

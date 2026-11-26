@@ -37,7 +37,12 @@
 //                        campaign_chain.h): N missions won, shots in --write-dir
 //   --frame-ms N         each frame shown is N ms on the game's clock, however
 //                        fast it is drawn (ours: scripted runs keep their timing);
-//                        with the network on, no faster than the wall clock
+//                        with the network on, no faster than the wall clock; a
+//                        mission still runs its fixed 1/30 s steps underneath (#485)
+//   --variable-step      one simulation step per frame drawn with the frame's own
+//                        time, as before the fixed step (ours, #485, docs/fixed-step.md)
+//   --step-log FILE      one line set per simulation step: a hash of every object's
+//                        transform and each vehicle's place (ours, #485)
 //   --seed N             rand seeded with N where the game seeds it from the clock (ours)
 //   --window WxH         window size (default 1280x960; with any_resolution the
 //                        frame's shape, and a given size pillarboxes the frame)
@@ -364,7 +369,7 @@ void usage() {
       "    [--cc-vsync 0|1 (default 1)]\n"
       "    [--cc-controller FILE] (launcher-exported controller profile)\n"
       "    [--cc-input FILE] (launcher-exported extended mouse and combo bindings)\n"
-      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
+      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--variable-step] [--step-log FILE] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [--benchmark DEF.json --benchmark-scene ID --benchmark-out DIR]\n"
       "    [--arena SETUP.json --seed N --frame-ms N [--arena-record-every-update]] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"

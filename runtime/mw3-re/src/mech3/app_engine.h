@@ -544,6 +544,8 @@ class GameEngine : public Engine {
   void input_set_mode(uint32_t mode) override;
   void input_poll(uint8_t callbacks) override;
   uint32_t key_state(int32_t key) override;
+  bool key_pressed_this_frame(int32_t key) override;
+  void frame_keys_begin() override;
   void input_clear() override;
   void input_reset() override;
   void model_purge(int32_t models, int32_t materials) override;  // 0x005394c0: zmod::models_purge
@@ -736,6 +738,7 @@ class GameEngine : public Engine {
   bool held_ = false;             // a shown frame kept behind a message box (hold_shown_frame)
   bool layer_blank_ = true;       // every 2D layer drawn since the last flip was only the key colour
   bool steps_present_ = false;    // ours (#485): made with present_per_step; the steps call on_present
+  bool fresh_keys_[0x100] = {};   // ours (#485): plain keys pressed afresh since frame_keys_begin
   void call_on_present();         // on_present after a frame drawn, as present_per_step says
   bool buffer_is_screen_ = true;  // the 16-bit buffer holds the frame shown (not the 3D lock's layer)
   std::vector<uint16_t> kept_screen_;  // that frame while a 3D lock has the buffer

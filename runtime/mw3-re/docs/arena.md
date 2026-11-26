@@ -71,7 +71,10 @@ all mech poses, rounds and beams, alongside the existing shot, hit, action and
 other replay effect events. State `t` is the actual match time of the update,
 without timestamp rounding or resampling. With `--frame-ms 33 --hidden` and no
 screenshots, updates are about 33 ms apart (floating-point clock precision can
-vary slightly). Watched matches still use wall-clock update times.
+vary slightly). Since #485 an update is a fixed 1/30 s simulation step at any
+`--frame-ms` (the arena's tick runs in each step; fixed-step.md), so dense
+states are 1/30 s apart and logs recorded before it differ. Watched matches
+still use wall-clock update times.
 
 Dense logs retain version 2 and add `"record_every_update": true` only to the
 start record; both replay readers accept them. Omitted or false, the setting

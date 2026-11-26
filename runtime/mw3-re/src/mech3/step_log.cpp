@@ -59,6 +59,7 @@ void step_log_end_step() {
   }
   std::fprintf(g_file, "S %llu objects=%d hash=%016llx\n%s", static_cast<unsigned long long>(g_step), count,
                static_cast<unsigned long long>(h), g_vehicles.c_str());
+  std::fflush(g_file);  // a run that crashes keeps its steps up to the crash
   g_vehicles.clear();
   ++g_step;
 }
