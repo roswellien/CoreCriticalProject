@@ -481,6 +481,7 @@ void CoreState::run_fixed_steps() {
     sync_frame_step(timer.dt, timer.total_scaled);
     poll_and_run_lists(false);
     world_tick(en);
+    en.arena_tick();                      // an arena match's log and end, on the step's time (#287)
     zcls::interp::prepare_cameras();      // the cameras' part of the draw the simulation reads
     zcls::interp::settle_world_caches();  // the caches the original's draw rebuilt each frame
     zcls::interp::record();               // the step's transforms, for drawing between steps
@@ -561,7 +562,10 @@ bool CoreState::frame() {
 bool CoreState::update() {
   Engine& en = e();
   if (frame()) a().push(a().state(3), 0);
-  en.arena_tick();  // ours (#287): an arena match's end, after the frame's play
+  // Ours (#287): an arena match's log and end, after the frame's play; with the
+  // fixed step it runs in each step instead (#485: its log records every
+  // simulation update, and the match ends on the steps' time).
+  if (g_world_tick_in_draw) en.arena_tick();
   if (en.vmode() != globals().last_vmode) {
     pick_renderer();
     globals().last_vmode = en.vmode();

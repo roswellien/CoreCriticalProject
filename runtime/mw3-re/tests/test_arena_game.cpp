@@ -613,9 +613,9 @@ TEST(replay_frame_branch_simulates_nothing_headless) {
   std::printf("  replay frames: %d, moved %d, off clock %d, clock not real %d, hooks %d/%d\n", r.frames,
               r.mechs_moved, r.time_off_clock, r.clock_not_real, r.before, r.after);
   EXPECT(r.frames == 60 && r.mechs_moved == 0 && r.time_off_clock == 0 && r.clock_not_real == 0);
-  // The hooks run once per 1/30 s simulation step (#485): 60 frames of the
-  // fake clock's 16 ms are 0.96 s, 28 or 29 steps, each with both hooks.
-  EXPECT(r.before == r.after && r.before >= 28 && r.before <= 29);
+  // Once per drawn frame: a 3D replay keeps one pass of the lists a frame
+  // under the fixed step too (#485, docs/fixed-step.md).
+  EXPECT(r.before == 60 && r.after == 60);
   // The control: the same frames without the hooks, where the bots move.
   replay_game::FrameProbe control(200, 60, false);
   arena_headless_run(json, 300, [&](int frame) { control.frame(frame); });
@@ -815,6 +815,8 @@ TEST(arena_log_detail_c1mp1_4v4_headless) {
 
 // #514: recording observes every simulation update without changing the fight.
 TEST(arena_record_every_update_c1mp1_4v4_headless) {
+  // Ours (#485): core frames counted are simulation steps, one state each.
+  const PresentOnSteps on_steps;
   if (!have_game()) return;
   const auto fixture = std::filesystem::path(MW3_SOURCE_DIR).parent_path().parent_path() /
                        "tools/benchmark/fixtures/c1mp1-4v4-reference.json";
@@ -864,7 +866,10 @@ TEST(arena_record_every_update_c1mp1_4v4_headless) {
         minimum = std::min(minimum, delta);
         maximum = std::max(maximum, delta);
         EXPECT(delta > 0);
-        EXPECT(every_update ? (delta > 0.0329 && delta < 0.0331) : (delta >= 0.098 && delta <= 0.133));
+        // Ours (#485): one state per simulation step of 1/30 s; the default
+        // 0.1 s sampling lands on whole steps, 2 to 4 of them as the float
+        // clock falls just short of or past each boundary.
+        EXPECT(every_update ? std::fabs(delta - 1.0 / 30.0) < 1e-4 : (delta >= 0.066 && delta <= 0.134));
       }
       previous = record["t"].get<double>();
       ++count;
