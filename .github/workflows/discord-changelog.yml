@@ -1,0 +1,73 @@
+name: Discord changelog
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: Mountain calendar date (YYYY-MM-DD)
+        required: true
+        type: string
+      version:
+        description: Verified public preview version
+        required: true
+        type: string
+      bullets:
+        description: JSON array of public changelog bullets
+        required: true
+        type: string
+      live:
+        description: Deliver to the configured Discord channel
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: corecritical-discord-changelog
+  cancel-in-progress: false
+
+jobs:
+  dry-run:
+    if: github.repository == 'roswellien/CoreCriticalProject' && github.ref == 'refs/heads/develop' && inputs.live == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate changelog without contacting Discord
+        run: python3 tools/github/discord_changelog.py dry
+
+  post:
+    if: github.repository == 'roswellien/CoreCriticalProject' && github.ref == 'refs/heads/develop' && github.run_attempt == 1 && inputs.live == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: discord-changelog
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify date is unreserved and check the channel
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_CHANGELOG_WEBHOOK_URL: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK_URL }}
+        run: python3 tools/github/discord_changelog.py reserve
+      - name: Reserve date before attempting delivery
+        id: reservation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.preflight.outputs.name }}
+          path: ${{ runner.temp }}/discord-changelog-reservation.txt
+          retention-days: 7
+          if-no-files-found: error
+      - name: Post once and verify receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_CHANGELOG_WEBHOOK_URL: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK_URL }}
+          RESERVATION_ID: ${{ steps.reservation.outputs.artifact-id }}
+        run: python3 tools/github/discord_changelog.py send
