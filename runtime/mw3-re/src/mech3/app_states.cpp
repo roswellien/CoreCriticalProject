@@ -509,6 +509,7 @@ void world_tick(Engine& en) {
   en.missions_update(0x6098d0, en.frame_dt());
   en.pilot_update(en.pilot(), en.frame_dt());
   en.camera_update();
+  en.spectator_camera();  // ours (#529): a watched arena match's camera, after the view's
 }
 }  // namespace
 

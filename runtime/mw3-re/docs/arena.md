@@ -39,8 +39,9 @@ nothing is bound to a socket and nothing leaves the process. A match plays
 without sound, watched or not. Every bot walks the grid (the Improved AI
 upgrade) whatever `mw3.cfg` says, so a setup and seed play the same match on
 any machine. With `--hidden` and no screenshots the match draws
-nothing; without `--hidden` a window follows one bot, and the camera-cycle
-key moves the view to the next bot still standing.
+nothing; without `--hidden` a window shows the match through the spectator
+camera below, and the game's camera-cycle key still moves the view to the
+next bot still standing.
 
 A hidden match steps the game clock by exactly `--frame-ms` each frame, so
 the same setup and seed write the same log byte for byte. A watched match
@@ -338,6 +339,52 @@ and fog distance of the old Core Critical host isn't in this runtime, so the
 replay shows the map's own fog. A mech is
 picked by its label's point on the screen, not its shape. The camera goes
 through hills.
+
+## The spectator camera (#529)
+
+A watched match (no `--hidden`) is seen through a spectator camera with five
+modes. It starts in chase. The window's title names the mode, the followed
+mech and the keys.
+
+| Mode | Key | What it shows |
+| --- | --- | --- |
+| Chase | 1 | Behind and above the followed mech, turning with its heading |
+| Cockpit | 2 | From the followed mech's torso, looking where its torso looks |
+| Orbit | 3 | Slowly circling the middle of every standing mech, wide enough to hold them all |
+| Overhead | 4 | High above the followed mech, north up; it never turns with the mech |
+| Free | 5 or V | Flown by hand |
+
+- C cycles chase, cockpit, orbit and overhead; Shift+C goes back.
+- Tab (or `]`) follows the next standing mech, Shift+Tab (or `[`) the one before.
+  When the followed mech falls, the view moves on by itself after it is down.
+- The mouse wheel, or `=` and `-`, zooms: the chase distance (8 to 150 m),
+  the overhead height (40 to 800 m), the orbit's size, or the free camera's
+  speed (5 to 400 m/s, starting at 40).
+- Free camera: hold the right mouse button and move the mouse to look; W, A,
+  S and D fly, Q and E go down and up, Shift flies four times as fast. A fly
+  key or the right mouse button in any other mode takes over from where the
+  camera is; V goes back to the mode it left.
+- Escape opens the game's quit box as before.
+
+Every move is smoothed in real seconds (1 - e^(-rate x seconds)), so the
+camera moves the same at 30 frames a second as at 300. The camera only reads
+where the mechs are and places the scene's camera after the game's own view
+has placed it; it never touches a mech, its torso or the match. A hidden
+match never makes one, so its log stays byte for byte as before. The math is
+`src/mech3/arena_camera.h` (tested in `tests/test_arena_camera.cpp`); the keys
+are `src/frontend/sdl/arena_camera_view.cpp`. The camera goes through hills.
+
+The old overhead view was the game's godseye camera, 150 m above the mech,
+looking straight down (a pitch of exactly -90 degrees) and turning with the
+mech's heading. Bots turn all the time, so the whole map spun under the
+viewer, and at exactly -90 degrees the camera's angles sit at gimbal lock,
+where a rounding error swaps yaw and roll from frame to frame and the picture
+jumps. It also sat a fixed 150 m above the mech's centre, so its height rose
+and fell with every hill. A trace of a watched c1mp1 1v1 (seed 7, 5,759 frames
+at about 144 a second) showed its yaw jumping more than 0.05 radians in 947
+frames (up to 0.78 in one), a roll that should be zero in 535, 221 radians of
+turning in 40 seconds, and its height ranging from 126 to 174 m. The spectator's overhead view keeps north up, looks down at 83
+degrees, and glides after the mech instead of snapping to it each frame.
 
 ## Repeating a match
 
