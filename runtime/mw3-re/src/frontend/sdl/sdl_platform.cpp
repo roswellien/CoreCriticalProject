@@ -845,13 +845,28 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   render_->set_viewport(vx, vy, vw, vh);
 }
 
-bool SdlScreen2D::live_menu_gpu_enabled() const {
+// Ours (#552): constructors can run before the new menu becomes the app's current state.
+// Share the configuration gate, while recording/presentation still reject active Core gameplay.
+bool SdlScreen2D::menu_gpu_configured() const {
   if (!render_ || !hud_ || !menu_use_gpu_ || menu_observation_enabled_) return false;
+  return mw3_menu_gpu_env() == 1;
+}
+
+bool SdlScreen2D::live_menu_gpu_enabled() const {
+  if (!menu_gpu_configured()) return false;
   // The engine arms menu recording for every canvas, mission modes included. Gating here keeps
   // recording, the menu layout and present_16's menu canvas off for the whole mission.
   const bool mission_running = in_mission && in_mission();
-  if (mission_running) return false;
-  return mw3_menu_gpu_env() == 1;
+  return !mission_running;
+}
+
+// Ours (#552): the decision precedes the first menu frame, so use the presenter's readiness,
+// not last frame's blits. Live GPU frames need the uploaded HD texture. Disabling live replay
+// (or selecting CPU composition) still permits Stage C's HD compositor in present_16.
+bool SdlScreen2D::hd_menu_background_ready() const {
+  if (!render_ || !menu_background_) return false;
+  if (!menu_gpu_configured()) return true;
+  return menu_gpu_available_ && menu_hd_texture_ >= 0;
 }
 
 void SdlScreen2D::set_menu_layout_active(bool active) noexcept {

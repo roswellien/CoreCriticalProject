@@ -109,11 +109,12 @@ void CreditsScreen::BackButton::on_left_up() {
 // Mech3.exe 1.2 @ 0x004289a0
 CreditsScreen::CreditsScreen(Engine& e, Handle s) : MenuScreen(e, s), cancel(e) {
   const bool moving = !e.fast_menu();
-  if (load("dlgCredits.zrd", "CREDITSDIALOG", moving)) {
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
+  if (load("dlgCredits.zrd", "CREDITSDIALOG", moving || !bake_menu)) {
     borrow_background(false);
     bind_primitive(&lines, "CREDIT_LINES");
     bind_primitive(&title, "CREDIT_TEXT");
-    if (!moving) {
+    if (bake_menu) {
       bake();
       remove(&background);
       remove(&lines);
