@@ -60,6 +60,7 @@
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zweapon/zweapon.h"
 #include "gamez/zentity/zent_init.h"
+#include "mech3/replay_hooks.h"
 #include "mech3/cheats.h"
 #include "mech3/cockpit_sound.h"
 #include "mech3/landmines.h"
@@ -2526,6 +2527,7 @@ void wire_mission_hooks(GameEngine* e) {
 // addition standing in for the briefing's Launch button) the Core state.
 void GameEngine::missions_start(uint32_t list) {
   if (list != 0x6098d0) return Engine::missions_start(list);
+  if (ReplayHooks* replay = replay_hooks()) replay->scene_load_enter();
   platform::loading::Session loading("mission-load", "Loading mission");
   Missions& m = missions();
   // zEntity's list: emptied by the last cleanup (0x0049dc40) but for the
@@ -2555,7 +2557,7 @@ void GameEngine::missions_start(uint32_t list) {
   zvid::producer_mission_changed(identity);
   if (auto *render = platform_parts().render) {
     platform::loading::Phase phase("renderer-mission-preparation");
-    render->mission_changed(identity);
+    render->mission_scene_changed(identity, !m.failed);
   }
   zcls::Node* cam = mission_node(*this, camera_);
   if (launch_.active && launch_.have_pos && cam) {  // as the debug viewer places it (render.md section 0)

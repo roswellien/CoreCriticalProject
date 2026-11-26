@@ -92,9 +92,12 @@ class GameEngine : public Engine {
   void arena_tick() override;    // ours (#287, app_mission.cpp -> mech3/arena)
   // Ours (#289): the 3D replay's frame, through replay_hooks() (replay_hooks.h).
   bool replay_on() override;
+  bool replay_strict() override;
+  bool replay_advance_lists() override;
   void replay_start() override;
-  void replay_before_lists() override;
+  bool replay_before_lists() override;
   void replay_after_lists() override;
+  void replay_after_frame() override;
   void replay_camera() override;
   void spectator_camera() override;
   void replay_draw() override;

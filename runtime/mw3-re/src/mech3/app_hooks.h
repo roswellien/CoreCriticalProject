@@ -683,12 +683,15 @@ class Engine : public zgame::AppHooks {
   virtual void arena_tick() {}    // ours (#287): an arena match's end, each Core frame (nothing outside one)
   // Ours (#289, replay_hooks.h): a 3D replay's frame. Off outside one.
   virtual bool replay_on() { return false; }
+  virtual bool replay_strict() { return false; }
+  virtual bool replay_advance_lists() { return true; }
   virtual void replay_start() {}
-  virtual void replay_before_lists() {}
+  virtual bool replay_before_lists() { return true; }
   virtual void replay_after_lists() {}
   // Ours (#529): after the view's frame placed the camera, a watched arena
   // match's spectator camera wins (spectator_camera_hooks.h).
   virtual void spectator_camera() {}
+  virtual void replay_after_frame() {}
   virtual void replay_camera() {}  // after the view's frame placed the camera: the replay's camera wins
   virtual void replay_draw() {}    // over the HUD, under the quit box: the replay's overlays and bar
   virtual uint32_t network_lobby_active() { return unported("0x00586ce0", {}) & 0xff; }

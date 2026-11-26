@@ -50,6 +50,10 @@ class PreparedModels {
     explicit PreparedModels(const sdlfe::CoreCriticalAssets &options,
                             const std::vector<PreparedMaterialBinding> &materials = {});
     bool empty() const { return models_.empty(); }
+    struct LoadedAssets {
+        std::size_t lods{}, normals{}, materials{}, skins{};
+    };
+    LoadedAssets loaded_assets() const;
     std::uint64_t surface_decoded_bytes() const { return surface_budget_->used(); }
     const std::shared_ptr<::mw34::materials::SurfaceDecodedBudget> &surface_budget() const {
         return surface_budget_;

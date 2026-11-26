@@ -15,6 +15,8 @@ struct RendererBridgeConfig {
   bool dxgi_present{true};
   std::string window_mode{"windowed"};
   bool vsync{true};
+  bool require_immediate_present{false};
+  bool strict_swapchain_readback{false};
   std::string present_mode;
 
   // Output / Resolution

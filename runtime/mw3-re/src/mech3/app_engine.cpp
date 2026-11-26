@@ -677,12 +677,25 @@ void GameEngine::input_set_mode(uint32_t mode) { zin::set_mode(mode); }
 void GameEngine::input_poll(uint8_t callbacks) { zin::poll(callbacks != 0); }
 
 bool GameEngine::replay_on() { return replay_hooks() != nullptr; }
+bool GameEngine::replay_strict() {
+  const ReplayHooks* replay = replay_hooks();
+  return replay && replay->strict();
+}
+bool GameEngine::replay_advance_lists() {
+  const ReplayHooks* replay = replay_hooks();
+  return !replay || replay->advance_lists();
+}
 void GameEngine::replay_start() {
   if (ReplayHooks* replay = replay_hooks()) replay->start();
 }
-void GameEngine::replay_before_lists() {
-  if (ReplayHooks* replay = replay_hooks()) replay->before_lists(quit_box_ && quit_box_->active);
+bool GameEngine::replay_before_lists() {
+  ReplayHooks* replay = replay_hooks();
+  return !replay || replay->before_lists(quit_box_ && quit_box_->active);
 }
+void GameEngine::replay_after_frame() {
+  if (ReplayHooks* replay = replay_hooks()) replay->after_frame();
+}
+
 void GameEngine::replay_after_lists() {
   if (ReplayHooks* replay = replay_hooks()) replay->after_lists();
 }

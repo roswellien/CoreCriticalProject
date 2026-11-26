@@ -29,6 +29,8 @@ class ReplayRun {
 
   // With the install mounted: the log read, its map checked and found in the
   // game files, and every chassis known.
+  bool load_log(const std::string& path, std::string* message);
+  bool check_game_files(std::string* message) const;
   bool read(const std::string& path, std::string* message);
   // Before the engine runs: the in-process session opened, with no bots,
   // and the host seated as a spectator.

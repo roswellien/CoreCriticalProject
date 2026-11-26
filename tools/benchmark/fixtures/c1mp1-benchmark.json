@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "scenes": [
+    {
+      "id": "c1mp1",
+      "map": "c1mp1",
+      "log": "../../../local/benchmark/reference-16/match-7.jsonl",
+      "log_sha256": "003521ae20a0e503cc7b9946e050a89e0b9037c9aca365572dd5ad40bf5d2f54",
+      "camera": {
+        "mode": "sequence",
+        "subject": 3,
+        "shots": [
+          {
+            "type": "chase",
+            "duration_seconds": 10,
+            "distance": 40,
+            "mech": 0
+          },
+          {
+            "type": "chase",
+            "duration_seconds": 8,
+            "distance": 40,
+            "mech": 3
+          },
+          {
+            "type": "orbit",
+            "duration_seconds": 7,
+            "radius": 60,
+            "height": 18,
+            "degrees_per_second": 28,
+            "mech": 2
+          },
+          {
+            "type": "side",
+            "duration_seconds": 5,
+            "distance": 48,
+            "mech": 1
+          },
+          {
+            "type": "high",
+            "duration_seconds": 5,
+            "distance": 68,
+            "height": 52,
+            "mech": 5
+          },
+          {
+            "type": "front",
+            "duration_seconds": 5,
+            "distance": 50,
+            "height": 14,
+            "mech": 13
+          },
+          {
+            "type": "low",
+            "duration_seconds": 5,
+            "distance": 40,
+            "height": 3,
+            "mech": 10
+          },
+          {
+            "type": "chase",
+            "duration_seconds": 5,
+            "distance": 40,
+            "mech": 9
+          }
+        ]
+      },
+      "seed": 7,
+      "warmup_seconds": 20,
+      "measured_seconds": 30,
+      "stress": false,
+      "start_seconds": 20
+    }
+  ]
+}
