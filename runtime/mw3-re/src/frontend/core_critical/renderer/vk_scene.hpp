@@ -1845,6 +1845,7 @@ private:
     // Slots drawn with white this frame because their texture is waiting for
     // pixels or didn't fit in video memory (#496).
     std::vector<bool> stand_in_slots(s.textures.size());
+    std::set<std::uint64_t> requested_texture_pixels;
     for (size_t i = 0; i < s.textures.size(); ++i) {
       const auto &t = s.textures[i];
       const bool has_pixels = (t.format == TexFormat::rgba8888 ? t.pixels32.size()
@@ -1857,11 +1858,13 @@ private:
         const auto retry = texture_retry_at_.find(t.key);
         const bool backing_off = retry != texture_retry_at_.end() && render_frame_ < retry->second;
         if ((!has_pixels || backing_off) && !uploaded_again) {
-          // The frontend may have re-sent the pixels during the back-off and
-          // taken its receipt back; once the back-off ends, ask again.
-          if (!backing_off && retry != texture_retry_at_.end()) {
-            texture_retry_at_.erase(retry);
-            mark_texture_awaiting_pixels(t.key);
+          // #496: a discarded or queued scene can leave the frontend with a
+          // stale receipt. Ask again once the texture can be uploaded.
+          if (!backing_off) {
+            if (retry != texture_retry_at_.end())
+              texture_retry_at_.erase(retry);
+            if (requested_texture_pixels.insert(t.key).second)
+              mark_texture_awaiting_pixels(t.key);
           }
           bound[i] = &white;
           stand_in_slots[i] = true;

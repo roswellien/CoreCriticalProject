@@ -3058,6 +3058,42 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
               "A re-sent texture's receipt was not restored, so its pixels are copied every frame");
     }
     {
+      // #496: a wholly clipped draw can restore a receipt without sending pixels.
+      sdlfe::CoreCriticalAssets clipped_options;
+      clipped_options.models = options.models;
+      auto clipped = make_check_renderer(window, backend, quality, clipped_options);
+      clipped->set_viewport(0, 0, 64, 64);
+      frame(clipped.get());
+      const auto handles = preload_test_state(*clipped).completed_texture_handles;
+      require(handles.size() == 1, "Clipped draw fixture did not bind exactly one texture");
+      const auto handle = handles.front();
+      const auto expected_clipped_texture = draw_texture(*clipped, handle);
+      require(expected_clipped_texture != expected_white,
+              "Clipped draw fixture can't tell its texture from white");
+
+      age_to(*clipped, scene_render_frame(*clipped) + 301);
+      free_unused_textures(*clipped, 300);
+      require(!is_texture_gpu_resident(*clipped, handle) &&
+                  texture_awaiting_pixels(*clipped, handle),
+              "Clipped draw fixture's texture was not freed");
+      const auto before_clip = scene_render_frame(*clipped);
+      auto clipped_context = context;
+      clipped_context.clip_near = context.far_z / 2;
+      clipped->begin_model_draw(clipped_context);
+      clipped->end_model_draw();
+      clipped->flush();
+      require(scene_render_frame(*clipped) == before_clip &&
+                  has_texture_receipt(*clipped, handle) &&
+                  !is_texture_gpu_resident(*clipped, handle),
+              "Clipped draw did not leave a stale texture receipt");
+
+      bool recovered = false;
+      for (int attempt = 0; attempt < 3 && !recovered; ++attempt)
+        recovered = draw_texture(*clipped, handle) == expected_clipped_texture &&
+                    is_texture_gpu_resident(*clipped, handle);
+      require(recovered, "Texture stayed white after a clipped draw left a stale receipt");
+    }
+    {
       // (h) A model failure never frees a texture the same frame draws, however
       // old: this one has a receipt, so a freed copy couldn't come back in-frame.
       auto preloaded = preloaded_texture_renderer(0);
