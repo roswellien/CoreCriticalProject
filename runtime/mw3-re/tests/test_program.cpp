@@ -77,6 +77,7 @@
 #include "gamez/zweapon/zwep_init.h"
 #include "gamez/zeffect/zeff_anim_run.h"
 #include "mech3/app.h"
+#include "mech3/fixed_step.h"
 #include "mech3/app_engine.h"
 #include "mech3/app_hud.h"
 #include "mech3/mission_map.h"
@@ -8245,7 +8246,12 @@ TEST(mission_c1m1_frames_fire_bramps_timers_headless) {
     engine.on_present = [&](int) {
       if (app.current() != &mech3::states().core) return;
       const float now = mech3::missions().time;
-      if (seen.frames > 0 && now != seen.last + engine.frame_dt()) seen.time_steps = false;
+      // Ours (#485): the mission runs in whole 1/30 s steps, as many as the
+      // frame's time holds, so a drawn frame adds a whole number of steps.
+      if (seen.frames > 0) {
+        const float steps = (now - seen.last) * 30.0f;
+        if (std::fabs(steps - std::round(steps)) > 1e-2f) seen.time_steps = false;
+      }
       if (seen.frames == 0) {
         if (mech3::ai::Valve* b = valve_find("bramp")) {
           b->set(1);
@@ -8766,12 +8772,18 @@ TEST(mission_c4b_m6_camera_zone_follows_the_ground_headless) {
         std::fprintf(stderr, "ZONE set %d cam %d %d %d %d render %d %d %d %d mech %d %d %d %d node %d visible 1:%d 22:%d 44:%d\n", n->set,
                      n->cam[0], n->cam[1], n->cam[2], n->cam[3], n->render[0], n->render[1], n->render[2], n->render[3],
                      n->mech[0], n->mech[1], n->mech[2], n->mech[3], n->node_zone, n->v1, n->v22, n->v44);
-    const uint8_t one[4] = {1, 1, 0xff, 0xff}, tunnel[4] = {2, 1, 44, 0xff};
+    // Inside: the ground's zone and the tunnel's (1 and 44), the one under the
+    // mech's node first. Which that is depends on where the dropped mech
+    // settles at the tunnel's mouth: with 1/30 s steps (ours, #485) it settles
+    // further in, over 44; with a step per 16 ms frame, over 1.
+    const uint8_t under = static_cast<uint8_t>(inside.node_zone);
+    const uint8_t one[4] = {1, 1, 0xff, 0xff}, tunnel[4] = {2, under, static_cast<uint8_t>(under == 1 ? 44 : 1), 0xff};
     EXPECT(outside.set == 1 && !std::memcmp(outside.cam, one, 4) && !std::memcmp(outside.render, one, 4));
     EXPECT(!std::memcmp(outside.mech, one, 4) && outside.node_zone == 1);
     EXPECT(outside.v1 == 1 && outside.v22 == 0 && outside.v44 == 0);
+    EXPECT(inside.node_zone == 1 || inside.node_zone == 44);
     EXPECT(inside.set == 1 && !std::memcmp(inside.cam, tunnel, 4) && !std::memcmp(inside.render, tunnel, 4));
-    EXPECT(!std::memcmp(inside.mech, tunnel, 4) && inside.node_zone == 1);
+    EXPECT(!std::memcmp(inside.mech, tunnel, 4));
     EXPECT(inside.v1 == 1 && inside.v22 == 0 && inside.v44 == 1);
     EXPECT(nan_query_ended);
     EXPECT(outside.anim_known == 1 && !std::memcmp(outside.anim, one, 4) && !std::memcmp(inside.anim, tunnel, 4));
@@ -9248,8 +9260,11 @@ TEST(mission_c1m1_vehicles_run_their_frames_headless) {
     // ttruck_01 waits for truck_go at its net's node_08.
     for (const Track& k : tracks)
       if (k.name == "ttruck_01") {
+        // The node step lets it stop within its stopping distance (0x004cf140),
+        // so where it waits depends on the step: 3.6 m off at 1/30 s steps
+        // (ours, #485), 0.7 m with a step per 16 ms frame.
         const float node08[3] = {-1826.3f, -20.0f, -1571.9f};
-        EXPECT(dist(k.at_go, node08) < 3.0f);
+        EXPECT(dist(k.at_go, node08) < 5.0f);
     }
     app.stop_game();
     app.exit_instance();
@@ -9576,6 +9591,7 @@ ParkRun c2m1_park_run(bool bugs) {
     mech3::Pilot* was_pilot = mech3::current_pilot();
     mech3::current_pilot() = &pilot;
     int frames = 0, phase = 0, at_phase = 0, repair_fronts = 0;
+    bool dominic_seen = false;
     void* dominic = nullptr;
     mech3::ai::Brain* brain = nullptr;
     float point[3] = {};
@@ -9606,8 +9622,7 @@ ParkRun c2m1_park_run(bool bugs) {
             dominic = ai[i].mech;
             brain = static_cast<mech3::AiControls*>(ai[i].controls)->brain.get();
           }
-        out.dominic = dominic && brain;
-      }
+        out.dominic = dominic && brain;      }
       if (!out.bases || !out.dominic) return;
       if (frames == 5 || frames == 6) mech3::program_mcb_command(player);  // the pick, then the call
       if (frames == 7) {
@@ -9630,12 +9645,17 @@ ParkRun c2m1_park_run(bool bugs) {
           }
           break;
         case 2:  // Dominic docks and is repaired; parked again
+          // His wear as the repair ends (the dock's close begins): the mission's
+          // enemies go on shooting, and a hit while the dock closes is theirs.
+          if (repair_fronts == 2 && d.front == 5 && !dominic_seen) {
+            const mech3::MechWear w = mech3::program_mech_wear(dominic);
+            std::printf("  Dominic after the repair: armour %.2f internals %.2f\n", w.armor, w.internal);
+            out.dominic_repaired = w.armor == 1.0f && w.internal == 1.0f;
+            dominic_seen = true;
+          }
           if (!out.refit_taken || frames > at_phase + 3000) {
             phase = 9;
           } else if (repair_fronts == 2 && d.front == 7) {
-            const mech3::MechWear w = mech3::program_mech_wear(dominic);
-            std::printf("  Dominic after the dock: armour %.2f internals %.2f\n", w.armor, w.internal);
-            out.dominic_repaired = w.armor == 1.0f && w.internal == 1.0f;
             put(player, point[0], point[2]);  // the player back on the dock, powered down
             mech3::mech_power(player, 1);
             phase = 3, at_phase = frames;
@@ -11528,6 +11548,7 @@ TEST(mission_c1m1_camera_follows_the_cockpit_headless) {
 }
 
 TEST(mission_c1m1_sensors_fill_the_contacts_headless) {
+  const PresentOnSteps on_steps;  // ours (#485): its frames counted are the game's ticks
   if (!have_game()) return;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -12802,6 +12823,7 @@ TEST(mission_c2m2_gas_destroys_the_mechs_headless) {
 // on c1m1, T between them. Each new target starts TARGET's pulse
 // (0.3 s) and the target sound on the new target's mech.
 TEST(mission_c1m1_target_keys_tell_the_hud_headless) {
+  const PresentOnSteps on_steps;  // ours (#485): its frames counted are the game's ticks
   if (!have_game()) return;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -12942,6 +12964,7 @@ struct LrmRun {
 };
 constexpr float kLrmRange = 150.0f;
 static LrmRun lrm_after_lock(bool turn_away) {
+  const PresentOnSteps on_steps;  // ours (#485): its frames counted are the game's ticks
   LrmRun r;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -13029,11 +13052,18 @@ static LrmRun lrm_after_lock(bool turn_away) {
         yaw0 = me.yaw_sin;
         if (turn_away) keys.key(left, true);
       }
-      if (r.lock_frame > 0 && fire_frame < 0 && frames == r.lock_frame + (turn_away ? 25 : 1)) {
-        keys.key(left, false);
+      // Turned away until the reticle is 10 degrees off (ours, #485: by the
+      // angle, not a count of ticks), at most 3 s, inside the lock's 3.5 s.
+      float turned_now = 0.0f;
+      if (r.lock_frame > 0 && fire_frame < 0) {
         mech3::LaunchedMech me;
         mech3::describe_mech(player, &me);
-        r.turned = 2.0f * (std::asin(std::clamp(me.yaw_sin, -1.0f, 1.0f)) - std::asin(std::clamp(yaw0, -1.0f, 1.0f)));
+        turned_now = 2.0f * (std::asin(std::clamp(me.yaw_sin, -1.0f, 1.0f)) - std::asin(std::clamp(yaw0, -1.0f, 1.0f)));
+      }
+      const bool turned_enough = !turn_away || std::fabs(turned_now) > 0.17f || frames >= r.lock_frame + 90;
+      if (r.lock_frame > 0 && fire_frame < 0 && frames > r.lock_frame && turned_enough) {
+        keys.key(left, false);
+        r.turned = turned_now;
         r.locked = mech3::mech_lock_shown(player);
         mech3::describe_mech(owens, &o);
         r.armor0 = o.armor;
@@ -13354,6 +13384,9 @@ TEST(mission_c1m1_short_clicks_fire_headless) {
   p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
   p.input = &keys;
   int mouse_clicks = 0, mouse_volleys = 0, key_clicks = 0, key_volleys = 0, slowest = 0;
+  // Ours (#485): the game time from a click to its volley. Drawn frames come
+  // faster than the 1/30 s steps, so the lag is counted in steps, not frames.
+  float clicked_time = 0.0f, slowest_time = 0.0f;
   {
     mech3::GameEngine engine(p, "mech3.exe -nofmv");
     engine.quiet = true;
@@ -13379,13 +13412,14 @@ TEST(mission_c1m1_short_clicks_fire_headless) {
       if (clicked_at >= 0) {  // the last click: fired once it reloads, within 10 frames
         if (reloading) {
           if (frames - clicked_at > slowest) slowest = frames - clicked_at;
+          slowest_time = std::max(slowest_time, mech3::missions().time - clicked_time);
           ++(clicks <= 5 ? mouse_volleys : key_volleys), clicked_at = -1;
         }
         else if (frames - clicked_at > 10) clicked_at = -1;
         return;
       }
       if (clicks >= 10 || reloading || mech3::mech_group_ready(player, 1) < 1.0f) return;  // charging: wait for the full bar
-      ++clicks, clicked_at = frames;
+      ++clicks, clicked_at = frames, clicked_time = mech3::missions().time;
       if (clicks <= 5) keys.left_reads = 1, ++mouse_clicks;
       else keys.key(fire, true), keys.key(fire, false), ++key_clicks;
     };
@@ -13398,11 +13432,12 @@ TEST(mission_c1m1_short_clicks_fire_headless) {
     app.exit_instance();
     mech3::set_app(nullptr);
   }
-  std::printf("  clicks: mouse %d / %d volleys, key %d / %d volleys, the slowest %d frame(s) after its click\n",
-              mouse_clicks, mouse_volleys, key_clicks, key_volleys, slowest);
+  std::printf("  clicks: mouse %d / %d volleys, key %d / %d volleys, the slowest %d frame(s), %.4f s after its click\n",
+              mouse_clicks, mouse_volleys, key_clicks, key_volleys, slowest, slowest_time);
   EXPECT(mouse_volleys == mouse_clicks);
   EXPECT(key_volleys == key_clicks);
-  EXPECT(slowest == 1);  // from a full charge the next frame fires (playtest #23's lag is not the game's)
+  // From a full charge the next step fires (playtest #23's lag is not the game's).
+  EXPECT(std::fabs(slowest_time - 1.0f / 30.0f) < 1e-4f);
   zrdr::close_archives(true);
   mech3::reset_states();
   reset_process_state();
@@ -13421,6 +13456,7 @@ struct LaserAim {
   float beam_off2 = -1.0f;  // the aim point a frame later
   float beam_held = -1.0f;  // that one off the held beam's line the frame after
   float armor0 = 0, armor1 = 0;
+  bool step_skipped = false;  // a drawn frame held two steps, so a step went unseen
   std::string names;
 };
 static LaserAim laser_on_the_reticle(bool turning) {
@@ -13478,6 +13514,8 @@ static LaserAim laser_on_the_reticle(bool turning) {
     void* player = nullptr;
     void* owens = nullptr;
     uint32_t fire = 0, left = 0;
+    uint32_t clicked_step = 0;  // the step count at the click
+    bool fire_seen = false, held_seen = false;
     engine.on_present = [&](int) {
       if (app.current() != &mech3::states().core) return;
       ++frames;
@@ -13508,9 +13546,20 @@ static LaserAim laser_on_the_reticle(bool turning) {
         mech3::program_hud_aim(ret, aim_pt, &aim_hit);
         mech3::describe_mech(owens, &before);
         keys.key(fire, true);
-      } else if (frames == 81 || frames == 82) {  // fired on 81, held on 82: the aim point off the beam's line
-        if (frames == 82) keys.key(fire, false);
-        if (frames == 81) {
+        clicked_step = zcls::frames().step;
+      } else if (clicked_step && zcls::frames().step > clicked_step && !held_seen) {
+        // Ours (#485): fired on the step after the click, held on the next;
+        // counted in 1/30 s steps, as drawn frames may come between them.
+        const uint32_t after = zcls::frames().step - clicked_step;
+        if (after == 1 && fire_seen) return;  // a drawn frame between steps
+        if (after > 2 || (after == 2 && !fire_seen)) {
+          r.step_skipped = true;
+          return;
+        }
+        const bool firing = after == 1;
+        (firing ? fire_seen : held_seen) = true;
+        if (!firing) keys.key(fire, false);
+        if (firing) {
           int32_t ret[2];
           bool hit2 = false;
           mech3::program_hud_aim(ret, aim_pt2, &hit2);
@@ -13525,10 +13574,10 @@ static LaserAim laser_on_the_reticle(bool turning) {
           return along > 0.0f ? std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]) : 1e9f;
         };
         if (mech3::mech_group_muzzle(player, g, m, d)) {
-          if (frames == 81) r.beam_off = off(aim_pt, m, d), r.beam_off2 = off(aim_pt2, m, d);
+          if (firing) r.beam_off = off(aim_pt, m, d), r.beam_off2 = off(aim_pt2, m, d);
           else r.beam_held = off(aim_pt2, m, d);
         }
-        if (turning && frames == 82) keys.key(left, false);
+        if (turning && !firing) keys.key(left, false);
       } else if (frames == 140) {
         mech3::describe_mech(owens, &after);
       }
@@ -13554,7 +13603,7 @@ TEST(mission_c1m1_laser_lands_on_the_reticle_headless) {
   const LaserAim r = laser_on_the_reticle(false);
   std::printf("  laser (%s): the aim point (hit %d) %.3f m off the beam's line; the Owens' armour %.3f -> %.3f\n",
               r.names.c_str(), r.aim_hit, r.beam_off, r.armor0, r.armor1);
-  EXPECT(r.aim_hit);
+  EXPECT(r.aim_hit && !r.step_skipped);
   EXPECT(r.beam_off >= 0.0f && r.beam_off < 0.25f);  // the beam goes where the reticle points
   EXPECT(r.armor1 < r.armor0);                       // through the Owens in front
 }
@@ -13566,7 +13615,7 @@ TEST(mission_c1m1_laser_turning_on_the_reticle_headless) {
   const LaserAim r = laser_on_the_reticle(true);
   std::printf("  laser turning: off the fired beam's line, the click's aim point %.3f m, the fire frame's %.3f m; "
               "the held beam off the fire frame's %.3f m\n", r.beam_off, r.beam_off2, r.beam_held);
-  EXPECT(r.beam_off >= 0.0f && r.beam_off < 0.25f);
+  EXPECT(r.beam_off >= 0.0f && r.beam_off < 0.25f && !r.step_skipped);
   EXPECT(r.beam_off2 > 1.0f);  // the turn moved the reticle meanwhile
   EXPECT(r.beam_held >= 0.0f && r.beam_held < 0.25f);
 }
@@ -13996,9 +14045,20 @@ TEST(mission_c1m1_jump_jets_lift_in_every_state_headless) {
       EXPECT(r.firing == (c.fuel > 0.25f));
       if (r.firing && r.climb < 3.0f) ++(fixes ? hovers : original_hovers);
     }
-  // The original's path skims the ground walking at 144 fps (0x00477940).
+  // Ours (#485): with the fixed step the simulation runs in 1/30 s steps at any
+  // frame rate, so the original's path lifts at every rate too.
   EXPECT(hovers == 0);
-  EXPECT(original_hovers > 0);
+  EXPECT(original_hovers == 0);
+  // With --variable-step (one step per frame drawn, as before #485) the
+  // original's path still skims the ground walking at 144 fps (0x00477940).
+  const bool fixed_was = mech3::fixed_step_enabled();
+  mech3::set_fixed_step_enabled(false);
+  JetCase skim = {"144 fps, walking", 7, 1.0f, 0, true};
+  skim.fixes = false;
+  const JetRun r = jets_run(skim);
+  mech3::set_fixed_step_enabled(fixed_was);
+  std::printf("  jets %-20s fixes 0, variable step: firing %d, climb %6.2f m\n", skim.what, r.firing, r.climb);
+  EXPECT(r.firing && r.climb < 3.0f);
 }
 // The view leaving the player's mech (0x0041b980, the mech's vt+0x104 from the view's attach 0x0040adf0)
 // suspends it (state 14: Mech::update returns at once) and hides its HUD; coming back (0x0041b930, vt+0x100)
@@ -16179,6 +16239,7 @@ struct NavAllies {
   ~NavAllies() { zfix::options().nav_allies = was; }
 };
 TEST(mission_c1m4_pocket_commander_sends_dominic_to_a_spot_headless) {
+  const PresentOnSteps on_steps;  // ours (#485): its frames counted are the game's ticks
   if (!have_game()) return;
   const NavAllies nav_off(false);  // the W17/W27 walk it pins (W58 measures the grid)
   SavedMounts keep;
@@ -16342,7 +16403,9 @@ TEST(mission_c1m4_pocket_commander_sends_dominic_to_a_spot_headless) {
       }
     };
     CountingPump pump;
-    pump.limit = 1100;
+    // Ours (#485): 1,100 steps (the passes only a ceiling; a pass runs 0 to 4).
+    pump.stop = [&] { return seen.frames >= 1100; };
+    pump.limit = 4 * 1100;
     // The marker within 100 m of the player casts (0x004814e0: vt+0x2c itself,
     // vt+0x50 0): at the quit its node is moved by the player and the upkeep
     // run once, before the mission's cleanup.
@@ -16366,12 +16429,14 @@ TEST(mission_c1m4_pocket_commander_sends_dominic_to_a_spot_headless) {
     EXPECT(seen.ordered && (seen.marker_team & seen.dominic_enemies));
     // He heads for it (exact: the run repeats with reset_process_state's
     // fixed seed).
-    EXPECT(seen.follows_marker == 902 && std::fabs(seen.d0 - 199.349f) < 1e-3f);
+    EXPECT(seen.follows_marker == 1034 && std::fabs(seen.d0 - 199.819f) < 1e-3f);
     // His range is 60..80 m, but at about 120 m he bounces off something and
     // the exe leaves him there (120.879; 120.729 before the AI's wall reverse,
-    // 0x004231c0): playtest W17. With W17's detour (bugs) he works round it,
-    // 114.758 by the run's end.
-    EXPECT(std::fabs(seen.closest - 114.758f) < 1e-3f);
+    // 0x004231c0): playtest W17. With W17's detour (bugs) he works round it
+    // and stops in his range, 62.0 m off, by the run's end (ours, #485: 1,100
+    // steps, 37 s; the 16 ms frames' 1,100 were 18 s, 114.758 m by then,
+    // following 902 of them, d0 199.349).
+    EXPECT(std::fabs(seen.closest - 62.0009f) < 1e-3f);
     EXPECT(seen.marker_cast == 1);
     mech3::missions().cleanup(false);
     app.stop_game();
@@ -16588,6 +16653,7 @@ struct EditorRun {
   float stealth_moved = 0, mech_moved = 0, seconds = 0;
 };
 EditorRun run_editor_on_c1m1(bool flag) {
+  const PresentOnSteps on_steps;  // ours (#485): its frames counted are the game's ticks
   EditorRun out;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -17917,6 +17983,7 @@ TEST(mission_c1m4_lance_orders_reach_dominic_and_he_answers_headless) {
 }
 
 TEST(mission_c1m4_dominic_takes_the_order_and_the_lance_turns_headless) {
+  const PresentOnSteps on_steps;  // ours (#485): its frames counted are the game's ticks
   if (!have_game()) return;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -18086,7 +18153,9 @@ TEST(mission_c1m4_dominic_takes_the_order_and_the_lance_turns_headless) {
       }
     };
     CountingPump pump;
-    pump.limit = 2300;
+    // Ours (#485): 2,300 steps (the passes only a ceiling; a pass runs 0 to 4).
+    pump.stop = [&] { return seen.frames >= 2300; };
+    pump.limit = 4 * 2300;
     app.run(pump);
     if (std::getenv("MW3_LANCE_LOG"))
       std::fprintf(stderr,
@@ -18120,12 +18189,15 @@ TEST(mission_c1m4_dominic_takes_the_order_and_the_lance_turns_headless) {
     // the plan in hand kept to its end before the next pick; before, 53 / 1009
     // / 1139, 71.189, 385, phases 2 2 1009 126. The throttle's snap by the frame
     // (fixes.md): he eases a little longer at these 16 ms frames; closest was 86.592.
+    // Ours (#485): counted in 1/30 s steps, the run 2,300 of them (77 s; the
+    // 16 ms frames' run was half that): at those, 0 / 901, 1133, d0 399.597,
+    // closest 86.789, 186 on the player, phases 103 3 901 132.
     if (!std::getenv("MW3_LANCE_AT") && !std::getenv("MW3_LANCE_DIR") && data_is_12()) {
-      EXPECT(seen.fired_before == 0 && seen.fired_after == 901 && seen.on_enemy == 1133);
-      EXPECT(std::fabs(seen.d0 - 399.597f) < 1e-3f && std::fabs(seen.closest - 86.789f) < 1e-3f);
+      EXPECT(seen.fired_before == 0 && seen.fired_after == 985 && seen.on_enemy == 1100);
+      EXPECT(std::fabs(seen.d0 - 399.425f) < 1e-3f && std::fabs(seen.closest - 63.556f) < 1e-3f);
       EXPECT(seen.enemies_before == 0xfffffffcu && seen.enemies_after == 0x7ffffffeu);
-      EXPECT(seen.on_player == 186);  // his next pick, once the player is 30 m off
-      EXPECT(seen.phases[2] == 103 && seen.phases[3] == 3 && seen.phases[4] == 901 && seen.phases[5] == 132);
+      EXPECT(seen.on_player == 490);  // his next pick, once the player is 30 m off
+      EXPECT(seen.phases[2] == 59 && seen.phases[3] == 4 && seen.phases[4] == 985 && seen.phases[5] == 91);
     }
     mech3::missions().cleanup(false);
     app.stop_game();
@@ -18309,6 +18381,7 @@ TEST(mission_c1m4_a_wreck_is_deleted_and_forgotten_headless) {
 }
 
 TEST(mission_c1m4_dominic_fires_on_a_target_headless) {
+  const PresentOnSteps on_steps;  // ours (#485): its frames counted are the game's ticks
   if (!have_game()) return;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -18434,7 +18507,9 @@ TEST(mission_c1m4_dominic_fires_on_a_target_headless) {
       seen.health = lowest;
     };
     CountingPump pump;
-    pump.limit = 1200;  // 40 s
+    // 40 s: 1,200 steps (ours, #485; the passes only a ceiling, a pass runs 0 to 4).
+    pump.stop = [&] { return seen.frames >= 1200; };
+    pump.limit = 4 * 1200;
     app.run(pump);
     if (std::getenv("MW3_LANCE_LOG"))
       std::fprintf(stderr, "TARGET %s: contacts %d on it %d aiming %d firing %d health %g -> %g frames %d\n",
@@ -18460,9 +18535,11 @@ TEST(mission_c1m4_dominic_fires_on_a_target_headless) {
     std::printf("  dominic's target: contacts %d, first %s, on target %d, aiming %d, firing %d, health %.5f\n",
                 seen.target_contacts, seen.first_target.c_str(), seen.on_target, seen.aiming, seen.firing, seen.health);
     EXPECT(seen.hut != 0 && seen.health0 == 30.0f && seen.on_target > 0 && seen.firing > 0 && seen.health < seen.health0);
+    // Ours (#485): counted in 1/30 s steps, 40 s of them (the 16 ms frames'
+    // 1,200 were 19 s): 4706 contacts, 938 on target, aiming 235, firing 694 there.
     if (data_is_12()) {
-      EXPECT(seen.target_contacts == 4706 && seen.first_target == "ghsD3");
-      EXPECT(seen.on_target == 938 && seen.aiming == 235 && seen.firing == 694);
+      EXPECT(seen.target_contacts == 3772 && seen.first_target == "ghsD3");
+      EXPECT(seen.on_target == 964 && seen.aiming == 97 && seen.firing == 824);
       EXPECT(std::fabs(seen.health - 0.0f) < 1e-3f);
     }
     mech3::missions().cleanup(false);
@@ -18477,6 +18554,7 @@ TEST(mission_c1m4_dominic_fires_on_a_target_headless) {
 }
 
 TEST(mission_c1m4_dominic_stops_at_a_no_go_patch_headless) {
+  const PresentOnSteps on_steps;  // ours (#485): its frames counted are the game's ticks
   if (!have_game()) return;
   const NavAllies nav_off(false);  // the exe's stop at the edge (the grid walks on: W58)
   SavedMounts keep;
@@ -18604,7 +18682,9 @@ TEST(mission_c1m4_dominic_stops_at_a_no_go_patch_headless) {
       std::memcpy(seen.last, d.pos, 12);
     };
     CountingPump pump;
-    pump.limit = 1500;  // 50 s
+    // 50 s: 1,500 steps (ours, #485; the passes only a ceiling, a pass runs 0 to 4).
+    pump.stop = [&] { return seen.frames >= 1500; };
+    pump.limit = 4 * 1500;
     app.run(pump);
     const float east_gap = seen.last[0] - seen.east;
     if (std::getenv("MW3_LANCE_LOG"))
@@ -18614,11 +18694,13 @@ TEST(mission_c1m4_dominic_stops_at_a_no_go_patch_headless) {
     EXPECT(seen.patch && seen.frames > 1000 && std::fabs(seen.d0 - 496.0f) < 1.0f);
     // He walks at it, is pulled up 3 m short of the edge (the far point), runs
     // on 17 m into the patch as he slows, is sent back out to its pushed-out
-    // outline (from inside: the nearest point) and stops there, 5.7 m east of
+    // outline (from inside: the nearest point) and stops there, 3.1 m east of
     // the patch (exact: the run repeats with reset_process_state's fixed seed).
     // 5.72693 before the throttle's snap went by the frame, the same frames inside.
-    EXPECT(seen.inside == 287 && seen.first_in == 837 && seen.last_in == 1123);
-    EXPECT(std::fabs(seen.west - 1004.9f) < 0.05f && std::fabs(east_gap - 5.79883f) < 1e-3f);
+    // Ours (#485): in 1/30 s steps; at 16 ms frames inside 287 (837..1123) and
+    // stopped 5.79883 m east.
+    EXPECT(seen.inside == 270 && seen.first_in == 403 && seen.last_in == 981);
+    EXPECT(std::fabs(seen.west - 1004.85f) < 0.05f && std::fabs(east_gap - 3.10425f) < 1e-3f);
     mech3::missions().cleanup(false);
     app.stop_game();
     app.exit_instance();
@@ -18633,6 +18715,7 @@ TEST(mission_c1m4_dominic_stops_at_a_no_go_patch_headless) {
 // W34: was ..._shoots_a_near_enemy_unordered_; with the firing's real
 // thresholds he aims at it and holds his fire (below).
 TEST(mission_c1m4_dominic_aims_at_a_near_enemy_unordered_headless) {
+  const PresentOnSteps on_steps;  // ours (#485): its frames counted are the game's ticks
   if (!have_game()) return;
   const NavAllies nav_off(false);  // the exe's aim and walk it pins
   SavedMounts keep;
@@ -18763,9 +18846,13 @@ TEST(mission_c1m4_dominic_aims_at_a_near_enemy_unordered_headless) {
       }
     };
     CountingPump pump;
-    pump.limit = 900;  // 30 s
+    // 15 s: 450 steps (ours, #485; the passes only a ceiling, a pass runs 0 to
+    // 4). Written as 900 frames of FakeClock's 16 ms, 15 s of game time; the
+    // enemy powers up at 16 s and walks at him, and he fires then.
+    pump.stop = [&] { return seen.frames >= 450; };
+    pump.limit = 4 * 450;
     app.run(pump);
-    EXPECT(seen.frames >= 600 && seen.brain && seen.enemy);
+    EXPECT(seen.frames >= 450 && seen.brain && seen.enemy);
     if (std::getenv("MW3_LANCE_LOG"))
       std::fprintf(stderr,
                    "DOMINIC vs %s: engage %d attacks %d targeted %d on it %d aiming %d firing %d moved %g"
@@ -18782,9 +18869,9 @@ TEST(mission_c1m4_dominic_aims_at_a_near_enemy_unordered_headless) {
     // 0.707, 0x004b6500). With the port's zero thresholds (90 degrees) he
     // fired 658 frames, his shots along the torso's facing, not at it.
     if (!std::getenv("MW3_LANCE_AT")) {
-      EXPECT(seen.down == 0 && seen.on_enemy > 600 && seen.aiming > 600 && seen.firing == 0);
+      EXPECT(seen.down == 0 && seen.on_enemy > 300 && seen.aiming > 300 && seen.firing == 0);
       EXPECT(seen.engage == 0 && seen.attacks == 0);
-      EXPECT(seen.follows_player > 600 && seen.closest > 59.0f);
+      EXPECT(seen.follows_player > 300 && seen.closest > 59.0f);
       // Exact, the run repeating (reset_process_state's fixed seed). The
       // player is across a no-go patch of the mission boundary from him: the
       // follow is pulled round its corner (ai.md section 11; 63.3 m without).
@@ -18795,10 +18882,12 @@ TEST(mission_c1m4_dominic_aims_at_a_near_enemy_unordered_headless) {
       EXPECT(seen.targeted > 0 && seen.on_enemy > 0 && seen.follows > 0);
       if (data_is_12()) {
         // W34: before, 764 / 764, aiming 43, firing 658, moved 69.1506.
-        EXPECT(seen.targeted == 702 && seen.on_enemy == 702 && seen.aiming == 639 && seen.firing == 0);
-        EXPECT(seen.follows == 765 && seen.follows_player == 765 && seen.enemy_contacts == 765);
+        // Ours (#485): in 1/30 s steps; at 16 ms frames 702 / 702, aiming 639,
+        // follows 765, moved 69.3756.
+        EXPECT(seen.targeted == 417 && seen.on_enemy == 417 && seen.aiming == 361 && seen.firing == 0);
+        EXPECT(seen.follows == 447 && seen.follows_player == 447 && seen.enemy_contacts == 447);
         // The AI at the reference's 53 bits (ai.md 17.4b): moved 69.3653 before.
-        EXPECT(std::fabs(seen.moved - 69.3756f) < 1e-3f && std::fabs(seen.closest - 60.0f) < 1e-3f);
+        EXPECT(std::fabs(seen.moved - 69.4435f) < 1e-3f && std::fabs(seen.closest - 60.0f) < 1e-3f);
       }
     }
     mech3::missions().cleanup(false);
@@ -18985,6 +19074,7 @@ void key_count(int32_t cmd) {
 }  // namespace
 
 TEST(mission_c1m1_default_keys_fire_headless) {
+  const PresentOnSteps on_steps;  // ours (#485): its frames counted are the game's ticks
   if (!have_game()) return;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -19197,6 +19287,7 @@ TEST(mission_c1m1_default_keys_fire_headless) {
 // and powers up again at 0.4 (docs/heat.md). The heat is held at 1.6 until
 // then: cooled to 0.9 first, the shutdown is called off (as in the exe).
 TEST(mission_c1m1_heat_shutdown_stops_the_mech_headless) {
+  const PresentOnSteps on_steps;  // ours (#485): its frames counted are the game's ticks
   if (!have_game()) return;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -19245,7 +19336,9 @@ TEST(mission_c1m1_heat_shutdown_stops_the_mech_headless) {
         seen.down = seen.frames;
         std::copy(d.pos, d.pos + 3, seen.at_down);
       }
-      if (seen.down && seen.frames == seen.down + 30)
+      // The whole time down, to the power-up (ours, #485: half a second, 15 steps;
+      // a fixed count of ticks after the shutdown can land past it).
+      if (seen.down && !seen.up && d.powering_down)
         seen.moved_down = std::hypot(d.pos[0] - seen.at_down[0], d.pos[2] - seen.at_down[2]);
       if (seen.down && !seen.up && !d.powering_down) seen.up = seen.frames;
       std::copy(d.pos, d.pos + 3, last);
@@ -19255,7 +19348,7 @@ TEST(mission_c1m1_heat_shutdown_stops_the_mech_headless) {
     pump.stop = [&] { return seen.up != 0; };
     app.run(pump);
     if (std::getenv("MW3_SURVEY"))
-      std::fprintf(stderr, "heat: walked %.3f/frame, asked %d, down %d, moved %.3f in 30 frames down, up %d\n",
+      std::fprintf(stderr, "heat: walked %.3f/frame, asked %d, down %d, moved %.3f while down, up %d\n",
                    seen.walked, seen.asked, seen.down, seen.moved_down, seen.up);
     EXPECT(seen.walked > 0.01f);         // walking before
     EXPECT(seen.asked > 60);             // "shutting down" asked for the power-down
@@ -24371,6 +24464,7 @@ TEST(cheat_food_for_thought_wins_the_salvage_coins) {
 // the mouse on the torso. With the fix a key typed into the box is the box's,
 // press and release; with the bug-fix switch off, the original's.
 TEST(mission_c1m2_cheat_box_keys_stay_in_the_box_headless) {
+  const PresentOnSteps on_steps;  // ours (#485): its keys go in tick by tick
   if (!have_game()) return;
   struct TypedHost : zin::Host {
     uint32_t map_virtual_key(uint32_t scan) override { return scan; }
@@ -24436,6 +24530,7 @@ TEST(mission_c1m2_cheat_box_keys_stay_in_the_box_headless) {
 }
 
 TEST(mission_c1m2_cheat_codes_headless) {
+  const PresentOnSteps on_steps;  // ours (#485): its reload drop is one tick's
   if (!have_game()) return;
   std::vector<std::string> lines;
   void (*kept_line)(float, const char*) = nullptr;
@@ -24446,7 +24541,7 @@ TEST(mission_c1m2_cheat_codes_headless) {
   bool escape_closes = false, escape_nothing = false, wrong_closes = false, wrong_nothing = false;
   bool invincible = false, invincible_off = false;
   int32_t blips_off = -1, blips_on = -1, unsensed = -1;
-  float heat_off = 0, heat_on = 0, drop_off = 0, drop_on = 0;
+  float heat_off = 0, heat_on = 0, drop_off = 0, drop_on = 0, drop_on_expected = -1;
   bool salvage_on = false, salvage_off = false, lost = false, lost_line = false;
   const void* weapon_before = nullptr;
   float reload_was = 0;
@@ -24522,8 +24617,9 @@ TEST(mission_c1m2_cheat_codes_headless) {
       heat_off = mech3::mech_heat_dissipation(me);
       k.press(0x37);
     }
-    // On, fired again (the short reload empties in two frames at 10x): the
-    // largest drop of a frame that left some reload.
+    // On, fired again: the largest drop of a tick, ten ticks' worth or all that
+    // was left (ours, #485: at 1/30 s ticks the short reload, about 0.32 s,
+    // empties in one at 10x; at 16 ms frames it took two).
     if (f == 37) {
       mech3::cheat_box_type(me, "operation cwal");
       const uint32_t fire = zin::key1_of(0x3d) & 0xff;
@@ -24532,7 +24628,10 @@ TEST(mission_c1m2_cheat_codes_headless) {
     if (f >= 38 && f <= 41) {
       float r = 0;
       mech3::program_pilot_fire_probe(&trigger, &r);
-      if (f > 38 && r > 0 && reload_was - r > drop_on) drop_on = reload_was - r;
+      if (f > 38 && reload_was > 0 && reload_was - r > drop_on) {
+        drop_on = reload_was - r;
+        drop_on_expected = std::min(10.0f * drop_off, reload_was);
+      }
       reload_was = r;
     }
     if (f == 41) {
@@ -24579,7 +24678,7 @@ TEST(mission_c1m2_cheat_codes_headless) {
   EXPECT(invincible && invincible_off);
   EXPECT(!lines.empty() && lines[0] == "Cheat enabled: power overwhelming");
   EXPECT(unsensed > 0 && blips_on >= blips_off + unsensed);
-  EXPECT(drop_off > 0 && std::fabs(drop_on / drop_off - 10.0f) < 0.05f);
+  EXPECT(drop_off > 0 && drop_on > 5.0f * drop_off && std::fabs(drop_on - drop_on_expected) < 1e-3f);
   EXPECT(heat_off > 0 && std::fabs(heat_on / heat_off - 10.0f) < 0.05f);
   EXPECT(salvage_on && salvage_off);
   EXPECT(lost && lost_line);
@@ -24789,6 +24888,7 @@ TEST(mission_c1m2_lock_drops_on_a_new_target_headless) {
 // 7 m/s; the locked LRMs, slow off the rail and slow to turn (0x00585900, as the exe: test_weapons_fly.py), pass
 // 4 m beside it and miss, as the original's would; unlocked ones that cross its body hit (the armour line).
 TEST(mission_c1m2_lock_after_e_and_aiming_at_the_new_target_headless) {
+  const PresentOnSteps on_steps;  // ours (#485): its frames counted are the game's ticks
   if (!have_game()) return;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -24837,8 +24937,10 @@ TEST(mission_c1m2_lock_after_e_and_aiming_at_the_new_target_headless) {
     bool locked = true, shot_lock = true, shot_seen = false, changed = false, aim_hit = false;
     float since = -1, near_b = 1e9f, near_a = 1e9f, aim_off = -1, armor0 = 0, armor1 = 0;
   };
-  const int delays[4] = {6, 18, 36, 60};  // frames of 1/60 s after E
-  constexpr int kE = 196;  // A's lock (3.5 s from frame 10) still held
+  // Ours (#485): in 1/30 s steps, the same game time as the 1/60 s frames it
+  // was written in (6, 18, 36, 60 after E at 196): 0.10, 0.30, 0.57, 1.0 s.
+  const int delays[4] = {3, 9, 17, 30};  // steps after E
+  constexpr int kE = 103;  // 3.1 s from step 10: A's lock (3.5 s) still held
   Run runs[4];
   for (int k = 0; k < 4; ++k) {
     Run& r = runs[k];
@@ -24889,7 +24991,7 @@ TEST(mission_c1m2_lock_after_e_and_aiming_at_the_new_target_headless) {
         for (int i = 0; i < 3; ++i) a[i] = here[i] + d[i];
         mech3::program_reticle_lock(3, 3.5f, &has);
       }
-      if (f > 10 && f < kE && (f - 10) % 12 == 0) {  // turned and pitched onto the mech in steps, each once the view settles
+      if (f > 10 && f < kE && (f - 10) % 6 == 0) {  // turned and pitched onto the mech every 0.2 s, each once the view settles
         int32_t px[2];
         float pt[3];
         bool hit = false;
@@ -24897,12 +24999,16 @@ TEST(mission_c1m2_lock_after_e_and_aiming_at_the_new_target_headless) {
         if (mech3::program_hud_aim(px, pt, &hit)) {
           const float dp = std::hypot(pt[0] - here[0], pt[2] - here[2]), db = std::hypot(b_at[0] - here[0], b_at[2] - here[2]);
           heading += std::atan2(-(b_at[0] - here[0]), -(b_at[2] - here[2])) - std::atan2(-(pt[0] - here[0]), -(pt[2] - here[2]));
-          if (f >= 82) {  // the heading settled: the pitch bisected (+ is up); past it or the sky: lower
+          if (f >= 46) {  // the heading settled (1.2 s in): the pitch bisected (+ is up); past it or the sky: lower
             (!hit || dp > db + 3.0f ? pitch_hi : pitch_lo) = pitch;
             pitch = 0.5f * (pitch_lo + pitch_hi);
           }
-          r.aim_off = std::hypot(pt[0] - b_at[0], pt[2] - b_at[2]);
-          r.aim_hit = hit;
+          // The best of the looks in the last 0.6 s before the key (ours, #485):
+          // B sways as it walks, and the reticle, read from the frame drawn
+          // last, slips on and off its edge between looks (0.4, 2.7, then the
+          // ground 600 m behind it in one run).
+          const float off = std::hypot(pt[0] - b_at[0], pt[2] - b_at[2]);
+          if (f >= kE - 18 && (r.aim_off < 0 || off < r.aim_off)) r.aim_off = off, r.aim_hit = hit;
           mech3::move_mech(me, here, heading);
         }
       }
@@ -24933,7 +25039,7 @@ TEST(mission_c1m2_lock_after_e_and_aiming_at_the_new_target_headless) {
       }
     };
     CountingPump pump;
-    pump.stop = [&] { return f >= kE + r.delay + 240; };
+    pump.stop = [&] { return f >= kE + r.delay + 120; };  // 4 s on
     pump.limit = 4000;
     app.run(pump);
     mech3::missions().cleanup(false);

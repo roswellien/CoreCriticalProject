@@ -381,6 +381,13 @@ class GameEngine : public Engine {
   void decals_shutdown() override;           // 0x00502020
   void missions_shutdown() override;  // 0x004844b0: mech3::close_mechlib
   std::function<void(int frame)> on_present;  // after each frame shown (the 2D or the 3D)
+  // Ours (#485, docs/fixed-step.md), for tests timed in the game's ticks: set
+  // when an engine is made, that engine's on_present runs after each mission
+  // simulation step (1/30 s each) instead of after each frame drawn in a
+  // mission, so a test that counts its calls counts steps, however many a
+  // drawn frame ran. Outside a mission (and with --variable-step) it runs
+  // after each frame drawn, as without it.
+  static inline bool present_per_step = false;
   bool drew_scene() const { return last_drew_scene_; }  // the frame just shown was the 3D scene
   // FIX (A): the frame just shown, when it went through the 3D path (the
   // scene, or the 2D layer over it), read back at the buffer's size; false
@@ -726,6 +733,8 @@ class GameEngine : public Engine {
   bool last_via_render_ = false;  // the frame just shown went through Render3D
   bool held_ = false;             // a shown frame kept behind a message box (hold_shown_frame)
   bool layer_blank_ = true;       // every 2D layer drawn since the last flip was only the key colour
+  bool steps_present_ = false;    // ours (#485): made with present_per_step; the steps call on_present
+  void call_on_present();         // on_present after a frame drawn, as present_per_step says
   bool buffer_is_screen_ = true;  // the 16-bit buffer holds the frame shown (not the 3D lock's layer)
   std::vector<uint16_t> kept_screen_;  // that frame while a 3D lock has the buffer
   std::unordered_map<void*, Handle> handles_;

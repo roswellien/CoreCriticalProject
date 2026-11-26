@@ -24,6 +24,7 @@
 #include "gamez/zutil/ztimer.h"
 #include "mech3/app_mech.h"
 #include "mech3/fixed_step.h"
+#include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/interp.h"
 
 namespace mech3 {
@@ -445,6 +446,7 @@ bool g_world_tick_in_draw = true;
 // The input poll and the action lists, the frame's first half in the exe.
 void CoreState::poll_and_run_lists(bool replay) {
   Engine& en = e();
+  ++zcls::frames().step;  // ours (#485): a step begins
   if (!paused_) {
     en.input_poll(replay ? 0 : 1);
     if (!a().fullscreen() && (a().input_mode_ & 0xc) == 8) {
@@ -478,6 +480,7 @@ void CoreState::run_fixed_steps(bool replay) {
     poll_and_run_lists(replay);
     world_tick(en);
     zcls::interp::record();  // the step's transforms, for drawing between steps
+    if (after_each_step()) after_each_step()();  // the tests' look at each step
   }
   timer.dt = frame_clock.dt, timer.raw_dt = frame_clock.raw_dt;
   timer.total_scaled = frame_clock.total_scaled, timer.total_raw = frame_clock.total_raw;

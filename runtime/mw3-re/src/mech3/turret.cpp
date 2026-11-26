@@ -419,7 +419,8 @@ bool Turret::in_range() const { return active && player_contact && detect_range 
 
 // --- The frame (step 4c2) -------------------------------------------------------------
 
-uint32_t TurretHooks::frame_number() { return zcls::frames().frame; }
+// Ours (#485): the step count, as the turrets' turns are the simulation's.
+uint32_t TurretHooks::frame_number() { return zcls::frames().step; }
 float TurretHooks::clock() { return weapon_world().clock; }
 float TurretHooks::frame_dt() { return weapon_world().dt; }
 void TurretHooks::node_world_cached(Handle node, float out[3]) {

@@ -16,6 +16,8 @@
 #include "mech3/mission_map.h"
 #include "mech3/patch12.h"
 #include "mech3/app.h"
+#include "mech3/app_states.h"
+#include "mech3/fixed_step.h"
 #include "mech3/hud.h"
 #include "mech3/message_panel.h"
 #include "mech3/sensors.h"
@@ -213,6 +215,12 @@ GameEngine::GameEngine(const Platform& p, std::string command_line)
   g_engine = this;
   ztimer::set_clock(p_.clock);
   zsnd_cd::set_backend(p_.files, p_.music, "music");
+  if (present_per_step) {
+    steps_present_ = true;
+    after_each_step() = [this] {
+      if (on_present) on_present(frames_presented);
+    };
+  }
   set_options_hooks(&g_options_hooks);
   wire_mission_hooks(this);
   wire_pilot_hooks(this);
@@ -275,6 +283,7 @@ GameEngine::GameEngine(const Platform& p, std::string command_line)
 }
 
 GameEngine::~GameEngine() {
+  if (steps_present_) after_each_step() = nullptr;
   if (p_.screen) p_.screen->cancel_menu_observation();
   game_box() = nullptr;  // ours (upgrades/game_boxes.h): the game's box is gone with the engine
   if (force_) program_force_feedback(nullptr), force_.reset();  // an engine gone without the app's stop: its calls off
@@ -862,7 +871,7 @@ void GameEngine::video_flip(int32_t, int32_t, int32_t, int32_t) {
     p_.screen->overlay_16(buffer_.data(), width_, height_, width_ * 2, true, kLayerKey, nullptr, nullptr);
     p_.render->present();
     ++frames_presented;
-    if (on_present) on_present(frames_presented);
+    call_on_present();
     return;
   }
   if (held_) drop_held();
@@ -878,7 +887,16 @@ void GameEngine::video_flip(int32_t, int32_t, int32_t, int32_t) {
   scene_drawn_ = layer_drawn_ = false;
   layer_blank_ = true;
   ++frames_presented;
-  if (on_present) on_present(frames_presented);
+  call_on_present();
+}
+
+void GameEngine::call_on_present() {
+  if (!on_present) return;
+  // A mission's steps call it themselves (the constructor's after_each_step).
+  const Mech3App* running = app_if_any();
+  const bool in_stepped_mission = fixed_step_enabled() && running && running->current() == &states().core;
+  if (steps_present_ && in_stepped_mission) return;
+  on_present(frames_presented);
 }
 // 0x004f7d80: the zClass action lists, each followed by the frame update
 // (docs/action-lists.md): the player's tick (2), weapon_tick (3), the

@@ -130,6 +130,11 @@ struct Frames {
   uint32_t expiry = 0;             // 0x0073f3a8
   uint32_t update_frame = 1;       // 0x005e9e2c
   int32_t frozen = 0;              // 0x0060b94c
+  // Ours (#485, docs/fixed-step.md): the simulation steps run so far. The exe
+  // drew one frame per step, so its simulation's once-a-frame checks read
+  // `frame`; with several steps to a drawn frame they read this instead, and
+  // `frame` stays the drawn frames' count for the drawing's own checks.
+  uint32_t step = 0;
 };
 Frames& frames();
 

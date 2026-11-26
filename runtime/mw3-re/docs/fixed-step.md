@@ -77,6 +77,33 @@ not which file it is in. Callers as of #485:
 A sound or HUD pick that runs in the drawn frame only changes what is heard or
 shown, never the simulation.
 
+## Frame counters
+
+The engine's frame number (`zcls::frames().frame`, exe 0x0072f338) still goes
+up once per drawn world frame, as the original's camera draw counts it; the
+draw caches use it (a node unchanged for 160 drawn frames is static), and so do
+the camera's sound listener and the debug views. A second counter,
+`zcls::frames().step`, goes up at the start of each step (`poll_and_run_lists`).
+Simulation work the original timed "once a frame" counts steps: the vehicles'
+and turrets' frame numbers, the mech's sunlight shade turns, the network
+collision check and the texture scroll (`model_scroll_tick`). On the drawn-frame
+counter these ran once per drawn frame, so at 15 fps (two steps a frame) the
+horizon scrolled at half speed.
+
+## Tests
+
+The whole-mission tests drive the game through `GameEngine::on_present` and
+count its calls as the game's ticks. Their clock (`FakeClock`) moves on each
+time the game reads it, so a drawn frame runs one step or several depending on
+how busy the scene is. A test that counts ticks makes a `PresentOnSteps`
+(tests/program_harness.h): the engine made in it then calls `on_present` after
+each mission step (`after_each_step` in `fixed_step.h`) instead of after each
+frame drawn in a mission, so each call is exactly 1/30 s. Outside a mission
+(menus, loading, the fade in) it still runs after each frame drawn. Such tests
+stop on their step count (`pump.stop`), the pump's pass limit only a ceiling.
+`MW3_VARIABLE_STEP=1` runs the whole test program with one step per drawn frame,
+as `--variable-step` does.
+
 ## Switches
 
 - `--variable-step`: one simulation step per drawn frame with the frame's own

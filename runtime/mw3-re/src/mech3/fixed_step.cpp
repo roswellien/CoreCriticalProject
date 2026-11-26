@@ -36,4 +36,9 @@ FixedStep& mission_fixed_step() {
   return step;
 }
 
+std::function<void()>& after_each_step() {
+  static std::function<void()> hook;
+  return hook;
+}
+
 }  // namespace mech3

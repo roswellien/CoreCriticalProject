@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 
 // Ours (#485): the mission simulation runs in fixed 1/30 s steps, the original
 // frame time its constants were tuned for, however fast frames are drawn.
@@ -33,5 +34,9 @@ bool fixed_step_enabled();
 void set_fixed_step_enabled(bool on);
 
 FixedStep& mission_fixed_step();
+
+// For the tests: run after each step a mission runs, so a test can act and
+// look once per 1/30 s step (GameEngine::present_per_step). Unset in the game.
+std::function<void()>& after_each_step();
 
 }  // namespace mech3

@@ -20,6 +20,7 @@
 #include <cstring>
 
 #include "check.h"
+#include "mech3/fixed_step.h"
 
 namespace check {
 std::vector<Test>& registry() {
@@ -106,6 +107,9 @@ int main() {
   // MW3_TEST=name runs only the tests whose names contain it; a,b,c any of them.
   // MW3_SKIP=name (the same form) leaves those out: MW3_SKIP=headless skips the
   // whole-mission runs, nearly all of the suite's time.
+  // MW3_VARIABLE_STEP=1 runs the missions as mw3 --variable-step does, one
+  // simulation step per drawn frame (#485), to tell its effects apart.
+  if (std::getenv("MW3_VARIABLE_STEP")) mech3::set_fixed_step_enabled(false);
   const char* only = std::getenv("MW3_TEST");
   const char* skip = std::getenv("MW3_SKIP");
   auto any_in = [](const char* list, const char* name) {
