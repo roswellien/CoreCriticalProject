@@ -63,6 +63,7 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <random>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 
 namespace cc_mw3_re::checks {
 void check_scene_binding_slots();
@@ -3590,11 +3591,14 @@ void check_campaign_lighting_and_policy() {
               c1m1_lift.sdr_extra_shadow_lift == 0.f &&
               base.sdr_extra_shadow_lift == 0.f,
           "C1M2 SDR tuning leaked into other missions");
-  for (const auto *id : {"c1m2", "c1m3", "c2m2", "c2m4", "c3m5", "c3m6", "c4m1", "c4m2"}) {
+  const std::pair<std::string_view, float> sdr_missions[] = {
+      {"c1m2", 1.4f},      {"c1m3", 11.023497f}, {"c2m2", 1.4f}, {"c2m4", 1.4f},
+      {"c3m5", 6.025114f}, {"c3m6", 1.4f},       {"c4m1", 1.4f}, {"c4m2", 1.4f}};
+  for (const auto &[id, multiplier] : sdr_missions) {
       const auto mission = resolve_mission_lighting(id);
       const auto authored = mission_sun_settings(base, mission, true, false);
       const auto boosted = mw34::sun::display_ambient(authored, true, false);
-      require(std::abs(boosted.ambient - authored.ambient * 1.68f) < 1e-6f &&
+      require(std::abs(boosted.ambient - authored.ambient * 1.2f * multiplier) < 1e-6f &&
                   boosted.ambient_color == authored.ambient_color &&
                   boosted.strength == authored.strength,
               "Night or interior mission did not receive extra SDR ambient");
@@ -3610,8 +3614,12 @@ void check_campaign_lighting_and_policy() {
       "c3m5", platform::prepared::MissionAmbientOverride{{.2f, .3f, .4f}, .25f});
   const auto packed_interior = mission_sun_settings(base, resolve_mission_lighting("c3m5"), true,
                                                     false, &low_light_pack, "c3m5");
-  require(std::abs(mw34::sun::display_ambient(packed_interior, true, false).ambient - .42f) < 1e-6f,
-          "Extra SDR ambient did not scale the environment pack override");
+  require(std::abs(mw34::sun::display_ambient(packed_interior, true, false).ambient -
+                   (.25f * 1.2f * 6.025114f)) < 1e-6f &&
+              packed_interior.strength == 0.f,
+          "Hangar SDR ambient did not scale the pack override or gained directional light");
+  const auto bridgehead = mission_sun_settings(base, resolve_mission_lighting("c1m3"), true, false);
+  require(bridgehead.strength == .4875f, "Bridgehead moonlight intensity changed");
   const auto training = resolve_mission_lighting("t1m1");
   const auto lit = mission_sun_settings(base, training, true, false);
   require(lit.azimuth == 95.f && lit.elevation == 6.f && lit.strength == 1.05f,

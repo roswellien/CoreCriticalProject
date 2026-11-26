@@ -342,7 +342,7 @@ inline const std::vector<MissionEnvironment> &builtin_mission_database() {
        180.0f,
        40.0f,
        {0.36f, 0.45f, 0.63f},
-       0.26f, // Diffuse moonlight through storm clouds
+       0.4875f, // Diffuse moonlight through storm clouds
        {0.12f, 0.15f, 0.22f},
        0.10f,
        0.20f,

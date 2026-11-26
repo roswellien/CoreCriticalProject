@@ -39,6 +39,10 @@ mission_sun_settings(const sun::Settings &base,
                                           id == "c3m6" || id == "c4m1" || id == "c4m2"
                                       ? 1.4f
                                       : 1.f;
+  if (id == "c1m3")
+    result.sdr_ambient_multiplier = 11.023497f;
+  else if (id == "c3m5")
+    result.sdr_ambient_multiplier = 6.025114f;
   result.suppress_sky = mission.policy.suppress_sky;
   result.sky_source = static_cast<float>(mission.policy.sky_source);
   result.sky_tint = profile.sky_tint;
