@@ -309,7 +309,7 @@ struct Replay3dView::State {
   bool make_round(zwep::WeaponDef* def, LiveRound* made);
   void free_round(LiveRound& r);
   void start_effects(const Event& e);
-  void start_missile_explosion(const float pos[3]);
+  void start_missile_explosion(const zwep::Vec3f3& at);
   void fly(float dt);
   void seek_at(float window_x);
   void pick(float window_x, float window_y);
@@ -675,11 +675,12 @@ static bool is_missile_impact(const zwep::Effect& effect) {
 // Ours (replay only, not the original): a missile impact also plays the
 // game's own small fireball, fire_explode_tiny, so a replay watched from a
 // chase camera shows where the missiles land.
-void Replay3dView::State::start_missile_explosion(const float pos[3]) {
+void Replay3dView::State::start_missile_explosion(const zwep::Vec3f3& at) {
   // Looked up each time: a map load replaces the animation table.
   zeff::AnimDef* const fireball = zeff::anim_find("fire_explode_tiny");
   if (!fireball) return;
   static const float kZero[3] = {};
+  const float pos[3] = {at.x, at.y, at.z};
   zeff::AnimDef* playing = zeff::anim_start_at(fireball, nullptr, pos, kZero, kZero);
   if (playing && benchmark_run) impact_animations.insert(playing);
 }
@@ -706,6 +707,10 @@ void Replay3dView::State::start_effects(const Event& e) {
   // impact, as apply_damage (zweapon.cpp, 0x00583480) chooses one or the
   // other. The log has no health after the hit, so the game's starting value
   // (1.0) picks the first entry at or above it; none matching plays nothing.
+  // A missile's impact draws nothing in the world (is_missile_impact), so the
+  // replay adds a fireball, counted as the impact's explosion in its place.
+  const bool missile = impact && def->impacts && is_missile_impact(def->impacts[zwep::kSoilDefault]);
+  if (missile) start_missile_explosion(f3(e.at));
   if (e.type == "hit" && e.has_at && def->damage_anim_count > 0) {
     constexpr int32_t kDamageAnimSlots = 4;  // WeaponDef::damage_anims
     const int32_t count = std::min<int32_t>(def->damage_anim_count, kDamageAnimSlots);
@@ -716,7 +721,7 @@ void Replay3dView::State::start_effects(const Event& e) {
         const float at[3] = {e.at.x, e.at.y, e.at.z};
         zeff::AnimDef* damage = zeff::anim_start_at(static_cast<zeff::AnimDef*>(damage_anim),
                                                     nullptr, at, kZero, kZero);
-        if (damage && benchmark_run) impact_animations.insert(damage);
+        if (damage && benchmark_run && !missile) impact_animations.insert(damage);
       }
       return;
     }
@@ -739,8 +744,7 @@ void Replay3dView::State::start_effects(const Event& e) {
     const auto point = f3(position);
     zwep::hit_hooks().impact_effect(effect->effect, &point);
   }
-  if (impact && playing && benchmark_run) impact_animations.insert(playing);
-  if (impact && is_missile_impact(*effect)) start_missile_explosion(pos);
+  if (impact && playing && benchmark_run && !missile) impact_animations.insert(playing);
   if (effect->sound_count > 0 && effect->sounds[0])
     zsnd::play_at(static_cast<zsnd::Object*>(effect->sounds[0]), pos, 1.0f, nullptr);
 }
