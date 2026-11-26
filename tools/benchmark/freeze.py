@@ -123,9 +123,19 @@ def rank_windows(timestamps, activity):
     return sorted(windows, key=lambda window: -window["activity"])
 
 
-def freeze(executable, game, recipe, seed, output):
-    if not output.is_relative_to(BENCHMARK_ROOT.resolve()):
-        raise ValueError("Output must be under local/benchmark")
+def source_revision():
+    """The checkout's commit, or None in an installed launcher, which has no repository."""
+    if not (ROOT / ".git").exists():
+        return None
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+
+
+def freeze(executable, game, recipe, seed, output, allowed_root=None):
+    # Read the default at call time so the checkout's root can still be redirected.
+    if allowed_root is None:
+        allowed_root = BENCHMARK_ROOT
+    if not output.is_relative_to(allowed_root.resolve()):
+        raise ValueError(f"Output must be under {allowed_root}")
     launcher_data = os.environ.get("LOCALAPPDATA")
     read_only_roots = [game]
     if launcher_data:
@@ -176,9 +186,7 @@ def freeze(executable, game, recipe, seed, output):
     archive_manifest = json.dumps(archives, sort_keys=True, separators=(",", ":")).encode("utf-8")
     result.update(
         executable_sha256=sha256(executable),
-        source_sha=subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
-        ).strip(),
+        source_sha=source_revision(),
         reader_zbd_sha256=archives["reader.zbd"],
         game_archives_sha256=hashlib.sha256(archive_manifest).hexdigest(),
         game_archives=archives,

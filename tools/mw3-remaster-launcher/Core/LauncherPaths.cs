@@ -7,6 +7,11 @@ public static class LauncherPaths
 {
     public static string DataRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MW3Remaster");
     public static string SessionsRoot => Path.Combine(DataRoot, "sessions");
+    /// <summary>
+    /// Benchmark replays and results. Kept beside, not inside, DataRoot: the benchmark treats the
+    /// launcher's settings and packs as read-only inputs and refuses to write under them.
+    /// </summary>
+    public static string BenchmarkRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Core Critical Benchmark");
 
     public const string GameFolderName = "MechWarrior 3";
 
