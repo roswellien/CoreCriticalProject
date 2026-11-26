@@ -235,6 +235,7 @@ add_library(mw3core STATIC
   src/mech3/mech_waynet.cpp
   src/mech3/veh_controls.cpp
   src/mech3/veh_move.cpp
+  src/mech3/step_log.cpp  # ours (#485): --step-log, one record per simulation step
   src/mech3/veh_stealth.cpp
   src/mech3/game_editor.cpp
   src/mech3/game_editor_net.cpp

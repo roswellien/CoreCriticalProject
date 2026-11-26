@@ -18,6 +18,7 @@
 #include "mech3/app.h"
 #include "mech3/pilot.h"
 #include "mech3/spectator_seat.h"
+#include "mech3/step_log.h"
 
 namespace mech3 {
 
@@ -509,6 +510,7 @@ void world_tick(Engine& en) {
   en.missions_update(0x6098d0, en.frame_dt());
   en.pilot_update(en.pilot(), en.frame_dt());
   en.camera_update();
+  step_log_end_step();  // ours (#485): --step-log, the step's end
 }
 }  // namespace
 

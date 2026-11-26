@@ -109,6 +109,7 @@
 #include "mech3/game_editor.h"
 #include "mech3/mp_connect.h"
 #include "mech3/options_menu.h"
+#include "mech3/step_log.h"
 #include "mech3/game_setup.h"
 #include "frontend/sdl/sdl_force.h"
 #include "frontend/sdl/sdl_input.h"
@@ -279,6 +280,7 @@ struct Args {
   std::string chain;          // --campaign-chain new:N / resume:N (ours, campaign_chain.h)
   std::string modes;          // --action-chain all / c2 / c2:4 (ours, modes_chain.h)
   int frame_ms = 0;           // --frame-ms N: each frame shown N ms on the game's clock (ours)
+  std::string step_log;       // --step-log FILE: one record per simulation step (ours, #485, step_log.h)
   int64_t seed = -1;          // --seed N: rand seeded with N wherever the game seeds it from the clock (ours)
   int win = 0;  // --win N (ours): the mission won N frames in, by its Exit Mission
   int lose = 0;  // --lose N (ours): the mission aborted N frames in, a failure
@@ -452,6 +454,7 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--campaign-chain" && next(1)) a.chain = argv[++i];
     else if (s == "--action-chain" && next(1)) a.modes = argv[++i];
     else if (s == "--frame-ms" && next(1)) a.frame_ms = std::atoi(argv[++i]);
+    else if (s == "--step-log" && next(1)) a.step_log = argv[++i];
     else if (s == "--seed" && next(1)) a.seed = std::strtoll(argv[++i], nullptr, 10);
     else if (s == "--window" && next(1)) std::sscanf(argv[++i], "%dx%d", &a.win_w, &a.win_h), a.window_given = true;
     else if (s == "--nosound") a.nosound = true;
@@ -1531,6 +1534,10 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   // A network run's frames keep the wall clock too: the peers' packets come in
   // real time, and a build that draws fast ran its game clock far ahead of them.
   clock.paced = clock.frame_ms > 0 && (a.net_host || !a.net_join.empty() || a.net_port >= 0 || !a.net_lan.empty() || a.net_soak);
+  if (!a.step_log.empty() && !mech3::step_log_open(a.step_log)) {
+    std::fprintf(stderr, "mw3: --step-log: cannot write %s\n", a.step_log.c_str());
+    return 1;
+  }
   // --seed: every srand(time()) takes N instead (with --frame-ms a run repeats).
   if (a.seed >= 0) {
     crt::rand_fixed_seed() = static_cast<uint32_t>(a.seed);
