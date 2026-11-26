@@ -62,6 +62,23 @@ given: `--host`, `--join`, `--net-upnp`, `--original`, `--mission` (and
 can't start (the map's spawn spots can't be read, or a side has no bot that
 could be made) prints why and exits 1.
 
+For graphics benchmark recording, add `--arena-record-every-update` to the
+command above, or set `"record_every_update": true` in the arena setup. The
+flag requires `--arena` and enables recording even if the JSON field is false.
+This opt-in mode writes one complete `state` per simulation update, including
+all mech poses, rounds and beams, alongside the existing shot, hit, action and
+other replay effect events. State `t` is the actual match time of the update,
+without timestamp rounding or resampling. With `--frame-ms 33 --hidden` and no
+screenshots, updates are about 33 ms apart (floating-point clock precision can
+vary slightly). Watched matches still use wall-clock update times.
+
+Dense logs retain version 2 and add `"record_every_update": true` only to the
+start record; both replay readers accept them. Omitted or false, the setting
+preserves the existing bytes, record fields and nominal 100 ms cadence. Dense
+recording uses more disk space and replay memory. The authored reference setup
+and reproduction instructions live in `tools/benchmark/fixtures/`; generated
+logs stay local under ignored `local/benchmark/`.
+
 A match log grows by every mech's state ten times a second: a few minutes of
 4v4 is tens of megabytes, and the viewers read a whole log into memory.
 

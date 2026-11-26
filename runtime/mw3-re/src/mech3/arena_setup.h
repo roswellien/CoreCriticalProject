@@ -80,6 +80,7 @@ struct Setup {
   std::string out;      // the match log's folder
   // Optional (#507): one of kTimesOfDay's names; empty for the map's own lighting.
   std::string time_of_day;
+  bool record_every_update = false;  // benchmark recording; default stays at 100 ms
   std::vector<Bot> sides[kSides];
 };
 
@@ -124,6 +125,7 @@ struct Flags {
   bool host = false, join = false, net_upnp = false, original = false, mission = false;
   bool net_minutes = false, net_soak = false, net_drive = false, frames = false;
   bool seed = false, frame_ms = false;
+  bool record_every_update = false;  // --arena-record-every-update
   // Options that drive the player's mech or a menu screen; the arena has neither.
   bool fire = false, net_walk = false, net_ahead = false, briefing = false, lab_mech = false;
 };

@@ -4223,6 +4223,19 @@ void check_renderer_bridge_config() {
           "normal_maps_enabled false mismatch");
   require(cfg_wsi.sun == false, "sun false mismatch");
   require(cfg_wsi.draw_distance == 800, "draw-distance default mismatch");
+  require(cfg_wsi.vsync == true, "vsync default mismatch");
+
+  sdlfe::CoreCriticalAssets vsync_on_assets{};
+  vsync_on_assets.vsync = true;
+  const auto vsync_on_config = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, vsync_on_assets);
+  require(vsync_on_config.vsync == true, "vsync on propagation mismatch");
+
+  sdlfe::CoreCriticalAssets vsync_off_assets{};
+  vsync_off_assets.vsync = false;
+  const auto vsync_off_config = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, vsync_off_assets);
+  require(vsync_off_config.vsync == false, "vsync off propagation mismatch");
 
   // POM is opt-in and must not disappear when it is the only explicit option.
   sdlfe::CoreCriticalAssets pom_assets{};

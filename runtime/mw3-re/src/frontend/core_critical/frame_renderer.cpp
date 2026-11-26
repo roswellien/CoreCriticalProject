@@ -3140,7 +3140,7 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.world_scale_percent = 100;
   config.remaster_width = 0;
   config.remaster_height = 0;
-  config.vsync = true;
+  config.vsync = assets.vsync;
   config.temporal_inputs = false;
   config.gpu_models = (assets.geometry != "legacy");
   config.geometry = assets.geometry;

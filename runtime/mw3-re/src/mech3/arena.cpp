@@ -417,6 +417,7 @@ bool ArenaRun::read_setup(const std::string& path, const Flags& flags, std::stri
     *message = "--arena " + path_ + ": " + error;
     return false;
   }
+  setup_.record_every_update = setup_.record_every_update || flags.record_every_update;
   return true;
 }
 

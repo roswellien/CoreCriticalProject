@@ -17,7 +17,7 @@ _FIELDS = frozenset({
     "schema_version", "engine", "runtime_root", "executable", "game_dir", "write_dir", "renderer",
     "width", "height", "aa", "af", "window_mode", "render_thread", "lighting", "assets",
 })
-_OPTIONAL_FIELDS = frozenset({"indeo_codec", "flare_style", "disk_cache"})
+_OPTIONAL_FIELDS = frozenset({"indeo_codec", "flare_style", "disk_cache", "vsync", "supports_vsync"})
 _AA = {"off": "off", "1": "off", "fxaa": "fxaa", "2": "ssaa2", "4": "ssaa4"}
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_JSON_DEPTH = 64
@@ -822,6 +822,12 @@ def plan_launch(request):
     disk_cache = request.get("disk_cache", True)
     if type(disk_cache) is not bool:
         raise ValueError("disk_cache must be a boolean")
+    vsync = request.get("vsync", False)
+    if type(vsync) is not bool:
+        raise ValueError("vsync must be a boolean")
+    supports_vsync = request.get("supports_vsync", False)
+    if type(supports_vsync) is not bool:
+        raise ValueError("supports_vsync must be a boolean")
     schema = request.get("schema_version")
     if type(schema) is not int or schema not in (2, 3, 4):
         raise ValueError("Unsupported native request schema")
@@ -906,6 +912,14 @@ def plan_launch(request):
         "--cc-flare-style", flare_style,
     ]
     skipped_features = []
+    if supports_vsync:
+        argv.extend(("--cc-vsync", "1" if vsync else "0"))
+    elif not vsync:
+        # Older runtimes always present with vsync, so only a request to turn it off goes unmet.
+        skipped_features.append({
+            "feature": "vsync",
+            "reason": "The selected MW3-RE runtime does not advertise support for VSync.",
+        })
     if codec is None:
         skipped_features.append({
             "feature": "Indeo movies",

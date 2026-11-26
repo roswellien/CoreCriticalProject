@@ -88,6 +88,12 @@ and `16`. These are process-start options for either Core Critical presenter;
 they require a restart to change. The upstream backend rejects enhanced requests.
 Unsupported values or GPU capabilities fail visibly.
 
+Add `--cc-vsync 0|1` to control vertical synchronization (VSync). VSync defaults
+to on (`1`), capping the frame rate to the monitor's refresh rate and preventing
+screen tearing. Setting `--cc-vsync 0` disables VSync for an uncapped frame rate
+(selecting immediate presentation when supported, otherwise mailbox). Plain SDL
+and Core Critical Vulkan backends honor this flag.
+
 FXAA runs on world color before sharp HUD composition. AF uses generated mip
 levels and anisotropic world samplers; HUD sampling stays at level zero.
 SSAA resolves to the current SDL output dimensions, including readbacks and

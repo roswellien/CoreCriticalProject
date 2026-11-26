@@ -196,6 +196,12 @@ bool parse_arena_setup(const std::string& json_text, Setup* out, std::string* er
     out->time_of_day = time->get<std::string>();
   }
 
+  const auto recording = j.find("record_every_update");
+  if (recording != j.end()) {
+    if (!recording->is_boolean()) return fail(error, "record_every_update: needs a boolean");
+    out->record_every_update = recording->get<bool>();
+  }
+
   const auto sides = j.find("sides");
   if (sides == j.end() || !sides->is_array() || sides->size() != kSides)
     return fail(error, "sides: needs two lists of bots");
