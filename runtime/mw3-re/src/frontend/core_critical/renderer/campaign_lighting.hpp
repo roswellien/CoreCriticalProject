@@ -288,8 +288,8 @@ inline const std::vector<MissionEnvironment> &builtin_mission_database() {
        "Light coastal drizzle",
        210.0f,
        25.0f,
-       {0.35f, 0.45f, 0.65f},
-       0.28f,
+       {0.46f, 0.56f, 0.74f},
+       0.34f, // Moonlight filtered through coastal clouds
        {0.18f, 0.22f, 0.32f},
        0.14f,
        0.24f,
@@ -341,8 +341,8 @@ inline const std::vector<MissionEnvironment> &builtin_mission_database() {
        "Heavy tropical downpour & lightning",
        180.0f,
        40.0f,
-       {0.20f, 0.28f, 0.45f},
-       0.18f,
+       {0.36f, 0.45f, 0.63f},
+       0.26f, // Diffuse moonlight through storm clouds
        {0.12f, 0.15f, 0.22f},
        0.10f,
        0.20f,
@@ -802,8 +802,8 @@ inline const std::vector<MissionEnvironment> &builtin_mission_database() {
        "Clear starlit freezing desert night",
        140.0f,
        38.0f,
-       {0.48f, 0.58f, 0.85f},
-       0.42f, // Strong lunar light
+       {0.50f, 0.60f, 0.86f},
+       0.44f, // Clear-sky moonlight
        {0.22f, 0.26f, 0.38f},
        0.20f,
        0.26f,
@@ -846,8 +846,8 @@ inline const std::vector<MissionEnvironment> &builtin_mission_database() {
        "Ash fall & glowing lava illumination",
        180.0f,
        20.0f,
-       {0.10f, 0.10f, 0.10f},
-       0.05f, // Blotted out sky
+       {0.31f, 0.37f, 0.50f},
+       0.13f, // Moonlight filtered through ash
        {0.35f, 0.14f, 0.05f},
        0.30f, // Warm orange/red radiant underworld light
        0.22f,
@@ -895,8 +895,8 @@ inline const std::vector<MissionEnvironment> &builtin_mission_database() {
        "Acid rain & caustic sulfuric mist",
        75.0f,
        12.0f,
-       {0.25f, 0.32f, 0.45f},
-       0.20f, // Darkest part before sun breaks
+       {0.37f, 0.46f, 0.63f},
+       0.28f, // Diffuse moonlight before dawn
        {0.15f, 0.18f, 0.25f},
        0.15f,
        0.22f,

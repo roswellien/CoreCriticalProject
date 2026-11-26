@@ -3709,8 +3709,8 @@ void check_campaign_lighting_and_policy() {
                 c1m2_builtin.azimuth == 210.0f &&
                 c1m2_builtin.elevation == 25.0f &&
                 c1m2_builtin.color ==
-                    std::array<float, 3>{0.35f, 0.45f, 0.65f} &&
-                c1m2_builtin.strength == 0.28f &&
+                    std::array<float, 3>{0.46f, 0.56f, 0.74f} &&
+                c1m2_builtin.strength == 0.34f &&
                 c1m2_builtin.night_world_gain == 0.24f &&
                 !c1m2_builtin.suppress_sky,
             "Absent c1m2 pack entry did not restore c1m2 built-in ambient and "
@@ -3728,7 +3728,7 @@ void check_campaign_lighting_and_policy() {
     require(c1m2_after_distinct.ambient_color ==
                     std::array<float, 3>{0.18f, 0.22f, 0.32f} &&
                 c1m2_after_distinct.ambient == 0.14f &&
-                c1m2_after_distinct.strength == 0.28f,
+                c1m2_after_distinct.strength == 0.34f,
             "Transition to absent c1m2 leaked previous c1m1 pack ambient");
     for (const auto invalid_identity :
          {platform::MissionIdentity{},
