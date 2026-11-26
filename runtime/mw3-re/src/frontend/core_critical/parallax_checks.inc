@@ -979,6 +979,151 @@ void height_replacement_and_queued_retirement(vk::Renderer &renderer) {
           "POM queued height image did not retire after its fence");
   std::printf("pom_height_replacement_and_queued_retirement pass\n");
 }
+void quality_levels_distance_lod_and_grazing(vk::Renderer &high_renderer,
+                                             vk::Renderer &low_renderer) {
+  // Low quality must still satisfy the signed affine analytic oracle at close range.
+  for (float amplitude : {-.04f, 0.f, .04f}) {
+    auto test = fixture(Route::tl, Height::ramp_u, amplitude, .5f, .7);
+    low_renderer.render(test.scene);
+    compare_uv(decode(test.scene), expected(test, Height::ramp_u),
+               "POM Low quality signed affine height oracle");
+  }
+
+  // Distance LOD fade: Low fades 60..140, High fades 120..280.
+  auto close_low = fixture(Route::tl, Height::zero, .12f, 1.f, .7);
+  low_renderer.render(close_low.scene);
+  const auto full_uv = decode(close_low.scene);
+  const double full_shift = std::abs(full_uv[0] - .5) + std::abs(full_uv[1] - .5);
+  require(full_shift > .008, "POM LOD close control did not displace UV");
+
+  auto mid_low = fixture(Route::tl, Height::zero, .12f, 1.f, .7);
+  mid_low.scene.draws[0].surface_eye = {0, 0, -96.f, 1}; // eyeLength == 100 (mid 60..140)
+  low_renderer.render(mid_low.scene);
+  const auto mid_uv = decode(mid_low.scene);
+  const double mid_shift = std::abs(mid_uv[0] - .5) + std::abs(mid_uv[1] - .5);
+  require(mid_shift > 5e-4 && mid_shift < full_shift * .85,
+          "POM Low mid-distance LOD fade did not smoothly attenuate displacement");
+
+  auto far_zero = fixture(Route::tl, Height::zero, 0.f, 1.f, .7);
+  far_zero.scene.draws[0].surface_eye = {0, 0, -200.f, 1};
+  low_renderer.render(far_zero.scene);
+
+  auto far_low = fixture(Route::tl, Height::zero, .12f, 1.f, .7);
+  far_low.scene.draws[0].surface_eye = {0, 0, -200.f, 1}; // eyeLength == 204 >= 140
+  low_renderer.render(far_low.scene);
+  require(far_low.scene.pom_rgba8 == far_zero.scene.pom_rgba8,
+          "POM Low far distance did not fall back bit-identically to base UV");
+
+  auto far_high = fixture(Route::tl, Height::zero, .12f, 1.f, .7);
+  far_high.scene.draws[0].surface_eye = {0, 0, -350.f, 1}; // eyeLength == 354 >= 280
+  high_renderer.render(far_high.scene);
+  require(far_high.scene.pom_rgba8 == far_zero.scene.pom_rgba8,
+          "POM High far distance did not fall back bit-identically to base UV");
+
+  // Zoom-compensated LOD on GPU model/native route: at eyeLength == 204 (> Low fadeEnd 140),
+  // 1x FOV falls back to base UV, while 4x zoom (fy_near * 4 -> effectiveDistance ~ 59 < 60)
+  // retains active displacement.
+  auto model_far_1x = fixture(Route::native, Height::zero, .12f, 1.f, .7);
+  model_far_1x.scene.draws[0].surface_eye = {0, 0, -200.f, 1};
+  auto model_far_zero = fixture(Route::native, Height::zero, 0.f, 1.f, .7);
+  model_far_zero.scene.draws[0].surface_eye = {0, 0, -200.f, 1};
+  low_renderer.render(model_far_1x.scene);
+  low_renderer.render(model_far_zero.scene);
+  require(model_far_1x.scene.pom_rgba8 == model_far_zero.scene.pom_rgba8,
+          "POM Low native-route far 1x did not fall back to base UV");
+
+  auto model_far_4x = fixture(Route::native, Height::zero, .12f, 1.f, .7);
+  model_far_4x.scene.draws[0].surface_eye = {0, 0, -200.f, 1};
+  auto zoomed = std::make_shared<vk::ModelInstance>(*model_far_4x.scene.draws[0].model);
+  // cotHalfFovY = (fy_near * near) / (H / 2) = (112 * 1) / 16 = 7.0 -> zoomScale ~ 4.04.
+  zoomed->projection[2] = 112.f;
+  model_far_4x.scene.draws[0].model = zoomed;
+  low_renderer.render(model_far_4x.scene);
+  const auto zoom_uv = decode(model_far_4x.scene);
+  const double zoom_shift = std::abs(zoom_uv[0] - .5) + std::abs(zoom_uv[1] - .5);
+  require(zoom_shift > .005,
+          "POM Low native-route 4x zoom did not extend effective LOD distance");
+
+  // Smooth grazing-angle taper on [0.08, 0.14]: 0.11 attenuates between 0 and full.
+  auto taper = fixture(Route::tl, Height::zero, .04f, 1.f, .11);
+  high_renderer.render(taper.scene);
+  const auto taper_uv = decode(taper.scene);
+  const auto full_grazing = expected(taper, Height::zero);
+  const double taper_shift = std::abs(taper_uv[0] - .5) + std::abs(taper_uv[1] - .5);
+  const double untapered_shift = std::abs(full_grazing[0] - .5) + std::abs(full_grazing[1] - .5);
+  require(taper_shift > 5e-4 && taper_shift < untapered_shift * .85,
+          "POM grazing taper did not smoothly attenuate displacement");
+
+  std::printf("pom_quality_levels_distance_lod_and_grazing pass\n");
+}
+
+void region_catalog_bwsfm1_validation() {
+  std::vector<std::uint32_t> pixels(16 * 16, 0xff808080U);
+  const auto hash = mat::normal_hash(pixels.data(), pixels.size() * 4);
+  auto build_catalog = [&](const char *magic, std::uint64_t uv_hash, float amplitude,
+                           std::uint32_t height_img, std::uint64_t img_hash,
+                           bool truncate) -> std::string {
+    std::ostringstream out(std::ios::binary);
+    auto u32 = [&](std::uint32_t v) {
+      for (unsigned b = 0; b < 4; ++b) out.put(char(v >> (b * 8)));
+    };
+    auto u64 = [&](std::uint64_t v) { u32(std::uint32_t(v)); u32(std::uint32_t(v >> 32)); };
+    auto f32 = [&](float v) { u32(std::bit_cast<std::uint32_t>(v)); };
+    auto text = [&](std::string_view s) {
+      u32(std::uint32_t(s.size()));
+      out.write(s.data(), std::streamsize(s.size()));
+    };
+    out.write(magic, 8);
+    u32(1); u32(1); u32(1); u32(1); u64(uv_hash); u32(0);
+    text("operation2"); text("c2ter01");
+    u32(height_img); u32(mat::no_surface_image);
+    f32(.5f); f32(amplitude); f32(std::abs(amplitude)); u32(1);
+    f32(1.f); f32(1.f); f32(0.f); f32(0.f);
+    u32(mat::surface_address_wrap); u32(mat::surface_address_wrap);
+    f32(0.f); f32(0.f); f32(1.f); f32(1.f);
+    for (unsigned i = 0; i < 6; ++i) f32(0.f);
+    f32(.75f); f32(.04f); f32(0.f);
+    text("h_c2ter01"); u32(mat::surface_role_height); u32(16); u32(16); u64(img_hash);
+    const std::size_t write_bytes = truncate ? pixels.size() * 2 : pixels.size() * 4;
+    out.write(reinterpret_cast<const char *>(pixels.data()), std::streamsize(write_bytes));
+    return out.str();
+  };
+
+  auto budget = std::make_shared<mat::SurfaceDecodedBudget>();
+  const auto valid_bytes = build_catalog("BWSFM1\0\0", 0ULL, .35f, 0U, hash, false);
+  std::istringstream valid_stream(valid_bytes, std::ios::binary);
+  auto pack = std::make_shared<mat::SurfaceMaterialPack>(
+      mat::read_surface_material_catalog(valid_stream, "operation2",
+          mat::max_surface_sidecar_bytes, mat::max_surface_sidecar_bytes, budget));
+  require(pack->records.size() == 1 && pack->images.size() == 1 && budget->used() == 16 * 16,
+          "POM region catalog reader failed valid BWSFM1 decode");
+  const std::string sha = digest(valid_bytes.data(), valid_bytes.size());
+  const mat::SurfaceKey albedo{32, 32, 1, 0x123456789abcdef0ULL};
+  auto bound = mat::resolve_catalog_height_binding(pack, 0, sha, albedo, 32, 32, 0xfedcba9876543210ULL);
+  require(bool(bound) && bound->image != nullptr && bound->material.height_amplitude == .35f,
+          "POM catalog height binding resolution failed");
+
+  // Malformed catalogs must fail visibly.
+  const std::string bad_cases[] = {
+      build_catalog("BADMAG\0\0", 0ULL, .35f, 0U, hash, false),
+      build_catalog("BWSFM1\0\0", 1234ULL, .35f, 0U, hash, false),
+      build_catalog("BWSFM1\0\0", 0ULL, 25.f, 0U, hash, false),
+      build_catalog("BWSFM1\0\0", 0ULL, .35f, mat::no_surface_image, hash, false),
+      build_catalog("BWSFM1\0\0", 0ULL, .35f, 0U, hash ^ 1ULL, false),
+      build_catalog("BWSFM1\0\0", 0ULL, .35f, 0U, hash, true),
+  };
+  for (const auto &bad : bad_cases) {
+    bool rejected = false;
+    try {
+      std::istringstream stream(bad, std::ios::binary);
+      (void)mat::read_surface_material_catalog(stream, "operation2");
+    } catch (const std::runtime_error &) {
+      rejected = true;
+    }
+    require(rejected, "POM region catalog admitted a malformed BWSFM1 stream");
+  }
+  std::printf("pom_region_catalog_bwsfm1_validation pass\n");
+}
 } // namespace pom_checks
 
 void check_parallax(SDL_Window *window, sdlfe::RendererBackend backend) {
@@ -986,6 +1131,7 @@ void check_parallax(SDL_Window *window, sdlfe::RendererBackend backend) {
   require(backend == sdlfe::RendererBackend::core_critical_wsi,
           "POM qualification requires the explicit --wsi SDL surface harness");
   uniform_layout_and_rgba16_roundtrip();
+  region_catalog_bwsfm1_validation();
   auto tracker = std::make_shared<cc_mw3_re::platform::SdlWindowStateTracker>(window);
   tracker->sample_owner();
   const auto snapshot = tracker->current_state();
@@ -1014,25 +1160,34 @@ void check_parallax(SDL_Window *window, sdlfe::RendererBackend backend) {
     cc_mw3_re::RendererBridgeConfig config;
     config.dxgi_present = false;
     config.parallax_materials = true;
+    config.parallax_quality = 2;
     config.tl_combine = true;
     require(config.tl_combine, "POM merge qualification requires TL combine enabled");
     vk::Renderer renderer(vk::Renderer::ColorTarget::rgba8, source(),
         {1, 1, 1, false}, true, settings, true, config);
+    auto low_config = config;
+    low_config.parallax_quality = 1;
+    vk::Renderer low_renderer(vk::Renderer::ColorTarget::rgba8, source(),
+        {1, 1, 1, false}, true, settings, true, low_config);
     config.parallax_materials = false;
+    config.parallax_quality = 0;
     vk::Renderer disabled(vk::Renderer::ColorTarget::rgba8, source(),
         {1, 1, 1, false}, true, settings, true, config);
     auto uncombined_config = config;
     uncombined_config.parallax_materials = true;
+    uncombined_config.parallax_quality = 2;
     uncombined_config.tl_combine = false;
     vk::Renderer uncombined(vk::Renderer::ColorTarget::rgba8, source(),
         {1, 1, 1, false}, true, settings, true, uncombined_config);
     require(renderer.max_texture_dimension(native) >= 64 &&
+                low_renderer.max_texture_dimension(native) >= 64 &&
                 disabled.max_texture_dimension(native) >= 64 &&
                 uncombined.max_texture_dimension(native) >= 64,
             "POM authored textures exceed the selected WSI device");
     off_and_zero_amplitude_identity(renderer, disabled);
     per_draw_eye_affine_oracle(renderer, disabled);
     constant_and_ramp_signed_uv(renderer);
+    quality_levels_distance_lod_and_grazing(renderer, low_renderer);
     inverse_chart_color_normal_correspondence(renderer);
     atlas_and_finite_fallback(renderer);
     descriptor_identity_and_mixed_draws(renderer, uncombined);
@@ -1073,5 +1228,5 @@ void check_parallax(SDL_Window *window, sdlfe::RendererBackend backend) {
     worker.join();
     if (failure) std::rethrow_exception(failure);
   } else run();
-  require(created == 6, "POM qualification did not select its six actual SDL WSI devices");
+  require(created == 7, "POM qualification did not select its seven actual SDL WSI devices");
 }

@@ -1336,7 +1336,7 @@ public:
   std::vector<std::uint8_t> tiled_draw_modes_last;
   std::uint64_t normal_draws{};
   std::uint64_t height_uploads{}, height_uploaded_bytes{}, height_cache_hits{},
-      height_retired_images{};
+      height_retired_images{}, height_draws{};
   std::uint64_t presents{};
   bool presentInFlight{};
   // True when the cached texture for this guest surface already holds content
@@ -2188,6 +2188,9 @@ private:
               sunChecked[geometry.key] = geometry.hash;
             }
             u = mw34::sun::uniform(instance.sun_normal, environment);
+            u.projection = {instance.projection[1], instance.projection[2],
+                            instance.projection[3], instance.projection[4]};
+            u.extra[0] = instance.projection[0];
             u.world = instance.sun_world;
             u.geometry_fog0 = instance.geometry_fog0;
             u.geometry_fog1 = instance.geometry_fog1;

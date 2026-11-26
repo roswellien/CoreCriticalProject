@@ -34,6 +34,8 @@ namespace MW3RemasterLauncher.Core
         // environment pack provides its validated role catalog.
         public bool WaterDetail { get; set; } = true;
         public bool CloudDetail { get; set; } = true;
+        // Opt-in parallax occlusion mapping quality ("off", "low", "high"). Default off until approved.
+        public string PomQuality { get; set; } = "off";
         // Remembers full environment pack hashes under the profile's cache folder so the next
         // launch skips re-hashing unchanged packs. Off (or MW3_DISK_CACHE=0) hashes every start.
         public bool LoadCache { get; set; } = true;

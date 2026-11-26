@@ -65,6 +65,7 @@ struct CoreCriticalAssets {
   benchmark::Run* benchmark_run = nullptr;
   std::string flare_style = "modern";
   bool pom = false;
+  unsigned pom_quality = 0; // 0 = off, 1 = low, 2 = high
   std::string geometry = "legacy";
   bool geometry_debug_normals = false;
   std::string textures;
@@ -91,7 +92,7 @@ struct CoreCriticalAssets {
            !cloud_detail_explicit && !effect_lights && !fixture_lights &&
            !mech_headlights && effect_light_catalog.empty() &&
            stock_headlights.empty() && headlight_bindings.empty() &&
-           !render_thread && !pom && geometry == "legacy" && !geometry_debug_normals &&
+           !render_thread && !pom && pom_quality == 0 && geometry == "legacy" && !geometry_debug_normals &&
            flare_style == "modern" &&
            textures.empty() && models.empty() && normals.empty() &&
            materials.empty() && skins.empty() && skin_catalog.empty() &&

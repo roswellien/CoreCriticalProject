@@ -216,7 +216,13 @@ public sealed class NativeGameRunner
                 "original" => Mw3ReFlareStyle.Original,
                 _ => throw new InvalidOperationException("Unknown lens flare style: " + settings.FlareStyle)
             },
-            Pom = true,
+            Pom = settings.PomQuality is "low" or "high",
+            PomQuality = settings.PomQuality switch
+            {
+                "off" => null,
+                "low" or "high" => settings.PomQuality,
+                _ => throw new InvalidOperationException("Unknown parallax occlusion mapping quality: " + settings.PomQuality)
+            },
             // The environment switch stays a support override for a saved "on".
             DiskCache = settings.LoadCache && Environment.GetEnvironmentVariable("MW3_DISK_CACHE") != "0",
             Preview = new Mw3RePreviewOptions
