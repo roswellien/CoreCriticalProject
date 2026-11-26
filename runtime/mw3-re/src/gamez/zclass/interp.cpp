@@ -57,6 +57,19 @@ struct BeforeDraw {
   float applied_local[12];
 };
 std::vector<BeforeDraw> g_before_draw;
+// The records in list 6's order at the last record(): record and apply walk
+// the list in that order, so the i-th live object3d's record is found here
+// without a map lookup while the list has not changed (5,600 nodes in c2m1).
+// Emptied when a record goes (forget), as a freed node's address may come back.
+std::vector<std::pair<const Node*, Record*>> g_order;
+
+// The record of the i-th live object3d on list 6 (record's order), else from
+// the map; null for a node with none.
+Record* find_record(const Node* node, std::size_t i) {
+  if (i < g_order.size() && g_order[i].first == node) return g_order[i].second;
+  auto found = g_records.find(node);
+  return found == g_records.end() ? nullptr : &found->second;
+}
 
 Object3d* object_data(Node* node) { return static_cast<Object3d*>(node->data); }
 
@@ -159,10 +172,14 @@ void record() {
   // longer on it is dropped: a whole scene can go without node_slot_free (a
   // mission's pools reset), and its node addresses may be handed out again.
   ++g_pass;
+  std::vector<std::pair<const Node*, Record*>> order;
+  order.reserve(g_order.size());
   for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
     Node* node = item->node;
     if (!is_live_object3d(node)) continue;
-    Record& r = g_records[node];
+    Record* known = find_record(node, order.size());
+    Record& r = known ? *known : g_records[node];
+    order.emplace_back(node, &r);
     r.pass = g_pass;
     const Transforms now = read_transforms(node);
     if (r.blended || !r.has_previous) {
@@ -175,10 +192,12 @@ void record() {
     r.has_previous = true;
     r.blended = false;
   }
-  for (auto it = g_records.begin(); it != g_records.end();) {
-    if (it->second.pass != g_pass) it = g_records.erase(it);
-    else ++it;
-  }
+  if (g_records.size() != order.size())
+    for (auto it = g_records.begin(); it != g_records.end();) {
+      if (it->second.pass != g_pass) it = g_records.erase(it);
+      else ++it;
+    }
+  g_order = std::move(order);
 }
 
 void settle_world_caches() {
@@ -204,14 +223,14 @@ void apply(float alpha) {
     Node* node = item->node;
     if (!is_live_object3d(node)) continue;
     const Transforms now = read_transforms(node);
+    Record* known = find_record(node, g_before_draw.size());
     BeforeDraw& b = g_before_draw.emplace_back();
     b.node = node;
     b.world_stale = !now.world_valid;
     std::memcpy(b.local, now.local, kMatrixBytes);
     std::memcpy(b.world, now.world, kMatrixBytes);
-    auto found = g_records.find(node);
-    if (found == g_records.end()) continue;
-    Record& r = found->second;
+    if (!known) continue;
+    Record& r = *known;
     if (!r.has_previous) continue;
     // Moved since its last record, outside a step (a placement between frames,
     // a tool): the records are out of date, so it is drawn as it is and its
@@ -267,6 +286,7 @@ void restore() {
 
 void forget(const Node* node) {
   g_records.erase(node);
+  g_order.clear();
   g_before_draw.erase(std::remove_if(g_before_draw.begin(), g_before_draw.end(),
                                      [node](const BeforeDraw& b) { return b.node == node; }),
                       g_before_draw.end());
@@ -274,6 +294,7 @@ void forget(const Node* node) {
 
 void clear() {
   g_records.clear();
+  g_order.clear();
   g_before_draw.clear();
 }
 
