@@ -80,6 +80,9 @@ int side_of(const void* mech) {
 }  // namespace
 
 namespace arena_counts {
+
+void set_death_anim_toggle(bool right) { mech3::world().death_anim_toggle = right; }
+void reset_last_action() { mech3::world().last_action = 0; }
 void begin() {
   for (int side = 0; side < kSides; ++side) g_shots[side] = g_hits[side] = 0;
   g_shot_starts.clear();
