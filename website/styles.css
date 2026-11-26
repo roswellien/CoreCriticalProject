@@ -2107,6 +2107,9 @@ details p {
 }
 .hero-actions {
     display: flex;
+    /* The hero text column is narrow on tablets; keep each label on one line. */
+    width: max-content;
+    white-space: nowrap;
     align-items: center;
     gap: 28px;
     margin-top: 1.6vw;
@@ -2242,6 +2245,7 @@ details p {
         white-space: normal;
     }
     .hero-actions {
+        width: auto;
         flex-wrap: wrap;
         gap: 18px;
         margin-top: 20px;
@@ -2260,6 +2264,19 @@ details p {
     }
     .step-number {
         font-size: 26px;
+    }
+}
+/* The desktop hero is a fixed share of the viewport width, so between the mobile layout and
+   wide screens the title, buttons and status line can outgrow it and get clipped. The status
+   line repeats the action rail just below, so it is dropped first; tablets also get a floor. */
+@media (min-width: 761px) and (max-width: 1399px) {
+    .hero-note {
+        display: none;
+    }
+}
+@media (min-width: 761px) and (max-width: 1150px) {
+    .hero {
+        min-height: 400px;
     }
 }
 @media (prefers-reduced-motion: reduce) {
