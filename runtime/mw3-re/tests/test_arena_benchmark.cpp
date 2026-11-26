@@ -182,11 +182,15 @@ TEST(strict_benchmark_selects_recorded_states_and_samples_camera_at_recorded_tim
 {"type":"state","t":10.125}
 {"type":"state","t":10.375}
 {"type":"state","t":11}
-{"type":"end","t":11}
+{"type":"state","t":11.2}
+{"type":"state","t":11.7}
+{"type":"end","t":11.7}
 )");
     mech3::replay::ReplayLog log;
     std::string error;
     EXPECT(log.load((files.dir / "arena.jsonl").string(), &error));
+    const auto boundary_times = log.state_times(11.2, 11.7);
+    EXPECT(boundary_times == std::vector<float>{11.2f});
     const auto times = log.state_times(10.0625, 11);
     const std::vector<float> expected{10.125f, 10.375f};
     EXPECT(times == expected);
@@ -194,6 +198,11 @@ TEST(strict_benchmark_selects_recorded_states_and_samples_camera_at_recorded_tim
         return;
     StrictPlayback playback(times, 10.0625);
     const auto wait = [](double) { return strict_present(1); };
+    if (!boundary_times.empty()) {
+        StrictPlayback boundary_playback(boundary_times, 11.2);
+        const auto boundary = boundary_playback.next(wait);
+        EXPECT(boundary && boundary->elapsed == 0 && boundary->delta == 0);
+    }
     const CameraTrack track{{0, 0, 0, {0, 0, 0}}, {1, 0, 0, {16, 0, 0}}};
     const auto first = playback.next(wait);
     const auto second = playback.next(wait);

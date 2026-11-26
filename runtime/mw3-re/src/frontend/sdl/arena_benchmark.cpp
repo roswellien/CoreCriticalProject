@@ -443,7 +443,8 @@ std::optional<Statistics> Measurements::statistics() const {
 }
 
 StrictPlayback::StrictPlayback(std::vector<float> times, double start, std::function<double()> now)
-    : times_(std::move(times)), start_(start), now_(std::move(now)) {
+    : times_(std::move(times)), start_(static_cast<float>(start)), now_(std::move(now)) {
+    // Match state_times() so an included boundary tick starts with a zero delta.
     if (times_.empty())
         throw std::runtime_error("strict benchmark window has no recorded state ticks");
     frames_.reserve(times_.size());

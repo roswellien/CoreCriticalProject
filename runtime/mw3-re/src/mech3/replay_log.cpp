@@ -387,9 +387,12 @@ bool ReplayLog::covers(double start, double end) const {
 }
 
 std::vector<float> ReplayLog::state_times(double start, double end) const {
+  // Match the replay cursor's timestamp precision at both edges of the window.
+  const auto first = static_cast<float>(start);
+  const auto past_last = static_cast<float>(end);
   std::vector<float> times;
   for (const auto& state : states_)
-    if (start <= state.t && state.t < end) times.push_back(state.t);
+    if (first <= state.t && state.t < past_last) times.push_back(state.t);
   return times;
 }
 

@@ -2819,15 +2819,23 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       auto* strict_run = a.watch.benchmark_run && a.watch.benchmark_run->strict()
           ? a.watch.benchmark_run.get() : nullptr;
       const auto wait_for_strict_shutdown = [&] {
-        if (!strict_run || window.render()->wait_benchmark_idle()) return;
-        strict_run->invalidate(strict_run->next_frame(0), "timed out draining strict worker on exit");
+        if (!strict_run) return;
+        const auto frame = strict_run->next_frame(0);
+        try {
+          if (window.render()->wait_benchmark_idle()) return;
+          strict_run->invalidate(frame, "timed out draining strict worker on exit");
+        } catch (const std::exception& error) {
+          strict_run->invalidate(frame, error.what());
+        } catch (...) {
+          strict_run->invalidate(frame, "strict worker threw a non-standard exception on exit");
+        }
         try {
           strict_run->write_results();
         } catch (const std::exception& error) {
           std::fprintf(stderr, "mw3: benchmark output failed: %s\n", error.what());
         }
-        // The stuck job still borrows renderer resources, and its destructor
-        // would join the worker. Leave those resources to process teardown.
+        // Cleanup could join a stuck worker or rethrow its stored failure.
+        // Leave renderer resources to process teardown.
         std::fflush(stdout);
         std::fflush(stderr);
         std::_Exit(1);

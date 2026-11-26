@@ -208,6 +208,7 @@ class Run {
     void arm() { clock_.arm(); }
     bool armed() const { return clock_.armed(); }
     double elapsed() const { return clock_.elapsed(); }
+    double now() const { return clock_.now(); }
     FrameTag next_frame(double replay_time) const {
         if (strict_)
             return strict_->pending_frame();

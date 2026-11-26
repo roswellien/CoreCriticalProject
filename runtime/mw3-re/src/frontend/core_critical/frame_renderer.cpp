@@ -770,15 +770,17 @@ public:
 
   bool wait_benchmark_idle() override {
     if (!worker_) return true;
-    return wait_strict_job(worker_->statistics().submitted, sdlfe::benchmark::monotonic_seconds() +
-                              sdlfe::benchmark::kStrictPresentTimeoutSeconds);
+    const auto job = worker_->statistics().submitted;
+    const double deadline = benchmark_run_->now() + sdlfe::benchmark::kStrictPresentTimeoutSeconds;
+    return wait_strict_job(job, deadline);
   }
 
   bool wait_strict_job(std::size_t job, double deadline) {
     if (strict_wait_timed_out_) return false;
     using Clock = std::chrono::steady_clock;
-    const auto until = Clock::time_point(std::chrono::duration_cast<Clock::duration>(
-        std::chrono::duration<double>(deadline)));
+    // The run can use an injected clock with a different epoch.
+    const auto remaining = std::chrono::duration<double>(std::max(0.0, deadline - benchmark_run_->now()));
+    const auto until = Clock::now() + std::chrono::duration_cast<Clock::duration>(remaining);
     strict_wait_timed_out_ = !worker_->wait_for_job_until(job, until);
     return !strict_wait_timed_out_;
   }

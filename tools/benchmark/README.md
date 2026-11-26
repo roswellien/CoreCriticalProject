@@ -138,6 +138,12 @@ the first difference, or 2 for invalid or incompatible input. Use the same scene
 settings, packs, resolution, GPU and driver for repeatability checks. Strict runs are
 unscored, and `compare.py` rejects them from A-B-B-A.
 
+### Limitations
+
+Worker waits during pre-arm startup and fade frames can be unbounded. If the app
+throws mid-frame, producer work may remain unflushed. Losing window focus
+invalidates a strict run.
+
 ## Stress qualification
 
 Use the freezer's `candidate_windows` to select a log start 10 s before each candidate's
