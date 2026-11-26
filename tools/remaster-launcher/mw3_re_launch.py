@@ -50,6 +50,10 @@ _MAX_SURFACE_RECORDS = 4096
 _MAX_SURFACE_IMAGES = 512
 _MAX_SURFACE_DIMENSION = 4096
 MAX_SIDECAR_BYTES = 512 * 1024 * 1024
+# Decoded scalar-image budget per sidecar. The contract counts one retained byte per texel for
+# both v1 (RGBA, red channel kept) and v2 (grayscale). It equals the file cap today, but stays a
+# separate name so tests can lower it without the file-size gate hiding the per-texel accounting.
+_MAX_SURFACE_DECODED_BYTES = MAX_SIDECAR_BYTES
 _NO_SURFACE_MATERIAL = 0xFFFFFFFF
 _NO_SURFACE_IMAGE = 0xFFFFFFFF
 _ROLE_HEIGHT = 1
@@ -315,11 +319,15 @@ def read_surface_materials_file(path, *, expected_asset_id=None, expected_mesh_u
                 not 1 <= width <= _MAX_SURFACE_DIMENSION or
                 not 1 <= height <= _MAX_SURFACE_DIMENSION):
             raise ValueError("Invalid surface material image header")
-        byte_count = width * height * (4 if version == 1 else 1)
-        if decoded_total + byte_count > max_bytes:
+        pixel_count = width * height
+        # v1 stores RGBA but only the red scalar is retained, so both versions decode to one
+        # byte per texel; the stored bytes are still read and hashed in full below.
+        stored_byte_count = pixel_count * (4 if version == 1 else 1)
+        decoded_budget = min(max_bytes, _MAX_SURFACE_DECODED_BYTES)
+        if decoded_total + pixel_count > decoded_budget:
             raise ValueError("Surface material decoded images exceed budget")
-        decoded_total += byte_count
-        pixels = take(byte_count)
+        decoded_total += pixel_count
+        pixels = take(stored_byte_count)
         actual_hash = 0xCBF29CE484222325
         for byte in pixels:
             actual_hash = ((actual_hash ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
