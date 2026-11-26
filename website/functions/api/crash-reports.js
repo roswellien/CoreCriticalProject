@@ -1,3 +1,4 @@
+import { validateHeader } from "../_lib/crash-report-header.js";
 import { LOG_LABELS, LOG_ORDER } from "../_lib/crash-report-logs.js";
 
 const MAX_REQUEST_BYTES = 256 * 1024;
@@ -564,6 +565,8 @@ function validateReport(report) {
         typeof rawSourceCommit === "string" && rawSourceCommit.trim().length > 0
             ? redactPaths(rawSourceCommit.trim().slice(0, 40))
             : undefined;
+    const header = validateHeader(report.header, redactPaths);
+    const hasHeader = Object.keys(header).length > 0;
     const validated = {
         format_version: 1,
         report_id: reportId,
@@ -589,6 +592,8 @@ function validateReport(report) {
                 ? redactPaths(report.dotnet_runtime.slice(0, 120))
                 : "",
         hardware: validateHardware(report.hardware),
+        // Left out when empty so reports from older launchers are stored exactly as before.
+        ...(hasHeader ? { header } : {}),
         failure_summary: redactPaths(report.failure_summary.slice(0, 2000)),
         settings,
         packs,
