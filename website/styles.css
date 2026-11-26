@@ -1085,31 +1085,14 @@ details p {
     .section-heading > p {
         letter-spacing: 0.35px;
     }
+    /* The links flow as one row from the approved start point. Each link used to have its own
+       fixed position, which broke whenever a link was added (Mod Studio, Discord). */
     .primary-nav {
         position: absolute;
-        inset: 0;
-        pointer-events: none;
-    }
-    .primary-nav a {
-        position: absolute;
-        top: 50%;
-        transform: translateY(-50%);
-        pointer-events: auto;
-    }
-    .primary-nav a:nth-child(1) {
+        top: 0;
+        bottom: 0;
         left: 22.396vw;
-    }
-    .primary-nav a:nth-child(2) {
-        left: 27.93vw;
-    }
-    .primary-nav a:nth-child(3) {
-        left: 32.226vw;
-    }
-    .primary-nav a:nth-child(4) {
-        left: 36.914vw;
-    }
-    .primary-nav a:nth-child(5) {
-        left: 41.341vw;
+        gap: 2.1vw;
     }
     .project-edition {
         font-family: RussoOne, sans-serif;
@@ -2108,5 +2091,179 @@ details p {
     }
     .mech-pagination a {
         padding-block: 8px;
+    }
+}
+
+/* Closed playtest: every playtest action leads to the Discord application. */
+.button-solid {
+    background: var(--amber);
+    color: #141717;
+    border-color: var(--amber);
+    gap: 12px;
+}
+.button-solid:hover {
+    background: #ffc078;
+    color: #141717;
+}
+.hero-actions {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    margin-top: 1.6vw;
+}
+.hero-actions .button {
+    margin: 0;
+}
+.hero-secondary {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid #eee6dc66;
+    padding-bottom: 2px;
+}
+.hero-note {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 14px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+}
+.live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--amber);
+    box-shadow: 0 0 0 0 #efa34888;
+    animation: live-pulse 2.4s infinite;
+}
+@keyframes live-pulse {
+    70% {
+        box-shadow: 0 0 0 9px #efa34800;
+    }
+    100% {
+        box-shadow: 0 0 0 0 #efa34800;
+    }
+}
+/* Darkens the left of the hero art so the title and buttons stay readable over the mech. */
+.hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, #101514d9 0%, #10151480 32%, transparent 55%);
+    pointer-events: none;
+}
+.hero-copy {
+    z-index: 1;
+}
+.playtest {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    gap: 72px;
+    align-items: center;
+    padding-block: 72px;
+    border-bottom: 1px solid var(--rule);
+    background: linear-gradient(120deg, #1d1710 0%, #141717 60%);
+}
+.playtest h2 {
+    font: 700 clamp(30px, 2.8vw, 46px)/1.12 var(--display);
+    margin-bottom: 18px;
+}
+.playtest-intro > p {
+    color: #d4d4cd;
+    font-size: 18px;
+}
+.playtest-intro .button {
+    margin-top: 28px;
+}
+.playtest .playtest-requirement {
+    margin-top: 16px;
+    font-size: 14px;
+    color: var(--muted);
+}
+.playtest-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    border-top: 1px solid var(--rule);
+}
+.playtest-steps li {
+    display: grid;
+    grid-template-columns: 72px 1fr;
+    column-gap: 20px;
+    padding-block: 24px;
+    border-bottom: 1px solid var(--rule);
+}
+.step-number {
+    grid-row: span 2;
+    font: 700 34px/1 var(--display);
+    color: var(--amber);
+}
+.playtest-steps h3 {
+    font-size: 22px;
+    margin-bottom: 6px;
+}
+.playtest-steps p {
+    color: var(--muted);
+}
+.community-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-top: 26px;
+}
+.community-actions .button {
+    margin: 0;
+}
+@media (max-width: 1150px) {
+    .hero-note {
+        display: none;
+    }
+    .hero-actions {
+        margin-top: 12px;
+    }
+    .hero-actions .button {
+        min-height: 40px;
+        padding: 8px 16px;
+        font-size: 14px;
+    }
+}
+@media (max-width: 760px) {
+    .hero::before {
+        display: none;
+    }
+    .hero-note {
+        display: flex;
+        white-space: normal;
+    }
+    .hero-actions {
+        flex-wrap: wrap;
+        gap: 18px;
+        margin-top: 20px;
+    }
+    .hero-actions .button {
+        min-height: 48px;
+        font-size: 16px;
+    }
+    .playtest {
+        grid-template-columns: 1fr;
+        gap: 32px;
+        padding-block: 44px;
+    }
+    .playtest-steps li {
+        grid-template-columns: 52px 1fr;
+    }
+    .step-number {
+        font-size: 26px;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .live-dot {
+        animation: none;
     }
 }
