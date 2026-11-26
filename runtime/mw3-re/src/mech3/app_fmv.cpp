@@ -531,6 +531,9 @@ uint32_t GameEngine::movie_playing(Handle m) {
   auto* s = static_cast<zfmv::Script*>(object_of(m));
   const bool on = s && s->playing();
   if (!on) movie_cd_resume(m);
+  // Ours (#559): an HD movie's 24 frames a second shown between the
+  // script's 15 fps flips, each pass, when a newer one is due.
+  if (on && hd_movie_active_) present_hd_movie(false);
   return on;
 }
 void GameEngine::movie_stop(Handle m, int32_t all) {
@@ -553,6 +556,29 @@ void GameEngine::hd_movie_started() {
 void GameEngine::hd_movie_ended() {
   hd_movie_active_ = false;
   hd_movie_serial_shown_ = 0;
+  if (p_.screen) p_.screen->release_frame_rgba();
+}
+bool GameEngine::present_hd_movie(bool counted) {
+  if (!hd_movie_active_ || !p_.screen) return false;
+  HdPresentFrame shown;
+  if (!hd_movie_frame(&shown) || !shown.frame.bgra) return false;  // none decoded yet
+  const HdFrame& frame = shown.frame;
+  const bool already_shown = frame.serial == hd_movie_serial_shown_;
+  if (!counted && already_shown) return true;
+  if (!p_.screen->present_frame_rgba(frame.bgra->data(), frame.width, frame.height, frame.pitch, frame.serial,
+                                     shown.src_top, shown.src_bottom)) {
+    if (!hd_movie_no_presenter_logged_) {
+      hd_movie_no_presenter_logged_ = true;
+      std::fprintf(stderr, "mw3: hd movie: no frame presenter; the movie plays without its picture\n");
+    }
+    return false;
+  }
+  hd_movie_serial_shown_ = frame.serial;
+  if (counted) {
+    ++frames_presented;
+    if (on_present) on_present(frames_presented);
+  }
+  return true;
 }
 
 // The pause screen's blur: 0x00599f70(4, 1) on the stack, its vtable the

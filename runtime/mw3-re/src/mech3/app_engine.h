@@ -627,8 +627,14 @@ class GameEngine : public Engine {
   // while one plays its frames are shown instead of the 16-bit buffer.
   void hd_movie_started();
   void hd_movie_ended();
+  // The HD frame for the sound played, shown when it is newer than the last
+  // one shown; `counted` for a flip (frames_presented, on_present), not for
+  // the extra shows between the script's 15 fps flips. False when nothing
+  // could be shown (the 16-bit buffer is shown instead).
+  bool present_hd_movie(bool counted);
   bool hd_movie_active_ = false;
   uint64_t hd_movie_serial_shown_ = 0;
+  bool hd_movie_no_presenter_logged_ = false;
   // The Direct3D frame: zvid's lock (0x00576d00 / 0x00576d60), scene nesting
   // (0x00579af0 / 0x00579b10), the quad ([0x0072f3ec]) and the finish (0x00558610).
   // 0x0040f8d0: the message panel's slide, then the view target's HUD data update.

@@ -587,6 +587,73 @@ void SdlScreen2D::draw_layer(int width, int height, bool blend, bool sharp,
   render_->end_scene();
 }
 
+// Ours (#559, docs/fmv.md section 9): the HD movie frame drawn over the whole
+// window at its own resolution (never through the 16-bit buffer), its rows
+// kept in the shape the 16-bit movies have on a wide screen (movie_frame_fit).
+// A canvas scope with an unfitted shape makes the renderer's scene the whole
+// window (FrameRenderer sizes it by fit_rect), so the quad is in window pixels.
+bool SdlScreen2D::present_frame_rgba(const uint8_t* bgra, int width, int height, int pitch, uint64_t serial,
+                                     int src_top, int src_bottom) {
+  if (!render_ || !bgra || width <= 0 || height <= 0 || pitch < width * 4) return false;
+  FloatScope float_scope;  // the renderer's calls leave the game's floating point as it was
+  if (serial != movie_serial_ || movie_texture_ < 0) {
+    // create_texture takes RGBA; the decoder gives BGRA.
+    movie_rgba_.resize(static_cast<size_t>(width) * height * 4);
+    for (int y = 0; y < height; ++y) {
+      const uint8_t* in = bgra + static_cast<size_t>(y) * pitch;
+      uint8_t* out = &movie_rgba_[static_cast<size_t>(y) * width * 4];
+      for (int x = 0; x < width; ++x, in += 4, out += 4) out[0] = in[2], out[1] = in[1], out[2] = in[0], out[3] = 0xff;
+    }
+    if (movie_texture_ >= 0 && (movie_texture_w_ != width || movie_texture_h_ != height)) release_frame_rgba();
+    if (movie_texture_ < 0) {
+      movie_texture_ = render_->create_texture(width, height, movie_rgba_.data(), 1);
+      movie_texture_w_ = width, movie_texture_h_ = height;
+    } else {
+      render_->update_texture(movie_texture_, width, height, movie_rgba_.data());
+    }
+    if (movie_texture_ < 0) return false;
+    movie_serial_ = serial;
+  }
+  int window_width = width, window_height = height;
+  if (hud_window_) SDL_GetWindowSizeInPixels(hud_window_, &window_width, &window_height);
+  window_width = std::max(1, window_width);  // a minimized window may report 0
+  window_height = std::max(1, window_height);
+  const FitRect fit = movie_frame_fit(float(window_width), float(window_height), width, height, src_top, src_bottom);
+  const bool has_rows = src_top >= 0 && src_bottom >= src_top && src_bottom < height;
+  const platform::MenuBackgroundUvRect uv =
+      has_rows ? platform::MenuBackgroundUvRect{0, float(src_top) / height, 1, float(src_bottom + 1) / height}
+               : platform::MenuBackgroundUvRect{0, 0, 1, 1};
+  platform::DrawState state;
+  state.texture = movie_texture_;
+  state.depth_write = false;
+  state.depth_always = state.sharp = true;
+  state.filter = platform::TextureFilter::kLinear;
+  int vx, vy, vw, vh;
+  render_->viewport(&vx, &vy, &vw, &vh);
+  render_->flush();
+  {
+    MenuCanvasScope canvas(*render_, hud_shape_, true);
+    render_->set_viewport(0, 0, window_width, window_height);
+    render_->clear(true, 0, 0, 0);
+    render_->begin_canvas_scene();
+    draw_menu_quad(*render_, {fit.x, fit.y, fit.w, fit.h}, uv, state);
+    render_->end_scene();
+    render_->present();
+  }
+  render_->set_viewport(vx, vy, vw, vh);
+  ++frames;
+  return true;
+}
+
+void SdlScreen2D::release_frame_rgba() {
+  if (movie_texture_ >= 0 && render_) render_->release_texture(movie_texture_);
+  movie_texture_ = -1;
+  movie_texture_w_ = movie_texture_h_ = 0;
+  movie_serial_ = 0;
+  movie_rgba_.clear();
+  movie_rgba_.shrink_to_fit();  // about 5 MB a 1280x960 frame, not kept after the movie
+}
+
 void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) {
   if (menu_gpu_recording_) cancel_menu_observation();
   const bool sealed_menu = menu_gpu_sealed_;
@@ -943,6 +1010,7 @@ SdlScreen2D::~SdlScreen2D() {
     if (texture >= 0) render_->release_texture(texture);
   if (menu_hd_texture_ >= 0) render_->release_texture(menu_hd_texture_);
   if (texture_ >= 0) render_->release_texture(texture_);
+  release_frame_rgba();
 }
 void SdlScreen2D::begin_overlay_16(const uint16_t* target, int width, int height, int pitch) {
   set_menu_layout_active(false);

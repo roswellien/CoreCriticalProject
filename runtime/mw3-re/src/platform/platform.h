@@ -105,6 +105,18 @@ class Screen2D {
                           const uint8_t* alpha = nullptr, const uint16_t* colour = nullptr) {
     (void)pixels, (void)width, (void)height, (void)pitch, (void)rgb565, (void)key, (void)alpha, (void)colour;
   }
+  // Ours (#559, docs/fmv.md section 9): an HD movie's frame (32-bit BGRA,
+  // `pitch` bytes a row) shown over the whole window and presented, rows
+  // `src_top`..`src_bottom` of it (-1: all) kept in their shape as the 16-bit
+  // movies are on a wide screen (GameEngine::fmv_stretch). `serial` changes
+  // when the pixels do, so an unchanged frame isn't uploaded again. False
+  // when this screen can't show one (the movie's 16-bit buffer is shown).
+  virtual bool present_frame_rgba(const uint8_t* bgra, int width, int height, int pitch, uint64_t serial,
+                                  int src_top, int src_bottom) {
+    (void)bgra, (void)width, (void)height, (void)pitch, (void)serial, (void)src_top, (void)src_bottom;
+    return false;
+  }
+  virtual void release_frame_rgba() {}  // the frame's texture let go (the movie ended)
 };
 
 // Stands in for DirectInput as zInput uses it (DINPUT.dll's DirectInputCreateA,
