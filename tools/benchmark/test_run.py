@@ -179,6 +179,81 @@ class BenchmarkLaunchTest(unittest.TestCase):
         self.saved["RenderThread"] = False
         self.assertTrue(run.effective_settings(self.saved, {})["RenderThread"])
 
+    def test_suite_runs_conditioning_then_all_scenes_with_fresh_profiles(self):
+        self.write(
+            self.definition,
+            {"version": 1, "scenes": [{"id": scene, "seed": 7} for scene in run.SUITE_SCENES]},
+        )
+        profiles = []
+
+        def fake_scene(definition, scene, output, profile, *inputs):
+            self.assertFalse(profile.exists())
+            profiles.append(profile)
+            profile.mkdir(parents=True)
+            self.write(output / "summary.json", {"valid": True, "scene_id": scene})
+            return 0
+
+        with patch.object(run, "run_scene", side_effect=fake_scene):
+            run.run_suite(
+                self.definition, self.output, "A1", self.data, self.runtime, self.exe, self.saved
+            )
+        manifest = run.read_json(self.output / "suite.json")
+        self.assertEqual(manifest["definition_sha256"], run.sha256(self.definition))
+        self.assertEqual(manifest["label"], "A1")
+        self.assertEqual(
+            [profile.name for profile in profiles], ["conditioning", *run.SUITE_SCENES]
+        )
+        self.assertEqual([entry["id"] for entry in manifest["scenes"]], list(run.SUITE_SCENES))
+        self.assertLessEqual(
+            manifest["conditioning"]["finished_ns"], manifest["scenes"][0]["started_ns"]
+        )
+
+    def test_suite_does_not_publish_manifest_after_scene_failure(self):
+        self.write(
+            self.definition, {"version": 1, "scenes": [{"id": scene} for scene in run.SUITE_SCENES]}
+        )
+        with (
+            patch.object(run, "run_scene", return_value=1) as launch,
+            self.assertRaisesRegex(ValueError, "c1mp1.*status 1"),
+        ):
+            run.run_suite(
+                self.definition,
+                self.output,
+                "B1",
+                self.data,
+                self.runtime,
+                self.exe,
+                self.saved,
+            )
+        self.assertEqual(launch.call_count, 1)
+        self.assertFalse((self.output / "suite.json").exists())
+
+    def test_scene_claims_profile_before_the_planner_writes_to_it(self):
+        def planner(request):
+            profile = Path(request["write_dir"])
+            self.assertTrue(profile.is_dir())
+            (profile / "catalog.bin").write_bytes(b"catalog")
+            return {"ok": True, "argv": ["installed.exe"]}
+
+        with (
+            patch.object(run, "plan_launch", side_effect=planner),
+            patch.object(run, "launch_scene", return_value=0) as launch,
+        ):
+            code = run.run_scene(
+                self.definition,
+                "c1mp1",
+                self.output,
+                self.profile,
+                self.data,
+                self.runtime,
+                self.exe,
+                self.saved,
+            )
+        self.assertEqual(code, 0)
+        self.assertTrue((self.profile / "catalog.bin").is_file())
+        self.assertTrue((self.profile / "launch-plan.json").is_file())
+        self.assertEqual(launch.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
