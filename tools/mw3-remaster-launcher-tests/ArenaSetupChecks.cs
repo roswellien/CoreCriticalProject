@@ -629,7 +629,12 @@ internal static class ArenaSetupChecks
     {
         var dataRoot = LauncherPaths.DataRoot;
         var settings = new SettingsManager(launcherDirectory, dataRoot).Current;
-        var activeDirectories = new PackManager(dataRoot).GetActivePackDirectories().ToList();
+        // Same pack selection the main window makes at startup; without RefreshPacks the
+        // manager has no packs loaded and the match would run with stock models.
+        var packManager = new PackManager(dataRoot);
+        packManager.RefreshPacks(settings.PackSelectionInitialized || settings.ActivePacks.Count > 0
+            ? settings.ActivePacks : null);
+        var activeDirectories = packManager.GetActivePackDirectories();
         var runner = new NativeGameRunner(launcherDirectory, dataRoot);
         var catalog = await ArenaCatalog.EnsureCatalogAsync(runner, settings.GamePath, dataRoot);
         var setup = ArenaSetupFile.Load(setupPath);
