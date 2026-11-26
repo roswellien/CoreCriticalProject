@@ -12,6 +12,7 @@
 
 #include "arena_counts.h"
 #include "check.h"
+#include "frontend/core_critical/renderer/campaign_lighting.hpp"
 #include "gamez/znetwork/znet_session.h"
 #include "gamez/zutil/zutl_path.h"
 #include "mech3/app_mech.h"
@@ -170,6 +171,16 @@ TEST(arena_setup_reads_a_time_of_day) {
     EXPECT(mech3::arena::time_of_day_lighting(t.name) == std::string(t.lighting_mission));
   }
   EXPECT(mech3::arena::time_of_day_lighting("noon") == nullptr);
+}
+
+// #507: each time of day borrows a real, outdoor campaign profile, so a renamed
+// mission can't silently fall back to the map's own lighting.
+TEST(arena_times_of_day_borrow_outdoor_campaign_lighting) {
+  for (const auto& t : mech3::arena::kTimesOfDay) {
+    const auto resolved = mw34::campaign::resolve_mission_lighting(t.lighting_mission);
+    EXPECT(resolved.has_profile && resolved.environment);
+    EXPECT(!resolved.environment->is_interior && !resolved.policy.suppress_sun && !resolved.policy.suppress_sky);
+  }
 }
 
 TEST(arena_setup_refuses_an_unknown_time_of_day) {
