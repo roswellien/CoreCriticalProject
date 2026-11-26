@@ -104,6 +104,29 @@ static class AssetPackUpdateChecks
                 Eligible(installed with { Id = "another.pack" }, new Version(1, 2, 0)))
                 throw new Exception("Pack identity, lineage, or version selection was incorrect.");
 
+            var bundledRelease = release with
+            {
+                MinimumRuntimeVersion = "99.0.0",
+                BundledRuntimeCapabilities = new() { ["prepared-mechs"] = 1, ["mesh-payload"] = 7 }
+            };
+            var bundledCatalog = AssetPackUpdateCatalog.Verify(
+                Sign(document with { Packs = new[] { bundledRelease } }), trust, config, now);
+            var bundledCapabilities = new Dictionary<string, IReadOnlyList<int>>
+            {
+                ["prepared-mechs"] = new[] { 1 }, ["mesh-payload"] = new[] { 6, 7 }
+            };
+            bool BundledEligible(VerifiedAssetPackCatalog catalog) => AssetPackUpdateCatalog.Plan(
+                catalog, new[] { installed }, GameCatalog.Mw3, null, bundledCapabilities).Count == 1;
+            if (!BundledEligible(bundledCatalog) || BundledEligible(verified))
+                throw new Exception("Bundled runtime ignored its engine-specific catalog requirements.");
+            bundledCapabilities["mesh-payload"] = new[] { 6 };
+            if (BundledEligible(bundledCatalog))
+                throw new Exception("A bundled runtime without BWMESH7 was offered the update.");
+            Reject(() => AssetPackUpdateCatalog.Verify(Sign(document with
+            {
+                Packs = new[] { bundledRelease with { BundledRuntimeCapabilities = new() { ["mesh-payload"] = 0 } } }
+            }), trust, config, now));
+
             var big = release with { Archive = release.Archive with { Bytes = 2403550232 } };
             AssetPackUpdateCatalog.Verify(Sign(document with { Packs = new[] { big } }), trust, config, now);
             Reject(() => AssetPackUpdateCatalog.Verify(Sign(document with { Packs = new[] { release, release } }), trust, config, now));

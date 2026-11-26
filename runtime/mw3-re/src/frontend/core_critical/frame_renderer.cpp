@@ -833,7 +833,7 @@ public:
     fixture_model_scope(context);
     if(fixture_trace_run().open()) fixture_trace_model(context);
     ensure_extent();
-    const auto draws = prepared_.draw(context);
+    const auto draws = prepared_.draw(context, false, lab_preview_lighting_);
     if (!draws.replace)
       return;
     if (scene_.hud && !scene_.draws.empty()) {

@@ -591,6 +591,16 @@ def _source_capabilities(source):
             and _file_contains_bytes(main_source, b"a.cc_assets.vsync =")
             and _file_contains_bytes(renderer_source, b"config.vsync = assets.vsync;")):
         caps.append(("vsync", (1,)))
+    reader = source / "runtime/mw3-re/src/platform/prepared_visuals.cpp"
+    binding = source / "runtime/mw3-re/src/frontend/core_critical/prepared_models.cpp"
+    planner = source / "tools/remaster-launcher/mw3_re_launch.py"
+    # Advertise the prepared bundle only when the reader, draw path and planner
+    # agree on the new format. Old descriptors deliberately have no such entry.
+    if (_file_contains_bytes(reader, b"mesh.guard_fit = read_orion_guard_fit(reader)")
+            and _file_contains_bytes(binding, b"shift_orion_guard(draw.world")
+            and _file_contains_bytes(planner, br'BWMESH7\0')):
+        caps.extend((("prepared-mechs", (1,)), ("mesh-payload", tuple(range(1, 8))),
+                     ("normal-map", (1, 2, 3)), ("surface-materials", (1,))))
     return tuple(caps)
 
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frontend/core_critical/renderer/surface_materials.hpp"
+#include "platform/orion_guard_fit.h"
 
 #include <algorithm>
 #include <array>
@@ -45,11 +46,13 @@ struct Batch {
     uint32_t donor_bone = 0xffffffff;
     std::vector<Vertex> vertices;
     std::vector<uint32_t> donor_indices;
+    uint32_t guard_side = 0;
 };
 struct Mesh {
     unsigned version = 0;
     Rig rig;
     std::vector<Batch> batches;
+    std::optional<mw34::orion_guard::Fit> guard_fit;
 };
 struct Image {
     std::string name;
