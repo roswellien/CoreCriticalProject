@@ -1652,7 +1652,8 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     screen.in_mission = [&input] { return input.in_mission && input.in_mission(); };
     // Ours (#289): the 3D replay's mouse is the viewer's (clicks pick mechs,
     // the seek bar), never the mission's, so it is left free as the editor's.
-    input.pointer_free = [replay = !a.watch.replay3d_path.empty()] {
+    // Ours (#529): a watched arena match's too, for its spectator camera.
+    input.pointer_free = [replay = !a.watch.replay3d_path.empty() || watched_arena(a)] {
       return replay || mech3::editor_state().active != 0;
     };
     // FIX (A), playtest W4 (sdl_focus.h): a shown window's real focus; the mouse is held only when it is ours.
@@ -2546,7 +2547,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       // A quit outside the Exit state returns through ExitInstance, as the exe's WM_QUIT does,
       // and leaves the world to the process's end: stop_game after zSound's shutdown freed
       // the sounds the world's nodes still held (the exit's SIGTRAP, docs/program.md).
-      if (!sdlfe::watch_attach(a.watch, pump, window.render())) return 2;  // --replay3d's view (ours, #289)
+      if (!sdlfe::watch_attach(a.watch, pump, window.render(), window.sdl(), a.hidden)) return 2;  // --replay3d's view (ours, #289), the arena's camera (#529)
       try {
         result = app.run(pump);
       } catch (...) {
