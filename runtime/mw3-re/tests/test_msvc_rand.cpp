@@ -12,6 +12,29 @@ TEST(msvc_rand_default_seed_sequence) {
   EXPECT(crt::msvc_rand() == 19169);
 }
 
+// #485: draws inside a DrawnFrameRandom never move the simulation's sequence,
+// however many there are, and without one the sequence is MSVCRT's as before.
+TEST(msvc_rand_drawn_frame_draws_leave_the_simulation_sequence) {
+  crt::msvc_srand(1);
+  EXPECT(crt::msvc_rand() == 41);
+  {
+    crt::DrawnFrameRandom drawn_frame;
+    for (int i = 0; i < 1000; ++i) crt::msvc_rand();
+  }
+  EXPECT(crt::msvc_rand() == 18467);
+  EXPECT(crt::msvc_rand() == 6334);
+}
+
+TEST(msvc_rand_drawn_frame_state_is_seeded_with_the_simulation) {
+  crt::msvc_srand(1);
+  crt::DrawnFrameRandom drawn_frame;
+  EXPECT(crt::msvc_rand() == 41);
+  {
+    crt::DrawnFrameRandom nested;  // leaving a nested one keeps the drawn frame's state
+  }
+  EXPECT(crt::msvc_rand() == 18467);
+}
+
 #include <cmath>
 
 #include "crt/msvc_math.h"
