@@ -220,7 +220,7 @@ void check_catalog() {
                 s.append(reinterpret_cast<const char *>(dir), 12);
                 float col[3] = {1, 1, 1};
                 s.append(reinterpret_cast<const char *>(col), 12);
-                float params[4] = {3.0f, 100.0f, inner, outer};
+                float params[4] = {3.0f, 287.5f, inner, outer};
                 s.append(reinterpret_cast<const char *>(params), 16);
             }
         }
@@ -240,6 +240,7 @@ void check_catalog() {
         require(profiles.size() == 1, "valid catalog single profile mismatch");
         require(profiles[0].stock_id == 0, "stock_id mismatch");
         require(profiles[0].lamps.size() == 1, "lamps count mismatch");
+        require(profiles[0].lamps[0].range == 287.5f, "extended stock range mismatch");
     }
 
     {
