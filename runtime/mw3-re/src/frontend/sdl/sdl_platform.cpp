@@ -85,10 +85,10 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
     } else if (SDL_WindowSupportsGPUPresentMode(device_, window_, SDL_GPU_PRESENTMODE_MAILBOX)) {
       mode = SDL_GPU_PRESENTMODE_MAILBOX;
     }
-    if (!SDL_SetGPUSwapchainParameters(device_, window_, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode)) {
-      std::fprintf(stderr, "mw3: SDL_SetGPUSwapchainParameters: %s\n", SDL_GetError());
-      return false;
-    }
+    // VSync off is a preference, not a requirement: a driver that refuses the
+    // mode keeps SDL's default vsync swapchain rather than ending the launch.
+    if (!SDL_SetGPUSwapchainParameters(device_, window_, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
+      std::fprintf(stderr, "mw3: vsync off unavailable, keeping vsync: %s\n", SDL_GetError());
   }
   render_ = std::make_unique<SdlRender3D>(device_, window_);
   render_->set_shape(&shape_);
