@@ -220,7 +220,8 @@ ActionScreen::ActionScreen(Engine& e, Handle s)
   for (int i = 0; i < 6; ++i) enemies[i].configs = &enemy_configs[i];
   target_buffers(e);
   const bool moving = !e.fast_menu();
-  if (load_from(e.main_menu_definition(), "ACTIONDIALOG", moving)) {
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
+  if (load_from(e.main_menu_definition(), "ACTIONDIALOG", moving || !bake_menu)) {
     zimg::Texture* img = nullptr;
     uint8_t bg_moving = 0;
     e.main_menu_background(&img, &bg_moving);
@@ -238,7 +239,7 @@ ActionScreen::ActionScreen(Engine& e, Handle s)
     bind_button(&ally_title, "ALLY_TITLE");
     bind_button(&cancel_btn, "CANCEL");
     bind_button(&accept_btn, "ACCEPT");
-    if (!moving) {
+    if (bake_menu) {
       bake();
       remove(&background);
       remove(&lines);
