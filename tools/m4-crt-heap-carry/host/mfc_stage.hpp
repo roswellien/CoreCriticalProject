@@ -16,6 +16,7 @@
 #include "vk_scene.hpp"
 #include "render_thread.hpp"
 #include "missile_exhaust.hpp"
+#include "orion_guard_fit.hpp"
 #include "weapon_visuals.hpp"
 #include "early_triangle_commands.hpp"
 #include "controller_input.hpp"

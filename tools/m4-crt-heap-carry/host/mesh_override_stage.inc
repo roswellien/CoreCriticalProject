@@ -97,13 +97,13 @@ static bool override_candidate_name(const std::string&name){
  return names.count(name)!=0;}
 #include "override_arm_damage_plans.inc"
 using OverrideVertex=mw34::vkscene::ModelVertex;
-struct OverrideBatch{std::string owner;std::string visibility_node;unsigned color;std::vector<OverrideVertex>vertices;int texture{-1};int normal_texture{-1};unsigned model{};std::shared_ptr<const mw34::vkscene::ModelGeometry>geometry;std::array<float,3>lo{},hi{};std::string placement_frame;std::array<float,3>placement_offset{};unsigned donor_bone{~0U};std::vector<unsigned>vertex_bones;std::vector<int> skin_textures=std::vector<int>(8,-1);std::string joint_frame;std::array<float,3>joint_offset{};std::string anchor_control;std::array<float,3>anchor_position{};std::shared_ptr<const mw34::materials::SurfaceMaterialRecord>surface_material{};std::shared_ptr<const mw34::emission::Record>emission{};int emission_texture{-1};};
+struct OverrideBatch{std::string owner;std::string visibility_node;unsigned color;std::vector<OverrideVertex>vertices;int texture{-1};int normal_texture{-1};unsigned model{};std::shared_ptr<const mw34::vkscene::ModelGeometry>geometry;std::array<float,3>lo{},hi{};std::string placement_frame;std::array<float,3>placement_offset{};unsigned donor_bone{~0U};std::vector<unsigned>vertex_bones;std::vector<int> skin_textures=std::vector<int>(8,-1);std::string joint_frame;std::array<float,3>joint_offset{};std::string anchor_control;std::array<float,3>anchor_position{};std::shared_ptr<const mw34::materials::SurfaceMaterialRecord>surface_material{};std::shared_ptr<const mw34::emission::Record>emission{};int emission_texture{-1};unsigned guard_side{};};
 using OverrideMatrix=std::array<double,16>;
 struct OverrideScope{unsigned node{};std::string owner;OverrideMatrix owner_to_node{};unsigned root{},model{};unsigned skin{};bool attached_cockpit{};bool preview{};OverrideMatrix preview_camera{};};
 struct OverrideMxcsr{unsigned value=_mm_getcsr();~OverrideMxcsr(){_mm_setcsr(value);}};
 struct OverrideTexture{std::string name;unsigned width,height;std::uint64_t hash;std::vector<std::uint16_t>pixels;std::vector<std::uint32_t>pixels32;};
 struct OverrideDonorInstance{std::map<std::string,OverrideMatrix>raw;mw34::donor::Pose pose;double gait{};};
-struct OverrideState{std::map<unsigned,unsigned>arm_damage_masks;std::map<unsigned,std::pair<size_t,size_t>> model_ranges;std::set<std::pair<unsigned,unsigned>> skin_attempts;std::set<std::pair<unsigned,std::string>>attached_cockpit_nodes;std::map<unsigned,mw34::donor::Rig>donor_rigs;std::map<std::pair<unsigned,unsigned>,OverrideDonorInstance>donor_poses;std::set<std::pair<unsigned,unsigned>>retarget_clamp_roots;std::vector<OverrideTexture>textures,normal_textures,surface_material_textures;int ground_normal_texture{-1};std::vector<std::array<unsigned,5>> ground_normal_bindings;bool loaded{};std::vector<OverrideBatch>batches;OverrideScope scope;std::map<unsigned,int>validated_roots;std::map<unsigned,unsigned>source_skins;std::map<std::pair<unsigned,std::string>,bool>active_nodes;std::set<std::pair<unsigned,unsigned>>announced_roots;std::set<std::pair<unsigned,unsigned>>damage_announced;bool preview_active{},preview_has_bounds{},preview_fit_applied{};unsigned preview_role{};size_t preview_begin{};std::array<RECT,4>preview_boxes{};std::array<double,4>preview_bounds{};std::set<unsigned>preview_emitted;std::set<std::pair<unsigned,std::string>>emitted;std::ofstream log;unsigned emitted_frames{},last_frame{~0U};};
+struct OverrideState{std::map<unsigned,unsigned>arm_damage_masks;std::map<unsigned,std::pair<size_t,size_t>> model_ranges;std::set<std::pair<unsigned,unsigned>> skin_attempts;std::set<std::pair<unsigned,std::string>>attached_cockpit_nodes;std::map<unsigned,mw34::donor::Rig>donor_rigs;std::map<unsigned,mw34::orion_guard::Fit>guard_fits;std::map<std::pair<unsigned,unsigned>,std::array<float,2>>guard_poses;std::set<std::pair<unsigned,unsigned>>guard_announced;std::map<std::pair<unsigned,unsigned>,OverrideDonorInstance>donor_poses;std::set<std::pair<unsigned,unsigned>>retarget_clamp_roots;std::vector<OverrideTexture>textures,normal_textures,surface_material_textures;int ground_normal_texture{-1};std::vector<std::array<unsigned,5>> ground_normal_bindings;bool loaded{};std::vector<OverrideBatch>batches;OverrideScope scope;std::map<unsigned,int>validated_roots;std::map<unsigned,unsigned>source_skins;std::map<std::pair<unsigned,std::string>,bool>active_nodes;std::set<std::pair<unsigned,unsigned>>announced_roots;std::set<std::pair<unsigned,unsigned>>damage_announced;bool preview_active{},preview_has_bounds{},preview_fit_applied{};unsigned preview_role{};size_t preview_begin{};std::array<RECT,4>preview_boxes{};std::array<double,4>preview_bounds{};std::set<unsigned>preview_emitted;std::set<std::pair<unsigned,std::string>>emitted;std::ofstream log;unsigned emitted_frames{},last_frame{~0U};};
 static OverrideState&override_state(){static OverrideState state;return state;}
 static bool override_enabled(){static const bool enabled=[](){for(const auto&m:override_models())if(override_mesh_env(m))return true;if(std::getenv("MW34_GROUND_NORMALS")||std::getenv("MW34_SURFACE_NORMALS")||std::getenv("MW34_WORLD_NORMALS"))return true;return false;}();return enabled;}
 static OverrideMatrix override_identity(){return {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};}
@@ -226,10 +226,28 @@ void override_load_model(unsigned id){
  const auto started=::GetTickCount64();
  {
   std::ifstream file(path,std::ios::binary);auto bytes=[&](void*p,size_t n){if(!file.read(static_cast<char*>(p),std::streamsize(n)))throw std::runtime_error("Replacement models: incomplete mesh payload");};
-  char magic[8];bytes(magic,8);const bool donor=std::memcmp(magic,"BWMESH4\0",8)==0;const bool anchored=std::memcmp(magic,"BWMESH6\0",8)==0;const bool layered=anchored||std::memcmp(magic,"BWMESH5\0",8)==0;const bool placement=layered||std::memcmp(magic,"BWMESH3\0",8)==0;const bool component_visibility=donor||placement||std::memcmp(magic,"BWMESH2\0",8)==0;if(!component_visibility&&std::memcmp(magic,"BWMESH1\0",8))throw std::runtime_error("Replacement models: wrong mesh payload");unsigned count;bytes(&count,4);if(!count||count>256)throw std::runtime_error("Replacement models: invalid batch count");const size_t first=o.batches.size();if(donor)o.donor_rigs.emplace(id,override_read_donor(bytes));
+  char magic[8];bytes(magic,8);const bool guard=std::memcmp(magic,"BWMESH7\0",8)==0;const bool donor=std::memcmp(magic,"BWMESH4\0",8)==0;const bool anchored=std::memcmp(magic,"BWMESH6\0",8)==0;const bool layered=anchored||std::memcmp(magic,"BWMESH5\0",8)==0;const bool placement=layered||std::memcmp(magic,"BWMESH3\0",8)==0;const bool component_visibility=guard||donor||placement||std::memcmp(magic,"BWMESH2\0",8)==0;if(!component_visibility&&std::memcmp(magic,"BWMESH1\0",8))throw std::runtime_error("Replacement models: wrong mesh payload");unsigned count;bytes(&count,4);if(!count||count>256)throw std::runtime_error("Replacement models: invalid batch count");const size_t first=o.batches.size();if(donor)o.donor_rigs.emplace(id,override_read_donor(bytes));
+  std::array<bool,2> seen_guards{};
+  mw34::orion_guard::Fit guard_fit;
+  if(guard){
+   if(std::string_view(model.id)!="orion"||model.resource)
+    throw std::runtime_error("Orion guard fit: unsupported model");
+   guard_fit=mw34::orion_guard::read(bytes);
+  }
   for(unsigned i=0;i<count;++i){char name[32];bytes(name,32);if(name[31])throw std::runtime_error("Replacement models: invalid controller name");
    bool owner=false;for(size_t r=0;r<model.count;++r)if(std::string(name)==model.roster[r].owner)owner=true;if(!owner)throw std::runtime_error("Replacement models: unknown source controller");
    char visibility[32]{};if(component_visibility){bytes(visibility,32);if(!visibility[0]||visibility[31])throw std::runtime_error("Replacement models: invalid visibility node");bool bound=false;for(size_t r=0;r<model.count;++r)if(std::string(visibility)==model.roster[r].name&&std::string(name)==model.roster[r].owner)bound=true;if(!bound)throw std::runtime_error("Replacement models: visibility node is outside source controller");}
+   unsigned guard_side=0;
+   if(guard){
+    bytes(&guard_side,4);
+    if(guard_side>2)throw std::runtime_error("Orion guard fit: invalid guard side");
+    if(guard_side){
+     auto& seen=seen_guards[guard_side-1];
+     if(seen||std::string_view(name)!="hip"||std::string_view(visibility)!="hip_polys")
+      throw std::runtime_error("Orion guard fit: invalid guard batch");
+     seen=true;
+    }
+   }
    // V3 adds a rigid translation in a named original ancestor frame.
    // Legacy V1/V2 payloads retain the exact prior projection path.
    char placement_name[32]{};std::array<float,3>placement_offset{};
@@ -248,11 +266,13 @@ void override_load_model(unsigned id){
     if(!anchor_name[0]){for(float value:anchor_position)if(value!=0)throw std::runtime_error("Replacement models: anchor position without control");}
     else{if(!placement_name[0])throw std::runtime_error("Replacement models: anchor requires placement frame");bool found=false;for(size_t r=0;r<model.count;++r)if(std::string(anchor_name)==model.roster[r].owner)found=true;if(!found)throw std::runtime_error("Replacement models: unknown anchor control");}}
    unsigned donor_bone=~0U;if(donor){bytes(&donor_bone,4);if(donor_bone!=~0U&&donor_bone>=o.donor_rigs.at(id).bones.size())throw std::runtime_error("Visual retarget: invalid batch bone");}
-   unsigned size,color;bytes(&size,4);bytes(&color,4);if(!size||size>65535||size%3)throw std::runtime_error("Replacement models: invalid triangle count");OverrideBatch batch{name,visibility,color,{}};batch.model=id;batch.placement_frame=placement_name;batch.placement_offset=placement_offset;batch.donor_bone=donor_bone;batch.joint_frame=joint_name;batch.joint_offset=joint_offset;batch.anchor_control=anchor_name;batch.anchor_position=anchor_position;batch.vertices.resize(size);bytes(batch.vertices.data(),size*sizeof(OverrideVertex));
+   unsigned size,color;bytes(&size,4);bytes(&color,4);if(!size||size>65535||size%3)throw std::runtime_error("Replacement models: invalid triangle count");OverrideBatch batch{name,visibility,color,{}};batch.model=id;batch.placement_frame=placement_name;batch.placement_offset=placement_offset;batch.donor_bone=donor_bone;batch.joint_frame=joint_name;batch.joint_offset=joint_offset;batch.anchor_control=anchor_name;batch.anchor_position=anchor_position;batch.guard_side=guard_side;batch.vertices.resize(size);bytes(batch.vertices.data(),size*sizeof(OverrideVertex));
    for(const auto&v:batch.vertices){for(float value:{v.x,v.y,v.z,v.nx,v.ny,v.nz,v.u,v.v})if(!std::isfinite(value))throw std::runtime_error("Replacement models: nonfinite mesh payload");if(v.nx*v.nx+v.ny*v.ny+v.nz*v.nz<.5f)throw std::runtime_error("Replacement models: invalid normal");}
    if(donor&&donor_bone==~0U){batch.vertex_bones.resize(size);bytes(batch.vertex_bones.data(),size*4);for(unsigned bone:batch.vertex_bones)if(bone>=o.donor_rigs.at(id).bones.size())throw std::runtime_error("Visual retarget: invalid seam bone");}
    override_prepare_geometry(batch,o.batches.size());o.batches.push_back(std::move(batch));}
   if(file.peek()!=std::char_traits<char>::eof())throw std::runtime_error("Replacement models: trailing mesh payload");
+  if(guard&&(!seen_guards[0]||!seen_guards[1]))
+   throw std::runtime_error("Orion guard fit: a guard batch is missing");
   for(size_t r=0;r<model.count;++r){bool present=false;for(size_t b=first;b<o.batches.size();++b)if(o.batches[b].owner==model.roster[r].owner)present=true;
    if(!present)throw std::runtime_error("Replacement models: missing required source controller geometry");}
   override_load_textures(model,first,o.batches.size());
@@ -271,6 +291,7 @@ void override_load_model(unsigned id){
    }
   }
   override_load_emission(model,first,o.batches.size());
+  if(guard)o.guard_fits.emplace(id,std::move(guard_fit));
   o.model_ranges.emplace(id,std::pair{first,o.batches.size()});
   std::fprintf(stderr,"Model resource ready: chassis=%s lod=%u batches=%zu elapsed_ms=%llu\n",model.id,model.lod,o.batches.size()-first,(unsigned long long)(::GetTickCount64()-started));
   o.log<<"{\"event\":\"enabled\",\"model\":\""<<model.id<<"\",\"lod\":"<<model.lod<<",\"batches\":"<<count<<",\"scope\":\"optional visual replacement; source gameplay preserved\"}\n";
@@ -471,7 +492,7 @@ OverrideScope override_begin(unsigned node){OverrideMxcsr preserve;auto&o=overri
 }
 void override_preview_start(){auto&o=override_state();o.preview_emitted.clear();o.donor_poses.clear();o.preview_has_bounds=false;o.preview_fit_applied=false;o.preview_role=override_preview_role();o.preview_begin=0;for(auto&d:host.devices)if(d.in_scene)o.preview_begin=d.commands.size();}
 void override_restore(const OverrideScope&scope){override_state().scope=scope;}
-void override_scene_start(){if(override_enabled()){override_state().emitted.clear();override_state().validated_roots.clear();override_state().attached_cockpit_nodes.clear();override_state().source_skins.clear();override_state().active_nodes.clear();override_state().arm_damage_masks.clear();override_state().donor_poses.clear();}}
+void override_scene_start(){if(override_enabled()){override_state().emitted.clear();override_state().validated_roots.clear();override_state().attached_cockpit_nodes.clear();override_state().source_skins.clear();override_state().active_nodes.clear();override_state().arm_damage_masks.clear();override_state().donor_poses.clear();override_state().guard_poses.clear();}}
 bool override_suppress_draw(){if(override_state().scope.node&&override_state().scope.attached_cockpit)return true;if(!override_enabled()||!override_state().scope.node)return false;if(override_state().scope.preview)return override_state().preview_emitted.count(override_state().scope.node)!=0;if(!override_state().emitted.count({override_state().scope.root,override_state().scope.owner}))throw std::runtime_error("Bushwacker test: source draw reached without replacement projection");return true;}
 // Recover the requested ancestor's current camera basis from this exact
 // instance and animation sample. Never reuse another actor's cached pose.
@@ -485,6 +506,45 @@ OverrideMatrix override_placement_frame_camera(const std::string&frame,const Ove
   const auto local=(load(data_)&8)?override_identity():override_matrix(data_+0x30);owner_to_frame=override_product(local,owner_to_frame);current=override_parent(current);
  }
  return override_product(owner_camera,override_inverse(owner_to_frame));
+}
+// A guard corrects its rigid draw translation using both live thigh
+// transforms. The controller matrices remain read-only guest data.
+std::array<float,2> override_guard_weights(const mw34::orion_guard::Fit& fit){
+ auto& state=override_state();
+ const auto& scope=state.scope;
+ const auto key=std::make_pair(scope.root,scope.model);
+ if(auto found=state.guard_poses.find(key);found!=state.guard_poses.end())return found->second;
+
+ unsigned hip=scope.node;
+ for(unsigned depth=0;hip&&pose_name(hip,36)!="hip"&&depth<16;++depth)
+  hip=override_parent(hip);
+ if(!hip||!readable(hip,100)||pose_name(hip,36)!="hip")
+  throw std::runtime_error("Orion guard fit: missing hip controller");
+ const unsigned count=load(hip+0x5c),children=load(hip+0x60);
+ if(count>64||(count&&!readable(children,count*4)))
+  throw std::runtime_error("Orion guard fit: unreadable hip children");
+ mw34::orion_guard::PoseKey pose{};
+ std::array<bool,2> found{};
+ for(unsigned i=0;i<count;++i){
+  const unsigned node=load(children+i*4);
+  if(!readable(node,100))throw std::runtime_error("Orion guard fit: unreadable child");
+  const auto name=pose_name(node,36);
+  if(name!="lthigh"&&name!="rthigh")continue;
+  const unsigned side=name=="lthigh"?0:1;
+  const unsigned data=load(node+0x38);
+  if(found[side]||load(node+0x34)!=5||!readable(data,96))
+   throw std::runtime_error("Orion guard fit: invalid thigh transform");
+  found[side]=true;
+  const auto local=(load(data)&8)?override_identity():override_matrix(data+0x30);
+  for(unsigned feature=0;feature<12;++feature)
+   pose[side*12+feature]=float(local[feature]*(feature%4==3?.5:1.0));
+ }
+ const auto weights=found[0]&&found[1]?mw34::orion_guard::weights(fit,pose):std::array<float,2>{};
+ if((weights[0]>0.0f||weights[1]>0.0f)&&state.guard_announced.emplace(key).second)
+  state.log<<"{\"event\":\"orion_guard_clearance_applied\",\"root\":"<<scope.root
+           <<",\"lod\":"<<override_models()[scope.model].lod
+           <<",\"weights\":["<<weights[0]<<','<<weights[1]<<"]}\n";
+ return state.guard_poses.emplace(key,weights).first->second;
 }
 #include "chassis_preview_stage.inc"
 void override_emit(const D3DCmd*original=nullptr){if(!override_enabled())return;auto&o=override_state();if(o.scope.attached_cockpit)return;if(!o.scope.node)return;const bool preview=o.scope.preview;if(preview&&!original){const unsigned pointer=load(0x5eda90);if(!readable(pointer,4))throw std::runtime_error("Status models: missing model-view stack");o.scope.preview_camera=override_matrix(load(pointer));return;}if(preview?o.preview_emitted.count(o.scope.node)!=0:o.emitted.count({o.scope.root,o.scope.owner})!=0)return;unsigned preview_specular=0xff000000U;if(preview){if(original->vertices.empty())return;unsigned alpha_sum=0,alpha_count=0;for(size_t i=0;i+32<=original->vertices.size();i+=32){unsigned spec;std::memcpy(&spec,original->vertices.data()+i+20,4);alpha_sum+=spec>>24;++alpha_count;}if(!alpha_count)return;preview_specular=((alpha_sum+alpha_count/2)/alpha_count)<<24;}
@@ -518,6 +578,15 @@ void override_emit(const D3DCmd*original=nullptr){if(!override_enabled())return;
    auto anchor=placement_frames.find(batch.anchor_control);if(anchor==placement_frames.end())anchor=placement_frames.emplace(batch.anchor_control,override_placement_frame_camera(batch.anchor_control,control_to_camera)).first;
    const auto&parent=placement_frames.at(batch.placement_frame);
    for(unsigned row=0;row<3;++row){double desired=parent[row*4+3];for(unsigned col=0;col<3;++col)desired+=parent[row*4+col]*batch.anchor_position[col];batch_to_camera[row*4+3]+=desired-anchor->second[row*4+3];}
+  }
+  if(batch.guard_side&&!preview){
+   const auto& fit=o.guard_fits.at(batch.model);
+   const auto side=batch.guard_side-1;
+   const auto weight=override_guard_weights(fit)[side];
+   const auto& delta=fit.shifts[side];
+   for(unsigned row=0;row<3;++row)
+    for(unsigned col=0;col<3;++col)
+     batch_to_camera[row*4+3]+=control_to_camera[row*4+col]*delta[col]*weight;
   }
   const int active_tex=o.scope.skin?batch.skin_textures.at(o.scope.skin):batch.texture;
   const auto active_surface_material=(batch.surface_material&&active_tex>=0&&size_t(active_tex)<o.textures.size()&&o.textures[active_tex].name==batch.surface_material->material_name)?batch.surface_material:nullptr;

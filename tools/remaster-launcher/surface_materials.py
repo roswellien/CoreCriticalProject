@@ -111,15 +111,21 @@ def _mesh_uv_identity(stream) -> int:
 
     magic = take(8)
     donor = magic == b"BWMESH4\0"
+    guard = magic == b"BWMESH7\0"
     anchored = magic == b"BWMESH6\0"
     layered = anchored or magic == b"BWMESH5\0"
     placement = layered or magic == b"BWMESH3\0"
-    visibility = donor or placement or magic == b"BWMESH2\0"
+    visibility = guard or donor or placement or magic == b"BWMESH2\0"
     if not visibility and magic != b"BWMESH1\0":
         raise ValueError("Unsupported mesh payload format for UV identity")
     count = struct.unpack("<I", take(4))[0]
     if not 1 <= count <= 256:
         raise ValueError("Invalid mesh batch count for UV identity")
+    if guard:
+        sample_count = struct.unpack("<I", take(4))[0]
+        if not 4 <= sample_count <= 4096:
+            raise ValueError("Invalid Orion guard fit sample count")
+        take(24 + 104 * sample_count)
     if donor:
         bones, refs, flags = struct.unpack("<III", take(12))
         if not 1 <= bones <= 256 or not 1 <= refs <= 128 or flags > 3:
@@ -138,6 +144,8 @@ def _mesh_uv_identity(stream) -> int:
         take(32)  # owner name
         if visibility:
             take(32)
+        if guard and struct.unpack("<I", take(4))[0] > 2:
+            raise ValueError("Invalid Orion guard fit side")
         if placement:
             take(32 + 12)
         if layered:

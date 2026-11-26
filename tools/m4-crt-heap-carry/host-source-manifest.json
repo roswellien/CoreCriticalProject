@@ -541,8 +541,8 @@
       "classification": "authored-host-source"
     },
     "mesh_override_stage.inc": {
-      "sha256": "fadafaa8e1518f1fb7b12a145d7fcc6ca0cb8a697ea2d510ad6a6cfa465ab4e5",
-      "bytes": 62835,
+      "sha256": "dc7d9f227d37b37d2ebcffd1c9feb80b6a8b36d6b8dde99950b4972c40690387",
+      "bytes": 66512,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -559,8 +559,8 @@
       "classification": "authored-host-source"
     },
     "mfc_stage.hpp": {
-      "sha256": "7719fbf1a18cd2a564aa6e1b2fb5f69683ffc23ea6944ec4f79a3eaee5a54940",
-      "bytes": 318964,
+      "sha256": "cbe7c16d2feac92b34bf94090c4fa6ed8307d9c871cddd731a354e78f54f252a",
+      "bytes": 318996,
       "decision": "commit",
       "classification": "authored-host-source"
     },
@@ -1085,6 +1085,12 @@
       "classification": "authored-host-source",
       "sha256": "2ab38a8b3e8b2d6c2494549aac43317eacef252fb427856d0b40e29311c706d9",
       "bytes": 1708
+    },
+    "orion_guard_fit.hpp": {
+      "sha256": "3c64e4904fa3041d3b9b81343b8d75493c693c7a5678e59e090a304643182c97",
+      "bytes": 3333,
+      "decision": "commit",
+      "classification": "authored-host-source"
     }
   },
   "metadata_decision": "Owner approved reviewed interoperability tables in issue #25 on 2026-10-27; original instructions, binaries and assets remain local."
