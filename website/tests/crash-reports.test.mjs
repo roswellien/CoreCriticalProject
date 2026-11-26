@@ -1453,7 +1453,12 @@ test("keeps only the allowed report header fields, bounded and redacted", async 
                         device_local: true,
                     },
                     { index: 1, size_bytes: "big", budget_bytes: -1, extra: "MUST_NOT_BE_STORED" },
-                    ...Array.from({ length: 20 }, (_, index) => ({ index })),
+                    { index: 2, size_bytes: 1024 },
+                    ...Array.from({ length: 20 }, (_, index) => ({
+                        index,
+                        size_bytes: 1,
+                        budget_bytes: 1,
+                    })),
                 ],
                 resolution: "2560x1080",
                 window_mode: "Borderless",
@@ -1474,14 +1479,16 @@ test("keeps only the allowed report header fields, bounded and redacted", async 
     assert.equal(header.vulkan_device, "NVIDIA GeForce RTX 3060 Laptop GPU");
     assert.equal(header.vulkan_api_version, "1.3.289");
     assert.equal(header.vulkan_driver_version, "566.36");
-    assert.equal(header.heaps.length, 16);
+    // Only the first 16 entries are read; the two incomplete ones among them are dropped.
+    assert.equal(header.heaps.length, 14);
     assert.deepEqual(header.heaps[0], {
         index: 0,
         size_bytes: 6283067392,
         budget_bytes: 5990000000,
         device_local: true,
     });
-    assert.deepEqual(header.heaps[1], { index: 1 });
+    // The entries with a bad or missing size or budget are dropped whole.
+    assert.deepEqual(header.heaps[1], { index: 0, size_bytes: 1, budget_bytes: 1 });
     assert.equal(header.resolution, "2560x1080");
     assert.equal(header.window_mode, "Borderless");
     assert.equal(header.refresh_hz, 144);

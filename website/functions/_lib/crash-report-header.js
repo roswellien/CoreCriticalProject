@@ -18,14 +18,16 @@ function keepText(target, name, value, maxLength, redactText) {
     if (typeof value === "string") target[name] = redactText(value.slice(0, maxLength));
 }
 
+// A heap row is only useful with both its size and its budget, so an entry missing
+// either is dropped whole rather than stored as a row with no numbers.
 function validateHeap(heap) {
     if (!isPlainObject(heap)) return null;
-    const kept = {};
+    const hasNumbers = isCount(heap.size_bytes) && isCount(heap.budget_bytes);
+    if (!hasNumbers) return null;
+    const kept = { size_bytes: heap.size_bytes, budget_bytes: heap.budget_bytes };
     if (isCount(heap.index, 64)) kept.index = heap.index;
-    if (isCount(heap.size_bytes)) kept.size_bytes = heap.size_bytes;
-    if (isCount(heap.budget_bytes)) kept.budget_bytes = heap.budget_bytes;
     if (typeof heap.device_local === "boolean") kept.device_local = heap.device_local;
-    return Object.keys(kept).length > 0 ? kept : null;
+    return kept;
 }
 
 function validatePackTextures(pack, redactText) {
