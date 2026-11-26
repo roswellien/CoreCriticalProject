@@ -302,7 +302,7 @@ def native_stage_tests(inputs):
                 argv=[str(self.output / "bin/mw3.exe"), "--install", str(game), "--write-dir", expected_write,
                       "--cc-vulkan-wsi", "--window", "1280x720", "--windowed", "--cc-aa", "fxaa",
                       "--cc-af", "16", "--cc-render-thread", "1", "--cc-lighting", "off",
-                      "--cc-flare-style", "modern"],
+                      "--cc-flare-style", "modern", "--cc-vsync", "0"],
                 skipped_features=[{
                     "feature": "Indeo movies",
                     "reason": "No original Ir50_32.dll passed the launcher's identity check; movie playback will use the existing imported-file fallback.",
