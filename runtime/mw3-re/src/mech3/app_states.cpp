@@ -24,6 +24,7 @@
 #include "gamez/zutil/ztimer.h"
 #include "mech3/app_mech.h"
 #include "mech3/fixed_step.h"
+#include "gamez/zclass/interp.h"
 
 namespace mech3 {
 
@@ -476,6 +477,7 @@ void CoreState::run_fixed_steps(bool replay) {
     sync_frame_step(timer.dt, timer.total_scaled);
     poll_and_run_lists(replay);
     world_tick(en);
+    zcls::interp::record();  // the step's transforms, for drawing between steps
   }
   timer.dt = frame_clock.dt, timer.raw_dt = frame_clock.raw_dt;
   timer.total_scaled = frame_clock.total_scaled, timer.total_raw = frame_clock.total_raw;
@@ -486,6 +488,7 @@ void CoreState::run_fixed_steps(bool replay) {
 // from the pause menu; the steps' clock starts from the timer's.
 void CoreState::restart_fixed_step() {
   mission_fixed_step().reset();
+  zcls::interp::clear();
   g_step_clock.total_scaled = ztimer::state().total_scaled;
   g_step_clock.total_raw = ztimer::state().total_raw;
 }
@@ -517,12 +520,15 @@ bool CoreState::frame() {
     flag = cam && en.field32(cam, 0x4) == 1;
   }
   bool stop = false;
+  // Ours (#485): drawn between the last two steps, then the exact transforms back.
+  if (fixed) zcls::interp::apply(mission_fixed_step().alpha());
   switch (renderer_) {
     case kSoftware: stop = draw_software(veh, flag); break;
     case kDoubled: stop = draw_doubled(veh, flag); break;
     case kHardware: stop = draw_hardware(veh, flag); break;
     default: break;  // the original calls through a null object here
   }
+  if (fixed) zcls::interp::restore();
   if (stop) {
     if (en.vcall(en.field32(en.pilot(), 0x6c), 0x2c, {}) != 3) return true;
     en.message_box_quit_prompt(message_box_);

@@ -104,6 +104,7 @@ add_library(mw3core STATIC
   src/gamez/zclass/cls_mechlib.cpp
   src/gamez/zclass/cls_mechlib_json.cpp
   src/gamez/zclass/cls_node.cpp
+  src/gamez/zclass/interp.cpp  # ours (#485): drawing between fixed simulation steps
   src/gamez/zclass/cls_util.cpp
   src/gamez/zclass/cls_world.cpp
   src/gamez/zclass/cls_zbd.cpp
@@ -683,6 +684,7 @@ add_executable(mw3tests
   tests/test_msvc_rand.cpp
   tests/test_ztimer.cpp
   tests/test_fixed_step.cpp
+  tests/test_interp.cpp
   tests/test_zgameapp.cpp
   tests/test_app.cpp
   tests/test_mainmenu.cpp
