@@ -138,6 +138,7 @@ struct ArenaMech {
   int id = 0;
   int side = 0;  // 0 side A, 1 side B
   int spot = 0;  // its remote_ spawn spot
+  std::string name;  // its name ("arena_a_0"), a copy of the match's name list entry
 };
 // The match's mechs in setup order; empty outside a match.
 const std::vector<ArenaMech>& arena_mechs();
