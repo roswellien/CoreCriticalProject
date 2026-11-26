@@ -80,7 +80,7 @@ the isolated profile under local/benchmark.
 The scored scene now replays `c1mp1-8v8-reference.json`: 16 different
 chassis (Mad Cat, Thor, Vulture, Avatar, Owens, Strider, Daishi, Shadow Cat
 against Black Hawk, Bushwacker, Champion, Cauldron-Born, Puma, Sunder,
-Supernova, Orion), recorded with the command above into
+Supernova, Orion), recorded with the command above, `--arena` pointed at that file, into
 `local/benchmark/reference-16/match-7.jsonl` (SHA-256
 `003521ae20a0e503cc7b9946e050a89e0b9037c9aca365572dd5ad40bf5d2f54` on
 2026-11-26). Each camera shot follows its own `mech`, so every cut shows a
@@ -88,21 +88,22 @@ different chassis. The 4v4 notes above describe the original reference.
 
 Use a fresh output directory for each attempt. This scene starts at log time
 20 seconds, warms up over [20, 40) (the first frame loads all 16 chassis and
-can take over 10 s), and scores [40, 70). The measured
-span contains 593 shots and hits, with the heaviest fighting from 45 to 55 seconds.
+can take over 10 s), and scores [40, 70).
 
-The sequence follows mech ID 3, an Orion that survives the full span. Among
-survivors it had the most shots and hits within 150 meters (593), based on
-event positions and the nearest following pose snapshot. The camera cuts
-are chase 8 s, orbit 7 s, side 5 s, high 5 s, front 5 s, low 5 s, and chase
-5 s. Chase is 40 meters behind the mech and orbit is 60 meters out at
-28 degrees per second. Within each shot the camera uses interpolated replay
-poses. The renderer uses the same recorded fight time for effects.
+The measured span holds 803 shots and hits (267 shots, 536 hits), the
+heaviest fighting from 60 to 70 seconds. Each cut follows its own mech, all
+alive for their cut: chase Mad Cat 10 s, chase Avatar 8 s, orbit Vulture 7 s,
+side Thor 5 s, high Strider 5 s, front Sunder 5 s, low Champion 5 s and chase
+Bushwacker 5 s (50 s in all). Chase is 40 meters behind the mech and orbit is
+60 meters out at 28 degrees per second. Within each shot the camera uses
+interpolated replay poses. The renderer uses the same recorded fight time for
+effects.
 
 For an authored alternative, set the scene camera to
 `{"mode":"track","file":"c1mp1-camera.json","sha256":"..." }` and provide the
 file's SHA-256. Key times are relative to playback start and the track must
-cover the whole span. Keep recording files and run outputs in local storage.
+cover the whole 50 s span; `c1mp1-camera.json` ends at 40 s and needs
+extending first. Keep recording files and run outputs in local storage.
 
 ## Four-scene suite (step 3, #514)
 
