@@ -13,7 +13,8 @@ class BenchmarkLaunchTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        # resolve() expands Windows 8.3 short names (RUNNER~1) the way run.py does.
+        self.root = Path(temporary.name).resolve()
         self.data = self.root / "data"
         self.runtime = self.root / "NativePreview"
         self.profile = self.root / "run-profile"
