@@ -9,23 +9,29 @@
         />
         <meta name="theme-color" content="#141717" />
         <title>Core Critical — MW3</title>
-        <link rel="icon" href="assets/plates/brand-mark.png" type="image/png" />
+        <link rel="icon" href="assets/plates/brand-mark-64.png" type="image/png" />
         <link rel="stylesheet" href="styles.css?v=20261126" />
         <script src="site.js" defer></script>
         <link
             rel="preload"
-            href="assets/fonts/Orbitron.ttf"
+            href="assets/fonts/Orbitron.woff2"
             as="font"
-            type="font/ttf"
+            type="font/woff2"
             crossorigin
         />
-        <link rel="preload" href="assets/plates/hero-art.png" as="image" />
+        <link
+            rel="preload"
+            as="image"
+            href="assets/plates/hero-art.webp"
+            imagesrcset="assets/plates/hero-art-1280.webp 1280w, assets/plates/hero-art.webp 2056w"
+            imagesizes="100vw"
+        />
     </head>
     <body>
         <a class="skip-link" href="#main">Skip to content</a>
         <header class="site-header">
             <a class="brand" href="index.html" aria-label="Core Critical home"
-                ><img src="assets/plates/brand-mark.png" alt="" width="32" height="32" /><span
+                ><img src="assets/plates/brand-mark-128.webp" alt="" width="32" height="32" /><span
                     >CORE CRITICAL</span
                 ></a
             ><button
@@ -52,7 +58,12 @@
             <section class="hero" aria-labelledby="hero-title">
                 <img
                     class="hero-art"
-                    src="assets/plates/hero-art.png"
+                    src="assets/plates/hero-art.webp"
+                    srcset="
+                        assets/plates/hero-art-1280.webp 1280w,
+                        assets/plates/hero-art.webp      2056w
+                    "
+                    sizes="100vw"
                     alt="The classic Mad Cat, with twin shoulder missile racks and a rounded cockpit, in an amber-lit hangar."
                     width="2056"
                     height="765"
@@ -89,7 +100,7 @@
                 <div class="rail-status">
                     <span class="development-status"
                         ><img
-                            src="assets/plates/brand-mark.png"
+                            src="assets/plates/brand-mark-128.webp"
                             alt=""
                             width="20"
                             height="20"
@@ -202,7 +213,17 @@
                 </div>
                 <div class="track-grid">
                     <a class="track" href="native.html"
-                        ><img src="assets/plates/native-art.png" alt="" width="2048" height="768" />
+                        ><img
+                            src="assets/plates/native-art.webp"
+                            srcset="
+                                assets/plates/native-art-1024.webp 1024w,
+                                assets/plates/native-art.webp      2048w
+                            "
+                            sizes="(max-width: 760px) 100vw, 33vw"
+                            loading="lazy"
+                            alt=""
+                            width="2048"
+                            height="768" />
                         <div class="track-content">
                             <span class="track-icon" aria-hidden="true"
                                 ><svg viewBox="0 0 24 24">
@@ -217,7 +238,13 @@
                             </svg></div></a
                     ><a class="track" href="vulkan.html"
                         ><img
-                            src="assets/plates/vulkan-c1m1-beach.png"
+                            src="assets/plates/vulkan-c1m1-beach.webp"
+                            srcset="
+                                assets/plates/vulkan-c1m1-beach-1280.webp 1280w,
+                                assets/plates/vulkan-c1m1-beach.webp      2560w
+                            "
+                            sizes="(max-width: 760px) 100vw, 33vw"
+                            loading="lazy"
                             alt=""
                             width="2560"
                             height="1440" />
@@ -238,7 +265,8 @@
                             </svg></div></a
                     ><a class="track track-tools" href="tools.html"
                         ><img
-                            src="assets/plates/launcher-dashboard.png"
+                            src="assets/plates/launcher-dashboard.webp"
+                            loading="lazy"
                             alt=""
                             width="1080"
                             height="720" />
@@ -271,7 +299,12 @@
                 <div class="project-family">
                     <a href="project.html?id=pirates-moon" class="family-project"
                         ><img
-                            src="assets/plates/vulkan-art.png"
+                            src="assets/plates/vulkan-art.webp"
+                            srcset="
+                                assets/plates/vulkan-art-1024.webp 1024w,
+                                assets/plates/vulkan-art.webp      2048w
+                            "
+                            sizes="(max-width: 760px) 100vw, 50vw"
                             alt=""
                             width="2048"
                             height="768"
@@ -284,7 +317,12 @@
                         </div></a
                     ><a href="project.html?id=mw4" class="family-project"
                         ><img
-                            src="assets/plates/hero-art.png"
+                            src="assets/plates/hero-art.webp"
+                            srcset="
+                                assets/plates/hero-art-1280.webp 1280w,
+                                assets/plates/hero-art.webp      2056w
+                            "
+                            sizes="(max-width: 760px) 100vw, 50vw"
                             alt=""
                             width="2056"
                             height="765"
@@ -339,7 +377,7 @@
         </main>
         <footer class="site-footer section-shell">
             <a class="brand" href="index.html"
-                ><img src="assets/plates/brand-mark.png" alt="" width="28" height="28" /><span
+                ><img src="assets/plates/brand-mark-128.webp" alt="" width="28" height="28" /><span
                     >CORE CRITICAL</span
                 ></a
             >

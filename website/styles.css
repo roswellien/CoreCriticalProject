@@ -1,18 +1,18 @@
 @font-face {
     font-family: Orbitron;
-    src: url("assets/fonts/Orbitron.ttf") format("truetype");
+    src: url("assets/fonts/Orbitron.woff2") format("woff2");
     font-weight: 400 900;
     font-display: swap;
 }
 @font-face {
     font-family: Barlow;
-    src: url("assets/fonts/Barlow-Regular.ttf") format("truetype");
+    src: url("assets/fonts/Barlow-Regular.woff2") format("woff2");
     font-weight: 400;
     font-display: swap;
 }
 @font-face {
     font-family: Barlow;
-    src: url("assets/fonts/Barlow-SemiBold.ttf") format("truetype");
+    src: url("assets/fonts/Barlow-SemiBold.woff2") format("woff2");
     font-weight: 600 800;
     font-display: swap;
 }
@@ -37,7 +37,7 @@ html {
 }
 body {
     margin: 0;
-    background: var(--ground) url("assets/plates/surface-texture.png") repeat;
+    background: var(--ground) url("assets/plates/surface-texture.webp") repeat;
     color: var(--ink);
     font: 400 17px/1.55 var(--body);
 }
@@ -1111,7 +1111,7 @@ details p {
 }
 @font-face {
     font-family: RussoOne;
-    src: url("assets/fonts/RussoOne-Regular.ttf") format("truetype");
+    src: url("assets/fonts/RussoOne-Regular.woff2") format("woff2");
     font-weight: 400;
     font-display: swap;
 }
