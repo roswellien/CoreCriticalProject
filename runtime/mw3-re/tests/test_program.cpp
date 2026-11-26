@@ -26741,8 +26741,9 @@ TEST(mission_c1m1_options_from_the_pause_4x3_by_default_headless) {
 
 // Issue 519: the option pages reached from the main menu borrow its image, so
 // their show and drop leave the main menu's HD background source alone: once
-// OPTIONS registers it (main_menu_background), GRAPHICS & AUDIO, BACK, BACK
-// keep it registered, back at the main menu too.
+// the main menu's option screens are built (main_menu_background registers it),
+// OPTIONS, GRAPHICS & AUDIO, BACK, BACK keep it registered, back at the main
+// menu too.
 TEST(main_menu_options_keep_the_main_menu_background_source_headless) {
   if (!have_game()) return;
   W40Setup w("519_main_menu_backdrop");
@@ -26755,6 +26756,7 @@ TEST(main_menu_options_keep_the_main_menu_background_source_headless) {
   const zimg::Texture* at_main = nullptr;
   const zimg::Texture* on_game = nullptr;
   const zimg::Texture* on_gfx = nullptr;
+  const zimg::Texture* game_again = nullptr;
   const zimg::Texture* back_at_main = nullptr;
   auto walk = [&](mech3::GameEngine& engine, mech3::Mech3App& app) {
     auto* os = dynamic_cast<mech3::OptionsState*>(app.current());
@@ -26773,6 +26775,7 @@ TEST(main_menu_options_keep_the_main_menu_background_source_headless) {
       os->escape();  // back to the game options
       stage = 3;
     } else if (stage == 3 && os && os->kind == mech3::OptionsState::kGame) {
+      game_again = zrndr::menu_background_source();
       os->escape();  // back to the main menu
       stage = 4;
     } else if (stage == 4 && at_main_menu(app)) {
@@ -26784,7 +26787,7 @@ TEST(main_menu_options_keep_the_main_menu_background_source_headless) {
   w40_run(w.dir, nullptr, nullptr, walk, nullptr, &image_host);
   EXPECT(stage == 4);
   EXPECT(at_main != nullptr);
-  EXPECT(on_game == at_main && on_gfx == at_main);
+  EXPECT(on_game == at_main && on_gfx == at_main && game_again == at_main);
   EXPECT(back_at_main == at_main);
 }
 
