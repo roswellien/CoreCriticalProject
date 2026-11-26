@@ -299,8 +299,10 @@ public sealed class NativeGameRunner
                 try
                 {
                     var exit = await GameRunner.WaitForCompletionAsync(process).ConfigureAwait(false);
-                    if (exit != 0)
-                        PlaytestDiagnostics.CollectNativeSessionArtifacts(baseline, session);
+                    // Copy the game's own log on every exit, not only crashes: a session that
+                    // ran out of video memory can recover and exit cleanly, and Export Report
+                    // reads this copy, so without it a clean exit exports no game log at all.
+                    PlaytestDiagnostics.CollectNativeSessionArtifacts(baseline, session);
                     return exit;
                 }
                 finally
