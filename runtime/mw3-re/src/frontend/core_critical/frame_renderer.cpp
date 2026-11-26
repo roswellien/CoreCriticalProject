@@ -37,6 +37,7 @@
 #include "renderer/native_fixture_sources.hpp"
 #include "renderer/fixture_observation_emission.hpp"
 #include "platform/loading.hpp"
+#include "platform/render3d.h"
 #include "platform/prepared_visuals.h"
 #include "platform/sha256.hpp"
 #include "renderer/surface_detail_bindings.hpp"
@@ -876,8 +877,13 @@ public:
     staging_early_logged_ = false;
     staging_oversized_logged_ = false;
     staging_first_flush_pending_ = true;
-    const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
-                                                         identity.number);
+    // An arena match (#507) may borrow a campaign mission's lighting for its
+    // chosen time of day; its multiplayer map has no profile of its own.
+    const std::string &arena_lighting = ::platform::arena_lighting_mission();
+    const auto id = !arena_lighting.empty()
+                        ? arena_lighting
+                        : mw34::campaign::canonical_mission_id(
+                              identity.world_index, identity.number);
     mw34::campaign::ResolvedMissionLighting resolved{};
     if (!id.empty())
       resolved = mw34::campaign::resolve_mission_lighting(id);

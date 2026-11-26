@@ -854,6 +854,8 @@ TEST(arena_catalog_lists_the_game_headless) {
     if (p.value("world", "") == "c1" && p.value("mission", "") == "ia1" && p.value("record", "") == "Enemy_01")
       enemy_01 = p["numbers"].value("attack_m", 0.0) > 0;
   EXPECT(enemy_01);
+  // #507: the setup's time_of_day values.
+  EXPECT(c["times_of_day"] == nlohmann::json({"dawn", "day", "dusk", "night"}));
   // The picture's PPM header matches its placement file.
   std::ifstream ppm(dir + "/terrain/c3mp1.ppm", std::ios::binary);
   std::string magic;

@@ -91,6 +91,14 @@ A match log grows by every mech's state ten times a second: a few minutes of
   mech lab lists them (Primary, Alternate A ...). A player's saved loadouts
   and the training ones can't be picked, so a setup plays the same on any
   install.
+- `time_of_day` (optional): `"dawn"`, `"day"`, `"dusk"` or `"night"`; left
+  out or `null`, a watched match keeps the map's own lighting. Each borrows
+  the sun, ambient, sky and haze of one outdoor campaign mission's lighting
+  profile (`kTimesOfDay` in `arena_setup.h`: dawn Training 1, day c3m1 at
+  noon, dusk Training 4, night c1m3). It is purely visual: only the renderer
+  reads it, AI sight and sensors never do, so one seed gives the same match
+  log at every time of day. Any other value is refused (exit 2) naming the
+  field. `--arena-catalog` lists the values as `times_of_day`.
 
 Whatever the preset says, a bot is awake from the start, engages any enemy,
 is no one's lancemate and starts powered up: a campaign record can start its
@@ -434,8 +442,8 @@ install, takes a few seconds and writes:
 - `catalog.json`: the arena maps (those with 16 spawn spots) with the
   lobby's names; every chassis with its stock loadouts (the mech lab's names,
   weapons by part, ammo, armor, walk and run speed, heat sinks, jump jets);
-  and every enemy pilot record in the game's mission readers with the numbers
-  behind the runner's summary line.
+  every enemy pilot record in the game's mission readers with the numbers
+  behind the runner's summary line; and the setup's `times_of_day` values.
 - `terrain/<map>.ppm` and `<map>.json`: the map from above as the top-down
   replay draws it, framed on its 16 spawn spots with 300 m more each way (a
   multiplayer map is a part of its campaign world, which shares its files),

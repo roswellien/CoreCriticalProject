@@ -148,13 +148,16 @@ public sealed class ArenaSetup
     {
         ArgumentNullException.ThrowIfNull(catalog);
 
-        // #507: send time_of_day to the runtime and relax this guard once it supports it.
-        if (TimeOfDay != null)
-        {
-            throw new ArenaSetupException("time_of_day", "this game runtime cannot set time of day yet");
-        }
-
         Validate();
+
+        // #507: the runtime lists the times of day it can light; an older one lists none.
+        if (TimeOfDay != null && !catalog.TimeOfDayOptions.Contains(TimeOfDay, StringComparer.Ordinal))
+        {
+            var message = catalog.TimeOfDayOptions.Count == 0
+                ? "this game runtime cannot set time of day"
+                : $"unknown time of day \"{TimeOfDay}\" (one of {string.Join(", ", catalog.TimeOfDayOptions)})";
+            throw new ArenaSetupException("time_of_day", message);
+        }
 
         var knownMaps = new HashSet<string>(catalog.Maps.Select(map => map.Id), StringComparer.Ordinal);
         if (!knownMaps.Contains(Map))
@@ -194,9 +197,9 @@ public sealed class ArenaSetup
 
     /// <summary>
     /// Serialize only the runtime setup fields that <c>mw3 --arena</c> accepts:
-    /// <c>map</c>, <c>minutes</c>, <c>out</c>, and <c>sides</c> (with explicit <c>loadout</c>).
-    /// Launcher-only fields (<c>seed</c>, <c>random_seed</c>, <c>frame_ms</c>, <c>hidden</c>, <c>time_of_day</c>)
-    /// are never emitted into the runtime file.
+    /// <c>map</c>, <c>minutes</c>, <c>out</c>, <c>sides</c> (with explicit <c>loadout</c>) and,
+    /// when set, <c>time_of_day</c>. Launcher-only fields (<c>seed</c>, <c>random_seed</c>,
+    /// <c>frame_ms</c>, <c>hidden</c>) are never emitted into the runtime file.
     /// </summary>
     public string ToRuntimeSetupJson(string outFolder)
     {
@@ -232,6 +235,8 @@ public sealed class ArenaSetup
                 writer.WriteEndArray();
             }
             writer.WriteEndArray();
+            if (TimeOfDay != null)
+                writer.WriteString("time_of_day", TimeOfDay);
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(stream.ToArray());

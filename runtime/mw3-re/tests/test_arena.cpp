@@ -156,6 +156,29 @@ TEST(arena_setup_reads_a_good_setup) {
   EXPECT(!s.sides[0][0].params_read);
 }
 
+// #507: an optional time of day, each one a campaign mission's lighting.
+TEST(arena_setup_reads_a_time_of_day) {
+  Setup s;
+  std::string error;
+  EXPECT(parse_arena_setup(setup_json(), &s, &error) && s.time_of_day.empty());
+  EXPECT(parse_arena_setup(setup_json("c1mp1", "", R"(, "time_of_day": null)"), &s, &error) &&
+         s.time_of_day.empty());
+  for (const auto& t : mech3::arena::kTimesOfDay) {
+    EXPECT(parse_arena_setup(setup_json("c1mp1", "", std::string(R"(, "time_of_day": ")") + t.name + "\""),
+                             &s, &error));
+    EXPECT(s.time_of_day == t.name);
+    EXPECT(mech3::arena::time_of_day_lighting(t.name) == std::string(t.lighting_mission));
+  }
+  EXPECT(mech3::arena::time_of_day_lighting("noon") == nullptr);
+}
+
+TEST(arena_setup_refuses_an_unknown_time_of_day) {
+  EXPECT(starts_with(refused(setup_json("c1mp1", "", R"(, "time_of_day": "noon")")), "time_of_day: "));
+  EXPECT(starts_with(refused(setup_json("c1mp1", "", R"(, "time_of_day": "")")), "time_of_day: "));
+  EXPECT(starts_with(refused(setup_json("c1mp1", "", R"(, "time_of_day": 3)")), "time_of_day: "));
+  EXPECT(starts_with(refused(setup_json("c1mp1", "", R"(, "time_of_day": "Night")")), "time_of_day: "));
+}
+
 TEST(arena_setup_takes_eight_a_side) {
   std::string eight;
   for (int i = 0; i < 8; ++i)

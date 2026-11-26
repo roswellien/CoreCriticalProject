@@ -55,12 +55,31 @@ constexpr int kSides = 2;
 constexpr int kMaxBotsPerSide = 8;  // two lances
 constexpr int kSpawnSpots = 16;     // remote_0 .. remote_15, as net_respawn_point walks them
 
+// Ours (#507): the arena's times of day, each the campaign mission whose
+// lighting profile (sun, ambient, sky and haze, campaign_lighting.hpp) a
+// watched match borrows. Outdoor missions only. Visual only: the simulation
+// never reads it.
+struct TimeOfDay {
+  const char* name;
+  const char* lighting_mission;
+};
+inline constexpr TimeOfDay kTimesOfDay[] = {
+    {"dawn", "t1m1"},   // Training 1, dawn
+    {"day", "c3m1"},    // high noon
+    {"dusk", "t1m4"},   // Training 4, dusk
+    {"night", "c1m3"},  // dead of night
+};
+// The lighting mission for a name in kTimesOfDay; null for any other.
+const char* time_of_day_lighting(const std::string& name);
+
 struct Setup {
   std::string map;      // the lobby map id, e.g. "c1mp1"
   std::string dir;      // its world folder, "c1"
   int32_t number = 0;   // its multiplayer map number, 1
   int32_t minutes = 0;  // the time limit
   std::string out;      // the match log's folder
+  // Optional (#507): one of kTimesOfDay's names; empty for the map's own lighting.
+  std::string time_of_day;
   std::vector<Bot> sides[kSides];
 };
 
