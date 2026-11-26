@@ -251,6 +251,7 @@ static class NativeRuntimeLayoutChecks
             if (Mw3ReRuntimeContract.ReadStructure(root).SupportsControllerProfiles)
                 throw new Exception("A runtime without controller capability was marked compatible.");
             File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(descriptor));
+            CheckVsyncProjection(root, descriptor);
             void RejectDescriptor(Action<JsonObject> change, string reason = "")
             {
                 var candidate = descriptor.DeepClone().AsObject();
@@ -1086,6 +1087,54 @@ static class NativeRuntimeLayoutChecks
             Console.WriteLine("Typed POM observational schema3 -> actual Python controls passed; installed admission pending.");
         }
         finally { File.WriteAllBytes(manifestPath, original); }
+    }
+
+    private static void CheckVsyncProjection(string root, JsonObject descriptor)
+    {
+        var descriptorPath = Path.Combine(root, "runtime.json");
+        try
+        {
+            foreach (var version in new[] { 0, 2, 1 })
+            {
+                var candidate = descriptor.DeepClone().AsObject();
+                if (version == 0) candidate["capabilities"]!.AsObject().Remove("vsync");
+                else candidate["capabilities"]!["vsync"] = new JsonArray(version);
+                File.WriteAllText(descriptorPath, GameRunner.SerializeLaunchProfile(candidate));
+                var contract = Mw3ReRuntimeContract.ReadStructure(root);
+                var supported = version == 1;
+                if (contract.SupportsVsync != supported)
+                    throw new Exception("VSync capability version was not respected.");
+                foreach (var enabled in new[] { false, true })
+                {
+                    var settings = new LauncherSettings { Vsync = enabled };
+                    var options = NativeGameRunner.PlanningOptionsForSettings(settings, contract, 800,
+                        Array.Empty<string>(), Array.Empty<string>(), null);
+                    foreach (var preview in new[] { false, true })
+                    {
+                        var selection = preview ? options : options with { Preview = null, Pom = false };
+                        var json = Mw3ReLaunchRequest.Create(contract, selection, "D:/Original MW3",
+                            Path.GetFullPath(Path.Combine(root, "..", "vsync-data")), "vsync-test");
+                        var wire = JsonNode.Parse(json)!;
+                        if (wire["vsync"]!.GetValue<bool>() != enabled ||
+                            wire["supports_vsync"]!.GetValue<bool>() != supported)
+                            throw new Exception("Saved VSync choice or runtime support was lost in projection.");
+                        var planned = RunMw3RePlanner(json);
+                        var argv = planned["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+                        if (argv.Contains("--cc-vsync") != supported ||
+                            (supported && argv[argv.IndexOf("--cc-vsync") + 1] != (enabled ? "1" : "0")))
+                            throw new Exception("VSync argv did not respect the setting and installed runtime.");
+                        var skipped = planned["skipped_features"]!.AsArray()
+                            .Any(feature => feature!["feature"]!.GetValue<string>() == "vsync");
+                        // Only a request to turn vsync off goes unmet on an older runtime,
+                        // which always presents with vsync.
+                        var expectSkipped = !supported && !enabled;
+                        if (skipped != expectSkipped)
+                            throw new Exception("VSync off on an unsupported runtime was not reported as skipped.");
+                    }
+                }
+            }
+        }
+        finally { File.WriteAllText(descriptorPath, GameRunner.SerializeLaunchProfile(descriptor)); }
     }
 
     /// <summary>The saved Load Cache choice reaches the child environment and nothing else.</summary>

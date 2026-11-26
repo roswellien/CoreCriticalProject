@@ -28,7 +28,7 @@ MAX_METADATA_BYTES = 2 * 1024 * 1024
 MAX_CLOSURE_BYTES = 4 * 1024**3
 MAX_MEMBERS = 20000
 ENVIRONMENT_POLICY = "mw3-re-explicit-windows-native-bootstrap-v2"
-_DEFAULT_CAPABILITIES = (("controller-profile", (1,)), ("input-bindings", (1,)))
+_DEFAULT_CAPABILITIES = (("controller-profile", (1,)), ("input-bindings", (1,)), ("vsync", (1,)))
 _TOOL_NAMES = {"git": "git.exe", "cmake": "cmake.exe", "ninja": "ninja.exe",
                "clang_cl": "clang-cl.exe", "glslang": "glslangValidator.exe",
                "dxc": "dxc.exe", "dumpbin": "dumpbin.exe"}
@@ -586,6 +586,11 @@ def _source_capabilities(source):
             and _file_contains_bytes(main_source, b"input.set_input_bindings(")
             and _file_contains_bytes(source / "runtime/mw3-re/src/platform/render3d.h", b"CC_MW3_HEADLIGHTS_V2")):
         caps.append(("input-bindings", (1,)))
+    renderer_source = source / "runtime/mw3-re/src/frontend/core_critical/frame_renderer.cpp"
+    if (_file_contains_bytes(main_source, b"--cc-vsync")
+            and _file_contains_bytes(main_source, b"a.cc_assets.vsync =")
+            and _file_contains_bytes(renderer_source, b"config.vsync = assets.vsync;")):
+        caps.append(("vsync", (1,)))
     return tuple(caps)
 
 

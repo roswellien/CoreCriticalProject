@@ -355,6 +355,7 @@ void usage() {
       "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires Core Critical Vulkan and --cc-lighting normal)]\n"
       "    [--cc-draw-distance 800|1200|1600|2400|3200 (default 800)]\n"
       "    [--cc-flare-style modern|original (default modern)]\n"
+      "    [--cc-vsync 0|1 (default 1)]\n"
       "    [--cc-controller FILE] (launcher-exported controller profile)\n"
       "    [--cc-input FILE] (launcher-exported extended mouse and combo bindings)\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
@@ -611,6 +612,14 @@ bool parse(int argc, char** argv, Args& a) {
       }
       a.cc_assets.sun_shadows_explicit = true;
       a.cc_assets.sun_shadows = value == "1";
+    } else if (s == "--cc-vsync" && next(1)) {
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") {
+        std::fprintf(stderr, "--cc-vsync supports 0 or 1\n");
+        return false;
+      }
+      a.cc_assets.vsync_explicit = true;
+      a.cc_assets.vsync = value == "1";
     } else if (s == "--cc-water-detail" && next(1)) {
       const std::string value = argv[++i];
       if (value != "0" && value != "1") {

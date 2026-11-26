@@ -22,6 +22,7 @@ public sealed record Mw3RePlanningOptions
     public Mw3ReLighting Lighting { get; init; } = Mw3ReLighting.Off;
     public Mw3ReFlareStyle FlareStyle { get; init; } = Mw3ReFlareStyle.Modern;
     public bool Pom { get; init; } = false;
+    public bool Vsync { get; init; } = false;
     public bool DiskCache { get; init; } = true;
     public IReadOnlyList<string> Assets { get; init; } = Array.Empty<string>();
     /// <summary>Native preview choices; when set, the request uses wire schema 4.</summary>
@@ -115,7 +116,8 @@ public static class Mw3ReLaunchRequest
             ["write_dir"] = Path.Combine(dataRoot, "mw3-re", "profiles", id), ["renderer"] = renderer,
             ["width"] = options.Width, ["height"] = options.Height, ["aa"] = antialiasing,
             ["af"] = options.AnisotropicFiltering, ["window_mode"] = windowMode,
-            ["render_thread"] = options.RenderThread, ["lighting"] = lighting,
+            ["render_thread"] = options.RenderThread, ["vsync"] = options.Vsync,
+            ["supports_vsync"] = contract.SupportsVsync, ["lighting"] = lighting,
             ["flare_style"] = flareStyle,
             ["assets"] = new JsonArray(options.Assets.Select(asset => (JsonNode?)JsonValue.Create(asset)).ToArray())
         };
@@ -140,7 +142,8 @@ public static class Mw3ReLaunchRequest
             ["write_dir"] = Path.Combine(dataRoot, "mw3-re", "profiles", id), ["renderer"] = renderer,
             ["width"] = options.Width, ["height"] = options.Height, ["aa"] = antialiasing,
             ["af"] = options.AnisotropicFiltering, ["window_mode"] = windowMode,
-            ["render_thread"] = options.RenderThread, ["lighting"] = lighting,
+            ["render_thread"] = options.RenderThread, ["vsync"] = options.Vsync,
+            ["supports_vsync"] = contract.SupportsVsync, ["lighting"] = lighting,
             ["flare_style"] = flareStyle,
             ["assets"] = new JsonArray(options.Assets.Select(asset => (JsonNode?)JsonValue.Create(asset)).ToArray()),
             ["preview"] = new JsonObject
