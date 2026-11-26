@@ -31,6 +31,9 @@ struct MenuRipplePass {
 };
 
 class EditorUiSource;
+namespace benchmark {
+class Run;
+}
 
 enum class RendererBackend { sdl, core_critical_dxgi, core_critical_wsi };
 
@@ -38,6 +41,7 @@ struct CoreCriticalQuality {
   std::string antialiasing = "off";
   std::string anisotropy = "1";
   unsigned draw_distance = 800;
+  unsigned fog_distance = 0;
 };
 
 struct PreparedModelBinding {
@@ -58,6 +62,7 @@ struct CoreCriticalAssets {
   bool environment_packs_explicit = false;
   std::shared_ptr<const platform::prepared::EnvironmentSelection> environment;
   bool render_thread = false;
+  benchmark::Run* benchmark_run = nullptr;
   std::string flare_style = "modern";
   bool pom = false;
   std::string geometry = "legacy";
@@ -76,6 +81,9 @@ struct CoreCriticalAssets {
   bool cloud_detail_explicit = false, cloud_detail = false;
   bool effect_lights = false, fixture_lights = false, mech_headlights = false;
   std::string effect_light_catalog, stock_headlights, headlight_bindings;
+  bool vsync_explicit = false, vsync = true;
+  // vsync and vsync_explicit are intentionally excluded from empty() because plain SDL
+  // supports vertical synchronization without requiring a Core Critical Vulkan backend.
   bool empty() const {
     return environment_packs.empty() && !environment_packs_explicit &&
            !environment && !sun_explicit &&
@@ -95,6 +103,11 @@ struct CoreCriticalAssets {
 class FrameRenderer : public platform::Render3D {
  public:
   virtual bool ok() const = 0;
+  virtual void benchmark_load() {}
+  virtual bool benchmark_ready() { return false; }
+  virtual void set_benchmark_time(double) {}
+  virtual void set_benchmark_effects(unsigned, unsigned) {}
+  virtual void benchmark_finish() {}
   // Unsupported recorders reject attachment explicitly. Null detach is safe.
   virtual void attach_editor(EditorUiSource* source) {
     if (source) throw std::invalid_argument("renderer: editor attachment unsupported");

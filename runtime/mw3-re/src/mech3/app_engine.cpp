@@ -79,6 +79,7 @@
 #include "mech3/player.h"
 #include "mech3/quit_box.h"
 #include "mech3/replay_hooks.h"
+#include "mech3/spectator_camera_hooks.h"
 #include "platform/platform.h"
 #include "platform/render3d.h"
 #include "platform/sound_output.h"
@@ -688,9 +689,14 @@ bool GameEngine::replay_on() { return replay_hooks() != nullptr; }
 void GameEngine::replay_start() {
   if (ReplayHooks* replay = replay_hooks()) replay->start();
 }
-void GameEngine::replay_before_lists() {
-  if (ReplayHooks* replay = replay_hooks()) replay->before_lists(quit_box_ && quit_box_->active);
+bool GameEngine::replay_before_lists() {
+  ReplayHooks* replay = replay_hooks();
+  return !replay || replay->before_lists(quit_box_ && quit_box_->active);
 }
+void GameEngine::replay_after_frame() {
+  if (ReplayHooks* replay = replay_hooks()) replay->after_frame();
+}
+
 void GameEngine::replay_after_lists() {
   if (ReplayHooks* replay = replay_hooks()) replay->after_lists();
 }
@@ -699,6 +705,11 @@ void GameEngine::replay_camera() {
   if (!replay || !camera_) return;
   replay->place_camera(static_cast<zcls::Node*>(object_of(camera_)));
   program_view_follow_ground();
+}
+void GameEngine::spectator_camera() {
+  SpectatorCameraHooks* spectator = spectator_camera_hooks();
+  if (!spectator || !camera_) return;
+  spectator->place_camera(static_cast<zcls::Node*>(object_of(camera_)));
 }
 void GameEngine::replay_draw() {
   if (ReplayHooks* replay = replay_hooks()) replay->draw_overlay();

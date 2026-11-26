@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <filesystem>
 
+#include "frontend/sdl/arena_camera_view.h"
 #include "frontend/sdl/replay3d_view.h"
 #include "frontend/sdl/replay_view.h"
 #include "frontend/sdl/sdl_platform.h"
@@ -24,6 +25,12 @@ bool parse_watch_option(WatchArgs& w, int argc, char** argv, int* i) {
   else if (s == "--replay") w.replay_path = argv[++*i];
   else if (s == "--replay-script") w.replay_script = argv[++*i];
   else if (s == "--replay3d") w.replay3d_path = argv[++*i];
+  else if (s == "--benchmark") w.benchmark_path = argv[++*i];
+  else if (s == "--benchmark-scene") w.benchmark_scene = argv[++*i];
+  else if (s == "--benchmark-resolution") w.benchmark_resolution = argv[++*i];
+  else if (s == "--benchmark-window-mode") w.benchmark_window_mode = argv[++*i];
+  else if (s == "--benchmark-out") w.benchmark_output = argv[++*i];
+  else if (s == "--benchmark-pack") w.benchmark_packs.emplace_back(argv[++*i]);
   else if (s == "--arena-catalog") w.catalog_dir = argv[++*i];
   else return false;
   return true;
@@ -75,9 +82,15 @@ int watch_after_mount(WatchArgs& w, int seed, std::string* mission) {
   }
   // --replay3d: the log read and checked before anything is made from it.
   if (!w.replay3d_path.empty()) {
-    w.replay3d = std::make_shared<mech3::replay::ReplayRun>();
     std::string message;
-    if (!w.replay3d->read(w.replay3d_path, &message)) {
+    bool ready;
+    if (w.benchmark_run) {
+      ready = w.replay3d->check_game_files(&message);
+    } else {
+      w.replay3d = std::make_shared<mech3::replay::ReplayRun>();
+      ready = w.replay3d->read(w.replay3d_path, &message);
+    }
+    if (!ready) {
       std::fprintf(stderr, "mw3: %s\n", message.c_str());
       w.replay3d.reset();
       return 2;
@@ -123,11 +136,18 @@ void close_watch(WatchArgs& w) {
 
 namespace {
 std::unique_ptr<Replay3dView> g_view;  // --replay3d's, between watch_attach and watch_detach
+std::unique_ptr<ArenaCameraView> g_arena_camera;  // a watched --arena match's (#529), likewise
 }  // namespace
 
-bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render) {
+bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render, SDL_Window* window, bool hidden) {
+  if (w.arena && !hidden) {
+    g_arena_camera = std::make_unique<ArenaCameraView>(window);
+    mech3::set_spectator_camera_hooks(g_arena_camera.get());
+    pump.intercept = [](const SDL_Event& e) { return g_arena_camera && g_arena_camera->handle(e); };
+  }
   if (!w.replay3d) return true;
-  g_view = std::make_unique<Replay3dView>(*w.replay3d, render, w.replay_script, [&pump] { pump.post_quit(); });
+  g_view = std::make_unique<Replay3dView>(*w.replay3d, render, w.replay_script, [&pump] { pump.post_quit(); },
+                                         w.benchmark_run.get());
   std::string message;
   if (!g_view->ready(&message)) {
     std::fprintf(stderr, "mw3: %s\n", message.c_str());
@@ -140,6 +160,11 @@ bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render) {
 }
 
 void watch_detach(SdlPump& pump) {
+  if (g_arena_camera) {
+    pump.intercept = nullptr;
+    if (mech3::spectator_camera_hooks() == g_arena_camera.get()) mech3::set_spectator_camera_hooks(nullptr);
+    g_arena_camera.reset();
+  }
   if (!g_view) return;
   pump.intercept = nullptr;
   if (mech3::replay_hooks() == g_view.get()) mech3::set_replay_hooks(nullptr);
@@ -160,7 +185,7 @@ void start_watch_clock(const WatchArgs& w, int net_minutes) {
 }
 
 void watch_default_hud(const WatchArgs& w, bool mode_chosen, HudOptions* hud) {
-  if (w.replay3d_path.empty() || mode_chosen) return;
+  if (w.replay3d_path.empty() || w.benchmark_run || mode_chosen) return;
   hud->mode = "core-critical";
   if (!hud->artwork.empty()) return;
   const char* local = std::getenv("LOCALAPPDATA");

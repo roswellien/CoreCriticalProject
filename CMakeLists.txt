@@ -147,6 +147,12 @@ if(BUILD_TESTING)
     add_test(NAME mw3_re_launch_plan_python
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p test_mw3_re_launch.py -v)
     set_tests_properties(mw3_re_launch_plan_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME arena_benchmark_launcher_python
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/benchmark -p test_run.py)
+    set_tests_properties(arena_benchmark_launcher_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    add_test(NAME arena_benchmark_tools_python
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/benchmark/tests -v)
+    set_tests_properties(arena_benchmark_tools_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
     add_test(NAME owned_visuals_python
         COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover -s tools/remaster-launcher -p "test_owned*.py" -v)
     set_tests_properties(owned_visuals_python PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")

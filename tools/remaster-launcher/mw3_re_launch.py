@@ -17,7 +17,7 @@ _FIELDS = frozenset({
     "schema_version", "engine", "runtime_root", "executable", "game_dir", "write_dir", "renderer",
     "width", "height", "aa", "af", "window_mode", "render_thread", "lighting", "assets",
 })
-_OPTIONAL_FIELDS = frozenset({"indeo_codec", "flare_style", "disk_cache"})
+_OPTIONAL_FIELDS = frozenset({"indeo_codec", "flare_style", "disk_cache", "vsync", "supports_vsync"})
 _AA = {"off": "off", "1": "off", "fxaa": "fxaa", "2": "ssaa2", "4": "ssaa4"}
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_JSON_DEPTH = 64
@@ -26,7 +26,7 @@ _MAX_JSON_DEPTH = 64
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _MAX_PREVIEW_PACKS = 64
 _MAX_REGISTRY_MODELS = 256
-_PREVIEW_FIELDS = frozenset({"draw_distance", "hud", "hud_text", "geometry", "model_packs",
+_PREVIEW_FIELDS = frozenset({"draw_distance", "fog_distance", "hud", "hud_text", "geometry", "model_packs",
                              "environment_packs", "ui_packs", "skin_packs", "dynamic_lighting", "shadows",
                              "headlights", "water_detail", "cloud_detail",
                              "headlight_bindings", "stock_effect_catalog",
@@ -95,16 +95,23 @@ def _mesh_uv_identity_file(path):
             return chunk
 
         magic = take(8)
+        guard = magic == b"BWMESH7\0"
         donor = magic == b"BWMESH4\0"
         anchored = magic == b"BWMESH6\0"
         layered = anchored or magic == b"BWMESH5\0"
         placement = layered or magic == b"BWMESH3\0"
-        visibility = donor or placement or magic == b"BWMESH2\0"
+        visibility = guard or donor or placement or magic == b"BWMESH2\0"
         if not visibility and magic != b"BWMESH1\0":
             raise ValueError("Unsupported mesh payload format for UV identity")
         count = struct.unpack("<I", take(4))[0]
         if not 1 <= count <= _MAX_MESH_BATCHES:
             raise ValueError("Invalid mesh batch count for UV identity")
+        if guard:
+            samples = struct.unpack("<I", take(4))[0]
+            if not 4 <= samples <= 4096:
+                raise ValueError("Invalid Orion guard fit sample count")
+            # Clearance moves the rigid batch at draw time; it does not alter UV identity.
+            take(24 + 104 * samples)
         if donor:
             bones, refs, flags = struct.unpack("<III", take(12))
             if not 1 <= bones <= 256 or not 1 <= refs <= 128 or flags > 3:
@@ -122,6 +129,8 @@ def _mesh_uv_identity_file(path):
             take(32)
             if visibility:
                 take(32)
+            if guard and struct.unpack("<I", take(4))[0] > 2:
+                raise ValueError("Invalid Orion guard side")
             if placement:
                 take(32 + 12)
             if layered:
@@ -760,6 +769,7 @@ def _preview_choices(preview):
         raise ValueError("Invalid native preview fields")
     choices = {
         "draw_distance": 800,
+        "fog_distance": None,
         "hud": None,
         "hud_text": None,
         "geometry": None,
@@ -780,6 +790,9 @@ def _preview_choices(preview):
     distance = choices["draw_distance"]
     if type(distance) is not int or distance not in _PREVIEW_DRAW_DISTANCES:
         raise ValueError("Native preview scenery distance must be 800, 1200, 1600, 2400 or 3200")
+    fog = choices["fog_distance"]
+    if fog is not None and (type(fog) is not int or not 0 <= fog <= 3200):
+        raise ValueError("Native fog distance must be between 0 and 3200")
     if choices["hud"] is not None and choices["hud"] not in _PREVIEW_HUDS:
         raise ValueError("Unknown native preview HUD")
     if choices["hud_text"] is not None:
@@ -822,6 +835,12 @@ def plan_launch(request):
     disk_cache = request.get("disk_cache", True)
     if type(disk_cache) is not bool:
         raise ValueError("disk_cache must be a boolean")
+    vsync = request.get("vsync", False)
+    if type(vsync) is not bool:
+        raise ValueError("vsync must be a boolean")
+    supports_vsync = request.get("supports_vsync", False)
+    if type(supports_vsync) is not bool:
+        raise ValueError("supports_vsync must be a boolean")
     schema = request.get("schema_version")
     if type(schema) is not int or schema not in (2, 3, 4):
         raise ValueError("Unsupported native request schema")
@@ -906,6 +925,14 @@ def plan_launch(request):
         "--cc-flare-style", flare_style,
     ]
     skipped_features = []
+    if supports_vsync:
+        argv.extend(("--cc-vsync", "1" if vsync else "0"))
+    elif not vsync:
+        # Older runtimes always present with vsync, so only a request to turn it off goes unmet.
+        skipped_features.append({
+            "feature": "vsync",
+            "reason": "The selected MW3-RE runtime does not advertise support for VSync.",
+        })
     if codec is None:
         skipped_features.append({
             "feature": "Indeo movies",
@@ -948,6 +975,8 @@ def plan_launch(request):
         # 800 is the original range, so it adds no argument and older runtimes stay compatible.
         if preview["draw_distance"] != 800:
             argv.extend(("--cc-draw-distance", str(preview["draw_distance"])))
+        if preview["fog_distance"] is not None:
+            argv.extend(("--cc-fog-distance", str(preview["fog_distance"])))
         if preview["hud"] is not None:
             argv.extend(("--cc-hud", preview["hud"]))
         if preview["hud_text"] is not None:

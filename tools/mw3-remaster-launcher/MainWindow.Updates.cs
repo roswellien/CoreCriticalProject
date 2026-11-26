@@ -145,6 +145,7 @@ public partial class MainWindow
     protected override void OnClosed(EventArgs e)
     {
         _updateNotificationsClosed = true;
+        StopAssetPackUpdateChecks();
         _updateNotificationTimer?.Stop();
         _updateNotificationCancellation?.Cancel();
         base.OnClosed(e);

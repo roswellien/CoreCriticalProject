@@ -937,7 +937,11 @@ void local_lights_begin() {
   local_fixture_sources_.clear();
   local_active_ = false;
   local_native_.clear();
-  if (!bridge_config_.effect_lights || current_mission_id_.empty())
+  // A multiplayer or IA map has no campaign profile. Admit its camera's
+  // world pass, since the preceding fade and tint passes have no projection.
+  if (!bridge_config_.effect_lights ||
+      (current_mission_id_.empty() &&
+       !(mission_world_loaded_ && zvid::capture_producer_view().present)))
     return;
   VisualFloatScope guard;
   const auto p = zmth::projection();
@@ -958,7 +962,7 @@ void local_lights_begin() {
   for (float v : local_camera_)
     if (!std::isfinite(v))
       throw std::runtime_error("Local lights: invalid camera");
-  local_time_ = ztimer::state().total_scaled;
+  local_time_ = benchmark_time_.value_or(ztimer::state().total_scaled);
   if (!std::isfinite(local_time_) || local_time_ < 0.0)
     throw std::runtime_error("Local lights: invalid time");
   if (bridge_config_.fixture_lights) {
@@ -1028,6 +1032,11 @@ void local_lights_attach(vk::Scene &target) {
     }
   }
   target.effect_lights = mw34::effects::rank_frame_lights(sources, eye, 64, 16);
+  if (benchmark_run_ && benchmark_run_->armed()) {
+    // Use the weapon prefix, so steady fixture lights cannot mask a missing effect.
+    benchmark_effects_.lights = std::max(benchmark_effects_.lights,
+                                        static_cast<unsigned>(target.effect_lights.params[1]));
+  }
   local_packet_peak_ =
       std::max(local_packet_peak_,
                static_cast<std::uint64_t>(target.effect_lights.params[0]));

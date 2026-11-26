@@ -444,7 +444,8 @@ bool g_world_tick_in_draw = true;
 // Mech3.exe 1.2 @ 0x00481e70, one mission frame. True when command 1 (Escape)
 // asks for the pause menu; in multiplayer the message box asks instead.
 // The input poll and the action lists, the frame's first half in the exe.
-void CoreState::poll_and_run_lists(bool replay) {
+// False when a 3D replay has stopped and no world frame should follow.
+bool CoreState::poll_and_run_lists(bool replay) {
   Engine& en = e();
   ++zcls::frames().step;  // ours (#485): a step begins
   if (!paused_) {
@@ -455,16 +456,17 @@ void CoreState::poll_and_run_lists(bool replay) {
       en.mouse_set_pos(x, y);
     }
   }
-  if (replay) en.replay_before_lists();  // the action lists on the replay's step
+  if (replay && !en.replay_before_lists()) return false;
   en.lists_update();
-  if (replay) en.replay_after_lists();  // real time back; the replay's time, puppets and camera
+  if (replay) en.replay_after_lists();  // update the replay time, puppets and camera
+  return true;
 }
 
 // Ours (#485, docs/fixed-step.md): the frame's real time goes into the fixed
 // step, and each whole 1/30 s runs one step: the clock set to the step (the
 // timer and the modules' copies), the input and action lists, then world_tick.
 // The frame's own clock is put back for the drawing that follows.
-void CoreState::run_fixed_steps(bool replay) {
+void CoreState::run_fixed_steps() {
   Engine& en = e();
   ztimer::State& timer = ztimer::state();
   const ztimer::State frame_clock = timer;
@@ -477,7 +479,7 @@ void CoreState::run_fixed_steps(bool replay) {
     timer.total_scaled = g_step_clock.total_scaled;
     timer.total_raw = g_step_clock.total_raw;
     sync_frame_step(timer.dt, timer.total_scaled);
-    poll_and_run_lists(replay);
+    poll_and_run_lists(false);
     world_tick(en);
     zcls::interp::prepare_cameras();      // the cameras' part of the draw the simulation reads
     zcls::interp::settle_world_caches();  // the caches the original's draw rebuilt each frame
@@ -506,15 +508,25 @@ bool CoreState::frame() {
   const bool replay = en.replay_on();
   // Ours (#485): with the fixed step, world_tick runs in the steps, not in the
   // drawing paths, and the drawing's random numbers come from their own state.
-  const bool fixed = fixed_step_enabled();
+  // A 3D replay simulates nothing (it poses every mech from the log's time) and
+  // its clock and benchmark go by the drawn frame (replay_hooks.h), so it keeps
+  // one pass of the lists a drawn frame, as before #485.
+  const bool fixed = fixed_step_enabled() && !replay;
   std::optional<crt::DrawnFrameRandom> drawn_frame_random;
   g_world_tick_in_draw = !fixed;
   if (fixed) {
-    run_fixed_steps(replay);
+    run_fixed_steps();
     drawn_frame_random.emplace();
-  } else {
-    poll_and_run_lists(replay);
+  } else if (!poll_and_run_lists(replay)) {
+    return false;  // a replay that has stopped: no world frame
   }
+  // The replay's end of the frame (its real clock back), however it returns.
+  struct ReplayFrameScope {
+    Engine* engine;
+    ~ReplayFrameScope() {
+      if (engine) engine->replay_after_frame();
+    }
+  } replay_frame{replay ? &en : nullptr};
   en.sound_update(0, 1);
   const Handle view = en.player_view();
   const Handle target = en.field32(view, 0x64);
@@ -596,7 +608,8 @@ void world_tick(Engine& en) {
   en.missions_update(0x6098d0, en.frame_dt());
   en.pilot_update(en.pilot(), en.frame_dt());
   en.camera_update();
-  step_log_end_step();  // ours (#485): --step-log, the step's end
+  en.spectator_camera();  // ours (#529): a watched arena match's camera, after the view's
+  step_log_end_step();    // ours (#485): --step-log, the step's end
 }
 }  // namespace
 

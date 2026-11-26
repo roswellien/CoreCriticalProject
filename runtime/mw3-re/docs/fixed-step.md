@@ -14,10 +14,15 @@ zero or more steps, then draws once.
 
 **Per step** (the frame time reads 1/30 s): the input poll and the command
 callbacks it fires; the action lists (`lists_update`: the player, mechs,
-vehicles, turrets, sequences, effect animations, mission objects); the replay
-hooks around them; `world_tick` (sensors, missions, the pilot, the camera); the
-clock copies `sync_frame_step` makes for the mech, weapon and hit modules; and
-the step log.
+vehicles, turrets, sequences, effect animations, mission objects);
+`world_tick` (sensors, missions, the pilot, the camera, an arena spectator's
+camera); the clock copies `sync_frame_step` makes for the mech, weapon and hit
+modules; and the step log.
+
+A 3D replay (`--replay3d`) runs as before #485, one pass of the lists a drawn
+frame with the replay's hooks around it: it simulates nothing (every mech is
+posed from the log's time), and its clock, its stop and its benchmark go by
+the drawn frame (`replay_hooks.h`).
 
 **Per drawn frame** (the frame time reads the real frame): shadows, the scene
 draw, weather, sound, the HUD and the message box, model effects drawn with the

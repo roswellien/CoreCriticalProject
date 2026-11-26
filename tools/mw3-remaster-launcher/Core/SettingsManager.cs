@@ -26,6 +26,7 @@ namespace MW3RemasterLauncher.Core
         public bool PerformanceMonitor { get; set; } = false;
         // Off until the RX 9070 benchmark shows the same gain as the RTX 5070 (issue #252).
         public bool RenderThread { get; set; } = false;
+        public bool Vsync { get; set; } = false;
         public bool Headlights { get; set; } = false;
         public bool DynamicLighting { get; set; } = false;
         public bool Shadows { get; set; } = false;
@@ -41,6 +42,7 @@ namespace MW3RemasterLauncher.Core
         public bool DirectInputJoystickNone { get; set; }
         public bool InitialSetupCompleted { get; set; } = false;
         public bool AutomaticUpdateChecks { get; set; } = false;
+        public bool AutomaticAssetPackChecks { get; set; } = false;
         public bool AutomaticCrashReports { get; set; } = false;
         public int ReplayVideoSettingsVersion { get; set; } = 0;
         public List<string> ActivePacks { get; set; } = new();

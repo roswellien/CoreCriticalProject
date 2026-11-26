@@ -18,6 +18,7 @@
   <ItemGroup>
     <PackageReference Include="System.Management" Version="[8.0.0]" />
     <None Update="online-updates.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="asset-pack-updates.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Update="update-trust.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="Core\SupportedMedia.json" />
     <EmbeddedResource Include="Core\Mw3ControlActions.json" />

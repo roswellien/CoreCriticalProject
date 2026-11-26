@@ -19,6 +19,7 @@ struct Fog {
   float inv_alt = 0;               // 0x0074a25c  1 / (high - low)
   float density = 0;               // 0x0074a260
 };
+void set_render_fog_distance(unsigned distance);
 Fog& fog();
 // Render paths may use a camera-scoped copy. Interpreter/gameplay accessors
 // continue to read fog() and never observe the extended visual interval.

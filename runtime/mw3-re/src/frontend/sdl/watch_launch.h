@@ -1,7 +1,10 @@
 #pragma once
+#include <SDL3/SDL.h>
+
 #include <memory>
 #include <string>
 
+#include "frontend/sdl/arena_benchmark.h"
 #include "frontend/sdl/gpu_hud.h"
 #include "mech3/app_engine.h"
 #include "mech3/arena.h"
@@ -40,6 +43,10 @@ struct WatchArgs {
   // --arena-catalog DIR: the arena runner's lists and pictures written there
   // (arena_catalog.h), then the run ends.
   std::string catalog_dir;
+  std::string benchmark_path, benchmark_scene, benchmark_output;
+  std::string benchmark_resolution, benchmark_window_mode;
+  std::vector<std::string> benchmark_packs;
+  std::shared_ptr<benchmark::Run> benchmark_run;
   // Either watched run: the host's seat is a spectator's.
   bool watched_match() const { return !arena_path.empty() || !replay3d_path.empty(); }
 };
@@ -73,8 +80,10 @@ void close_watch(WatchArgs& w);
 
 // --replay3d, once the window and the pump exist: the 3D view made, set as
 // the replay's hooks and put ahead of the game's input. False (exit 2) when
-// its script can't be read. watch_detach() undoes it before the window goes.
-bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render);
+// its script can't be read. A watched --arena match (not `hidden`) gets the
+// spectator camera (arena_camera_view.h) the same way. watch_detach() undoes
+// either before the window goes.
+bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render, SDL_Window* window, bool hidden);
 void watch_detach(SdlPump& pump);
 
 // --arena and --replay3d: respawn off (a downed mech stays down) and the

@@ -10,6 +10,7 @@ namespace zmod {
 
 namespace {
 Fog g_fog;
+unsigned g_render_fog_distance{};
 // The innermost active world-render copy and its far ratio; null/1 outside render scopes.
 Fog* g_render_fog = nullptr;
 float g_render_scale = 1.0f;
@@ -20,6 +21,9 @@ float g_render_far = 0.0f;  // the active copy's visual far plane; 0 only when n
 // copy, so the HUD zoom view (drawn inside the main world render) is not scaled twice.
 Fog scaled_fog(const Fog& source, float scale, float visual_far) {
   Fog copy = source;
+  if (g_render_fog_distance && source.on && source.linear &&
+      source.far_range > source.near_range && source.far_range > 0.0f)
+    scale = static_cast<float>(g_render_fog_distance) / source.far_range;
   copy.near_range *= scale;
   copy.far_range *= scale;
   // Preserve proportional haze, including missions that become opaque before the edge.
@@ -50,6 +54,7 @@ void refresh_render_fog() {
 }
 }  // namespace
 
+void set_render_fog_distance(unsigned distance) { g_render_fog_distance = distance; }
 Fog& fog() { return g_fog; }
 const Fog& render_fog() { return g_render_fog ? *g_render_fog : g_fog; }
 RenderFogEdge render_fog_edge() {

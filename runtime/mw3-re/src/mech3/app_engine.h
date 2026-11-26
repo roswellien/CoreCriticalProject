@@ -93,9 +93,11 @@ class GameEngine : public Engine {
   // Ours (#289): the 3D replay's frame, through replay_hooks() (replay_hooks.h).
   bool replay_on() override;
   void replay_start() override;
-  void replay_before_lists() override;
+  bool replay_before_lists() override;
   void replay_after_lists() override;
+  void replay_after_frame() override;
   void replay_camera() override;
+  void spectator_camera() override;
   void replay_draw() override;
   // A mission started from the command line (our addition, docs/program.md):
   // the pilot's game answers these, and the load goes on to the Core state.
