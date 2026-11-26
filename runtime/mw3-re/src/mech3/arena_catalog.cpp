@@ -310,6 +310,13 @@ Json catalog_presets() {
 }  // namespace
 
 namespace {
+// Ours (#507): the setup's time_of_day values, in kTimesOfDay's order.
+Json catalog_times_of_day() {
+  Json names = Json::array();
+  for (const TimeOfDay& t : kTimesOfDay) names.push_back(t.name);
+  return names;
+}
+
 bool write_files(const std::string& dir, std::string* error) {
   const std::filesystem::path root(dir), terrain = root / "terrain", pictures = root / "mechs";
   std::error_code ec;
@@ -324,7 +331,8 @@ bool write_files(const std::string& dir, std::string* error) {
   const Json catalog = {{"version", kCatalogVersion},
                         {"maps", maps},
                         {"mechs", catalog_mechs(pictures)},
-                        {"presets", catalog_presets()}};
+                        {"presets", catalog_presets()},
+                        {"times_of_day", catalog_times_of_day()}};
   std::ofstream f(root / "catalog.json");
   f << catalog.dump(1);
   if (!f) {

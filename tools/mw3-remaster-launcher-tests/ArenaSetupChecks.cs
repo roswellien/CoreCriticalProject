@@ -317,20 +317,25 @@ internal static class ArenaSetupChecks
             catalogWithoutTime.Presets,
             new[] { "day", "night" });
 
-        // Reject ANY non-null time_of_day even when listed in catalog
-        foreach (var timeOfDay in new[] { "night", "", " " })
+        // #507: a listed time of day is accepted and sent to the runtime.
+        parsed.TimeOfDay = "night";
+        parsed.ValidateAgainst(catalogWithTime);
+        using var runtimeWithTimeDoc = JsonDocument.Parse(parsed.ToRuntimeSetupJson("D:/arena-out"));
+        Check(runtimeWithTimeDoc.RootElement.GetProperty("time_of_day").GetString() == "night",
+            "Runtime setup JSON must include a chosen time_of_day.");
+
+        // A runtime whose catalog lists none can't take one.
+        ExpectFieldFailure(
+            () => parsed.ValidateAgainst(catalogWithoutTime),
+            "time_of_day",
+            "this game runtime cannot set time of day");
+
+        // Unlisted, empty or differently cased values are refused by name.
+        foreach (var timeOfDay in new[] { "dusk", "Night", "", " " })
         {
             parsed.TimeOfDay = timeOfDay;
-            ExpectFieldFailure(
-                () => parsed.ValidateAgainst(catalogWithTime),
-                "time_of_day",
-                "this game runtime cannot set time of day yet");
+            ExpectFieldFailure(() => parsed.ValidateAgainst(catalogWithTime), "time_of_day");
         }
-
-        parsed.TimeOfDay = "night";
-        using var runtimeWithTimeDoc = JsonDocument.Parse(parsed.ToRuntimeSetupJson("D:/arena-out"));
-        Check(!runtimeWithTimeDoc.RootElement.TryGetProperty("time_of_day", out _),
-            "Runtime setup JSON must never include time_of_day.");
     }
 
     private static void CheckRejectionFieldPaths(ArenaCatalog catalog)
@@ -517,9 +522,9 @@ internal static class ArenaSetupChecks
                 badTime.ValidateAgainst(catalog);
             },
             "time_of_day",
-            "this game runtime cannot set time of day yet");
+            "this game runtime cannot set time of day");
 
-        // Empty string TimeOfDay rejected by ValidateAgainst before Validate()
+        // Empty string TimeOfDay rejected by Validate() before the catalog check
         ExpectFieldFailure(
             () =>
             {
@@ -528,7 +533,7 @@ internal static class ArenaSetupChecks
                 emptyTime.ValidateAgainst(catalog);
             },
             "time_of_day",
-            "this game runtime cannot set time of day yet");
+            "must be null or a non-empty");
 
         var catalogWithTime = new ArenaCatalog(
             catalog.Maps,
@@ -539,11 +544,11 @@ internal static class ArenaSetupChecks
         ExpectFieldFailure(
             () =>
             {
-                var unknownTime = ArenaSetupFile.Parse(SampleValidSetupJson.Replace("\"time_of_day\": null", "\"time_of_day\": \"day\""));
+                var unknownTime = ArenaSetupFile.Parse(SampleValidSetupJson.Replace("\"time_of_day\": null", "\"time_of_day\": \"noon\""));
                 unknownTime.ValidateAgainst(catalogWithTime);
             },
             "time_of_day",
-            "this game runtime cannot set time of day yet");
+            "unknown time of day");
     }
 
     private static void CheckRandomSeedAndDirectoryPrep(string tempRoot)

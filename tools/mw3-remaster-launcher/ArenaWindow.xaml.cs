@@ -222,10 +222,11 @@ public partial class ArenaWindow : Window
         ComboTimeOfDay.ItemsSource = timeChoices;
         ComboTimeOfDay.SelectedIndex = 0;
 
-        // ValidateAgainst rejects time_of_day until #507, even if the catalog lists options.
-        ComboTimeOfDay.IsEnabled = false;
-        ComboTimeOfDay.ToolTip = "Needs a newer game runtime";
-        TxtTimeOfDayHint.Visibility = Visibility.Visible;
+        // #507: a runtime that can light the arena lists its times of day; an older one lists none.
+        var canSetTimeOfDay = catalog.TimeOfDayOptions.Count > 0;
+        ComboTimeOfDay.IsEnabled = canSetTimeOfDay;
+        ComboTimeOfDay.ToolTip = canSetTimeOfDay ? null : "Needs a newer game runtime";
+        TxtTimeOfDayHint.Visibility = canSetTimeOfDay ? Visibility.Collapsed : Visibility.Visible;
 
         _sideARows.Clear();
         _sideBRows.Clear();

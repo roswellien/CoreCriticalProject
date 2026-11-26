@@ -18,6 +18,7 @@
 #include "mech3/zai_attack.h"
 #include "mech3/zai_hunt.h"
 #include "mech3/zrdraiv.h"
+#include "platform/render3d.h"
 
 namespace mech3::arena {
 
@@ -442,6 +443,9 @@ bool ArenaRun::open(int64_t seed, int32_t frame_ms, bool headless, std::string* 
   set_arena_seed(seed);      // which ends of the map the sides start at, and the update order
   set_arena_log(log_.get(), frame_ms);
   set_arena_headless(headless);  // nobody watches: draw nothing
+  // Before the mission loads, so its first mission_changed lights it (#507).
+  const char* lighting = time_of_day_lighting(setup_.time_of_day);
+  platform::arena_lighting_mission() = lighting ? lighting : "";
   return true;
 }
 
@@ -450,6 +454,7 @@ ArenaRun::~ArenaRun() {
   set_arena_setup(nullptr);
   set_arena_log(nullptr, 0);
   set_arena_headless(false);
+  platform::arena_lighting_mission().clear();
   znet::shutdown();
   hub_.reset();
 }
