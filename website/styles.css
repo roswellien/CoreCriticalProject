@@ -2284,3 +2284,144 @@ details p {
         animation: none;
     }
 }
+/* Before/after slider. The upgraded frame is the base image; the stock frame sits on top
+   and is clipped to the left --split share, so the divider never resizes either image. */
+.compare {
+    padding-block: 64px;
+    border-bottom: 1px solid var(--rule);
+}
+.compare-copy {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    gap: 64px;
+    align-items: end;
+    margin-bottom: 32px;
+}
+.compare h2 {
+    font: 700 clamp(27px, 2.5vw, 40px)/1.2 var(--display);
+    text-wrap: balance;
+}
+.compare-copy p {
+    color: var(--muted);
+    font-size: 19px;
+    max-width: 52ch;
+}
+.compare-figure {
+    margin: 0;
+}
+.compare-frame {
+    position: relative;
+    overflow: hidden;
+    aspect-ratio: 2560 / 1080;
+    border: 1px solid var(--rule);
+    background: #0b0d0d;
+    user-select: none;
+    touch-action: pan-y;
+}
+.compare-frame img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+}
+.compare-before {
+    clip-path: inset(0 calc(100% - var(--split)) 0 0);
+}
+.compare-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: var(--split);
+    width: 2px;
+    margin-left: -1px;
+    background: var(--amber);
+    box-shadow: 0 0 12px #0009;
+    pointer-events: none;
+}
+.compare-handle::after {
+    content: "";
+    position: absolute;
+    /* Below the frame's middle, so the knob sits on the ground instead of over the mechs. */
+    top: 72%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    border: 2px solid var(--amber);
+    border-radius: 50%;
+    background: #141717cc;
+    transform: translate(-50%, -50%);
+}
+.compare-handle::before {
+    content: "\2039\00a0\203a";
+    position: absolute;
+    top: 72%;
+    left: 50%;
+    z-index: 1;
+    color: var(--amber);
+    font: 700 22px/1 var(--body);
+    white-space: nowrap;
+    transform: translate(-50%, -54%);
+}
+.compare-frame:has(.compare-range:focus-visible) .compare-handle::after {
+    outline: 3px solid var(--ink);
+    outline-offset: 3px;
+}
+.compare-range {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: ew-resize;
+    appearance: none;
+}
+.compare-label {
+    position: absolute;
+    bottom: 16px;
+    padding: 6px 12px;
+    background: #101514cc;
+    color: var(--ink);
+    font: 700 13px/1 var(--display);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    pointer-events: none;
+}
+.compare-label-before {
+    left: 16px;
+}
+.compare-label-after {
+    right: 16px;
+    color: var(--amber);
+}
+.compare-figure figcaption {
+    margin-top: 12px;
+    color: var(--muted);
+    font-size: 14px;
+}
+@media (max-width: 1000px) {
+    .compare-copy {
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
+}
+@media (max-width: 760px) {
+    .compare {
+        padding-block: 48px;
+    }
+    .compare-frame {
+        aspect-ratio: 4 / 3;
+    }
+    .compare-label {
+        bottom: 10px;
+        font-size: 11px;
+    }
+    .compare-label-before {
+        left: 10px;
+    }
+    .compare-label-after {
+        right: 10px;
+    }
+}

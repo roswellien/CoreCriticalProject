@@ -39,6 +39,9 @@ ARTWORK_SMALLER_WIDTHS = {
     "vulkan-art": [1024],
     "vulkan-c1m1-beach": [1280],
     "launcher-dashboard": [],
+    # The before/after pair keeps identical sizes so the two frames line up.
+    "compare-stock": [1280],
+    "compare-core-critical": [1280],
 }
 
 # Only the current Mod Studio tour screenshots; the older numbered copies are unused.
