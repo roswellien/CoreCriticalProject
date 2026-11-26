@@ -433,20 +433,24 @@ public static class ArenaMatchRunner
 
         var profileWriteDir = Path.Combine(Path.GetFullPath(dataRoot), "mw3-re", "profiles", NativeGameRunner.ProfileId);
         var runtimeLogPath = Path.Combine(profileWriteDir, "mw3.log");
-        var baselineLogOffset = GetLogFileLength(runtimeLogPath);
+        DateTime launchStartUtc = default;
 
-        var process = await Task.Run(() => runner.Launch(
-            settings,
-            activeModDirs,
-            line =>
-            {
-                lock (captureLock)
+        var process = await Task.Run(() =>
+        {
+            launchStartUtc = DateTime.UtcNow;
+            return runner.Launch(
+                settings,
+                activeModDirs,
+                line =>
                 {
-                    capturedLines.Add(line);
-                }
-                onProgressLine?.Invoke(StripLauncherElapsed(line));
-            },
-            extraArguments)).ConfigureAwait(false);
+                    lock (captureLock)
+                    {
+                        capturedLines.Add(line);
+                    }
+                    onProgressLine?.Invoke(StripLauncherElapsed(line));
+                },
+                extraArguments);
+        }).ConfigureAwait(false);
 
         using (process)
         {
@@ -465,8 +469,9 @@ public static class ArenaMatchRunner
 
             // When built as a Windows GUI executable without an attached console, mw3.exe
             // redirects stdout and stderr directly into <write-dir>/mw3.log (log_to_file).
-            // Read only freshly appended bytes starting from our recorded pre-launch offset.
-            var fallbackLines = TryReadFreshRuntimeLogLines(runtimeLogPath, baselineLogOffset);
+            // The runtime reopens mw3.log without append on every start, so the whole file
+            // belongs to this run only when its last write is at or after launch.
+            var fallbackLines = TryReadFreshRuntimeLogLines(runtimeLogPath, launchStartUtc);
             return EvaluateOutcome(
                 exitCode,
                 resolvedSeed,
@@ -479,42 +484,18 @@ public static class ArenaMatchRunner
         }
     }
 
-    /// <summary>Return the current file size in bytes, or 0 when the file does not exist.</summary>
-    public static long GetLogFileLength(string logPath)
-    {
-        try
-        {
-            if (File.Exists(logPath))
-            {
-                return new FileInfo(logPath).Length;
-            }
-        }
-        catch
-        {
-        }
-        return 0L;
-    }
-
     /// <summary>
-    /// Read freshly appended lines from <paramref name="runtimeLogPath"/> starting at
-    /// <paramref name="baselineByteOffset"/>. If the file is now shorter than before launch
-    /// (e.g. truncated or recreated), read from offset 0.
+    /// Read the entire runtime log only when it was last written at or after
+    /// <paramref name="launchStartUtc"/>; each runtime start truncates the previous log.
     /// </summary>
-    public static IReadOnlyList<string> TryReadFreshRuntimeLogLines(string runtimeLogPath, long baselineByteOffset)
+    public static IReadOnlyList<string> TryReadFreshRuntimeLogLines(string runtimeLogPath, DateTime launchStartUtc)
     {
         try
         {
-            if (!File.Exists(runtimeLogPath))
+            if (!File.Exists(runtimeLogPath) || File.GetLastWriteTimeUtc(runtimeLogPath) < launchStartUtc)
                 return Array.Empty<string>();
 
             using var stream = new FileStream(runtimeLogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            // If the file shrank or was truncated/restarted from 0, reset reading to offset 0.
-            var startOffset = stream.Length < baselineByteOffset ? 0L : baselineByteOffset;
-            if (startOffset > 0)
-            {
-                stream.Seek(startOffset, SeekOrigin.Begin);
-            }
-
             using var reader = new StreamReader(stream, Encoding.UTF8);
             var lines = new List<string>();
             string? line;

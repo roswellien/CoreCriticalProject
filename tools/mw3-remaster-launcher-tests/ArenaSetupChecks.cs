@@ -98,7 +98,7 @@ internal static class ArenaSetupChecks
             CheckRandomSeedAndDirectoryPrep(tempRoot);
             CheckArgumentsAndGraphicsSummary(tempRoot);
             CheckOutcomeParsingAndExitHandling(tempRoot);
-            CheckRuntimeLogOffsetAndStdoutResult(tempRoot);
+            CheckRuntimeLogTimestampAndStdoutResult(tempRoot);
             CheckCatalogProcessWaitHelper();
             Console.WriteLine("AI Arena catalog, setup schema, field-path validation, argument builder and result parser checks passed.");
         }
@@ -738,45 +738,35 @@ internal static class ArenaSetupChecks
             "is not a stock loadout of madcat");
     }
 
-    private static void CheckRuntimeLogOffsetAndStdoutResult(string tempRoot)
+    private static void CheckRuntimeLogTimestampAndStdoutResult(string tempRoot)
     {
         var testLogPath = Path.Combine(tempRoot, "test_mw3.log");
+        var launchStartUtc = new DateTime(2026, 11, 26, 12, 0, 0, DateTimeKind.Utc);
 
-        // 1. Unchanged stale winner + appended ordinary text rejected
         File.WriteAllText(testLogPath, "arena: winner A, time 1:15, lost A 0 B 2\n");
-        var baselineOffset = ArenaMatchRunner.GetLogFileLength(testLogPath);
+        File.SetLastWriteTimeUtc(testLogPath, launchStartUtc.AddMinutes(-1));
+        var staleLines = ArenaMatchRunner.TryReadFreshRuntimeLogLines(testLogPath, launchStartUtc);
+        Check(staleLines.Count == 0, "Runtime log older than launch must be ignored.");
 
-        File.AppendAllText(testLogPath, "ordinary runtime startup line\nanother non-result line\n");
-        var linesAfterOrdinaryAppend = ArenaMatchRunner.TryReadFreshRuntimeLogLines(testLogPath, baselineOffset);
-        var foundStale = ArenaMatchRunner.TryParseStdoutResult(linesAfterOrdinaryAppend, out _, out _, out _, out _);
-        Check(!foundStale, "Stale winner before baseline offset must be ignored.");
-
-        // 2. Appended winner accepted
-        baselineOffset = ArenaMatchRunner.GetLogFileLength(testLogPath);
-        File.AppendAllText(testLogPath, "arena: winner B, time 2:30, lost A 1 B 0\n");
-        var linesAfterResultAppend = ArenaMatchRunner.TryReadFreshRuntimeLogLines(testLogPath, baselineOffset);
-        var foundAppended = ArenaMatchRunner.TryParseStdoutResult(linesAfterResultAppend, out var appendedWinner, out var appendedTime, out var appendedLostA, out var appendedLostB);
-        Check(foundAppended && appendedWinner == "B" && appendedTime == "2:30" && appendedLostA == 1 && appendedLostB == 0,
-            "Appended fresh winner result was not accepted.");
-
-        // 3. Truncated file read from offset 0
-        var largeBaseline = ArenaMatchRunner.GetLogFileLength(testLogPath) + 500;
-        File.WriteAllText(testLogPath, "arena: winner draw, time 4:00, lost A 2 B 2\n");
-        var linesAfterTruncation = ArenaMatchRunner.TryReadFreshRuntimeLogLines(testLogPath, largeBaseline);
-        var foundTruncated = ArenaMatchRunner.TryParseStdoutResult(linesAfterTruncation, out var truncatedWinner, out var truncatedTime, out _, out _);
-        Check(foundTruncated && truncatedWinner == "draw" && truncatedTime == "4:00",
-            "Truncated log file must be read from offset 0.");
-
-        // 4. Several results, last wins
-        var severalLines = new[]
+        // The runtime replaces the old log, so every line in a fresh file belongs to this run.
+        var freshLines = new[]
         {
             "arena: winner A, time 1:00, lost A 0 B 2",
             "ordinary log line",
             "arena: winner B, time 3:20, lost A 2 B 0"
         };
-        var foundLast = ArenaMatchRunner.TryParseStdoutResult(severalLines, out var lastWinner, out var lastTime, out _, out _);
-        Check(foundLast && lastWinner == "B" && lastTime == "3:20",
-            "TryParseStdoutResult must pick the LAST matching result.");
+        File.WriteAllLines(testLogPath, freshLines);
+        File.SetLastWriteTimeUtc(testLogPath, launchStartUtc.AddMinutes(1));
+        var runtimeLines = ArenaMatchRunner.TryReadFreshRuntimeLogLines(testLogPath, launchStartUtc);
+        Check(runtimeLines.SequenceEqual(freshLines), "Fresh runtime log must be read in full.");
+        var foundLast = ArenaMatchRunner.TryParseStdoutResult(
+            runtimeLines, out var lastWinner, out var lastTime, out var lastLostA, out var lastLostB);
+        Check(foundLast && lastWinner == "B" && lastTime == "3:20" && lastLostA == 2 && lastLostB == 0,
+            "Fresh runtime log must use the LAST matching result.");
+
+        File.SetLastWriteTimeUtc(testLogPath, launchStartUtc);
+        var sameTimeLines = ArenaMatchRunner.TryReadFreshRuntimeLogLines(testLogPath, launchStartUtc);
+        Check(sameTimeLines.SequenceEqual(freshLines), "Runtime log written at launch time must be accepted.");
     }
 
     private static void CheckCatalogProcessWaitHelper()

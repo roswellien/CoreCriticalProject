@@ -130,6 +130,7 @@ public partial class ArenaWindow : Window
     private bool _matchOrReplayActive;
     private Process? _activeProcess;
     private bool _stopRequested;
+    private bool _killIssued;
     private bool _closeDeferred;
     private CancellationTokenSource? _catalogCancellationSource;
     private string? _lastRunFolder;
@@ -221,10 +222,10 @@ public partial class ArenaWindow : Window
         ComboTimeOfDay.ItemsSource = timeChoices;
         ComboTimeOfDay.SelectedIndex = 0;
 
-        var hasTimeOfDay = catalog.TimeOfDayOptions.Count > 0;
-        ComboTimeOfDay.IsEnabled = hasTimeOfDay;
-        ComboTimeOfDay.ToolTip = hasTimeOfDay ? null : "Needs a newer game runtime";
-        TxtTimeOfDayHint.Visibility = hasTimeOfDay ? Visibility.Collapsed : Visibility.Visible;
+        // ValidateAgainst rejects time_of_day until #507, even if the catalog lists options.
+        ComboTimeOfDay.IsEnabled = false;
+        ComboTimeOfDay.ToolTip = "Needs a newer game runtime";
+        TxtTimeOfDayHint.Visibility = Visibility.Visible;
 
         _sideARows.Clear();
         _sideBRows.Clear();
@@ -542,9 +543,16 @@ public partial class ArenaWindow : Window
         try
         {
             if (_activeProcess != null && !_activeProcess.HasExited)
+            {
                 _activeProcess.Kill(entireProcessTree: true);
+                _killIssued = true;
+            }
         }
         catch (InvalidOperationException)
+        {
+            // Includes ObjectDisposedException: the runner may finish and dispose before the UI resumes.
+        }
+        catch (Win32Exception)
         {
             // The process can exit between checking HasExited and requesting termination.
         }
@@ -583,6 +591,7 @@ public partial class ArenaWindow : Window
         ClearResultActions();
         _matchOrReplayActive = true;
         _stopRequested = false;
+        _killIssued = false;
         _closeDeferred = false;
         _activeProcess = null;
         SetEditingEnabled(false);
@@ -634,9 +643,9 @@ public partial class ArenaWindow : Window
 
             BtnOpenRunFolder.IsEnabled = Directory.Exists(outcome.RunFolder);
             BtnCopyCommand.IsEnabled = !string.IsNullOrWhiteSpace(outcome.CommandLine);
-            BtnWatchReplay3d.IsEnabled = !_stopRequested && outcome.Succeeded && File.Exists(outcome.ExpectedLogPath);
+            BtnWatchReplay3d.IsEnabled = !_killIssued && outcome.Succeeded && File.Exists(outcome.ExpectedLogPath);
 
-            if (_stopRequested)
+            if (_killIssued)
             {
                 SetStatus("Match stopped.", isError: false);
                 TxtResultDetail.Text = "";
@@ -665,7 +674,7 @@ public partial class ArenaWindow : Window
         }
         catch (Exception error)
         {
-            if (_stopRequested)
+            if (_killIssued)
             {
                 SetStatus("Match stopped.", isError: false);
                 TxtResultDetail.Text = "";
@@ -720,6 +729,7 @@ public partial class ArenaWindow : Window
         var logPath = _lastMatchLogPath;
         _matchOrReplayActive = true;
         _stopRequested = false;
+        _killIssued = false;
         _closeDeferred = false;
         _activeProcess = null;
         SetEditingEnabled(false);
@@ -748,7 +758,7 @@ public partial class ArenaWindow : Window
                     ? await _runner.LastSessionCompletion
                     : await GameRunner.WaitForCompletionAsync(process);
 
-                if (_stopRequested)
+                if (_killIssued)
                 {
                     SetStatus("Match stopped.", isError: false);
                     TxtResultDetail.Text = "";
@@ -766,7 +776,7 @@ public partial class ArenaWindow : Window
         }
         catch (Exception error)
         {
-            if (_stopRequested)
+            if (_killIssued)
             {
                 SetStatus("Match stopped.", isError: false);
                 TxtResultDetail.Text = "";
@@ -869,6 +879,13 @@ public partial class ArenaWindow : Window
 
             if (result == MessageBoxResult.Yes)
             {
+                // The modal prompt lets completion callbacks run while it is open.
+                if (!_matchOrReplayActive)
+                {
+                    e.Cancel = false;
+                    return;
+                }
+
                 // Defer window close until the session and runner gate have finished cleaning up.
                 e.Cancel = true;
                 _closeDeferred = true;
