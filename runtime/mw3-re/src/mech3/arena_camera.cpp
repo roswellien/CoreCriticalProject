@@ -86,6 +86,8 @@ Pose Camera::update(const Subject &subject, const Action &action, const Input &i
     if (mode_ == Mode::Free) {
         free_speed_ = std::clamp(free_speed_ * zoom_factor, kFreeSpeedMin, kFreeSpeedMax);
         pose_.yaw -= input.look_dx * kLookRadiansPerCount;
+        // Kept in -pi .. pi so a long session never loses float precision.
+        pose_.yaw = std::remainder(pose_.yaw, 2.0f * 3.14159265358979f);
         pose_.pitch =
             std::clamp(pose_.pitch + input.look_dy * kLookRadiansPerCount, -kMaxPitch, kMaxPitch);
 

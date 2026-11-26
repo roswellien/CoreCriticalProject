@@ -401,7 +401,7 @@ bool arena_camera_view(arena_camera::Subject* subject, arena_camera::Action* act
 }
 
 bool arena_viewed_label(int* id, std::string* label) {
-  if (g_viewed < 0 || !g_setup) return false;
+  if (!g_started || g_viewed < 0 || g_viewed >= static_cast<int>(g_mechs.size())) return false;
   const ArenaMech& entry = g_mechs[static_cast<size_t>(g_viewed)];
   *id = entry.id;
   *label = g_names[static_cast<size_t>(g_viewed)];

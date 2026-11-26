@@ -112,7 +112,14 @@ void ArenaCameraView::place_camera(zcls::Node* camera) {
 
   cam::Subject subject;
   cam::Action action;
-  if (!mech3::arena::arena_camera_view(&subject, &action)) return;
+  if (!mech3::arena::arena_camera_view(&subject, &action)) {
+    // No match running (loading, or after the end): drop the input so it
+    // can't all land on the first frame of the next match, and jump to that
+    // match's first view rather than glide from this one.
+    look_dx_ = look_dy_ = zoom_ = 0;
+    camera_.reset();
+    return;
+  }
 
   const auto key = [&](SDL_Scancode code) { return held_[code] ? 1.0f : 0.0f; };
   cam::Input input;
