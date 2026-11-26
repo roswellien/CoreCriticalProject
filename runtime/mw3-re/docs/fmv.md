@@ -524,3 +524,54 @@ a stop while waiting) and, with FFmpeg in the importer,
 C1M1 imported and measured by the test; 1920x1080 shots on mode 13: INTRO lit across
 0..1919 between rows 132 and 965, C1M1 at 238..1678 across the full height;
 the program measures none of them: the table has them).
+
+## 9. HD movies (ours, 2026-11-26, #559)
+
+`mw3 --hd-movie NAME PATH` plays an HD MP4 (H.264 and AAC, such as the
+1280x960, 24 fps cinematics pack) wherever a script plays the movie `NAME`
+(the AVI's file name, lower case: `intro`). It is a developer option for
+now; only INTRO has been checked, and only on Windows, whose own Media
+Foundation decodes it (`mech3/hd_movie_mf.cpp`). Other builds have no
+decoder and play the original.
+
+The ported player (section 5) still owns the movie: the script, its skip
+keys, the CD pause (section 3) and its end. `GameFmvHost` hands it a
+stand-in for the AVI (`mech3/hd_movie.h`):
+
+- **The picture stream:** the original's size and frames at 15 a second, from
+  the shape table (`intro/2737/640x480`), so the player's length and end
+  are the original's, and the shape (section 8) is known, never measured.
+  Its frames decode to black and are never shown.
+- **The sound stream:** the MP4's AAC as 22050 Hz 16-bit PCM, read as the
+  player refills its two halves of one second each. The frame shown still
+  follows this sound's play cursor, `--nosound`'s clocked silent cursor too.
+
+The MP4's pictures are decoded on a thread of their own, at most three
+waiting. `zfmv::Stream::sound_seconds()` gives the sound's position between
+the 15 fps frames. Each pass, and at each of the script's flips, the
+newest picture at or before it is drawn over the whole window
+(`SdlScreen2D::present_frame_rgba`) at its own resolution, not through the
+16-bit buffer. On a window wider than 4:3, the picture keeps the shape's
+rows as `fmv_stretch` keeps a 16-bit movie's: INTRO's rows 79-400 of 480
+are rows 158-801 of the HD clip, filling a 16:9 window's width
+(`sdlfe::movie_frame_fit`).
+
+The clip is checked when the script loads and again when it starts. It is
+refused, and the original plays, when it can't be opened or decoded, when no
+H.264/AAC decoder is installed (Windows N without the Media Feature Pack),
+when the shape table doesn't know the movie, when its length differs from
+the original's frames / 15 by more than a second, or when its sound isn't
+22050 Hz mono or stereo. One line on stderr says which:
+
+    mw3: hd movie intro: <path> (1280x960, 182.5 s)
+    mw3: hd movie intro not used (its length is 204.3 s, the original's 182.5 s); playing the original
+
+A decoding failure part way through holds the last picture to the end, with
+one `decoding stopped` line.
+
+Tests: `test_hd_movie.cpp` (the stand-in's streams, its sound in order then
+silence, the picture queue, each refusal's line, the source closed once),
+`fmv_sound_seconds_matches_the_sound_frame` (`test_fmv_stream.cpp`),
+`resolution_hd_movie_frame_keeps_the_movies_shape` (`test_resolution.cpp`)
+and `mw3hd_movie_checks` (Windows: a 2 s H.264/AAC clip made by Media
+Foundation's encoders and decoded back; "not run" without the encoders).
