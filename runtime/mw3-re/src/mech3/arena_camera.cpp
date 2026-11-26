@@ -80,8 +80,10 @@ void Camera::toggle_free() { set_mode(mode_ == Mode::Free ? before_free_ : Mode:
 
 Pose Camera::update(const Subject &subject, const Action &action, const Input &input, float dt) {
     // Limit the motion after a stalled frame and keep negative elapsed time from reversing it.
-    dt = std::clamp(dt, 0.0f, kMaxFrameSeconds);
-    const float zoom_factor = std::pow(kZoomStep, input.zoom);
+    // A non-finite step or zoom (NaN passes std::clamp) would poison the camera for good.
+    dt = std::isfinite(dt) ? std::clamp(dt, 0.0f, kMaxFrameSeconds) : 0.0f;
+    const float zoom = std::isfinite(input.zoom) ? input.zoom : 0.0f;
+    const float zoom_factor = std::pow(kZoomStep, zoom);
 
     if (mode_ == Mode::Free) {
         free_speed_ = std::clamp(free_speed_ * zoom_factor, kFreeSpeedMin, kFreeSpeedMax);
@@ -106,7 +108,11 @@ Pose Camera::update(const Subject &subject, const Action &action, const Input &i
             aim_[axis] = eye_[axis] + forward[axis] * 10.0f;
         }
         std::copy_n(eye_, 3, pose_.eye);
-        fresh_ = false;
+        // Leaving free glides from here, except after a reset(): then the
+        // first automatic mode still jumps to the new match.
+        if (!reset_pending_) {
+            fresh_ = false;
+        }
         return pose_;
     }
 
@@ -149,6 +155,10 @@ Pose Camera::update(const Subject &subject, const Action &action, const Input &i
         break;
     }
     case Mode::Orbit: {
+        // With nothing to circle, hold still and keep fresh_ for the first mech.
+        if (action.count == 0 && !subject.present) {
+            return pose_;
+        }
         const float *centre = aim_;
         float action_radius = 0.0f;
         if (action.count > 0) {
@@ -172,6 +182,9 @@ Pose Camera::update(const Subject &subject, const Action &action, const Input &i
         break;
     }
     case Mode::Overhead: {
+        if (!subject.present && action.count == 0) {
+            return pose_;
+        }
         const float *ground = aim_;
         if (subject.present) {
             ground = subject.centre;
@@ -198,7 +211,7 @@ Pose Camera::update(const Subject &subject, const Action &action, const Input &i
     if (fresh_) {
         std::copy_n(target_eye, 3, eye_);
         std::copy_n(target_aim, 3, aim_);
-        fresh_ = false;
+        fresh_ = reset_pending_ = false;
     } else {
         glide(eye_, target_eye, smoothing(eye_rate, dt));
         glide(aim_, target_aim, smoothing(aim_rate, dt));

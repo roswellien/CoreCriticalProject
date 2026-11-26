@@ -13,14 +13,14 @@ struct Node;
 namespace mech3 {
 
 class SpectatorCameraHooks {
- public:
-  virtual ~SpectatorCameraHooks() = default;
-  // In the world's tick, after the view's frame placed `camera` (the
-  // mission's camera node): the spectator's camera written over it.
-  virtual void place_camera(zcls::Node* camera) = 0;
+  public:
+    virtual ~SpectatorCameraHooks() = default;
+    // In the world's tick, after the view's frame placed `camera` (the
+    // mission's camera node): the spectator's camera written over it.
+    virtual void place_camera(zcls::Node *camera) = 0;
 };
 
-void set_spectator_camera_hooks(SpectatorCameraHooks* hooks);
-SpectatorCameraHooks* spectator_camera_hooks();
+void set_spectator_camera_hooks(SpectatorCameraHooks *hooks);
+SpectatorCameraHooks *spectator_camera_hooks();
 
-}  // namespace mech3
+} // namespace mech3
