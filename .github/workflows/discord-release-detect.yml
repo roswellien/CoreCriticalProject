@@ -1,0 +1,44 @@
+name: Observe CoreCritical release
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  observe:
+    if: github.repository == 'roswellien/CoreCriticalProject' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Record the public release identity
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_bytes())
+          release = event["release"]
+          tag = release.get("tag_name")
+          release_id = release.get("id")
+          if (
+              event.get("action") != "published"
+              or release.get("draft") is not False
+              or not isinstance(tag, str)
+              or not re.fullmatch(r"v[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}(?:-preview)?", tag)
+              or os.environ.get("GITHUB_REF") != f"refs/tags/{tag}"
+              or type(release_id) is not int or not 1 <= release_id < 10**20
+          ):
+              raise SystemExit("Not a supported published release")
+          output = Path(os.environ["RUNNER_TEMP"]) / "hint.json"
+          output.write_text(json.dumps({"id": release_id, "tag": tag}), encoding="ascii")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: corecritical-release-hint
+          path: ${{ runner.temp }}/hint.json
+          retention-days: 2
+          if-no-files-found: error

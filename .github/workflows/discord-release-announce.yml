@@ -1,0 +1,82 @@
+name: Announce CoreCritical release
+
+on:
+  workflow_run:
+    workflows: [Observe CoreCritical release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Public GitHub release ID (dry run only)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run:
+    if: github.repository == 'roswellien/CoreCriticalProject' && github.ref == 'refs/heads/develop' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify public release and signed feed without posting
+        run: python3 tools/github/discord_release_announcement.py dry
+
+  announce:
+    if: >-
+      github.repository == 'roswellien/CoreCriticalProject' &&
+      github.ref == 'refs/heads/develop' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'release' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.run_attempt == 1 &&
+      vars.DISCORD_RELEASE_ACTIVATION != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 9
+    concurrency:
+      group: corecritical-discord-release-announcement
+      cancel-in-progress: false
+    environment: discord-changelog
+    permissions:
+      contents: read
+      actions: read
+    env:
+      DISCORD_RELEASE_ACTIVATION: ${{ vars.DISCORD_RELEASE_ACTIVATION }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: corecritical-release-hint
+          path: ${{ runner.temp }}/corecritical-release-hint
+          run-id: ${{ github.event.workflow_run.id }}
+          repository: roswellien/CoreCriticalProject
+          github-token: ${{ github.token }}
+      - name: Verify the release, signed feed and destination
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_CHANGELOG_WEBHOOK_URL: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK_URL }}
+        run: python3 tools/github/discord_release_announcement.py reserve
+      - name: Reserve one announcement for the release
+        id: reservation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.preflight.outputs.name }}
+          path: ${{ runner.temp }}/corecritical-release-reservation.txt
+          retention-days: 7
+          if-no-files-found: error
+      - name: Recheck the release and confirm one Discord send
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_CHANGELOG_WEBHOOK_URL: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK_URL }}
+          RESERVATION_ID: ${{ steps.reservation.outputs.artifact-id }}
+        run: python3 tools/github/discord_release_announcement.py send
