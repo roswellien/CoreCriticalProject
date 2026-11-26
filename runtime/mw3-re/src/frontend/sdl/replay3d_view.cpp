@@ -1,11 +1,16 @@
 #include "frontend/sdl/replay3d_view.h"
 
+#include "frontend/sdl/arena_benchmark.h"
+
+#include <limits>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <vector>
 
 #include "frontend/sdl/replay_ui.h"
@@ -217,6 +222,7 @@ void rotation_of(const zwep::Vec3f3& d, float out[3]) {
 // log's from and to place it, and its pulse is beam_update's.
 struct LiveBeam {
   zwep::Beam* beam = nullptr;
+  zwep::Handle light = nullptr;
   float age = 0;
   bool seen = false;
 };
@@ -227,7 +233,7 @@ struct LiveBeam {
 // the log's positions instead of flown.
 struct LiveRound {
   zwep::WeaponDef* def = nullptr;
-  zwep::Handle node = nullptr, model = nullptr, flyout_anim = nullptr, model_anim = nullptr;
+  zwep::Handle node = nullptr, model = nullptr, flyout_anim = nullptr, attached_anim = nullptr, model_anim = nullptr;
   bool pooled_model = false, has_last = false, seen = false;
   Vec3 last;
 };
@@ -242,6 +248,10 @@ struct Replay3dView::State {
   const mech3::replay::ReplayRun* run = nullptr;
   const ReplayLog* log = nullptr;
   FrameRenderer* render = nullptr;
+  benchmark::Run* benchmark_run = nullptr;
+  bool startup_frame = true;
+  double playback_elapsed = 0;
+  float event_cursor = 0;
   std::function<void()> request_quit;
   std::string screenshot_dir;  // F12's screenshots: the script's folder, else the current one
 
@@ -279,6 +289,7 @@ struct Replay3dView::State {
   // The shots in flight, by (shooter, weapon, nth of that pair) and round id.
   std::map<std::string, LiveBeam> live_beams;
   std::map<int, LiveRound> live_rounds;
+  std::set<zeff::AnimDef*> impact_animations;
 
   // Lets go of every held key, the mouse look and a seek drag, for when the
   // releases can't reach handle(): the quit box takes the input, or the
@@ -303,12 +314,14 @@ struct Replay3dView::State {
 };
 
 Replay3dView::Replay3dView(const mech3::replay::ReplayRun& run, FrameRenderer* render,
-                           const std::string& script_path, std::function<void()> request_quit)
+                           const std::string& script_path, std::function<void()> request_quit,
+                           benchmark::Run* benchmark_run)
     : s_(new State()) {
   State& s = *s_;
   s.run = &run;
   s.log = &run.log();
   s.render = render;
+  s.benchmark_run = benchmark_run;
   s.request_quit = std::move(request_quit);
   s.clock.duration = s.log->duration() + ReplayClock::kEndHoldSeconds;
   s.scripted = !script_path.empty();
@@ -333,7 +346,7 @@ Replay3dView::Replay3dView(const mech3::replay::ReplayRun& run, FrameRenderer* r
         if (st.frame.mechs[i].id == id) st.selected = static_cast<int>(i);
     });
   };
-  s.draw.open_text();
+  if (!s.benchmark_run) s.draw.open_text();
 }
 
 // The beams and rounds in flight are not freed here: their nodes are in the
@@ -347,10 +360,18 @@ bool Replay3dView::ready(std::string* message) const {
   return false;
 }
 
+void Replay3dView::scene_load_enter() {
+  if (auto* run = s_->benchmark_run) {
+    run->scene_load_entry = benchmark::monotonic_seconds();
+    s_->render->benchmark_load();
+  }
+}
+
 void Replay3dView::start() {
   State& s = *s_;
   s.started = true;
-  s.frame = s.log->frame_at(0);
+  if (s.benchmark_run) s.clock.t = float(s.benchmark_run->log_start_time);
+  s.frame = s.log->frame_at(s.clock.t);
   for (const auto& info : s.log->mechs()) {
     const MechPose* pose = pose_of(s.frame, info.id);
     if (!pose) continue;
@@ -358,19 +379,60 @@ void Replay3dView::start() {
     auto puppet = Puppet::create(info.chassis, info.side, *pose, &error);
     if (!puppet) {
       std::fprintf(stderr, "mw3: replay3d: mech %d (%s): %s\n", info.id, info.chassis.c_str(), error.c_str());
+      if (s.benchmark_run) s.benchmark_run->invalidate({}, "replay puppet creation failed");
       continue;
     }
     s.puppets[info.id] = std::move(puppet);
   }
   // The camera starts behind the first mech (a map-wide view from above is
   // lost in the maps' fog); any fly key or a look lets it go.
-  if (!s.frame.mechs.empty()) s.follow_id = s.frame.mechs[0].id;
+  if (!s.benchmark_run && !s.frame.mechs.empty()) s.follow_id = s.frame.mechs[0].id;
   s.last_ns = SDL_GetTicksNS();
   std::printf("mw3: replay3d: %zu puppets, %.1f s of match\n", s.puppets.size(), s.clock.duration);
 }
 
-void Replay3dView::before_lists(bool quit_box_open) {
+bool Replay3dView::before_lists(bool quit_box_open) {
   State& s = *s_;
+  if (auto* run = s.benchmark_run) {
+    if (s.startup_frame && !run->failed()) {
+      // Present the initial pose and camera once outside the scoring epoch.
+      s.startup_frame = false;
+      s.real_dt = ztimer::state().dt;
+      return true;
+    }
+    if (!run->armed() && !run->failed()) {
+      if (s.render->benchmark_ready()) {
+        run->arm();
+        s.event_cursor = float(run->log_start_time);
+        // At an explicit cut, fire only events on the boundary. Older
+        // impacts are over, while frame_at still restores in-flight shots.
+        const float previous = run->scene.start_seconds
+            ? std::nextafter(s.event_cursor, -std::numeric_limits<float>::infinity())
+            : -std::numeric_limits<float>::infinity();
+        for (const Event& event : s.log->fire_between(previous, s.event_cursor))
+          s.start_effects(event);
+      } else {
+        run->invalidate({}, "benchmark presenter was not ready after startup");
+      }
+    }
+    if (run->failed()) {
+      s.request_quit();
+      return false;
+    }
+    const double elapsed = run->elapsed();
+    if (elapsed >= run->scene.end()) {
+      run->finish_window();
+      s.request_quit();
+      return false;
+    }
+    s.real_dt = ztimer::state().dt;
+    ztimer::state().dt = std::min(float(elapsed - s.playback_elapsed), kMaxListStep);
+    s.playback_elapsed = elapsed;
+    const double replay_time = run->replay_time(elapsed);
+    s.clock.t = float(replay_time);
+    s.render->set_benchmark_time(replay_time);
+    return true;
+  }
   s.quit_box_open = quit_box_open;
   for (const auto& apply : s.next_frame) apply();
   s.next_frame.clear();
@@ -383,11 +445,12 @@ void Replay3dView::before_lists(bool quit_box_open) {
   const float moved = quit_box_open ? 0.0f : s.clock.step(s.real_elapsed, s.seeking);
   s.real_dt = ztimer::state().dt;
   ztimer::state().dt = std::clamp(moved, 0.0f, kMaxListStep);
+  return true;
 }
 
 void Replay3dView::after_lists() {
   State& s = *s_;
-  ztimer::state().dt = s.real_dt;
+  if (!s.benchmark_run) ztimer::state().dt = s.real_dt;
   if (s.scripted && s.started && !s.script.run(s.actions)) {
     std::fprintf(stderr, "mw3: replay3d: the script failed\n");
     if (s.request_quit) s.request_quit();
@@ -395,7 +458,19 @@ void Replay3dView::after_lists() {
   mech3::mech_set_game_time(s.clock.t);
   if (!s.started) return;
   s.pose();
-  if (!s.quit_box_open) s.fly(s.real_elapsed);
+  if (s.benchmark_run && s.benchmark_run->armed()) {
+    for (auto anim = s.impact_animations.begin(); anim != s.impact_animations.end();) {
+      if (!zeff::anim_is_playing(*anim)) anim = s.impact_animations.erase(anim);
+      else ++anim;
+    }
+    s.render->set_benchmark_effects(static_cast<unsigned>(s.live_beams.size()),
+                                     static_cast<unsigned>(s.impact_animations.size()));
+  }
+  if (!s.benchmark_run && !s.quit_box_open) s.fly(s.real_elapsed);
+}
+
+void Replay3dView::after_frame() {
+  if (s_->benchmark_run) ztimer::state().dt = s_->real_dt;
 }
 
 void Replay3dView::State::pose() {
@@ -424,8 +499,14 @@ void Replay3dView::State::pose() {
         if ((part == 4 || part == 5) && std::find(lost.begin(), lost.end(), part) == lost.end()) leg_kill = true;
     puppet->set(*p, lost, live ? t - posed_t : 1.0f / 60, live, leg_kill);
   }
-  if (!first && !seeked && t > posed_t)
+  if (benchmark_run) {
+    if (benchmark_run->armed()) {
+      for (const Event& e : log->fire_between(event_cursor, t)) start_effects(e);
+      event_cursor = t;
+    }
+  } else if (!first && !seeked && t > posed_t) {
     for (const Event& e : log->fire_between(posed_t, t)) start_effects(e);
+  }
   sync_shots(first || seeked ? 0.0f : std::max(0.0f, t - posed_t));
   posed_t = t;
 }
@@ -452,6 +533,12 @@ void Replay3dView::State::sync_beams(float dt) {
       if (!def) continue;
       LiveBeam made;
       made.beam = zwep::beam_make(def, nullptr, nullptr, &kStillOrigin, &kStillDir, 1);
+      if (def->flags & zwep::kDesignate) {
+        const zwep::Vec3f3 color{def->target_heat[3], def->target_heat[4], def->target_heat[5]};
+        made.light = zwep::light_take(&color);
+        if (made.light && rh.light_range)
+          rh.light_range(made.light, def->target_heat[0], def->target_heat[1]);
+      }
       it = live_beams.emplace(key, made).first;
     }
     LiveBeam& b = it->second;
@@ -465,6 +552,10 @@ void Replay3dView::State::sync_beams(float dt) {
     dir = {dir.x / length, dir.y / length, dir.z / length};
     seg.start = from, seg.dir = dir, seg.length = length;
     zwep::beam_draw(&seg);
+    if (b.light) {
+      if (rh.light_position) rh.light_position(b.light, to.x, to.y, to.z);
+      if (rh.set_active) rh.set_active(b.light, 1);
+    }
     // beam_update's pulse: the beam's opacity swings between PULSE's two
     // values at its rate (the hook is named set_uniform_scale, but the game
     // wires it to object3d_set_opacity, app_weapons.cpp).
@@ -478,6 +569,7 @@ void Replay3dView::State::sync_beams(float dt) {
       ++it;
       continue;
     }
+    if (it->second.light) zwep::light_return(it->second.light);
     zwep::beam_free(it->second.beam);
     it = live_beams.erase(it);
   }
@@ -499,6 +591,8 @@ bool Replay3dView::State::make_round(zwep::WeaponDef* def, LiveRound* made) {
   }
   if (rh.add_child) rh.add_child(zwep::state().world, made->node);
   if (flyout.animation && rh.anim_follow) made->flyout_anim = rh.anim_follow(flyout.animation, made->node);
+  if (flyout.animation_attached && rh.anim_attached)
+    made->attached_anim = rh.anim_attached(flyout.animation_attached, made->node, nullptr);
   if (made->pooled_model && rh.anim_model) made->model_anim = rh.anim_model(flyout.model_animation, made->model);
   return true;
 }
@@ -550,6 +644,7 @@ void Replay3dView::State::sync_rounds() {
 void Replay3dView::State::free_round(LiveRound& r) {
   zwep::RunHooks& rh = zwep::run_hooks();
   if (r.flyout_anim && rh.anim_stop) rh.anim_stop(r.flyout_anim);
+  if (r.attached_anim && rh.anim_stop) rh.anim_stop(r.attached_anim);
   if (rh.remove_child) rh.remove_child(zwep::state().world, r.node);
   if (r.model) {
     if (r.pooled_model) {
@@ -569,21 +664,37 @@ void Replay3dView::State::start_effects(const Event& e) {
   zwep::WeaponDef* def = zwep::find_def(e.weapon.c_str());
   if (!def) return;
   const zwep::Effect* effect = nullptr;
-  float pos[3], rot[3] = {0, 0, 0};
+  float rot[3] = {};
   static const float kZero[3] = {};
+  const bool impact = (e.type == "hit" || (e.type == "round_end" && e.terrain)) && e.has_at;
+  Vec3 position;
   if (e.type == "shot") {
-    // As the game's fire effect (zwep_shot.cpp spawn): at the muzzle, turned
-    // along the shot.
     effect = &def->fire;
-    pos[0] = e.muzzle.x, pos[1] = e.muzzle.y, pos[2] = e.muzzle.z;
+    position = e.muzzle;
     rotation_of(f3(e.dir), rot);
-  } else if (e.type == "hit" && e.has_at && def->impacts) {
+  } else if (impact && def->impacts) {
     effect = &def->impacts[zwep::kSoilDefault];
-    pos[0] = e.at.x, pos[1] = e.at.y, pos[2] = e.at.z;
+    position = e.at;
   }
   if (!effect) return;
-  if (effect->animation)
-    zeff::anim_start_at(static_cast<zeff::AnimDef*>(effect->animation), nullptr, pos, rot, kZero);
+  const float pos[3] = {position.x, position.y, position.z};
+  zeff::AnimDef* playing = nullptr;
+  if (effect->animation && (impact || !effect->effect))
+    playing = zeff::anim_start_at(static_cast<zeff::AnimDef*>(effect->animation), nullptr,
+                                  pos, rot, kZero);
+  if (impact && effect->surface_animation) {
+    // The recording has the contact position but no surface normal.
+    const zwep::Vec3f3 up{0, 1, 0};
+    if (zwep::hit_hooks().surface_angles) zwep::hit_hooks().surface_angles(&up, rot);
+    auto* surface = zeff::anim_start_at(static_cast<zeff::AnimDef*>(effect->surface_animation),
+                                       nullptr, pos, rot, kZero);
+    if (!playing) playing = surface;
+  }
+  if (effect->effect && zwep::hit_hooks().impact_effect) {
+    const auto point = f3(position);
+    zwep::hit_hooks().impact_effect(effect->effect, &point);
+  }
+  if (impact && playing && benchmark_run) impact_animations.insert(playing);
   if (effect->sound_count > 0 && effect->sounds[0])
     zsnd::play_at(static_cast<zsnd::Object*>(effect->sounds[0]), pos, 1.0f, nullptr);
 }
@@ -606,18 +717,24 @@ void Replay3dView::State::fly(float dt) {
 void Replay3dView::place_camera(zcls::Node* camera) {
   State& s = *s_;
   if (!camera || !s.started) return;
-  if (s.follow_id >= 0) {
-    if (const MechPose* p = pose_of(s.frame, s.follow_id)) {
-      // Behind the mech's heading (its forward axis, -z turned about +y).
-      const float ahead[3] = {-std::sin(p->heading), 0, -std::cos(p->heading)};
-      const float aim[3] = {p->pos.x, p->pos.y + kFollowAim, p->pos.z};
-      s.eye[0] = aim[0] - ahead[0] * kFollowBack;
-      s.eye[1] = p->pos.y + kFollowUp + kFollowAim;
-      s.eye[2] = aim[2] - ahead[2] * kFollowBack;
-      const float d[3] = {aim[0] - s.eye[0], aim[1] - s.eye[1], aim[2] - s.eye[2]};
-      const float flat = std::sqrt(d[0] * d[0] + d[2] * d[2]);
-      s.yaw = std::atan2(d[0], d[2]);
-      s.pitch = std::atan2(-d[1], flat);
+  if (s.benchmark_run && s.benchmark_run->scene.shots.empty()) {
+    const auto key = benchmark::sample_camera(s.benchmark_run->scene.track, s.playback_elapsed);
+    for (int axis = 0; axis < 3; ++axis) s.eye[axis] = float(key.position[axis]);
+    s.yaw = float(key.yaw);
+    s.pitch = float(key.pitch);
+  } else {
+    const benchmark::CameraShot default_follow{benchmark::ShotType::chase, s.follow_id,
+                                               0, 0, kFollowBack, kFollowUp + kFollowAim, 0};
+    const auto& shot = s.benchmark_run
+        ? benchmark::shot_at(s.benchmark_run->scene.shots, s.playback_elapsed)
+        : default_follow;
+    if (const MechPose* subject = pose_of(s.frame, shot.mech)) {
+      const auto& pos = subject->pos;
+      const auto camera_pose = benchmark::sample_shot(shot, {pos.x, pos.y, pos.z},
+                                                       subject->heading, s.playback_elapsed);
+      for (int axis = 0; axis < 3; ++axis) s.eye[axis] = float(camera_pose.position[axis]);
+      s.yaw = float(camera_pose.yaw);
+      s.pitch = float(camera_pose.pitch);
     }
   }
   // As a debug launch places the mission's camera (app_mission.cpp).
@@ -626,6 +743,7 @@ void Replay3dView::place_camera(zcls::Node* camera) {
 }
 
 void Replay3dView::draw_overlay() {
+  if (s_->benchmark_run) return;
   State& s = *s_;
   if (!s.started) return;
   s.draw.begin_frame(zvid::render3d());
@@ -717,6 +835,27 @@ void Replay3dView::State::pick(float window_x, float window_y) {
 }
 
 bool Replay3dView::handle(const SDL_Event& e) {
+  if (auto* run = s_->benchmark_run) {
+    const auto invalidate = [&](const char* reason) {
+      if (run->armed()) run->invalidate(run->next_frame(run->replay_time(s_->playback_elapsed)), reason);
+    };
+    switch (e.type) {
+      case SDL_EVENT_WINDOW_FOCUS_LOST:
+        invalidate("benchmark window lost focus");
+        return false;
+      case SDL_EVENT_WINDOW_MINIMIZED:
+        invalidate("benchmark window minimized");
+        return false;
+      case SDL_EVENT_WINDOW_RESIZED:
+      case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+        if (e.window.data1 != run->width || e.window.data2 != run->height)
+          invalidate("benchmark window or drawable resized");
+        return false;
+      default:
+        // The pump still owns window and quit events.
+        return e.type >= SDL_EVENT_KEY_DOWN && e.type < SDL_EVENT_FINGER_DOWN;
+    }
+  }
   State& s = *s_;
   if (!s.started) return false;
   if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) {

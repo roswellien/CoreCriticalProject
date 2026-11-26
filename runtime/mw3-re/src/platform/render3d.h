@@ -190,6 +190,10 @@ class Render3D {
   // Typed mission-change callback from the native missions object. The
   // default is a no-op so renderers that do not care are unaffected.
   virtual void mission_changed(const MissionIdentity &) {}
+  // Multiplayer and IA loads have a world even without a campaign identity.
+  virtual void mission_scene_changed(const MissionIdentity& identity, bool) {
+    mission_changed(identity);
+  }
   // The Mech Lab preview: a briefing loads its mission before the Lab opens, but the
   // chassis on the turntable is not part of that mission's scene. While this is on, a
   // renderer lights it with its configured stock lighting instead of the mission's

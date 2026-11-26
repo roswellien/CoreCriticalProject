@@ -26,7 +26,7 @@ _MAX_JSON_DEPTH = 64
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _MAX_PREVIEW_PACKS = 64
 _MAX_REGISTRY_MODELS = 256
-_PREVIEW_FIELDS = frozenset({"draw_distance", "hud", "hud_text", "geometry", "model_packs",
+_PREVIEW_FIELDS = frozenset({"draw_distance", "fog_distance", "hud", "hud_text", "geometry", "model_packs",
                              "environment_packs", "ui_packs", "skin_packs", "dynamic_lighting", "shadows",
                              "headlights", "water_detail", "cloud_detail",
                              "headlight_bindings", "stock_effect_catalog",
@@ -769,6 +769,7 @@ def _preview_choices(preview):
         raise ValueError("Invalid native preview fields")
     choices = {
         "draw_distance": 800,
+        "fog_distance": None,
         "hud": None,
         "hud_text": None,
         "geometry": None,
@@ -789,6 +790,9 @@ def _preview_choices(preview):
     distance = choices["draw_distance"]
     if type(distance) is not int or distance not in _PREVIEW_DRAW_DISTANCES:
         raise ValueError("Native preview scenery distance must be 800, 1200, 1600, 2400 or 3200")
+    fog = choices["fog_distance"]
+    if fog is not None and (type(fog) is not int or not 0 <= fog <= 3200):
+        raise ValueError("Native fog distance must be between 0 and 3200")
     if choices["hud"] is not None and choices["hud"] not in _PREVIEW_HUDS:
         raise ValueError("Unknown native preview HUD")
     if choices["hud_text"] is not None:
@@ -971,6 +975,8 @@ def plan_launch(request):
         # 800 is the original range, so it adds no argument and older runtimes stay compatible.
         if preview["draw_distance"] != 800:
             argv.extend(("--cc-draw-distance", str(preview["draw_distance"])))
+        if preview["fog_distance"] is not None:
+            argv.extend(("--cc-fog-distance", str(preview["fog_distance"])))
         if preview["hud"] is not None:
             argv.extend(("--cc-hud", preview["hud"]))
         if preview["hud_text"] is not None:

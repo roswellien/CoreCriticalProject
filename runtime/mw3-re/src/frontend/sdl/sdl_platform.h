@@ -55,6 +55,7 @@ class SdlWindow : public platform::Window {
   void frame_size(int width, int height, int canvas_w = 0, int canvas_h = 0) override;
   // --window not given: the window takes the frame's shape (sdl_fit.h).
   void set_auto_size(bool on) { auto_size_ = on; }
+  bool open_benchmark(int width, int height, bool fullscreen);
   void set_fullscreen(bool on) { fullscreen_ = on; }  // ours: borderless, the desktop's size
   // Ours (Alt+Enter): fullscreen or a window now, for this run only; the
   // window takes the frame's shape at the size it would open with, kept

@@ -684,11 +684,12 @@ class Engine : public zgame::AppHooks {
   // Ours (#289, replay_hooks.h): a 3D replay's frame. Off outside one.
   virtual bool replay_on() { return false; }
   virtual void replay_start() {}
-  virtual void replay_before_lists() {}
+  virtual bool replay_before_lists() { return true; }
   virtual void replay_after_lists() {}
   // Ours (#529): after the view's frame placed the camera, a watched arena
   // match's spectator camera wins (spectator_camera_hooks.h).
   virtual void spectator_camera() {}
+  virtual void replay_after_frame() {}
   virtual void replay_camera() {}  // after the view's frame placed the camera: the replay's camera wins
   virtual void replay_draw() {}    // over the HUD, under the quit box: the replay's overlays and bar
   virtual uint32_t network_lobby_active() { return unported("0x00586ce0", {}) & 0xff; }

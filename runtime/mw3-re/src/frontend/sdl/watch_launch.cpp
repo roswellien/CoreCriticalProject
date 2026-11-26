@@ -25,6 +25,12 @@ bool parse_watch_option(WatchArgs& w, int argc, char** argv, int* i) {
   else if (s == "--replay") w.replay_path = argv[++*i];
   else if (s == "--replay-script") w.replay_script = argv[++*i];
   else if (s == "--replay3d") w.replay3d_path = argv[++*i];
+  else if (s == "--benchmark") w.benchmark_path = argv[++*i];
+  else if (s == "--benchmark-scene") w.benchmark_scene = argv[++*i];
+  else if (s == "--benchmark-resolution") w.benchmark_resolution = argv[++*i];
+  else if (s == "--benchmark-window-mode") w.benchmark_window_mode = argv[++*i];
+  else if (s == "--benchmark-out") w.benchmark_output = argv[++*i];
+  else if (s == "--benchmark-pack") w.benchmark_packs.emplace_back(argv[++*i]);
   else if (s == "--arena-catalog") w.catalog_dir = argv[++*i];
   else return false;
   return true;
@@ -76,9 +82,15 @@ int watch_after_mount(WatchArgs& w, int seed, std::string* mission) {
   }
   // --replay3d: the log read and checked before anything is made from it.
   if (!w.replay3d_path.empty()) {
-    w.replay3d = std::make_shared<mech3::replay::ReplayRun>();
     std::string message;
-    if (!w.replay3d->read(w.replay3d_path, &message)) {
+    bool ready;
+    if (w.benchmark_run) {
+      ready = w.replay3d->check_game_files(&message);
+    } else {
+      w.replay3d = std::make_shared<mech3::replay::ReplayRun>();
+      ready = w.replay3d->read(w.replay3d_path, &message);
+    }
+    if (!ready) {
       std::fprintf(stderr, "mw3: %s\n", message.c_str());
       w.replay3d.reset();
       return 2;
@@ -134,7 +146,8 @@ bool watch_attach(const WatchArgs& w, SdlPump& pump, FrameRenderer* render, SDL_
     pump.intercept = [](const SDL_Event& e) { return g_arena_camera && g_arena_camera->handle(e); };
   }
   if (!w.replay3d) return true;
-  g_view = std::make_unique<Replay3dView>(*w.replay3d, render, w.replay_script, [&pump] { pump.post_quit(); });
+  g_view = std::make_unique<Replay3dView>(*w.replay3d, render, w.replay_script, [&pump] { pump.post_quit(); },
+                                         w.benchmark_run.get());
   std::string message;
   if (!g_view->ready(&message)) {
     std::fprintf(stderr, "mw3: %s\n", message.c_str());
@@ -172,7 +185,7 @@ void start_watch_clock(const WatchArgs& w, int net_minutes) {
 }
 
 void watch_default_hud(const WatchArgs& w, bool mode_chosen, HudOptions* hud) {
-  if (w.replay3d_path.empty() || mode_chosen) return;
+  if (w.replay3d_path.empty() || w.benchmark_run || mode_chosen) return;
   hud->mode = "core-critical";
   if (!hud->artwork.empty()) return;
   const char* local = std::getenv("LOCALAPPDATA");

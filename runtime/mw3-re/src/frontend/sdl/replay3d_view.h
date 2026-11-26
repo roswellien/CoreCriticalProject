@@ -21,13 +21,16 @@ class ReplayRun;
 namespace sdlfe {
 
 class FrameRenderer;
+namespace benchmark {
+class Run;
+}
 
 class Replay3dView : public mech3::ReplayHooks {
  public:
   // `run` outlives the view; `request_quit` ends the program (the quit box's
   // yes, the script's quit). `script_path` "" for none.
   Replay3dView(const mech3::replay::ReplayRun& run, FrameRenderer* render, const std::string& script_path,
-               std::function<void()> request_quit);
+               std::function<void()> request_quit, benchmark::Run* benchmark_run = nullptr);
   ~Replay3dView() override;
   Replay3dView(const Replay3dView&) = delete;
   Replay3dView& operator=(const Replay3dView&) = delete;
@@ -40,8 +43,10 @@ class Replay3dView : public mech3::ReplayHooks {
   bool handle(const SDL_Event& e);
 
   void start() override;
-  void before_lists(bool quit_box_open) override;
+  void scene_load_enter() override;
+  bool before_lists(bool quit_box_open) override;
   void after_lists() override;
+  void after_frame() override;
   void quit() override;
   void place_camera(zcls::Node* camera) override;
   void draw_overlay() override;

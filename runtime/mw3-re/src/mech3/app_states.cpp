@@ -428,9 +428,15 @@ bool CoreState::frame() {
       en.mouse_set_pos(x, y);
     }
   }
-  if (replay) en.replay_before_lists();  // the action lists on the replay's step
+  if (replay && !en.replay_before_lists()) return false;
+  struct ReplayFrameScope {
+    Engine* engine;
+    ~ReplayFrameScope() {
+      if (engine) engine->replay_after_frame();
+    }
+  } replay_frame{replay ? &en : nullptr};
   en.lists_update();
-  if (replay) en.replay_after_lists();  // real time back; the replay's time, puppets and camera
+  if (replay) en.replay_after_lists();  // update the replay time, puppets and camera
   en.sound_update(0, 1);
   const Handle view = en.player_view();
   const Handle target = en.field32(view, 0x64);

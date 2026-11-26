@@ -1,3 +1,4 @@
+#include "gamez/zmodel/gmod_fog.h"
 #include "frontend/sdl/sdl_platform.h"
 #include "gamez/zclass/visual_distance.h"
 #include "upgrades/game_boxes.h"
@@ -25,6 +26,15 @@
 
 namespace sdlfe {
 
+bool SdlWindow::open_benchmark(int width, int height, bool fullscreen) {
+  fullscreen_ = fullscreen;
+  window_ = SDL_CreateWindow("MechWarrior 3 - Loading benchmark", width, height,
+                             SDL_WINDOW_HIDDEN | SDL_WINDOW_VULKAN);
+  if (!window_) return false;
+  show();
+  return true;
+}
+
 bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend backend,
                      const CoreCriticalQuality& quality, const CoreCriticalAssets& assets) {
   if (backend == RendererBackend::sdl && quality.draw_distance != 800)
@@ -32,6 +42,7 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
                         "mw3: --cc-draw-distance requires a Core Critical Vulkan backend\n"),
            false;
   zcls::set_visual_far_request(quality.draw_distance);
+  zmod::set_render_fog_distance(quality.fog_distance);
   if (backend == RendererBackend::sdl &&
       (quality.antialiasing != "off" || quality.anisotropy != "1" || !assets.empty()))
     return std::fprintf(stderr, "mw3: Core Critical quality requires a Core Critical Vulkan backend\n"), false;
@@ -41,7 +52,7 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
     if (adopt) return std::fprintf(stderr, "mw3: Core Critical Vulkan requires its own window\n"), false;
     auto flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;
     if (backend == RendererBackend::core_critical_wsi) flags |= SDL_WINDOW_VULKAN;
-    window_ = SDL_CreateWindow("MechWarrior 3", 1280, 960, flags);
+    if (!window_) window_ = SDL_CreateWindow("MechWarrior 3", 1280, 960, flags);
     if (!window_) return std::fprintf(stderr, "mw3: SDL_CreateWindow: %s\n", SDL_GetError()), false;
     try {
       render_ = cc_mw3_re::make_renderer(window_, backend, quality, assets);

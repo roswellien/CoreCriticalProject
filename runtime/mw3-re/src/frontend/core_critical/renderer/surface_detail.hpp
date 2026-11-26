@@ -22,7 +22,9 @@ inline bool enabled(unsigned role, const Settings &detail_settings) {
 }
 inline double
 presentation_time(std::uint64_t frame,
-                  std::optional<double> fixed_time = std::nullopt) {
+                  std::optional<double> fixed_time = std::nullopt,
+                  std::optional<double> replay_time = std::nullopt) {
+  if (replay_time) return *replay_time;
   // Call this from one presentation thread. Cache one steady-clock
   // sample per supplied frame number so every draw in that frame shares phase.
   // The optional fixed time is also sampled once; neither path advances or
