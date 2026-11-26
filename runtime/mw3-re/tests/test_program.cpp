@@ -26336,6 +26336,7 @@ struct DistinctImageHost : BoxHost {
 struct PageBackdrop {
   const zimg::Texture* backdrop = nullptr;
   const zimg::Texture* source = nullptr;
+  bool baked = false;  // FastMenu baked the page into one still picture, hiding the live source (#552)
 };
 
 struct OptionsPlace {
@@ -26358,9 +26359,12 @@ struct OptionsPlace {
 // images (DistinctImageHost) and walks every page and back to the mission,
 // recording each page's backdrop and the menu background source. With
 // `quit_on_gfx` it stops on Graphics & Audio instead and tears the engine down
-// with that page still on top.
+// with that page still on top. `fast_menu` runs with FastMenu (-seasick), which
+// bakes each page unless the screen reports the HD menu background ready
+// (`hd_ready`, #552).
 OptionsPlace c1m1_options_place(int32_t mode, bool keep_wide_menus = false, const char* menu_wide_env = nullptr,
-                                bool walk_all_pages = false, bool quit_on_gfx = false) {
+                                bool walk_all_pages = false, bool quit_on_gfx = false, bool fast_menu = false,
+                                bool hd_ready = false) {
   OptionsPlace out;
   ScopedMenuWideEnv wide_env(menu_wide_env);
   const zfix::Options saved_fix = zfix::options();
@@ -26411,7 +26415,11 @@ OptionsPlace c1m1_options_place(int32_t mode, bool keep_wide_menus = false, cons
   FakeWindow window;
   FakeAlert alert;
   FakeClock clock;
-  FakeScreen screen;
+  struct HdScreen : FakeScreen {
+    bool hd_ready = false;
+    bool hd_menu_background_ready() const override { return hd_ready; }
+  } screen;
+  screen.hd_ready = hd_ready;
   platform::SilentSoundOutput sound;
   mech3::MountFiles files;
   mech3::Platform p;
@@ -26419,7 +26427,7 @@ OptionsPlace c1m1_options_place(int32_t mode, bool keep_wide_menus = false, cons
   p.input = &keys;
   if (keep_wide_menus) p.settings = &settings;
   {
-    mech3::GameEngine engine(p, "mech3.exe -nofmv");
+    mech3::GameEngine engine(p, fast_menu ? "mech3.exe -nofmv -seasick" : "mech3.exe -nofmv");
     engine.quiet = true;
     BoxHost plain_host;
     DistinctImageHost image_host;
@@ -26440,7 +26448,8 @@ OptionsPlace c1m1_options_place(int32_t mode, bool keep_wide_menus = false, cons
       o[0] = r->left, o[1] = r->top, o[2] = r->right, o[3] = r->bottom;
     };
     auto backdrop_of = [](mech3::MenuScreen* s) {
-      return PageBackdrop{s->background.image, zrndr::menu_background_source()};
+      const bool baked = !s->background.owner;  // the bake takes the live background off the page
+      return PageBackdrop{s->background.image, zrndr::menu_background_source(), baked};
     };
     engine.on_present = [&](int) {
       zgame::State* now = app.current();
@@ -26826,6 +26835,28 @@ TEST(mission_c1m1_options_quit_on_a_page_clears_the_background_source_headless) 
               static_cast<const void*>(v.source_after_teardown));
   EXPECT(gfx_was_the_source);
   EXPECT(v.source_after_teardown == nullptr);
+}
+
+// Ours (issue 519 with #552): with FastMenu on and the HD menu background
+// ready, the in-mission option pages aren't baked, so each stays live with its
+// own backdrop registered as the source; with HD not ready they keep the
+// original bake.
+TEST(mission_c1m1_options_fast_menu_keep_the_hd_background_headless) {
+  if (!have_game()) return;
+  const OptionsPlace hd = c1m1_options_place(13, true, nullptr, true, false, true, true);
+  const OptionsPlace baked = c1m1_options_place(13, true, nullptr, true, false, true, false);
+  auto live_own = [](const PageBackdrop& page) {
+    return page.backdrop && page.source == page.backdrop && !page.baked;
+  };
+  std::printf("fast menu, hd ready: game %d, gfx %d, game %d, controls %d, game %d; resumed %d; "
+              "hd not ready baked: game %d, gfx %d\n",
+              live_own(hd.game), live_own(hd.gfx), live_own(hd.game_after_gfx), live_own(hd.controls),
+              live_own(hd.game_after_controls), hd.resumed, baked.game.baked, baked.gfx.baked);
+  EXPECT(live_own(hd.game) && live_own(hd.gfx) && live_own(hd.controls));
+  EXPECT(live_own(hd.game_after_gfx) && live_own(hd.game_after_controls));
+  EXPECT(hd.resumed && hd.source_after_resume == nullptr && hd.source_after_teardown == nullptr);
+  // Controls keeps its background in the list when baked (as Mech3.exe does), so only these two show it.
+  EXPECT(baked.game.baked && baked.gfx.baked);
 }
 
 // Ours (16:9 menus, wide_menus with any_resolution; resolution.md): at mode
