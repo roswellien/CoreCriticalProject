@@ -2,6 +2,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Text;
 using System.Runtime.InteropServices;
@@ -14,6 +15,11 @@ public sealed record PackInstallProgress(string Stage, long CompletedBytes, long
     public double Percent => TotalBytes > 0
         ? Math.Min(IsComplete ? 100 : 99, 100.0 * CompletedBytes / TotalBytes) : 0;
 }
+
+/// <summary>The verified catalog identity expected for an installed-pack update.</summary>
+public sealed record PackUpdateExpectation(string Id, string Version,
+    IReadOnlyList<string>? InstalledManifestSha256s = null, ReleaseArtifact? Archive = null,
+    JsonObject? NativeRuntime = null);
 
 /// <summary>Bounded pack extraction. Content is verified before replacing an owned installation.</summary>
 public static class PackStorage
@@ -171,8 +177,83 @@ public static class PackStorage
         }
     }
 
+    internal static Version ParseOnlineVersion(string? value)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length > 48 || !Regex.IsMatch(value, @"\A[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?\z") ||
+            !Version.TryParse(value, out var parsed))
+        {
+            throw new InvalidDataException("Invalid numeric asset pack version.");
+        }
+        return new Version(parsed.Major, parsed.Minor, parsed.Build, Math.Max(0, parsed.Revision));
+    }
+
+    private static void RequireOnlineUpgrade(string root, string gameId, PackManifest incoming,
+        PackUpdateExpectation expected)
+    {
+        var id = ValidateId(expected.Id);
+        if (incoming.SchemaVersion != 2 || incoming.Id != id ||
+            ParseOnlineVersion(incoming.Version) != ParseOnlineVersion(expected.Version))
+        {
+            throw new InvalidDataException("Asset pack archive does not match the signed update identity.");
+        }
+
+        var installedPath = Resolve(root, id + "/pack.json");
+        if (!File.Exists(installedPath))
+        {
+            throw new InvalidDataException("The asset pack is no longer installed.");
+        }
+        var installed = ReadManifest(installedPath);
+        GameCatalog.RequirePackTarget(installed.GameId, gameId);
+        if (installed.Id != id)
+        {
+            throw new InvalidDataException("Installed asset pack has a different identity.");
+        }
+        if (expected.InstalledManifestSha256s != null)
+        {
+            using var stream = File.OpenRead(installedPath);
+            var installedHash = Convert.ToHexString(SHA256.HashData(stream));
+            if (!expected.InstalledManifestSha256s.Contains(installedHash, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("Installed asset pack does not match the signed update lineage.");
+            }
+        }
+        if (ParseOnlineVersion(incoming.Version) <= ParseOnlineVersion(installed.Version))
+        {
+            throw new InvalidDataException("The asset pack update is not newer than the installed version.");
+        }
+        if (expected.NativeRuntime is { } native && incoming.NativePayload is { } payload)
+        {
+            RuntimeContentCapabilities.Require(native, payload, id);
+            if (payload.Profile == "prepared-native-v1")
+            {
+                var formats = new HashSet<string>(StringComparer.Ordinal) { "BWTEX1" };
+                if (RuntimeContentCapabilities.Advertised(native)["surface-materials"] is JsonArray versions &&
+                    versions.Any(item => item!.GetValue<int>() == 1))
+                {
+                    formats.Add("BWSFM1");
+                }
+                AddRuntimeFormats("mesh_payload_versions", "BWMESH");
+                AddRuntimeFormats("normal_map_formats", "BWNRM");
+                if (!payload.RequiredFormats.All(formats.Contains))
+                {
+                    throw new InvalidDataException("The selected runtime does not support the asset pack's mesh or material formats.");
+                }
+
+                void AddRuntimeFormats(string field, string prefix)
+                {
+                    if (native[field] is not JsonArray versions) return;
+                    foreach (var version in versions)
+                    {
+                        if (version is JsonValue value && value.TryGetValue<int>(out var number))
+                            formats.Add(prefix + number.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    }
+                }
+            }
+        }
+    }
+
     public static PackManifest Install(string root, string archivePath, string gameId = GameCatalog.Mw3,
-        IProgress<PackInstallProgress>? progress = null)
+        IProgress<PackInstallProgress>? progress = null, PackUpdateExpectation? expectation = null)
     {
         root = Path.GetFullPath(root);
         EnsureNoLinks(root);
@@ -184,13 +265,27 @@ public static class PackStorage
         try
         {
             progress?.Report(new("Checking archive", 0, 0));
-            using var archive = ZipFile.OpenRead(archivePath);
+            using var source = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (expectation?.Archive is { } artifact)
+            {
+                if (source.Length != artifact.Bytes ||
+                    !Convert.ToHexString(SHA256.HashData(source)).Equals(artifact.Sha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("Asset pack archive does not match the signed update download.");
+                }
+                source.Position = 0;
+            }
+            using var archive = new ZipArchive(source, ZipArchiveMode.Read);
             if (archive.Entries.Count > 10000) throw new InvalidDataException("Too many pack members.");
             var manifestEntry = archive.GetEntry("pack.json") ?? throw new InvalidDataException("pack.json must be at the archive root.");
             if (manifestEntry.Length > MaxJsonBytes) throw new InvalidDataException("Pack manifest is too large.");
             ExtractBounded(manifestEntry, Path.Combine(stage, "pack.json"));
             var manifest = ReadManifest(Path.Combine(stage, "pack.json"));
             GameCatalog.RequirePackTarget(manifest.GameId, gameId, archivePath);
+            if (expectation != null)
+            {
+                RequireOnlineUpgrade(root, gameId, manifest, expectation);
+            }
             long expandedBytes = 0;
             foreach (var member in archive.Entries.Where(e => !e.FullName.EndsWith('/')))
                 expandedBytes = checked(expandedBytes + member.Length);

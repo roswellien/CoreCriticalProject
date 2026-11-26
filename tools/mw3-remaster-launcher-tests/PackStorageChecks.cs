@@ -19,7 +19,7 @@ static class PackStorageChecks
         {
             var manager = new PackManager(root);
             var archive = Path.Combine(root, "authored.mw3pack");
-            void Build(string id = "test.mech", string member = "payload/mesh.bin", bool corrupt = false, int schema = 2)
+            void Build(string id = "test.mech", string member = "payload/mesh.bin", bool corrupt = false, int schema = 2, string version = "1.0.0")
             {
                 var content = Encoding.UTF8.GetBytes("authored mesh");
                 var registry = Encoding.UTF8.GetBytes("""{"schema_version":2,"payload_profile":"prepared-native-v1","models":[{"environment":{"MW34_ORION_MESH":"payload/mesh.bin"}}]}""");
@@ -28,7 +28,7 @@ static class PackStorageChecks
                     files[name] = new { bytes = bytes.Length, sha256 = corrupt && name == member ? new string('0', 64) : Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant() };
                 using var zip = ZipFile.Open(archive, ZipArchiveMode.Create);
                 void Write(string name, byte[] bytes) { using var stream = zip.CreateEntry(name).Open(); stream.Write(bytes); }
-                Write("pack.json", JsonSerializer.SerializeToUtf8Bytes(new { schema_version = schema, id, name = "Authored fixture", native_payload = new { profile = "prepared-native-v1", registry = "models/models.json", path_base = "pack-root" }, files }));
+                Write("pack.json", JsonSerializer.SerializeToUtf8Bytes(new { schema_version = schema, id, version, name = "Authored fixture", native_payload = new { profile = "prepared-native-v1", registry = "models/models.json", path_base = "pack-root" }, files }));
                 Write(member, content);
                 Write("models/models.json", registry);
             }
@@ -111,7 +111,39 @@ static class PackStorageChecks
             Directory.Move(installed.DirectoryPath, Path.Combine(manager.ModsRoot, ".rollback-test.mech"));
             manager.RefreshPacks(new() { "test.mech" });
             if (manager.GetActivePackDirectories().Count != 1) throw new Exception("Interrupted update not recovered");
-            Console.WriteLine("Pack install, rejection, preservation, disable, uninstall and recovery checks passed.");
+            File.Delete(archive);
+            Build(version: "1.1.0");
+            Reject(() => PackStorage.Install(manager.ModsRoot, archive,
+                expectation: new("test.other", "1.1.0")));
+            Reject(() => PackStorage.Install(manager.ModsRoot, archive,
+                expectation: new("test.mech", "1.2.0")));
+            PackStorage.Install(manager.ModsRoot, archive, expectation: new("test.mech", "1.1.0"));
+            manager.RefreshPacks(new() { "test.mech" });
+            if (manager.Packs.Single().Version != "1.1.0" || manager.GetActivePackIds().Single() != "test.mech" ||
+                PackStorage.ReadManifest(Path.Combine(manager.ModsRoot, ".rollback-test.mech", "pack.json")).Version != "1.0.0")
+            {
+                throw new Exception("Online upgrade did not preserve one selected pack and a rollback.");
+            }
+            Reject(() => PackStorage.Install(manager.ModsRoot, archive,
+                expectation: new("test.mech", "1.1.0.0")));
+            File.Delete(archive);
+            Build(version: "1.0.0");
+            Reject(() => PackStorage.Install(manager.ModsRoot, archive,
+                expectation: new("test.mech", "1.0.0")));
+            File.Delete(archive);
+            Build(version: "1.2");
+            Reject(() => PackStorage.Install(manager.ModsRoot, archive,
+                expectation: new("test.mech", "1.2.0")));
+            File.Delete(archive);
+            Build(id: "test.uninstalled", version: "1.1.0");
+            Reject(() => PackStorage.Install(manager.ModsRoot, archive,
+                expectation: new("test.uninstalled", "1.1.0")));
+            manager.RefreshPacks(new() { "test.mech" });
+            if (manager.Packs.Single().Version != "1.1.0")
+            {
+                throw new Exception("A rejected online upgrade changed the installed version.");
+            }
+            Console.WriteLine("Pack install, online upgrade, rejection, preservation, disable, uninstall and recovery checks passed.");
         }
         finally { PackStorage.DeleteOwnedTree(root); }
     }

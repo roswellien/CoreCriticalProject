@@ -356,6 +356,13 @@
                                 <ComboBox x:Name="CmbPackGame" DisplayMemberPath="DisplayName" SelectedValuePath="Id" SelectionChanged="PackGame_SelectionChanged" MinWidth="250" MaxWidth="400" HorizontalAlignment="Left" AutomationProperties.Name="Game for content packs" />
                                 <Button x:Name="BtnWatchCinematics" Content="Watch installed cinematics…" Style="{StaticResource SecondaryButton}" FontSize="12" Padding="10,4" Click="WatchCinematics_Click" HorizontalAlignment="Left" Margin="0,6,0,0" />
                                 <TextBlock x:Name="TxtEnvironmentMigration" Text="Your previous environment content remains active until you install an environment pack." TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource BrushAmber}" Margin="0,4,12,0" MaxWidth="480" />
+                                <StackPanel x:Name="AssetPackUpdateControls" Visibility="Collapsed" Margin="0,8,0,0">
+                                    <CheckBox x:Name="ChkAutomaticAssetPackChecks" Content="Automatically check installed packs for updates"
+                                              Foreground="{StaticResource BrushInk}" Checked="AutomaticAssetPackChecks_Changed" Unchecked="AutomaticAssetPackChecks_Changed" />
+                                    <Button x:Name="BtnCheckAssetPackUpdates" Content="Check for pack updates…" Style="{StaticResource SecondaryButton}"
+                                            Click="CheckAssetPackUpdates_Click" HorizontalAlignment="Left" Margin="0,6,0,0" />
+                                    <TextBlock x:Name="TxtAssetUpdateAvailability" Foreground="{StaticResource BrushAmber}" TextWrapping="Wrap" />
+                                </StackPanel>
                                 <TextBlock x:Name="TxtPackLibraryStatus" Text="MechWarrior 3 packs. Install .mw3pack files or drag them into this window." TextWrapping="Wrap" MaxWidth="410" HorizontalAlignment="Left" FontSize="12" Foreground="{StaticResource BrushMuted}" Margin="0,8,12,0" />
                             </StackPanel>
 

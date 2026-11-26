@@ -74,3 +74,36 @@ Fixture checks: `dotnet run --project tools/mw3-remaster-launcher-tests/Launcher
  -c Release -- --online-updates-only` and `node --test tools/update-service/worker.test.mjs`.
 Real release checks and scope are recorded in
 [the 1.0.38 release record](../../docs/archive/playtest-release-1.0.38-2026-10-25.md).
+
+## Installed asset pack update checks
+
+The launcher can be configured with a separate `asset-pack-updates.json`
+using the same installed HTTPS origin and channel settings as the core
+updater. The channel serves an RSA-PSS signed
+`corecritical-asset-pack-catalog-v1` envelope signed with an installed trusted
+key. Its signed payload includes `schema_version: 1`, `channel`, `sequence`,
+`issued_utc`, `expires_utc`, and a `packs` list. Each entry declares:
+
+- `id`, `game_id`, `version`, and `minimum_runtime_version`
+- `archive` with `url`, `filename`, `bytes`, and `sha256`
+- `installed_manifest_sha256s` with the exact `pack.json` digests of eligible
+  published predecessor archives
+
+Publish metadata reachable by the opted-in launcher, and keep the archives on
+the protected playtest origin. An archive URL's origin must be approved in the
+asset configuration. Increment the catalog sequence for every new publication.
+Keep the stable manifest ID across releases and use a newer numeric version.
+The pack download opens in the player's browser so playtest sign-in remains in
+the browser. The launcher then checks the explicitly selected archive against
+the signed hash and rechecks the predecessor, version and runtime before
+activation. Only eligible installed packs are offered. An update preserves
+enablement and priority, retains one rollback version and refuses activation
+while a game holds its launch lease.
+
+The option is off by default and appears in the MechWarrior 3 pack library
+when the asset configuration is installed. It applies to the versioned
+managed runtime layout. A runtime with a separate engine layout and no
+reported managed runtime version is skipped. The current public runtime feed
+configuration and runtime archive size limit are unchanged. Run
+`LauncherChecks --asset-pack-updates-only` for signed discovery and an
+end-to-end in-place fixture upgrade with authored pack data.

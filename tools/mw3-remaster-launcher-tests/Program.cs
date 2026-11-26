@@ -14,6 +14,8 @@ if(args.Length==4 && args[0]=="--add-steam-shortcut")
     Console.WriteLine("Steam shortcut verified and installed for the selected local profile.");return;
 }
 
+if (args.Length == 1 && args[0] == "--asset-pack-updates-only") { await AssetPackUpdateChecks.Run(); return; }
+
 if(args.Length==1 && args[0]=="--online-updates-only") { OnlineUpdateChecks.Run(); await UpdateDownloadChecks.Run(); return; }
 if(args.Length==1 && args[0]=="--playtest-support-only")
 {

@@ -122,6 +122,7 @@ namespace MW3RemasterLauncher
                 string.IsNullOrWhiteSpace(_settingsMgr.Current.GamePath) || !_settingsMgr.Current.InitialSetupCompleted)
                 ShowGameSetup();
             StartUpdateNotifications();
+            InitializeAssetPackUpdates();
         }
 
         private void InitializeGamePath()
@@ -230,6 +231,8 @@ namespace MW3RemasterLauncher
             ListPacks.ItemsSource = view;
             ListPacks.IsHitTestVisible = ListPacks.Focusable = game.Playable;
             BtnWatchCinematics.IsEnabled = game.Playable;
+            AssetPackUpdateControls.Visibility = game.Id == GameCatalog.Mw3 &&
+                AssetPackUpdateService.IsConfigured(_basePath) ? Visibility.Visible : Visibility.Collapsed;
             BtnInstallPack.IsEnabled = BtnInspectConflicts.IsEnabled = game.Playable && !_nativeSessionActive && !_assetInstallActive;
             TxtEnvironmentMigration.Visibility = Visibility.Collapsed;
             TxtPackEmpty.Text = game.Playable ? "No packs installed for MechWarrior 3. Choose Install New Pack to add one."
