@@ -33,6 +33,7 @@ public partial class GraphicsPreferencesPanel : UserControl
             ChkWaterDetail.IsChecked = settings.WaterDetail;
             ChkCloudDetail.IsChecked = settings.CloudDetail;
             ChkLoadCache.IsChecked = settings.LoadCache;
+            ChkVsync.IsChecked = settings.Vsync;
         }
         finally { _loading = false; }
     }
@@ -46,7 +47,8 @@ public partial class GraphicsPreferencesPanel : UserControl
             int.Parse(Value(ComboAF)), int.Parse(Value(ComboDrawDist)),
             ChkDynamicLighting.IsChecked == true, ChkShadows.IsChecked == true,
             ChkHeadlights.IsChecked == true, ChkWaterDetail.IsChecked == true,
-            ChkCloudDetail.IsChecked == true, Value(ComboFlareStyle), ChkLoadCache.IsChecked == true);
+            ChkCloudDetail.IsChecked == true, Value(ComboFlareStyle), ChkLoadCache.IsChecked == true,
+            ChkVsync.IsChecked == true);
         result.Validate();
         return result;
     }

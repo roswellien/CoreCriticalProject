@@ -59,6 +59,12 @@ static class GraphicsSetupUiChecks
         try
         {
             panel.Load(new LauncherSettings { DynamicLighting = true, Headlights = true });
+            var vsync = (CheckBox)panel.FindName("ChkVsync");
+            Check(vsync.IsChecked == false && !panel.Read().Vsync, "VSync must default off in Display.");
+            vsync.IsChecked = true;
+            Check(panel.Read().Vsync, "VSync checkbox did not reach graphics preferences.");
+            panel.Load(new LauncherSettings { DynamicLighting = true, Headlights = true, Vsync = true });
+            Check(vsync.IsChecked == true, "Saved VSync choice did not load in Display.");
             var master = (CheckBox)panel.FindName("ChkHeadlights");
             var dynamicLighting = (CheckBox)panel.FindName("ChkDynamicLighting");
             Check(master.IsEnabled && master.IsChecked == true && panel.Read().Headlights,

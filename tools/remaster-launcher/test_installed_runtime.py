@@ -36,7 +36,7 @@ class InstalledPreparationTests(unittest.TestCase):
             producer._pins([], generated), "a" * 40, "fixture", "build"))
         self.assertEqual(descriptor["files"]["resources/stock-headlights.bin"], pin)
         self.assertIn("resources/stock-headlights.bin", descriptor["dependencies"])
-        self.assertEqual(descriptor["capabilities"], {"controller-profile": [1], "input-bindings": [1]})
+        self.assertEqual(descriptor["capabilities"], {"controller-profile": [1], "input-bindings": [1], "vsync": [1]})
 
     def test_source_capabilities_omit_input_bindings_for_older_sources(self):
         import stage_mw3_re_runtime as producer
@@ -66,6 +66,15 @@ class InstalledPreparationTests(unittest.TestCase):
             # Header, CLI token and V2 magic without the SdlInput startup call stay controller-only.
             self.assertEqual(producer._source_capabilities(capable_source), (("controller-profile", (1,)),))
             main_source.write_text("--cc-input\ninput.set_input_bindings(a.input_bindings, &count);\n", encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(capable_source), (("controller-profile", (1,)), ("input-bindings", (1,))))
+            # VSync requires both CLI parser assignment in main and bridge wiring in frame_renderer.cpp.
+            main_source.write_text("--cc-input\ninput.set_input_bindings(a.input_bindings, &count);\n--cc-vsync\n", encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(capable_source), (("controller-profile", (1,)), ("input-bindings", (1,))))
+            main_source.write_text("--cc-input\ninput.set_input_bindings(a.input_bindings, &count);\n--cc-vsync\na.cc_assets.vsync =\n", encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(capable_source), (("controller-profile", (1,)), ("input-bindings", (1,))))
+            core_critical = capable_source / "runtime/mw3-re/src/frontend/core_critical"
+            core_critical.mkdir(parents=True)
+            (core_critical / "frame_renderer.cpp").write_text("config.vsync = assets.vsync;\n", encoding="utf-8")
             self.assertEqual(producer._source_capabilities(capable_source), producer._DEFAULT_CAPABILITIES)
 
     def test_sdl3_sound_recipe_pins_version_and_enables_selected_sdk(self):

@@ -1152,6 +1152,7 @@ namespace MW3RemasterLauncher
                 InstantReplay = settings.InstantReplay,
                 PerformanceMonitor = settings.PerformanceMonitor,
                 RenderThread = settings.RenderThread,
+                Vsync = settings.Vsync,
                 D7VkResolution = settings.D7VkResolution,
                 D7VkAntiAliasing = settings.D7VkAntiAliasing,
                 D7VkAnisotropicFiltering = settings.D7VkAnisotropicFiltering,

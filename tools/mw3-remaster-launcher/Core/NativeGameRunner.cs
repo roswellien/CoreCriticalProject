@@ -208,6 +208,7 @@ public sealed class NativeGameRunner
             AnisotropicFiltering = settings.AnisotropicFiltering,
             WindowMode = WindowModeForSettings(settings.WindowMode),
             RenderThread = settings.RenderThread,
+            Vsync = settings.Vsync,
             Lighting = Mw3ReLighting.Normal,
             FlareStyle = settings.FlareStyle switch
             {

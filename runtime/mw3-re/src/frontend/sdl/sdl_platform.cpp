@@ -78,6 +78,17 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
     std::printf("mw3 benchmark: backend=%s adapter=%s present=immediate\n",
                 SDL_GetGPUDeviceDriver(device_),
                 SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device_), SDL_PROP_GPU_DEVICE_NAME_STRING, "unknown"));
+  } else if (!hidden_ && assets.vsync_explicit && !assets.vsync) {
+    SDL_GPUPresentMode mode = SDL_GPU_PRESENTMODE_VSYNC;
+    if (SDL_WindowSupportsGPUPresentMode(device_, window_, SDL_GPU_PRESENTMODE_IMMEDIATE)) {
+      mode = SDL_GPU_PRESENTMODE_IMMEDIATE;
+    } else if (SDL_WindowSupportsGPUPresentMode(device_, window_, SDL_GPU_PRESENTMODE_MAILBOX)) {
+      mode = SDL_GPU_PRESENTMODE_MAILBOX;
+    }
+    if (!SDL_SetGPUSwapchainParameters(device_, window_, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode)) {
+      std::fprintf(stderr, "mw3: SDL_SetGPUSwapchainParameters: %s\n", SDL_GetError());
+      return false;
+    }
   }
   render_ = std::make_unique<SdlRender3D>(device_, window_);
   render_->set_shape(&shape_);
