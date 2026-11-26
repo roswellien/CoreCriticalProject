@@ -12,6 +12,8 @@ struct Mech;
 
 namespace arena_counts {
 
+void set_death_anim_toggle(bool right);
+
 // From begin() to end(): every shot fired and hit taken by an arena mech,
 // counted per side through the weapon and damage calls the game makes.
 void begin();

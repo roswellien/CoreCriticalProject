@@ -74,15 +74,19 @@ ArenaRunResult arena_headless_run(const std::string& json, int max_core_frames,
   mech3::missions() = mech3::Missions{};
   mech3::mech_types_forget();
   mech3::player_controls_instance() = nullptr;
+  // Ensure slow deaths start with a new-process collapse direction.
+  arena_counts::set_death_anim_toggle(false);
   mech3::options() = mech3::Options{};
   FakeWindow window;
   FakeAlert alert;
   FakeClock clock;
+  // Use a local MovieClock to ensure consistent Intro loop ticks across runs
+  MovieClock movie_clock;
   FakeScreen screen;
   platform::SilentSoundOutput sound;
   mech3::MountFiles files;
   mech3::Platform p;
-  p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
+  p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &movie_clock, p.screen = &screen, p.sound = &sound, p.files = &files;
   znet::Hub hub;
   EXPECT(mech3::arena::arena_open_session(hub) != nullptr);
   // A fresh log each run (the arena never writes over one).
@@ -560,7 +564,6 @@ TEST(replay_puppet_follows_a_live_mech_headless) {
   if (!have_game()) return;
   const std::string json = R"({"map": "c1mp1", "minutes": 3, "out": "arena-out", "sides": [[)" +
                            arena_bot_json("madcat") + "], [" + arena_bot_json("madcat") + "]]}";
-  arena_headless_run(json, 60, [](int) {});  // the warm-up (#302)
   constexpr int kFrames = 1200;
   replay_game::PuppetProbe probe;
   arena_headless_run(json, kFrames, [&](int frame) { probe.frame(frame, kFrames - 1); });
@@ -584,7 +587,6 @@ TEST(replay_frame_branch_simulates_nothing_headless) {
   if (!have_game()) return;
   const std::string json = R"({"map": "c1mp1", "minutes": 3, "out": "arena-out", "sides": [[)" +
                            arena_bot_json("madcat") + "], [" + arena_bot_json("madcat") + "]]}";
-  arena_headless_run(json, 60, [](int) {});  // the warm-up (#302)
   replay_game::FrameProbe probe(200, 60);
   arena_headless_run(json, 300, [&](int frame) { probe.frame(frame); });
   const replay_game::FrameResults& r = probe.results();
@@ -611,13 +613,12 @@ TEST(arena_log_detail_c1mp1_4v4_headless) {
       R"({"map": "c1mp1", "minutes": 3, "out": "arena-out", "sides": [[)" + side + "], [" + side + "]]}";
   const int ninety_seconds = 90 * 1000 / 16;  // the fake clock's 16 ms frames
   // Each run empties the temp log folder, so each log is read before the next run.
-  // A warm-up match first: after other tests, something they leave behind
-  // changes the first match in the process (mw3 itself plays one per process;
-  // issue #302).
-  arena_headless_run(json, ninety_seconds, [](int) {});
+  arena_counts::set_death_anim_toggle(false);
   const auto run_on = arena_headless_run(json, ninety_seconds, [](int) {});
   const std::string bytes_on = file_text(run_on.log_path);
   const mech3::arena::LogRead log = mech3::arena::read_arena_log(run_on.log_path);
+  // Emulate an earlier slow death.
+  arena_counts::set_death_anim_toggle(true);
   const auto run_again = arena_headless_run(json, ninety_seconds, [](int) {});
   const std::string bytes_again = file_text(run_again.log_path);
   mech3::arena::set_arena_log_detail(false);
