@@ -79,6 +79,28 @@ int side_of(const void* mech) {
 }
 }  // namespace
 
+TEST(arena_record_every_update_setup) {
+  Setup setup;
+  std::string error;
+  EXPECT(parse_arena_setup(setup_json(), &setup, &error));
+  EXPECT(!setup.record_every_update);
+  EXPECT(parse_arena_setup(setup_json("c1mp1", "", R"(,"record_every_update":true)"), &setup, &error));
+  EXPECT(setup.record_every_update);
+  EXPECT(parse_arena_setup(setup_json("c1mp1", "", R"(,"record_every_update":false)"), &setup, &error));
+  EXPECT(!setup.record_every_update);
+  for (const char* value : {"1", "null", "\"true\""}) {
+    EXPECT(starts_with(refused(setup_json("c1mp1", "", std::string(",\"record_every_update\":") + value)),
+                       "record_every_update:"));
+  }
+  const std::string path = temp_dir("arena_recording_setup") + "/setup.json";
+  std::ofstream(path) << setup_json();
+  Flags flags;
+  flags.seed = flags.frame_ms = flags.record_every_update = true;
+  ArenaRun run;
+  EXPECT(run.read_setup(path, flags, &error));
+  EXPECT(run.setup().record_every_update);
+}
+
 namespace arena_counts {
 
 void set_death_anim_toggle(bool right) { mech3::world().death_anim_toggle = right; }
