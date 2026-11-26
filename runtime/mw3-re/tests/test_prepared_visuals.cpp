@@ -112,7 +112,8 @@ std::string build_bwsfm1(std::uint64_t mesh_hash, float height_amp, float max_di
                          std::uint32_t thick_img = mw34::materials::no_surface_image,
                          std::uint32_t tess_cap = 4U, float sss_part = 0.0f, float sss_rad = 0.0f,
                          float thick_scale = 0.0f, float roughness = 0.7f,
-                         float reflectivity = 0.04f, float metallic = 0.0f) {
+                         float reflectivity = 0.04f, float metallic = 0.0f,
+                         std::uint32_t version = 2U) {
     using namespace mw34::materials;
     const std::array<unsigned char, 16> h_pixels{
         32, 0, 0, 255, 96, 0, 0, 255, 160, 0, 0, 255, 224, 0, 0, 255,
@@ -122,7 +123,7 @@ std::string build_bwsfm1(std::uint64_t mesh_hash, float height_amp, float max_di
     };
 
     std::string out("BWSFM1\0\0", 8);
-    write_u32(out, 1U);        // version
+    write_u32(out, version);   // version
     write_u32(out, 2U);        // batch_count
     write_u32(out, 2U);        // record_count
     write_u32(out, 2U);        // image_count
@@ -195,16 +196,30 @@ std::string build_bwsfm1(std::uint64_t mesh_hash, float height_amp, float max_di
     write_u32(out, surface_role_height);
     write_u32(out, 2U);
     write_u32(out, 2U);
-    write_u64(out, normal_hash(h_pixels.data(), h_pixels.size()));
-    out.append(reinterpret_cast<const char *>(h_pixels.data()), h_pixels.size());
+    if (version == 1U) {
+        write_u64(out, normal_hash(h_pixels.data(), h_pixels.size()));
+        out.append(reinterpret_cast<const char *>(h_pixels.data()), h_pixels.size());
+    } else {
+        const std::array<unsigned char, 4> scalar{h_pixels[0], h_pixels[4], h_pixels[8],
+                                                  h_pixels[12]};
+        write_u64(out, normal_hash(scalar.data(), scalar.size()));
+        out.append(reinterpret_cast<const char *>(scalar.data()), scalar.size());
+    }
 
     // Image 1: thick_canopy
     write_str(out, "thick_canopy");
     write_u32(out, surface_role_thickness);
     write_u32(out, 2U);
     write_u32(out, 2U);
-    write_u64(out, normal_hash(t_pixels.data(), t_pixels.size()));
-    out.append(reinterpret_cast<const char *>(t_pixels.data()), t_pixels.size());
+    if (version == 1U) {
+        write_u64(out, normal_hash(t_pixels.data(), t_pixels.size()));
+        out.append(reinterpret_cast<const char *>(t_pixels.data()), t_pixels.size());
+    } else {
+        const std::array<unsigned char, 4> scalar{t_pixels[0], t_pixels[4], t_pixels[8],
+                                                  t_pixels[12]};
+        write_u64(out, normal_hash(scalar.data(), scalar.size()));
+        out.append(reinterpret_cast<const char *>(scalar.data()), scalar.size());
+    }
 
     return out;
 }
@@ -408,7 +423,37 @@ void check_surface_materials_contract() {
         require(pack.records[0]->roughness == 0.7f, "Default roughness mismatch");
         require(pack.records[0]->reflectivity == 0.04f, "Default reflectivity mismatch");
         require(pack.records[0]->metallic == 0.0f, "Default metallic mismatch");
-        require((pack.images[0].pixels[0] & 0xffU) == 32U, "Red channel scalar height mismatch");
+        require(pack.version == 2U, "Version-2 scalar sidecar was not accepted");
+        require(pack.images[0].pixels.size() == 4 && pack.images[0].pixels[0] == 32U,
+                "Grayscale scalar height mismatch");
+        std::istringstream exact(sidecar);
+        const auto bounded = read_surface_materials(exact, "bushwacker:close", mesh_hash,
+                                                    materials, sidecar.size(), 8);
+        require(bounded.images.size() == 2, "Exact file and decoded budgets rejected");
+        for (const auto limits : {std::make_pair(sidecar.size() - 1, std::size_t{8}),
+                                 std::make_pair(sidecar.size(), std::size_t{7})}) {
+            std::istringstream limited(sidecar);
+            bool rejected = false;
+            try {
+                (void)read_surface_materials(limited, "bushwacker:close", mesh_hash, materials,
+                                             limits.first, limits.second);
+            } catch (const std::runtime_error &) {
+                rejected = true;
+            }
+            require(rejected, "Sidecar exceeded its file or cumulative decoded budget");
+        }
+    }
+
+    // Existing version-1 RGBA sidecars remain readable and normalize to scalar bytes.
+    {
+        const auto sidecar = build_bwsfm1(mesh_hash, 1.0f, 1.0f, 0.5f, 0U,
+                                          no_surface_image, 4U, 0.0f, 0.0f, 0.0f,
+                                          0.7f, 0.04f, 0.0f, 1U);
+        std::istringstream iss(sidecar);
+        const auto pack = read_surface_materials(iss, "bushwacker:close", mesh_hash, materials);
+        require(pack.version == 1U && pack.images[0].pixels.size() == 4 &&
+                    pack.images[0].pixels[0] == 32U,
+                "Legacy RGBA height sidecar did not normalize to grayscale");
     }
 
     // B) Zero amplitude (0.0f) with max_displacement = 0.0f and no height image

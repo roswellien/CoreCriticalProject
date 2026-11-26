@@ -87,6 +87,7 @@ def select(metadata, host, verification=None, appearance_mode=None):
     from surface_materials import (
         CAPABILITY as SURFACE_CAPABILITY,
         FORMAT as SURFACE_FORMAT,
+        MAX_SIDECAR_BYTES,
         mesh_uv_identity_file,
         read_surface_materials_file,
         texture_batch_materials_file,
@@ -128,7 +129,8 @@ def select(metadata, host, verification=None, appearance_mode=None):
             paths.add(name.casefold())
             path = resolve(root, name)
             size, digest = pin.get('bytes'), pin.get('sha256', '')
-            if (type(size) is not int or not 0 < size <= 256 * 1024**2
+            size_limit = MAX_SIDECAR_BYTES if pin.get('format') == SURFACE_FORMAT else 256 * 1024**2
+            if (type(size) is not int or not 0 < size <= size_limit
                     or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)):
                 raise ValueError('Invalid chassis member pin')
             total += size

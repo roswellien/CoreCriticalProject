@@ -695,7 +695,7 @@ struct ProgramHudHooks : HudHooks {
   }
   const char* part_display_name(int32_t part) override {  // 0x00484d70
     return mech3::part_display_name(
-        part, [](void* c, int32_t id) { return static_cast<decltype(this)>(c)->message(id); }, this);
+        part, [](void* c, int32_t id) { return static_cast<ProgramHudHooks*>(c)->message(id); }, this);
   }
   void* saved_or_ally(Mech* m) override { return m->saved_or_ally(); }
   const char* message_arg(int32_t msg, const char* arg) override {  // 0x00575fd0

@@ -5,6 +5,9 @@
 #include <cstdio>
 #include <cstring>
 #if defined(_WIN32)
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 extern "C" __declspec(dllimport) unsigned short __stdcall RtlCaptureStackBackTrace(unsigned long, unsigned long, void**,
                                                                                    unsigned long*);
 extern "C" const char __ImageBase;  // the linker's, the image's start
@@ -112,7 +115,11 @@ void push(Mat34* buffer) {
   }
   ++g_stack.top;
   g_stack.slot[g_stack.top] = buffer;
+#if defined(_MSC_VER)
+  g_stack.pushed_by[g_stack.top] = _ReturnAddress();
+#else
   g_stack.pushed_by[g_stack.top] = __builtin_return_address(0);
+#endif
   g_stack.is_identity() = 0;
 }
 
@@ -126,7 +133,11 @@ void push_copy(Mat34* buffer) {
   ++g_stack.top;
   g_stack.identity[g_stack.top] = g_stack.identity[g_stack.top - 1];
   g_stack.slot[g_stack.top] = buffer;
+#if defined(_MSC_VER)
+  g_stack.pushed_by[g_stack.top] = _ReturnAddress();
+#else
   g_stack.pushed_by[g_stack.top] = __builtin_return_address(0);
+#endif
   *buffer = g_stack.below();
 }
 
