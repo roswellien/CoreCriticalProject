@@ -424,7 +424,7 @@ looks out of date.
 
 The Website tests workflow (`.github/workflows/website.yml`) runs `npm test`
 in `website/`, the crash report service tests, on pushes to `develop` and
-`main` and on PRs that change `website/**` or the workflow itself. A failing
+`main` and on PRs, whenever they change `website/**` or the workflow itself. A failing
 test fails the check.
 
 GitHub currently rejects branch-protection and ruleset access for this private
