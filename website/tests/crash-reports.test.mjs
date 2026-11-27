@@ -1414,6 +1414,23 @@ test("accepts a clean-exit problems log whose W line has no text", async () => {
     assert.equal(response.status, 200);
 });
 
+test("accepts a clean exit whose only problem line falls in a cut-out middle", async () => {
+    recordCreatedIssue();
+    const infoLines = (count) => "[1.000] I mw3: health t=60\n".repeat(count);
+    const response = await onRequestPost({
+        request: crashRequest({
+            exit_code: 0,
+            failure_summary: "middle warning",
+            logs: {
+                native_run: "RUN_LOG\n",
+                native_problems: `${infoLines(2000)}[9.000] W middle warning\n${infoLines(2000)}`,
+            },
+        }),
+        env: environment,
+    });
+    assert.equal(response.status, 200);
+});
+
 test("keeps the start and end of the game and problems logs in the issue", async () => {
     const created = recordCreatedIssue();
     // Over 64 KB each, so the start must also survive the intake cut.

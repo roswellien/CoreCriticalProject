@@ -537,10 +537,12 @@ function validateReport(report) {
     // A clean exit is only worth a report when the game logged problems during play;
     // without them it would be noise in the crash-report repository. The problems log
     // also holds the setup header (level I), so it must carry at least one warning or
-    // error line in the game's stamped form, "[<seconds>] W|E <text>".
+    // error line in the game's stamped form, "[<seconds>] W|E <text>". Checked on the log
+    // as sent, since the 64 KB cut above may drop the middle where that line is.
+    const sentProblems = report.logs.native_problems;
     const hasProblems =
-        typeof logs.native_problems === "string" &&
-        /^\[[0-9]{1,9}(?:\.[0-9]{1,6})?\] [WE](?: |$)/m.test(logs.native_problems);
+        typeof sentProblems === "string" &&
+        /^\[[0-9]{1,9}(?:\.[0-9]{1,6})?\] [WE](?: |$)/m.test(sentProblems);
     if (report.exit_code === 0 && !hasProblems)
         throw new Error("The crash report format is invalid.");
     const packs = Array.isArray(report.packs)
