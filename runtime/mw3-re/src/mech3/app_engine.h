@@ -40,6 +40,8 @@ struct MountFiles : platform::Files {
   bool exists(const std::string& path) override;
 };
 
+class HdMovieSource;  // hd_movie.h
+
 struct Platform {
   platform::Window* window = nullptr;
   platform::Alert* alert = nullptr;
@@ -66,6 +68,12 @@ struct Platform {
   std::function<Engine::NetReach()> network_reach;
   std::function<void(bool hosting)> network_hosting;
   std::function<void(const char* text)> copy_text;
+  // Ours (#559): `mw3 --hd-movie NAME PATH`, the movie name (lower case, as
+  // hd_movie_name gives it) to its HD MP4; empty: every movie its original.
+  std::map<std::string, std::string> hd_movies;
+  // Their decoder; empty: the platform's own (default_hd_movie_factory,
+  // hd_movie.h). Tests give a fake one.
+  std::function<std::unique_ptr<HdMovieSource>()> hd_movie_factory;
 };
 
 class ActionGame;
@@ -77,6 +85,10 @@ class MenuState;
 void wire_mission_hooks(GameEngine* e);  // mech3/mission's hooks to the ports (app_mission.cpp)
 void wire_pilot_hooks(GameEngine* e);    // the pilot module's calls out (app_menus.cpp)
 void wire_fmv(GameEngine* e);            // zFMV's host (app_fmv.cpp)
+struct HdPresentFrame;
+// Ours (#559): the playing HD movie's frame for the sound played so far and
+// the rows of it to show (app_fmv.cpp); false when none is playing or ready.
+bool hd_movie_frame(HdPresentFrame* out);
 
 // The briefing screen open ([0x005f4c80]) hears the mission load's fraction
 // (0x004050d0) and lines (0x00405120); none open, nothing (app_menus.cpp).
@@ -615,6 +627,19 @@ class GameEngine : public Engine {
   // Ours (docs/fmv.md section 8): a movie's shape measured before its first
   // frame instead of beside it (the --movie debug start's, for its shots).
   bool movie_shape_first = false;
+  // Ours (#559, docs/fmv.md section 9): an HD movie playing in place of an
+  // original. The movie host says when one starts and ends (app_fmv.cpp);
+  // while one plays its frames are shown instead of the 16-bit buffer.
+  void hd_movie_started();
+  void hd_movie_ended();
+  // The HD frame for the sound played, shown when it is newer than the last
+  // one shown; `counted` for a flip (frames_presented, on_present), not for
+  // the extra shows between the script's 15 fps flips. False when nothing
+  // could be shown (the 16-bit buffer is shown instead).
+  bool present_hd_movie(bool counted);
+  bool hd_movie_active_ = false;
+  uint64_t hd_movie_serial_shown_ = 0;
+  bool hd_movie_no_presenter_logged_ = false;
   // The Direct3D frame: zvid's lock (0x00576d00 / 0x00576d60), scene nesting
   // (0x00579af0 / 0x00579b10), the quad ([0x0072f3ec]) and the finish (0x00558610).
   // 0x0040f8d0: the message panel's slide, then the view target's HUD data update.

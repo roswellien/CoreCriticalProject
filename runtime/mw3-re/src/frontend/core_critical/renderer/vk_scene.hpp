@@ -2187,7 +2187,7 @@ private:
             u.surface_parameters = draw.surface_parameters;
             u.surface_eye = draw.surface_eye;
           }
-          height_uniform(s, draw, u);
+          height_uniform(s, draw, draw_heights[at], u);
           if (skyEyeValid) {
             const auto &e =
                 draw.sun_tl && !draw.sky ? draw.sun_tl->camera_world : skyEye;
