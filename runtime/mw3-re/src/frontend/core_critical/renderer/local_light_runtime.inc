@@ -929,7 +929,9 @@ void replay_headlights(const void *const *nodes, std::size_t count) override {
   constexpr std::uint64_t kReplayLampBase = (1ULL << 63) + (1ULL << 32);
   for (std::size_t mech = 0; mech < count; ++mech) {
     const auto *node = static_cast<const zcls::Node *>(nodes[mech]);
-    const auto *asset = node && node->source_asset_root ? node->source_asset.get() : nullptr;
+    if (!node)
+      continue;
+    const auto *asset = node->source_asset_root ? node->source_asset.get() : nullptr;
     const auto *profile = asset ? mw34::headlights::match_original(
         headlight_catalog_, asset->name, asset->member_sha256) : nullptr;
     if (!profile)

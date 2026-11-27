@@ -1069,7 +1069,9 @@ void prepare_benchmark(Args& a, std::optional<double> process_epoch) {
     if (!log.mech_alive_during(shot.mech, start + shot.start, start + shot.start + shot.duration))
       throw std::runtime_error("benchmark camera subject missing or destroyed during shot: " +
                                std::to_string(shot.mech));
-  // The scene's look, set before the mission loads (platform/render3d.h).
+  // The scene's look, set before the mission loads (platform/render3d.h). Every
+  // field is written, so a scene without one never inherits an earlier value.
+  platform::arena_lighting_mission().clear();
   if (!scene->time_of_day.empty()) {
     const char* lighting = mech3::arena::time_of_day_lighting(scene->time_of_day);
     if (!lighting) throw std::runtime_error("unknown benchmark time_of_day");
