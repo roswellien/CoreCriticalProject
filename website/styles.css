@@ -2509,3 +2509,14 @@ details p {
         margin: 10px 0 0;
     }
 }
+/* The Pirate's Moon card shows a 640x480 capture of the native PM menu. Keep the
+   menu buttons in view above the card text. */
+.family-project > img.family-project-capture {
+    object-position: center 18%;
+}
+/* MW4 has no running build yet, so its card has no picture rather than borrowed art. */
+.family-project-blank {
+    background:
+        linear-gradient(135deg, rgba(239, 163, 72, 0.08), transparent 55%),
+        #111615 url("assets/plates/surface-texture.webp") repeat;
+}
