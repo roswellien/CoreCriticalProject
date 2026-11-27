@@ -85,3 +85,27 @@ acceptance gate to make the count move. Keep failures and scopes explicit.
 End with actual code changed, executed boundary/next unsupported call, validation,
 fidelity limitations, verified accepted count and the next concrete execution
 step. Do not stop at another plan when an implementation advance is feasible.
+
+## Rules moved from AGENTS.md on 2026-11-27
+
+These rules from the October 2026 recompilation and startup-equivalence audit era
+were moved here from the opening section of `AGENTS.md`. They are a historical
+record, not current instructions: `AGENTS.md` supersedes them wherever they
+differ (MW3-RE is the shipping runtime and the recompiled runtime is retired), and
+they apply again only if the owner explicitly resumes the startup-equivalence
+audit.
+
+- Read `docs/archive/m4-claude-work-review-2026-10-11.md` before choosing
+  implementation work.
+- The execution-first strategy was authorized on 2026-10-11: preserve original
+  MW3 gameplay through recompilation, integrate modern platform services/Vulkan,
+  and advance native host -> live menu -> live Training. Do not restart as a remake.
+- Protect the existing controls composer/watcher (`build_v7.py` and its PowerShell
+  watcher for `reports/m4-controls-terminal-composite/`) and never open its active
+  SQLite database.
+- The historical post-composer/admission/review chain (for the paused 131/144
+  startup-initializer equivalence audit; see `docs/project-status-reporting.md`)
+  applies only when that audit is explicitly resumed, not to routine tasks.
+- No AFTER seeding (pre-populating expected post-execution memory pages in startup
+  equivalence harnesses instead of running the code that produces them).
+
