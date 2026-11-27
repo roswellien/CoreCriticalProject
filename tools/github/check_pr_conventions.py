@@ -62,12 +62,25 @@ def check(title: str, head: str, base: str, author: str) -> list[Finding]:
     return []
 
 
+def base_branch_error(head: str, base: str) -> Finding | None:
+    """Return the base-branch rule's error for a PR from `head` into `base`, or None.
+
+    The board check phrases this error differently from the other errors, so it
+    calls this to tell the two apart.
+    """
+    if base == "main" and head != "develop":
+        return Finding(
+            "error",
+            f"PRs into main come only from develop, not from {head!r} (docs/github-workflow.md).",
+        )
+    return None
+
+
 def _check_release(title: str, head: str) -> list[Finding]:
     findings = []
-    if head != "develop":
-        findings.append(
-            Finding("error", f"PRs into main come only from develop, not from {head!r} (docs/github-workflow.md).")
-        )
+    error = base_branch_error(head, "main")
+    if error is not None:
+        findings.append(error)
     if not title.startswith("Release "):
         findings.append(Finding("warning", f"A release PR title starts with 'Release ' ({DOCS_REFERENCE})."))
     return findings

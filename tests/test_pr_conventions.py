@@ -42,6 +42,15 @@ class BaseBranchTests(unittest.TestCase):
         findings = checker.check("Release launcher 1.0.45", "fix/x", "main", "carson-nr")
         self.assertEqual(levels(findings), ["error"])
 
+    def test_base_branch_error_helper(self):
+        # The board check uses this to tell the base-branch error apart from the others.
+        error = checker.base_branch_error("fix/x", "main")
+        self.assertIsNotNone(error)
+        self.assertEqual(error.level, "error")
+        self.assertIn("come only from develop", error.message)
+        self.assertIsNone(checker.base_branch_error("develop", "main"))
+        self.assertIsNone(checker.base_branch_error("fix/x", "develop"))
+
     def test_release_title_is_only_a_warning(self):
         findings = checker.check("Promote the workflow to main", "develop", "main", "roswellien")
         self.assertEqual(levels(findings), ["warning"])
