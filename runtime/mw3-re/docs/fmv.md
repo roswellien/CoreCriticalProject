@@ -552,7 +552,8 @@ stand-in for the AVI (`mech3/hd_movie.h`):
   (`mp4_sound_edit`).
 
 The MP4's pictures are decoded on a thread of their own, at most three
-waiting. The decoder runs in low-latency mode, which holds about 95 MB less;
+waiting, each already in the RGBA order the renderer's textures take, so
+the game's thread uploads a new one without a pass over its pixels. The decoder runs in low-latency mode, which holds about 95 MB less;
 its timestamps are wrong for B-frames there, so each picture is timed by the
 durations of those before it, from 0. Measured against ffmpeg's decode of
 INTRO, the sound matches to the sample at 5, 60, 150 and 180 s and picture

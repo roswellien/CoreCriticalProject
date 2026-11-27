@@ -27,11 +27,12 @@ struct HdMovieInfo {
   int audio_rate = 0, channels = 0;  // 0 channels: no sound
 };
 
-// One decoded picture: 32-bit BGRA, top row first, `pitch` bytes a row. The
-// shared buffer keeps a picked frame alive while the decoder goes on: a
-// buffer once handed out is never written again.
+// One decoded picture: 32-bit RGBA (the order the renderer's textures take,
+// so the game's thread uploads it as it is), top row first, `pitch` bytes a
+// row. The shared buffer keeps a picked frame alive while the decoder goes
+// on: a buffer once handed out is never written again.
 struct HdFrame {
-  std::shared_ptr<const std::vector<uint8_t>> bgra;
+  std::shared_ptr<const std::vector<uint8_t>> rgba;
   int width = 0, height = 0, pitch = 0;
   double pts = 0;       // seconds from the movie's start
   uint64_t serial = 0;  // different for every decoded frame; 0 none

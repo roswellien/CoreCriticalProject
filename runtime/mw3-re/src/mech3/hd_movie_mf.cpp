@@ -381,15 +381,22 @@ class MfHdMovieSource : public HdMovieSource {
       pitch = default_stride_;
       first_row = default_stride_ < 0 ? data + static_cast<size_t>(-default_stride_) * (height_ - 1) : data;
     }
+    // Media Foundation's RGB32 is B, G, R, then an undefined byte. The
+    // renderer's textures take R, G, B, A, so the swap and the opaque alpha
+    // are done here, on the decoder's thread, not on the game's at upload.
     for (int y = 0; y < height_; ++y) {
       const BYTE* source_row = first_row + static_cast<ptrdiff_t>(pitch) * y;
       uint8_t* row = pixels->data() + row_bytes * y;
-      std::memcpy(row, source_row, row_bytes);
-      for (size_t x = 3; x < row_bytes; x += 4) row[x] = 0xff;  // RGB32's fourth byte is undefined
+      for (size_t x = 0; x < row_bytes; x += 4) {
+        row[x + 0] = source_row[x + 2];
+        row[x + 1] = source_row[x + 1];
+        row[x + 2] = source_row[x + 0];
+        row[x + 3] = 0xff;
+      }
     }
     if (locked_2d) two_d->Unlock2D();
     else buffer->Unlock();
-    frame->bgra = std::move(pixels);
+    frame->rgba = std::move(pixels);
     frame->width = width_, frame->height = height_, frame->pitch = static_cast<int>(row_bytes);
     return true;
   }

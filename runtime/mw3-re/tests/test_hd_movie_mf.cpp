@@ -1,6 +1,7 @@
 // The Media Foundation HD movie decoder (#559, mech3/hd_movie_mf.cpp) on a
 // clip this check makes itself: 2 s of 320x240 H.264 at 24 frames a
-// second, its top half white and bottom half black, and a 440 Hz AAC tone.
+// second, its top half white and bottom half black with the bottom right
+// quarter red, and a 440 Hz AAC tone.
 // Nothing is committed or downloaded; the clip is written to the temp
 // folder and deleted. Returns 77 (CTest's skip) when this Windows can't
 // encode H.264/AAC, so a missing encoder is reported as "not run".
@@ -100,10 +101,19 @@ bool make_clip(const std::wstring& path, std::string* why) {
   if (FAILED(writer->SetInputMediaType(audio, pcm.Get(), nullptr))) return *why = "no PCM input to AAC", false;
   if (FAILED(writer->BeginWriting())) return *why = "the sink writer would not start", false;
 
-  // NV12: Y rows (white 235 above the middle, black 16 below), then grey chroma.
+  // NV12: Y rows (white 235 above the middle, black 16 below), then chroma
+  // at half size as U, V pairs: grey (128) except the bottom right quarter,
+  // which is red (U 90, V 240), so red and blue can't be swapped unseen.
   std::vector<uint8_t> picture(kWidth * kHeight * 3 / 2, 128);
   for (UINT32 y = 0; y < kHeight; ++y)
     std::memset(&picture[y * kWidth], y < kHeight / 2 ? 235 : 16, kWidth);
+  uint8_t* chroma = &picture[kWidth * kHeight];
+  for (UINT32 chroma_row = kHeight / 4; chroma_row < kHeight / 2; ++chroma_row) {
+    for (UINT32 pair = kWidth / 4; pair < kWidth / 2; ++pair) {
+      chroma[chroma_row * kWidth + pair * 2 + 0] = 90;   // U
+      chroma[chroma_row * kWidth + pair * 2 + 1] = 240;  // V
+    }
+  }
   for (UINT32 f = 0; f < kFrames; ++f)
     writer->WriteSample(video, sample_of(picture, f * kFrameTime, kFrameTime).Get());
   constexpr UINT32 kChunk = kAudioRate / 10;  // 0.1 s
@@ -133,7 +143,7 @@ void check_clip(const std::string& path) {
 
   std::set<uint64_t> serials;
   double last_pts = -1;
-  bool rising = true, top_white = true, bottom_black = true, alpha_set = true;
+  bool rising = true, top_white = true, bottom_black = true, alpha_set = true, red_first = true;
   // Ask for each frame's time in turn, as the game would, waiting up to
   // 0.5 s each for the worker to have decoded that far.
   for (UINT32 step = 0; step < kFrames; ++step) {
@@ -148,17 +158,21 @@ void check_clip(const std::string& path) {
     serials.insert(frame.serial);
     rising = rising && frame.pts > last_pts;
     last_pts = frame.pts;
-    const uint8_t* top = frame.bgra->data() + 10 * frame.pitch + 4 * 10;
-    const uint8_t* bottom = frame.bgra->data() + (kHeight - 10) * frame.pitch + 4 * 10;
-    top_white = top_white && top[1] > 200;  // green, BGRA
+    const uint8_t* top = frame.rgba->data() + 10 * frame.pitch + 4 * 10;
+    const uint8_t* bottom = frame.rgba->data() + (kHeight - 10) * frame.pitch + 4 * 10;
+    const uint8_t* red = frame.rgba->data() + (kHeight * 7 / 8) * frame.pitch + 4 * (kWidth * 7 / 8);
+    top_white = top_white && top[1] > 200;  // green
     bottom_black = bottom_black && bottom[1] < 50;
     alpha_set = alpha_set && top[3] == 255;
+    red_first = red_first && red[0] > 120 && red[2] < 60;  // R, G, B, A
+    if (serials.size() == 1) std::printf("  red quarter: %u %u %u %u\n", red[0], red[1], red[2], red[3]);
   }
   std::printf("  %zu pictures decoded, last at %.3f s\n", serials.size(), last_pts);
   expect(serials.size() >= 40 && serials.size() <= kFrames + 2, "about 48 distinct pictures");
   expect(rising, "pictures in rising time");
   expect(top_white && bottom_black, "the top row first (not upside down)");
   expect(alpha_set, "opaque pixels");
+  expect(red_first, "red in the first byte (RGBA, not BGRA)");
 
   std::vector<int16_t> sound(kAudioRate);
   size_t total = 0;

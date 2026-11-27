@@ -592,24 +592,20 @@ void SdlScreen2D::draw_layer(int width, int height, bool blend, bool sharp,
 // kept in the shape the 16-bit movies have on a wide screen (movie_frame_fit).
 // A canvas scope with an unfitted shape makes the renderer's scene the whole
 // window (FrameRenderer sizes it by fit_rect), so the quad is in window pixels.
-bool SdlScreen2D::present_frame_rgba(const uint8_t* bgra, int width, int height, int pitch, uint64_t serial,
+bool SdlScreen2D::present_frame_rgba(const uint8_t* rgba, int width, int height, int pitch, uint64_t serial,
                                      int src_top, int src_bottom) {
-  if (!render_ || !bgra || width <= 0 || height <= 0 || pitch < width * 4) return false;
+  // create_texture and update_texture take packed rows, which the decoder
+  // gives (hd_movie_mf.cpp), so the frame is uploaded as it is, uncopied.
+  const bool packed_rows = pitch == width * 4;
+  if (!render_ || !rgba || width <= 0 || height <= 0 || !packed_rows) return false;
   FloatScope float_scope;  // the renderer's calls leave the game's floating point as it was
   if (serial != movie_serial_ || movie_texture_ < 0) {
-    // create_texture takes RGBA; the decoder gives BGRA.
-    movie_rgba_.resize(static_cast<size_t>(width) * height * 4);
-    for (int y = 0; y < height; ++y) {
-      const uint8_t* in = bgra + static_cast<size_t>(y) * pitch;
-      uint8_t* out = &movie_rgba_[static_cast<size_t>(y) * width * 4];
-      for (int x = 0; x < width; ++x, in += 4, out += 4) out[0] = in[2], out[1] = in[1], out[2] = in[0], out[3] = 0xff;
-    }
     if (movie_texture_ >= 0 && (movie_texture_w_ != width || movie_texture_h_ != height)) release_frame_rgba();
     if (movie_texture_ < 0) {
-      movie_texture_ = render_->create_texture(width, height, movie_rgba_.data(), 1);
+      movie_texture_ = render_->create_texture(width, height, rgba, 1);
       movie_texture_w_ = width, movie_texture_h_ = height;
     } else {
-      render_->update_texture(movie_texture_, width, height, movie_rgba_.data());
+      render_->update_texture(movie_texture_, width, height, rgba);
     }
     if (movie_texture_ < 0) return false;
     movie_serial_ = serial;
@@ -650,8 +646,6 @@ void SdlScreen2D::release_frame_rgba() {
   movie_texture_ = -1;
   movie_texture_w_ = movie_texture_h_ = 0;
   movie_serial_ = 0;
-  movie_rgba_.clear();
-  movie_rgba_.shrink_to_fit();  // about 5 MB a 1280x960 frame, not kept after the movie
 }
 
 void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) {

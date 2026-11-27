@@ -390,7 +390,7 @@ struct StepClock : platform::Clock {
 HdFrame fake_picture(double pts, uint64_t serial) {
   HdFrame frame;
   frame.width = 1280, frame.height = 960, frame.pitch = 1280 * 4;
-  frame.bgra = std::make_shared<std::vector<uint8_t>>(static_cast<size_t>(frame.pitch) * frame.height,
+  frame.rgba = std::make_shared<std::vector<uint8_t>>(static_cast<size_t>(frame.pitch) * frame.height,
                                                        uint8_t{0x80});
   frame.pts = pts, frame.serial = serial;
   return frame;

@@ -566,11 +566,11 @@ void GameEngine::hd_movie_ended() {
 bool GameEngine::present_hd_movie(bool counted) {
   if (!hd_movie_active_ || !p_.screen) return false;
   HdPresentFrame shown;
-  if (!hd_movie_frame(&shown) || !shown.frame.bgra) return false;  // none decoded yet
+  if (!hd_movie_frame(&shown) || !shown.frame.rgba) return false;  // none decoded yet
   const HdFrame& frame = shown.frame;
   const bool already_shown = frame.serial == hd_movie_serial_shown_;
   if (!counted && already_shown) return true;
-  if (!p_.screen->present_frame_rgba(frame.bgra->data(), frame.width, frame.height, frame.pitch, frame.serial,
+  if (!p_.screen->present_frame_rgba(frame.rgba->data(), frame.width, frame.height, frame.pitch, frame.serial,
                                      shown.src_top, shown.src_bottom)) {
     if (!hd_movie_no_presenter_logged_) {
       hd_movie_no_presenter_logged_ = true;
