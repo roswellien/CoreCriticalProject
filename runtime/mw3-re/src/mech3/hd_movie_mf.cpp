@@ -4,7 +4,7 @@
 // costs a few milliseconds), and the pictures, decoded and converted to
 // 32-bit RGB on a thread of their own into a queue of at most three frames.
 // Media Foundation ignores the MP4's edit lists, so the sound's is read from
-// the file here and applied (mp4_sound_start).
+// the file here and applied (mp4_sound_edit).
 // Built on Windows only (CMakeLists.txt sets MW3_HD_MOVIE_MF); nothing here
 // is downloaded or bundled: the decoders are Windows' own, and a Windows N
 // edition without the Media Feature Pack is told so and plays the original.
@@ -26,6 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <thread>
 
 namespace mech3 {
@@ -70,14 +71,14 @@ std::wstring local_file_path(const std::string& path, std::string* reason) {
   return wide;
 }
 
-// The sound's edit-list start (hd_movie.h), read straight from the file:
-// Media Foundation's timestamps don't carry it. Zero if it can't be read.
-double read_sound_start(const std::wstring& path) {
+// The sound's edit list (hd_movie.h), read straight from the file: Media
+// Foundation's timestamps don't carry it. Zeros if it can't be read.
+Mp4SoundEdit read_sound_edit(const std::wstring& path) {
   const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                   FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) return 0;
+  if (file == INVALID_HANDLE_VALUE) return {};
   LARGE_INTEGER size{};
-  double start = 0;
+  Mp4SoundEdit edit;
   if (GetFileSizeEx(file, &size)) {
     const auto read_at = [file](uint64_t offset, void* out, size_t bytes) {
       OVERLAPPED where{};
@@ -86,10 +87,10 @@ double read_sound_start(const std::wstring& path) {
       DWORD got = 0;
       return ReadFile(file, out, static_cast<DWORD>(bytes), &got, &where) && got == bytes;
     };
-    start = mp4_sound_start(read_at, static_cast<uint64_t>(size.QuadPart));
+    edit = mp4_sound_edit(read_at, static_cast<uint64_t>(size.QuadPart));
   }
   CloseHandle(file);
-  return start;
+  return edit;
 }
 
 constexpr DWORD kFirstAudio = static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM);
@@ -124,8 +125,12 @@ class MfHdMovieSource : public HdMovieSource {
     if (!open_audio(wide, info, reason)) return false;
     if (!open_video(wide, info, reason)) return false;
     // The pack's AAC starts with 1024 priming samples (46 ms at 22050 Hz);
-    // played, they put the sound behind the picture (#569's review).
-    skip_sound_frames_ = static_cast<size_t>(std::llround(read_sound_start(wide) * info->audio_rate));
+    // played, they put the sound behind the picture (#569's review). Its
+    // last AAC frame is padded too (923 samples in INTRO), played after
+    // the clip's end.
+    const Mp4SoundEdit edit = read_sound_edit(wide);
+    skip_sound_frames_ = static_cast<size_t>(std::llround(edit.start * info->audio_rate));
+    if (edit.length > 0) sound_frames_left_ = static_cast<size_t>(std::llround(edit.length * info->audio_rate));
     PROPVARIANT duration;
     PropVariantInit(&duration);
     hr = audio_->GetPresentationAttribute(static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE), MF_PD_DURATION,
@@ -143,9 +148,11 @@ class MfHdMovieSource : public HdMovieSource {
     const size_t channels = static_cast<size_t>(channels_ > 0 ? channels_ : 1);
     size_t given = 0;
     while (given < frames) {
+      if (sound_frames_left_ == 0) break;  // the edit list's end: only padding is left
       if (leftover_at_ < leftover_.size()) {
         const size_t available = (leftover_.size() - leftover_at_) / channels;
-        const size_t take = std::min(available, frames - given);
+        const size_t take = std::min({available, frames - given, sound_frames_left_});
+        sound_frames_left_ -= take;
         std::memcpy(out + given * channels, &leftover_[leftover_at_], take * channels * sizeof(int16_t));
         leftover_at_ += take * channels;
         given += take;
@@ -401,6 +408,9 @@ class MfHdMovieSource : public HdMovieSource {
   std::vector<int16_t> leftover_;  // decoded sound not yet handed out
   size_t leftover_at_ = 0;
   size_t skip_sound_frames_ = 0;  // priming sample frames still to drop
+  // Sample frames still to hand out before the edit list's end; no limit
+  // without one.
+  size_t sound_frames_left_ = std::numeric_limits<size_t>::max();
   LONGLONG picture_clock_ = 0;    // the next picture's time, 100 ns units (worker only)
   LONGLONG frame_duration_ = 0;   // from the frame rate, for a picture without a duration
   int width_ = 0, height_ = 0;

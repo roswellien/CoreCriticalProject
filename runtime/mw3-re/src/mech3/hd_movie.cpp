@@ -140,31 +140,47 @@ bool read_mp4_box(const Mp4ReadAt& read_at, uint64_t at, uint64_t parent_end, Mp
   return true;
 }
 
-// What one 'trak' says about where its media starts.
+// The first entry of an 'elst' that isn't an empty edit (media time -1,
+// which delays the track instead of trimming it).
+struct Mp4Edit {
+  uint64_t duration = 0;  // how long it plays, in the movie's units ('mvhd')
+  int64_t media_time = 0;  // where it starts, in the track's units ('mdhd')
+};
+
+// What one 'trak' says about which part of its media plays.
 struct Mp4Track {
   char handler[5] = {};  // 'vide', 'soun', ...
   uint32_t timescale = 0;  // the media's units a second ('mdhd')
-  int64_t edit_start = 0;  // in those units ('elst'); 0 without one
+  Mp4Edit edit;  // zeros without an edit list
 };
 
-// The first entry of an 'elst' that isn't an empty edit (media time -1,
-// which delays the track instead of trimming it).
-int64_t read_edit_start(const Mp4ReadAt& read_at, const Mp4Box& elst) {
+Mp4Edit read_edit(const Mp4ReadAt& read_at, const Mp4Box& elst) {
   uint8_t head[8];
-  if (elst.end - elst.body < 8 || !read_at(elst.body, head, 8)) return 0;
+  if (elst.end - elst.body < 8 || !read_at(elst.body, head, 8)) return {};
   const bool wide = head[0] == 1;  // version 1: 64-bit duration and media time
   const uint64_t entry_size = wide ? 20 : 12;
   const uint32_t entries = big32(head + 4);
   uint64_t at = elst.body + 8;
   for (uint32_t i = 0; i < entries && i < 16 && elst.end - at >= entry_size; ++i, at += entry_size) {
     uint8_t entry[20];
-    if (!read_at(at, entry, static_cast<size_t>(entry_size))) return 0;
+    if (!read_at(at, entry, static_cast<size_t>(entry_size))) return {};
     const int64_t media_time =
         wide ? static_cast<int64_t>(big64(entry + 8)) : static_cast<int64_t>(static_cast<int32_t>(big32(entry + 4)));
     if (media_time == -1) continue;
-    return media_time > 0 ? media_time : 0;
+    Mp4Edit edit;
+    edit.duration = wide ? big64(entry) : big32(entry);
+    edit.media_time = media_time > 0 ? media_time : 0;
+    return edit;
   }
-  return 0;
+  return {};
+}
+
+// The timescale at the same place in 'mdhd' and 'mvhd': version 0 has 4
+// bytes each of created and modified before it, version 1 has 8 and 8.
+uint32_t read_timescale(const Mp4ReadAt& read_at, const Mp4Box& box) {
+  uint8_t head[24];
+  if (box.end - box.body < 24 || !read_at(box.body, head, 24)) return 0;
+  return big32(head + (head[0] == 1 ? 20 : 12));
 }
 
 // The children of a 'trak' that tell its handler, timescale and edit:
@@ -177,12 +193,9 @@ void read_track_boxes(const Mp4ReadAt& read_at, uint64_t at, uint64_t end, int d
     if (type == "edts" || type == "mdia") {
       read_track_boxes(read_at, box.body, box.end, depth + 1, track);
     } else if (type == "elst") {
-      track->edit_start = read_edit_start(read_at, box);
+      track->edit = read_edit(read_at, box);
     } else if (type == "mdhd") {
-      // version 0: 4 created, 4 modified, then the timescale; version 1: 8 and 8.
-      uint8_t head[24];
-      if (box.end - box.body >= 24 && read_at(box.body, head, 24))
-        track->timescale = big32(head + (head[0] == 1 ? 20 : 12));
+      track->timescale = read_timescale(read_at, box);
     } else if (type == "hdlr") {
       uint8_t head[12];  // version and flags, pre_defined, then the handler type
       if (box.end - box.body >= 12 && read_at(box.body, head, 12)) std::memcpy(track->handler, head + 8, 4);
@@ -193,23 +206,34 @@ void read_track_boxes(const Mp4ReadAt& read_at, uint64_t at, uint64_t end, int d
 
 }  // namespace
 
-double mp4_sound_start(const Mp4ReadAt& read_at, uint64_t file_size) {
+Mp4SoundEdit mp4_sound_edit(const Mp4ReadAt& read_at, uint64_t file_size) {
   Mp4Box top;
   for (uint64_t at = 0; read_mp4_box(read_at, at, file_size, &top); at = top.end) {
     if (std::string(top.type) != "moov") continue;
-    Mp4Box trak;
-    for (uint64_t inner = top.body; read_mp4_box(read_at, inner, top.end, &trak); inner = trak.end) {
-      if (std::string(trak.type) != "trak") continue;
-      Mp4Track track;
-      read_track_boxes(read_at, trak.body, trak.end, 0, &track);
-      const bool sound_track = std::string(track.handler) == "soun";
-      if (!sound_track) continue;
-      if (track.timescale == 0) return 0;
-      return static_cast<double>(track.edit_start) / track.timescale;
+    // The movie's timescale counts the edit's duration; 'mvhd' normally
+    // comes first, but nothing requires it, so the whole box is read.
+    uint32_t movie_timescale = 0;
+    Mp4Track sound;
+    bool sound_found = false;
+    Mp4Box child;
+    for (uint64_t inner = top.body; read_mp4_box(read_at, inner, top.end, &child); inner = child.end) {
+      const std::string type = child.type;
+      if (type == "mvhd") {
+        movie_timescale = read_timescale(read_at, child);
+      } else if (type == "trak" && !sound_found) {
+        Mp4Track track;
+        read_track_boxes(read_at, child.body, child.end, 0, &track);
+        sound_found = std::string(track.handler) == "soun";
+        if (sound_found) sound = track;
+      }
     }
-    break;  // one movie box
+    Mp4SoundEdit edit;
+    if (!sound_found || sound.timescale == 0) return edit;
+    edit.start = static_cast<double>(sound.edit.media_time) / sound.timescale;
+    if (movie_timescale > 0) edit.length = static_cast<double>(sound.edit.duration) / movie_timescale;
+    return edit;  // one movie box
   }
-  return 0;
+  return {};
 }
 
 HdMovieStandIn::HdMovieStandIn(std::string name, std::string path, HdMovieFactory factory, Log log)

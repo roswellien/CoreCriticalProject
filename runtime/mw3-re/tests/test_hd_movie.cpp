@@ -288,45 +288,70 @@ Bytes trak(const char* handler, uint32_t timescale, const Bytes& edits) {
   return mp4_box("trak", joined({mp4_box("edts", edits), media}));
 }
 
-double sound_start_of(const Bytes& file) {
+// The movie header: its timescale counts the edit lists' durations.
+// Version 0 has 4 bytes each of created and modified before it, version 1
+// has 8 and 8; the rest (duration, rate, matrix, ...) is left zero.
+Bytes mvhd(uint32_t timescale, bool version1 = false) {
+  Bytes contents{static_cast<uint8_t>(version1 ? 1 : 0), 0, 0, 0};
+  contents.resize(version1 ? 20 : 12);
+  append_big(contents, timescale, 4);
+  contents.resize(version1 ? 108 : 96);
+  return mp4_box("mvhd", contents);
+}
+
+mech3::Mp4SoundEdit sound_edit_of(const Bytes& file) {
   const auto read_at = [&file](uint64_t offset, void* out, size_t bytes) {
     if (offset > file.size() || file.size() - offset < bytes) return false;
     std::memcpy(out, file.data() + offset, bytes);
     return true;
   };
-  return mech3::mp4_sound_start(read_at, file.size());
+  return mech3::mp4_sound_edit(read_at, file.size());
 }
+
+bool close_to(double value, double expected) { return std::fabs(value - expected) < 1e-9; }
 
 }  // namespace
 
-// The pack's own layout (ffmpeg's): the movie box ahead of the media, the
-// video's edit two 24 fps frames in at a 12288 timescale (its B-frame
-// delay, not wanted here), the sound's 1024 priming samples in at 22050.
-TEST(hd_movie_mp4_edit_list_gives_the_sounds_priming) {
-  const Bytes moov = mp4_box("moov", joined({mp4_box("mvhd", Bytes(100)),
-                                             trak("vide", 12288, elst(false, {{182500, 1024}})),
+// The pack's own layout (ffmpeg's): the movie box ahead of the media at a
+// 1000 timescale, the video's edit two 24 fps frames in at 12288 (its
+// B-frame delay, not wanted here), the sound's 1024 priming samples in at
+// 22050 and 182.467 s long, so INTRO's last AAC frame's 923 padding
+// samples (4,024,320 decoded) are left out: ffmpeg's 4,023,397.
+TEST(hd_movie_mp4_edit_list_gives_the_sounds_priming_and_length) {
+  const Bytes moov = mp4_box("moov", joined({mvhd(1000), trak("vide", 12288, elst(false, {{182500, 1024}})),
                                              trak("soun", 22050, elst(false, {{182467, 1024}}))}));
   const Bytes file = joined({mp4_box("ftyp", Bytes(24)), moov, mp4_box("mdat", Bytes(64))});
-  EXPECT(std::fabs(sound_start_of(file) - 1024.0 / 22050.0) < 1e-9);
+  const mech3::Mp4SoundEdit edit = sound_edit_of(file);
+  EXPECT(close_to(edit.start, 1024.0 / 22050.0));
+  EXPECT(close_to(edit.length, 182.467));
+  EXPECT(std::llround(edit.length * 22050) == 4023397);
 }
 
 // An empty edit (media time -1) delays a track instead of trimming it, so
-// the next entry is the start; version 1 entries are 64-bit; the movie box
-// may come after the media. A sound track with no edit list starts at 0.
+// the next entry is the edit; version 1 entries and headers are 64-bit; the
+// movie box may come after the media and its header after the tracks. A
+// sound track with no edit list keeps everything, and without the movie's
+// timescale the length is unknown (0) while the start is still read.
 TEST(hd_movie_mp4_edit_list_skips_empty_edits_and_reads_version_1) {
-  const Bytes moov = mp4_box("moov", joined({trak("vide", 90000, elst(false, {{9000, 3003}})),
-                                             trak("soun", 48000, elst(true, {{500, -1}, {9000, 2112}}))}));
-  EXPECT(std::fabs(sound_start_of(joined({mp4_box("mdat", Bytes(32)), moov})) - 2112.0 / 48000.0) < 1e-9);
-  const Bytes no_edit = mp4_box("moov", trak("soun", 48000, Bytes()));
-  EXPECT(sound_start_of(no_edit) == 0.0);
+  const Bytes moov =
+      mp4_box("moov", joined({trak("vide", 90000, elst(false, {{9000, 3003}})),
+                              trak("soun", 48000, elst(true, {{500, -1}, {9000, 2112}})), mvhd(600, true)}));
+  const mech3::Mp4SoundEdit edit = sound_edit_of(joined({mp4_box("mdat", Bytes(32)), moov}));
+  EXPECT(close_to(edit.start, 2112.0 / 48000.0));
+  EXPECT(close_to(edit.length, 9000.0 / 600.0));
+  const mech3::Mp4SoundEdit no_edit = sound_edit_of(mp4_box("moov", joined({mvhd(1000), trak("soun", 48000, Bytes())})));
+  EXPECT(no_edit.start == 0.0 && no_edit.length == 0.0);
+  const mech3::Mp4SoundEdit no_header = sound_edit_of(mp4_box("moov", trak("soun", 22050, elst(false, {{100, 1024}}))));
+  EXPECT(close_to(no_header.start, 1024.0 / 22050.0) && no_header.length == 0.0);
 }
 
 // A box that claims more than the file holds, or nothing like an MP4,
-// gives 0 rather than reading past the end.
+// gives zeros rather than reading past the end.
 TEST(hd_movie_mp4_edit_list_of_a_broken_file_is_zero) {
-  Bytes moov = mp4_box("moov", trak("soun", 22050, elst(false, {{100, 1024}})));
+  Bytes moov = mp4_box("moov", joined({mvhd(1000), trak("soun", 22050, elst(false, {{100, 1024}}))}));
   moov[3] = 0xff;  // the movie box's size now runs past the file
-  EXPECT(sound_start_of(moov) == 0.0);
-  EXPECT(sound_start_of(Bytes{'n', 'o', 't', ' ', 'm', 'p', '4', '!', '!'}) == 0.0);
-  EXPECT(sound_start_of(Bytes()) == 0.0);
+  const auto zero = [](const mech3::Mp4SoundEdit& edit) { return edit.start == 0.0 && edit.length == 0.0; };
+  EXPECT(zero(sound_edit_of(moov)));
+  EXPECT(zero(sound_edit_of(Bytes{'n', 'o', 't', ' ', 'm', 'p', '4', '!', '!'})));
+  EXPECT(zero(sound_edit_of(Bytes())));
 }

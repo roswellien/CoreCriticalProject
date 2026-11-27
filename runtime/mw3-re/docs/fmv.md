@@ -545,10 +545,11 @@ stand-in for the AVI (`mech3/hd_movie.h`):
 - **The sound stream:** the MP4's AAC as 22050 Hz 16-bit PCM, read as the
   player refills its two halves of one second each. The frame shown still
   follows this sound's play cursor, `--nosound`'s clocked silent cursor too.
-  The AAC encoder's priming at its front (1024 samples, 46 ms) is dropped:
-  the MP4's edit list says to skip it, and Media Foundation ignores edit
-  lists, so the backend reads the sound track's list itself
-  (`mp4_sound_start`).
+  The AAC encoder's priming at its front (1024 samples, 46 ms) is dropped,
+  and so is its padding of the last AAC frame (923 samples in INTRO): the
+  MP4's edit list keeps only what lies between, and Media Foundation
+  ignores edit lists, so the backend reads the sound track's list itself
+  (`mp4_sound_edit`).
 
 The MP4's pictures are decoded on a thread of their own, at most three
 waiting. The decoder runs in low-latency mode, which holds about 95 MB less;
