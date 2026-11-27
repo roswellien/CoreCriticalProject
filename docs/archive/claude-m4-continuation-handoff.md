@@ -89,7 +89,11 @@ step. Do not stop at another plan when an implementation advance is feasible.
 ## Rules moved from AGENTS.md on 2026-11-27
 
 These rules from the October 2026 recompilation and startup-equivalence audit era
-were moved here from the opening section of `AGENTS.md`:
+were moved here from the opening section of `AGENTS.md`. They are a historical
+record, not current instructions: `AGENTS.md` supersedes them wherever they
+differ (MW3-RE is the shipping runtime and the recompiled runtime is retired), and
+they apply again only if the owner explicitly resumes the startup-equivalence
+audit.
 
 - Read `docs/archive/m4-claude-work-review-2026-10-11.md` before choosing
   implementation work.
