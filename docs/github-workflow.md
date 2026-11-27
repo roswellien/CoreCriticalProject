@@ -268,7 +268,10 @@ Once a PR has merged, a new fix or follow-up uses a fresh branch from current
 additional changes. At handoff, report the branch, PR URL, checks and open limits;
 distinguish "awaiting review" from "merged" and "published".
 
-After merge, check that the issue's card is Done (see [Project board](#project-board)).
+After merge, check that the issue closed and its card is Done (see
+[Project board](#project-board)). If the PR had no `Closes #<issue>` line,
+link the PR in the issue's Development box before closing the issue by hand;
+otherwise the board check flags it for 14 days.
 
 ## Project board
 
@@ -293,9 +296,11 @@ which stays open until the files are published.
    In review after the PR exists. Linking a PR to an already closed issue does
    the same; restore that card to Done using the status command below.
 3. **After merge:** GitHub closes the issue named by `Closes #<issue>`, which
-   moves its card to Done. If the PR had no such line, close the issue with a
-   comment naming the PR. Setting a card to Done also closes its issue, so set
-   Done by hand only to restore a closed issue's card after linking a PR.
+   moves its card to Done. If the PR had no such line, link the PR in the
+   issue's Development box, then close the issue with a comment naming the PR;
+   closing it without the link leaves the board check flagging it for 14 days.
+   Setting a card to Done also closes its issue, so set Done by hand only to
+   restore a closed issue's card after linking a PR.
 4. **If work stops before a PR:** unassign yourself and set the card back to
    Ready or Backlog.
 
@@ -344,9 +349,15 @@ enough to choose from.
   `needs-triage` removed), is closed as a duplicate
   (`gh issue close <issue> --duplicate-of <other>`), or is closed as not planned
   with a one-line reason (`gh issue close <issue> --reason "not planned" --comment "<reason>"`).
+  A `Playtest <what to check>` capture becomes a task with the `playtest` label
+  and stays open until someone runs it.
 - **Idle issues:** on the same check, P2 issues with no activity for 60 days
-  (the board check lists them) are kept or closed as not planned with a reason. No bot closes issues, so a
-  report is never closed without someone reading it.
+  (the board check lists them) are kept or closed as not planned with a
+  reason, and an In progress card whose issue hasn't changed for 7 days is
+  flagged to confirm someone is still on it. Only the issue's own activity
+  counts toward these day counts; comments or updates on its PR or other
+  issues don't reset them. No bot closes issues, so a report is never closed
+  without someone reading it.
 
 ## Promote and publish a release
 

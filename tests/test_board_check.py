@@ -114,21 +114,24 @@ class IssueTests(unittest.TestCase):
     def test_inbox_over_its_limit(self):
         over_limit = [("the Inbox", "has 11 open needs-triage issues, more than 10")]
         cases = (
-            # (open captures, closed captures, expected findings)
-            (10, 0, []),
-            (11, 0, over_limit),
-            (10, 5, []),
+            # (open captures, closed captures, sorted open issues, expected findings)
+            (10, 0, 0, []),
+            (11, 0, 0, over_limit),
+            (10, 5, 0, []),
+            (10, 0, 5, []),
         )
-        for open_count, closed_count, expected in cases:
-            with self.subTest(open=open_count, closed=closed_count):
+        for open_count, closed_count, sorted_count, expected in cases:
+            with self.subTest(open=open_count, closed=closed_count, sorted=sorted_count):
                 open_captures = [issue(n, labels=("needs-triage",)) for n in range(open_count)]
                 closed_captures = [
                     issue(100 + n, is_open=False, labels=("needs-triage",))
                     for n in range(closed_count)
                 ]
+                sorted_issues = [issue(200 + n) for n in range(sorted_count)]
                 cards = [card(capture.number, priority="") for capture in open_captures]
                 cards += [card(capture.number, "Done", priority="") for capture in closed_captures]
-                found = problems(open_captures + closed_captures, cards=cards)
+                cards += [card(sorted.number) for sorted in sorted_issues]
+                found = problems(open_captures + closed_captures + sorted_issues, cards=cards)
                 self.assertEqual(found, expected)
 
     def test_missing_priority(self):
@@ -167,13 +170,28 @@ class CardStatusTests(unittest.TestCase):
             ),
             ("In progress", "P1", 6, []),
             ("Backlog", "P2", 61, [("issue #1", "is P2 and hasn't changed for 61 days")]),
+            # Exactly 60 days is not flagged: the rule is "more than 60 days".
+            ("Backlog", "P2", 60, []),
             ("Backlog", "P2", 59, []),
             ("Backlog", "P1", 61, []),
+            # An idle In progress P2 card gets only the In progress finding.
+            (
+                "In progress",
+                "P2",
+                61,
+                [("issue #1", "is In progress but hasn't changed for 61 days")],
+            ),
         )
         for status, priority, idle_days, expected in cases:
             with self.subTest(status=status, priority=priority, idle_days=idle_days):
                 found = problems([issue(1, idle_days=idle_days)], cards=[card(1, status, priority)])
                 self.assertEqual(found, expected)
+
+    def test_idle_in_progress_p2_card_gets_one_finding(self):
+        # The P2 idle rule would also fire at 61 days, but the In progress idle
+        # finding already says the card is stale, so it isn't reported twice.
+        found = problems([issue(1, idle_days=61)], cards=[card(1, "In progress", "P2")])
+        self.assertEqual(found, [("issue #1", "is In progress but hasn't changed for 61 days")])
 
     def test_in_review_without_open_pr(self):
         found = problems(
@@ -211,9 +229,7 @@ class PullRequestTests(unittest.TestCase):
 
     def test_topic_branch_into_main(self):
         found = problems([issue(1)], [pull(2, base="main")], [card(1, "In review")])
-        self.assertEqual(len(found), 1)
-        self.assertEqual(found[0][0], "PR #2")
-        self.assertIn("PRs into main come only from develop", found[0][1])
+        self.assertEqual(found, [("PR #2", "targets main from 'carson-nr/fix/1-x'")])
 
     def test_pr_without_issue(self):
         self.assertEqual(
@@ -325,6 +341,14 @@ class ParsingTests(unittest.TestCase):
         )
         self.assertEqual(cards, [board.Card(issue_number=21, status="Ready", priority="P2")])
 
+    def test_card_with_null_content_is_skipped(self):
+        # gh returns "content": null for cards without content; that must not crash the read.
+        ours = "https://github.com/roswellien/CoreCriticalProject"
+        cards = board.parse_cards(
+            {"items": [{"content": None, "repository": ours, "status": "Backlog"}]}
+        )
+        self.assertEqual(cards, [])
+
 
 class ExitCodeTests(unittest.TestCase):
     def test_missing_gh_exits_2_not_1(self):
@@ -367,6 +391,13 @@ class ExitCodeTests(unittest.TestCase):
         exit_code, stderr = self.run_with_reads([], [], board.LIST_LIMIT + 5)
         self.assertEqual(exit_code, 2)
         self.assertIn("only 0 were read", stderr)
+
+    def test_board_read_with_the_wrong_shape_exits_2(self):
+        # A read whose JSON doesn't have the expected shape is a failed read (exit 2),
+        # not "problems found" (exit 1): here the board's items came back null.
+        exit_code, stderr = self.run_with_reads([], None, 0)
+        self.assertEqual(exit_code, 2)
+        self.assertIn("Could not read GitHub", stderr)
 
 
 if __name__ == "__main__":

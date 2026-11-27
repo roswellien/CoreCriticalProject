@@ -1,7 +1,7 @@
 """List where the project board, the issues and the pull requests disagree.
 
-The rules are described in "Project board" and "Names and formats" in
-docs/github-workflow.md. This only reads: it changes nothing on GitHub and uses
+The rules are described in "Project board", "Triage" and "Names and formats"
+in docs/github-workflow.md. This only reads: it changes nothing on GitHub and uses
 the caller's own `gh` login, which needs the `project` scope
 (`gh auth refresh -s project`).
 
@@ -168,8 +168,13 @@ def _check_card(
         )
     if not card.priority and not _is_capture(issue):
         findings.append(Finding(subject, "has no priority", "set P0, P1 or P2 on its card"))
-    if card.priority == "P2" and now - issue.updated_at > IDLE_P2_AFTER:
-        idle_days = (now - issue.updated_at).days
+    # One idle measurement feeds both idle rules below.
+    idle = now - issue.updated_at
+    idle_days = idle.days
+    p2_idle = card.priority == "P2" and idle > IDLE_P2_AFTER
+    in_progress_idle = card.status == "In progress" and idle > STALE_AFTER
+    if p2_idle and not in_progress_idle:
+        # An In progress card already gets the sharper In progress finding below.
         findings.append(
             Finding(
                 subject,
@@ -186,8 +191,7 @@ def _check_card(
                     "assign whoever is working on it",
                 )
             )
-        if now - issue.updated_at > STALE_AFTER:
-            idle_days = (now - issue.updated_at).days
+        if in_progress_idle:
             findings.append(
                 Finding(
                     subject,
@@ -262,13 +266,22 @@ def _check_pull(
         findings.append(Finding(subject, "has no changed files", "push the work, or close the PR"))
     # Only the base-branch rule is an error there; the author only affects naming
     # warnings, which are dropped here, so it is left empty.
-    base_errors = [
-        finding
-        for finding in check_pr_conventions.check(pull.title, pull.head, pull.base, "")
-        if finding.level == "error"
-    ]
-    for error in base_errors:
-        findings.append(Finding(subject, error.message.rstrip("."), "change the PR's base branch"))
+    base_error = check_pr_conventions.base_branch_error(pull.head, pull.base)
+    for error in check_pr_conventions.check(pull.title, pull.head, pull.base, ""):
+        if error.level != "error":
+            continue
+        if base_error is not None and error == base_error:
+            findings.append(
+                Finding(
+                    subject,
+                    f"targets {pull.base} from {pull.head!r}",
+                    "change the PR's base branch",
+                )
+            )
+        else:
+            findings.append(
+                Finding(subject, error.message.rstrip("."), "fix it to match the PR conventions")
+            )
     is_release_or_sync = (pull.head, pull.base) in (("develop", "main"), ("main", "develop"))
     if not pull.closes and not is_release_or_sync:
         findings.append(
@@ -363,18 +376,22 @@ def _issues_closed_here(references: list[dict]) -> tuple[int, ...]:
 
 def parse_cards(board: dict) -> list[Card]:
     # Only this repository's issues are checked: PR and draft cards are skipped, and so
-    # are issues from other repositories, whose numbers could match ours.
+    # are issues from other repositories, whose numbers could match ours. gh returns
+    # "content": null for some cards, so read it as empty instead of chaining .get on it.
     repository_url = f"https://github.com/{REPOSITORY}"
-    return [
-        Card(
-            issue_number=item["content"]["number"],
-            status=item.get("status") or "",
-            priority=item.get("priority") or "",
+    cards = []
+    for item in board["items"]:
+        content = item.get("content") or {}
+        if content.get("type") != "Issue" or item.get("repository") != repository_url:
+            continue
+        cards.append(
+            Card(
+                issue_number=content["number"],
+                status=item.get("status") or "",
+                priority=item.get("priority") or "",
+            )
         )
-        for item in board["items"]
-        if item.get("content", {}).get("type") == "Issue"
-        and item.get("repository") == repository_url
-    ]
+    return cards
 
 
 def fetch() -> tuple[list[Issue], list[PullRequest], list[Card]]:
@@ -412,9 +429,19 @@ def main(argv: list[str] | None = None) -> int:
         description="List where the project board, the issues and the pull requests disagree (read-only)."
     )
     parser.parse_args(argv)
+    # TypeError and AttributeError mean gh's JSON didn't have the expected shape (for
+    # example "content": null on a board item); an uncaught traceback would exit 1,
+    # which means "problems found", so they count as a failed read too.
     try:
         issues, pulls, cards = fetch()
-    except (RuntimeError, ValueError, KeyError, json.JSONDecodeError) as error:
+    except (
+        RuntimeError,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        json.JSONDecodeError,
+    ) as error:
         print(f"Could not read GitHub: {error}", file=sys.stderr)
         return 2
     findings = find_problems(issues, pulls, cards, datetime.now(UTC))
