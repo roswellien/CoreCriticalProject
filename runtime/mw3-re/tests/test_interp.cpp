@@ -217,7 +217,8 @@ TEST(interp_a_blended_node_gets_its_sphere_worked_out_each_draw) {
   yaw_at(0, 2, m);
   zcls::object3d_set_matrix(moving, m);
   zcls::interp::record();
-  for (zcls::Node* n : {moving, still}) n->put<uint32_t>(0x2c, n->get<uint32_t>(0x2c) & ~kSphereStale);
+  for (zcls::Node* n : {moving, still})
+    n->put<uint32_t>(0x2c, n->get<uint32_t>(0x2c) & ~kSphereStale);
   zcls::interp::apply(0.5f);
   EXPECT((moving->get<uint32_t>(0x2c) & kSphereStale) != 0);
   EXPECT((still->get<uint32_t>(0x2c) & kSphereStale) == 0);
