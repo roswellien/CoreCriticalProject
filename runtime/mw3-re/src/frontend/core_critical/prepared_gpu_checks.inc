@@ -1379,6 +1379,19 @@ void check_gpu_prepared_skin_eviction(SDL_Window *window, sdlfe::RendererBackend
     int width{}, height{};
     require(renderer->read_back(&pixels, &width, &height) && width == 64 && height == 64,
             "Skin eviction scene lost its extent");
+    // #518: the frontend tags each texture when it makes it, and the GPU copy
+    // keeps that tag, so the skins and their normal map are counted as what they are.
+    {
+        std::set<mw34::vkscene::TextureSource> sources;
+        for (const auto handle :
+             cc_mw3_re::testing::preload_test_state(*renderer).completed_texture_handles)
+            for (const bool sharp : {false, true})
+                if (cc_mw3_re::testing::is_texture_gpu_resident(*renderer, handle, sharp))
+                    sources.insert(cc_mw3_re::testing::texture_source(*renderer, handle, sharp));
+        require(sources.count(mw34::vkscene::TextureSource::prepared_skin) &&
+                    sources.count(mw34::vkscene::TextureSource::normal),
+                "A prepared skin or its normal map reached the card without its source");
+    }
     // Evicted sets' slots wait for a scene boundary; a mission reset releases all of
     // them once (no double release later) and a fresh scene draws normally.
     require(cc_mw3_re::testing::pending_skin_retirements(*renderer) > 0,

@@ -384,6 +384,9 @@ struct Texture {
   mw34::materials::SurfaceKey surface_key{};
   std::optional<mw34::materials::SurfaceKey> fixture_visual_key;
   std::uint64_t group_load_epoch{0};
+  // What the texture holds; set when the slot is allocated and sent with every
+  // upload, so the renderer can count memory by it and pick a storage format (#518).
+  vk::TextureSource source{vk::TextureSource::guest};
 };
 
 struct LoggedFlareTexture {
@@ -976,9 +979,9 @@ public:
     const auto &norm_img = surface_normal_image(normal_index);
     mw34::timing::ScopedDuration upload_timer(
         producer_resource_timing_.page_upload_target());
-    const auto handle = create_texture(
+    const auto handle = create_sourced_texture(
         int(norm_img.width), int(norm_img.height),
-        reinterpret_cast<const uint8_t *>(norm_img.pixels32.data()), 1);
+        reinterpret_cast<const uint8_t *>(norm_img.pixels32.data()), vk::TextureSource::normal);
     surface_normal_textures_.emplace(normal_index, handle);
     return handle;
   }
@@ -1484,14 +1487,18 @@ public:
   void prepare_canvas_textures(const std::vector<int32_t> &handles) override {
       std::vector<vk::TextureRef> references;
       for (const auto handle : handles) {
-          const auto &entry = textures_.at(handle);
+          auto &entry = textures_.at(handle);
+          // The HUD and menus draw into these every frame, so they are counted
+          // apart and never stored at 16 bits (#518).
+          entry.source = vk::TextureSource::canvas;
           references.push_back({std::uint64_t(handle) * 2 + 2,
                                 entry.version,
                                 entry.width,
                                 entry.height,
                                 vk::TexFormat::rgba8888,
                                 {},
-                                {}});
+                                {},
+                                entry.source});
       }
       const auto prepare = [this, &references] {
           // Return the failure as data: letting it escape a worker job permanently
@@ -1510,9 +1517,7 @@ public:
 
   int32_t create_texture(int width, int height, const uint8_t *rgba,
                          uint8_t) override {
-    const auto handle = allocate_texture_slot(width, height);
-    update_texture(handle, width, height, rgba);
-    return handle;
+    return create_sourced_texture(width, height, rgba, vk::TextureSource::guest);
   }
 
   void update_texture(int32_t handle, int width, int height,
@@ -1871,9 +1876,9 @@ private:
     const auto found = prepared_normals_.find(&image);
     if (found != prepared_normals_.end())
       return found->second;
-    const auto handle = create_texture(
+    const auto handle = create_sourced_texture(
         int(image.width), int(image.height),
-        reinterpret_cast<const uint8_t *>(image.pixels.data()), 1);
+        reinterpret_cast<const uint8_t *>(image.pixels.data()), vk::TextureSource::normal);
     prepared_normals_.emplace(&image, handle);
     return handle;
   }
@@ -2338,7 +2343,16 @@ private:
 #include "frame_presentation.inc"
 
 private:
-  int32_t allocate_texture_slot(int width, int height) {
+  // Makes a texture slot and uploads its first pixels; create_texture is the
+  // game's entry point, this one also says what the texture holds.
+  int32_t create_sourced_texture(int width, int height, const uint8_t *rgba,
+                                 vk::TextureSource source) {
+    const auto handle = allocate_texture_slot(width, height, source);
+    update_texture(handle, width, height, rgba);
+    return handle;
+  }
+
+  int32_t allocate_texture_slot(int width, int height, vk::TextureSource source) {
     if (width <= 0 || height <= 0 || unsigned(width) > texture_limit_ ||
         unsigned(height) > texture_limit_) {
       throw std::runtime_error("Invalid mw3-re texture size");
@@ -2353,6 +2367,7 @@ private:
     auto &entry = textures_[handle];
     entry.width = unsigned(width);
     entry.height = unsigned(height);
+    entry.source = source;
     mw34::materials::SurfaceKey active_key{};
     if (mw34::materials::get_active_surface_key(&active_key)) {
       entry.surface_key = active_key;
@@ -2378,8 +2393,9 @@ private:
     }
   }
 
-  int32_t create_owned_texture(int width, int height, std::vector<std::uint32_t> pixels) {
-    const auto handle = allocate_texture_slot(width, height);
+  int32_t create_owned_texture(int width, int height, std::vector<std::uint32_t> pixels,
+                               vk::TextureSource source) {
+    const auto handle = allocate_texture_slot(width, height, source);
     mw34::materials::SurfaceKey source_key{};
     mw34::materials::get_active_surface_key(&source_key);
     if (pixels.size() != std::size_t(width) * height)
@@ -2443,7 +2459,8 @@ private:
     }
     auto pixels = image_pixels(image);
     const auto handle =
-        create_owned_texture(int(image.width), int(image.height), std::move(pixels));
+        create_owned_texture(int(image.width), int(image.height), std::move(pixels),
+                             vk::TextureSource::prepared_skin);
     // The prepared reader preserves a declared hash without checking it. This
     // immutable slot gets an exact key from its complete visible RGB565 plane.
     textures_.at(handle).surface_key = prepared_fixture_key(image);
@@ -2877,7 +2894,8 @@ private:
                                texture_height,
                                vk::TexFormat::rgba8888,
                                {},
-                               entry.pixels};
+                               entry.pixels,
+                               entry.source};
     if (!renderer_->preload_texture(texture_ref)) {
       preload_test_state_.failed_texture_handle = handle;
       return;
@@ -3188,7 +3206,7 @@ private:
     const auto w = entry.width;
     const auto h = entry.height;
     vk::TextureRef ref{key, entry.version, w, h, vk::TexFormat::rgba8888, {},
-                       {}};
+                       {}, entry.source};
     const auto current = submitted_textures_.find(ref.key);
     if (current == submitted_textures_.end() ||
         current->second != std::array<std::uint64_t, 3>{ref.hash, w, h}) {
@@ -3618,6 +3636,10 @@ bool has_texture_receipt(VulkanFrameRenderer &renderer, int32_t handle, bool sha
 }
 bool is_texture_gpu_resident(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
   return preload_impl(renderer).backend_for_test().texture_resident(std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
+}
+vk::TextureSource texture_source(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
+  return preload_impl(renderer).backend_for_test().texture_source_for_test(
+      std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
 }
 bool has_partial_texture_cache_entry(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
   return preload_impl(renderer).backend_for_test().partial_texture(std::uint64_t(handle) * 2 + unsigned(sharp) + 1);

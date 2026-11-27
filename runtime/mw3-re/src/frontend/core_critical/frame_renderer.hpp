@@ -10,6 +10,7 @@
 #include "renderer/original_rigid_capture.hpp"
 #include "renderer/preload_budget.hpp"
 #include "renderer/renderer_bridge_config.hpp"
+#include "renderer/texture_source.hpp"
 #include "producer_view_test_hook.hpp"
 
 namespace mw34::vkscene {
@@ -147,6 +148,9 @@ bool has_texture_receipt(VulkanFrameRenderer &renderer, int32_t handle,
                          bool sharp = false);
 bool is_texture_gpu_resident(VulkanFrameRenderer &renderer, int32_t handle,
                              bool sharp = false);
+// The source the renderer recorded for a texture's GPU copy (#518).
+mw34::vkscene::TextureSource texture_source(VulkanFrameRenderer &renderer, int32_t handle,
+                                            bool sharp = false);
 bool has_partial_texture_cache_entry(VulkanFrameRenderer &renderer,
                                      int32_t handle, bool sharp = false);
 bool is_model_geometry_gpu_uploaded(VulkanFrameRenderer &renderer,
