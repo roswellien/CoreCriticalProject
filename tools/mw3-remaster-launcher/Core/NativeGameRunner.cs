@@ -210,7 +210,9 @@ public sealed class NativeGameRunner
         var arguments = new List<string>();
         foreach (var name in CheckedHdMovies)
         {
-            var clip = CinematicPack.FindLibraryClip(activeModDirs, name);
+            // A damaged pack is skipped so a valid clip in a lower-priority pack can still be used.
+            var clip = CinematicPack.FindLibraryClip(activeModDirs, name, (root, error) =>
+                log("Upscaled " + name + " from " + Path.GetFileName(root) + " not used: " + error.Message));
             if (clip == null) continue;
             if (!runtimeSupportsHdMovies)
             {

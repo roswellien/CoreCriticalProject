@@ -200,12 +200,22 @@ static class ArtworkCinematicChecks
         if (NativeGameRunner.HdMovieArguments(new[] { intro.DirectoryPath }, false, lines.Add).Count != 0 ||
             !lines.Single().Contains("does not support HD movies"))
             throw new Exception("A runtime without the hd-movie capability was given HD movie arguments.");
+        var backup = manager.InstallPack(introPack("test.hd-intro-backup", mp4));
         File.AppendAllText(clipPath, "tampered");
         try
         {
-            NativeGameRunner.HdMovieArguments(new[] { intro.DirectoryPath }, true, lines.Add);
-            throw new Exception("A damaged HD intro clip was passed to the runtime.");
+            CinematicPack.FindLibraryClip(new[] { intro.DirectoryPath }, "intro");
+            throw new Exception("A damaged HD intro clip passed the integrity check.");
         }
         catch (InvalidDataException) { }
+        lines.Clear();
+        if (NativeGameRunner.HdMovieArguments(new[] { intro.DirectoryPath }, true, lines.Add).Count != 0 ||
+            !lines.Single().Contains("not used"))
+            throw new Exception("A damaged HD intro clip was passed to the runtime, or its refusal wasn't logged.");
+        lines.Clear();
+        var backupPath = Path.GetFullPath(Path.Combine(backup.DirectoryPath, "cinematics/media/intro.mp4"));
+        if (!NativeGameRunner.HdMovieArguments(new[] { intro.DirectoryPath, backup.DirectoryPath }, true, lines.Add)
+                .SequenceEqual(new[] { "--hd-movie", "intro", backupPath }) || lines.Count != 1)
+            throw new Exception("A damaged higher-priority pack hid a valid HD intro in a later pack.");
     }
 }

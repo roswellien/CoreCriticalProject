@@ -154,28 +154,45 @@ public static class CinematicPack
     /// <summary>
     /// The first enabled pack's library MP4 with this id, or null. Only the registry and that one
     /// clip are checked, so a launch doesn't hash every movie in a large HD pack. A damaged
-    /// registry or clip throws, as in <see cref="Read"/>.
+    /// registry or clip throws, as in <see cref="Read"/>, unless <paramref name="skipDamaged"/> is
+    /// given: then that pack is reported and the search goes on to the next enabled pack.
     /// </summary>
-    public static Clip? FindLibraryClip(IEnumerable<string> directories, string id)
+    public static Clip? FindLibraryClip(IEnumerable<string> directories, string id, Action<string, Exception>? skipDamaged = null)
     {
         foreach (var root in directories)
         {
-            var manifest = PackStorage.ReadManifest(Path.Combine(root, "pack.json"));
-            if (manifest.NativePayload?.Profile != Profile) continue;
-            foreach (var item in ReadRegistry(root, manifest))
+            try
             {
-                var obj = item!.AsObject();
-                if (obj["id"]?.GetValue<string>() != id || obj["replaces"] != null) continue;
-                var source = "cinematics/media/" + id + ".mp4";
-                if (obj["source"]?.GetValue<string>() != source || !manifest.Files!.TryGetValue(source, out var pin) ||
-                    pin.Format != "MP4-library-v1")
-                    throw new InvalidDataException("Invalid cinematic source for " + id + ".");
-                var title = obj["title"]?.GetValue<string>() ?? id;
-                VerifyPinned(root, manifest, source);
-                var path = PackStorage.Resolve(root, source);
-                RequireMp4(path);
-                return new Clip(id, title, path, null);
+                var clip = FindLibraryClipIn(root, id);
+                if (clip != null) return clip;
             }
+            // InvalidOperationException: a registry value of the wrong JSON type (JsonNode.GetValue).
+            catch (Exception error) when (skipDamaged != null && error is IOException or InvalidDataException or
+                UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException)
+            {
+                skipDamaged(root, error);
+            }
+        }
+        return null;
+    }
+
+    private static Clip? FindLibraryClipIn(string root, string id)
+    {
+        var manifest = PackStorage.ReadManifest(Path.Combine(root, "pack.json"));
+        if (manifest.NativePayload?.Profile != Profile) return null;
+        foreach (var item in ReadRegistry(root, manifest))
+        {
+            var obj = item!.AsObject();
+            if (obj["id"]?.GetValue<string>() != id || obj["replaces"] != null) continue;
+            var source = "cinematics/media/" + id + ".mp4";
+            if (obj["source"]?.GetValue<string>() != source || !manifest.Files!.TryGetValue(source, out var pin) ||
+                pin.Format != "MP4-library-v1")
+                throw new InvalidDataException("Invalid cinematic source for " + id + ".");
+            var title = obj["title"]?.GetValue<string>() ?? id;
+            VerifyPinned(root, manifest, source);
+            var path = PackStorage.Resolve(root, source);
+            RequireMp4(path);
+            return new Clip(id, title, path, null);
         }
         return null;
     }
