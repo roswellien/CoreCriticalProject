@@ -1,4 +1,6 @@
 #include "depth_transfer.hpp"
+#include "device_diagnostics.hpp"
+#include "frontend/sdl/game_health.h"
 #include "sky_backdrop.hpp"
 // Vulkan scene renderer for the Direct3D 6 provider (adapted from
 // tools/vulkan-probe/replay.cpp). The provider records a scene
@@ -37,6 +39,7 @@
 #include "geometry/resource.hpp"
 #include "launcher_display.hpp"
 #include "light_cull_tiled_comp.h"
+#include "test_gpu_hang_comp.h"
 #include "menu_ripple_frag.h"
 #include "model_scene_vert.h"
 #include "native_geometry_vert.h"
@@ -612,6 +615,7 @@ public:
     si.signalSemaphoreCount = dxgi.active() ? 0 : 1;
     si.pSignalSemaphores = dxgi.active() ? nullptr : &swapRendered[index];
     check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
+    refresh_health_snapshot();
 #if defined(_WIN32)
     if (editor_frame)
       editor_submit(si);
@@ -894,6 +898,7 @@ public:
     si.signalSemaphoreCount = dxgi.active() ? 0 : 1;
     si.pSignalSemaphores = dxgi.active() ? nullptr : &swapRendered[index];
     check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
+    refresh_health_snapshot();
 #if defined(_WIN32)
     if (editor_frame)
       editor_submit(si);
@@ -3154,6 +3159,7 @@ private:
     VkDeviceSize memory_offset{}, memory_size{}, memory_alignment{1};
   };
 #include "tiled_light_gpu.inc"
+#include "gpu_hang_test.inc"
   struct Image {
     VkImage image{};
     VkDeviceMemory memory{};
@@ -3866,6 +3872,17 @@ private:
   PFN_vkGetBufferMemoryRequirements2 buffer_memory_requirements2_{};
   PFN_vkGetPhysicalDeviceMemoryProperties2 memory_properties2_{};
   bool memory_budget_supported_{};
+  // #521: once-per-session report state. FrameRenderer hands every Renderer it
+  // builds the same session (set_health_session); a Renderer made on its own
+  // (checks, tools) uses its own.
+  sdlfe::HealthSession own_health_session_;
+  sdlfe::HealthSession *health_session_{&own_health_session_};
+  // The health line's renderer figures, refreshed by the render thread at most
+  // once a second and read by the producer thread.
+  mutable std::mutex health_mutex_;
+  sdlfe::HealthSnapshot health_snapshot_{};
+  std::chrono::steady_clock::time_point health_refreshed_at_{};
+  DeviceFaultInfoFn device_fault_info_{};
   bool preload_active_{};
   // Opt-in CPU scopes distinguish producer work, driver allocation, command
   // recording and fence completion; allocation scopes nest inside resource scopes.
@@ -4006,6 +4023,101 @@ private:
                      memory_allocations_.size(), heap);
     }
   }
+  // A play-time allocation that didn't fit (#496, #521): the existing log line,
+  // then once per session the per-heap table, and a health event the launcher
+  // reads. Both failure paths call this one function so they can't drift apart.
+  void note_allocation_failure(const char *kind, VkDeviceSize bytes) {
+    log_video_memory_full(kind, bytes);
+    if (!health_session_->memory_table_printed.exchange(true)) {
+      print_memory_table(stderr, memory_report());
+      ++health_session_->memory_table_log_count;
+    }
+    const double now = sdlfe::process_seconds();
+    if (health_session_->limiter.allow(sdlfe::HealthEvent::alloc_failed, now)) {
+      std::printf("%s\n", sdlfe::format_alloc_failed_event(kind, bytes, now).c_str());
+      std::fflush(stdout);
+    }
+  }
+  // The setup facts the launcher puts in a report's header (#521), on stdout,
+  // once per session: every mission start builds a new Renderer and runs init().
+  void print_renderer_header_once() {
+    if (health_session_->renderer_header_printed.exchange(true))
+      return;
+    VkPhysicalDeviceProperties properties{};
+    f.vkGetPhysicalDeviceProperties(gpu, &properties);
+    std::vector<sdlfe::HeaderHeap> heaps;
+    for (const auto &heap : memory_report())
+      heaps.push_back({heap.index, heap.size, heap.budget, heap.device_local, heap.driver_figures});
+    sdlfe::print_lines(stdout, sdlfe::renderer_header_lines(properties.deviceName, properties.apiVersion,
+                                                            properties.vendorID, properties.driverVersion,
+                                                            heaps));
+  }
+  // #521 device fault report. check() is static and is where every VkResult
+  // passes, so the renderer to report from is registered here: set when its
+  // device is made, cleared (only if still its own) at shutdown. With several
+  // live devices it names the newest, which is exact with the game's one.
+  static std::atomic<Renderer *> &fault_owner() {
+    static std::atomic<Renderer *> owner{nullptr};
+    return owner;
+  }
+  static std::atomic<bool> &fault_reported() {
+    static std::atomic<bool> reported{false};
+    return reported;
+  }
+  // Prints the driver's fault report once per process, on the first lost device.
+  static void report_device_fault_once() noexcept {
+    if (fault_reported().exchange(true))
+      return;
+    Renderer *owner = fault_owner().load();
+    print_device_fault(stderr, owner ? owner->device : VK_NULL_HANDLE,
+                       owner ? owner->device_fault_info_ : DeviceFaultInfoFn{});
+  }
+#ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
+  VkPhysicalDeviceFaultFeaturesEXT device_fault_features_{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
+  // True when the device reports VK_EXT_device_fault's deviceFault feature.
+  bool device_fault_supported(PFN_vkGetInstanceProcAddr get) {
+    auto features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(get(instance, "vkGetPhysicalDeviceFeatures2"));
+    if (!features2)
+      features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(get(instance, "vkGetPhysicalDeviceFeatures2KHR"));
+    if (!features2)
+      return false;
+    VkPhysicalDeviceFaultFeaturesEXT fault{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
+    VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    features.pNext = &fault;
+    features2(gpu, &features);
+    device_fault_features_.deviceFault = fault.deviceFault;
+    device_fault_features_.deviceFaultVendorBinary = VK_FALSE;
+    return fault.deviceFault == VK_TRUE;
+  }
+#endif
+  // Called by the render thread before each present: copies the heap figures
+  // and memory trouble counts for the health line, at most once a second.
+  void refresh_health_snapshot() {
+    hang_gpu_if_due();
+    const auto now = std::chrono::steady_clock::now();
+    if (now - health_refreshed_at_ < std::chrono::seconds(1))
+      return;
+    health_refreshed_at_ = now;
+    sdlfe::HealthSnapshot snapshot;
+    const auto heaps = memory_report();
+    for (const auto &heap : heaps) {
+      if (snapshot.heap_count == snapshot.heaps.size())
+        break;
+      snapshot.heaps[snapshot.heap_count++] = {heap.used, heap.budget, heap.device_local, heap.driver_figures};
+    }
+    if (bridge_config.test_vram_budget_mb)  // test switch: a small budget a normal mission crosses
+      for (std::size_t i = 0; i < snapshot.heap_count; ++i)
+        if (snapshot.heaps[i].device_local) {
+          snapshot.heaps[i].budget_bytes = std::uint64_t(bridge_config.test_vram_budget_mb) * 1024 * 1024;
+          snapshot.heaps[i].driver_figures = true;
+        }
+    snapshot.mem_recoveries = memory_pressure.recoveries;
+    snapshot.models_skipped = memory_pressure.model_omissions;
+    snapshot.textures_swapped = memory_pressure.texture_substitutions;
+    snapshot.preload_stops = memory_pressure.preload_stops;
+    std::lock_guard lock(health_mutex_);
+    health_snapshot_ = snapshot;
+  }
   // Frees model buffers no frame has used for min_age_frames, once the GPU is
   // done with them. Their ModelGeometry keeps vertices and indices in system
   // memory, so a freed model uploads again the next time it is drawn.
@@ -4073,7 +4185,7 @@ private:
     }
     const VkDeviceSize model_bytes = VkDeviceSize(g.vertices.size()) * sizeof(ModelVertex) +
                                      VkDeviceSize(g.indices.size()) * sizeof(std::uint32_t);
-    log_video_memory_full("model", model_bytes);
+    note_allocation_failure("model", model_bytes);
     free_unused_resources();
     try {
       ModelBuffer &b = model_buffer(g);
@@ -4177,7 +4289,7 @@ private:
       // destroy() clears the age; keep this frame's texture out of the freeing below.
       c.last_used_frame = render_frame_;
     }
-    log_video_memory_full("texture base level", VkDeviceSize(t.width) * t.height * 4);
+    note_allocation_failure("texture base level", VkDeviceSize(t.width) * t.height * 4);
     free_unused_resources();
     try {
       create_once();
@@ -4603,6 +4715,43 @@ public:
     return found != textures.end() && !found->second.valid;
   }
   std::size_t video_memory_full_log_count() const { return video_memory_full_log_count_; }
+  // #521: the session this Renderer reports into; set before init().
+  void set_health_session(sdlfe::HealthSession &session) { health_session_ = &session; }
+  // For checks: the device fault report's registration and once flag.
+  static void reset_device_fault_report_for_test() { fault_reported().store(false); }
+  static void report_device_fault_for_test() { report_device_fault_once(); }
+  static Renderer *device_fault_owner_for_test() { return fault_owner().load(); }
+  bool device_fault_enabled_for_test() const { return device_fault_info_ != DeviceFaultInfoFn{}; }
+  // #521 test switch MW3_TEST_DEVICE_LOST: from this long after the call, the
+  // next present first submits a compute dispatch that never ends, so the GPU
+  // timeout resets the driver and the game takes its real lost-device path.
+  void hang_gpu_after(std::chrono::steady_clock::duration delay) {
+    hang_gpu_at_ = std::chrono::steady_clock::now() + delay;
+  }
+  sdlfe::HealthSession &health_session() const { return *health_session_; }
+  // Each heap's size and use: the driver's figures where VK_EXT_memory_budget
+  // gives them, the game's tracked allocations otherwise. The one budget read.
+  std::vector<HeapReport> memory_report() const {
+    std::vector<HeapReport> heaps;
+    for (unsigned heap = 0; heap < memory.memoryHeapCount; ++heap) {
+      HeapReport report;
+      report.index = heap;
+      report.size = memory.memoryHeaps[heap].size;
+      report.device_local = memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
+      report.driver_figures = heap_budget(heap, report.used, report.budget);
+      if (!report.driver_figures) {
+        report.used = tracked_heap_bytes(heap);
+        report.budget = 0;
+      }
+      heaps.push_back(report);
+    }
+    return heaps;
+  }
+  // The render thread's latest health figures (refresh_health_snapshot).
+  sdlfe::HealthSnapshot health_snapshot() const {
+    std::lock_guard lock(health_mutex_);
+    return health_snapshot_;
+  }
   std::uint64_t render_frame() const { return render_frame_; }
   void free_unused_model_buffers_for_test(std::uint64_t min_age_frames) {
     free_unused_model_buffers(min_age_frames);
@@ -4661,6 +4810,8 @@ public:
 
 private:
   static void check(VkResult r, const char *what) {
+    if (r == VK_ERROR_DEVICE_LOST)
+      report_device_fault_once();
     if (r != VK_SUCCESS)
       throw std::runtime_error(std::string("Vulkan scene renderer: ") + what +
                                " failed (" + std::to_string(int(r)) + ")");
@@ -4919,6 +5070,15 @@ private:
           memory_budget_supported_ = true;
           deviceExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
         }
+#ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
+        // #521: the driver's own account of a lost device, where it has one.
+        if (!std::strcmp(p.extensionName, VK_EXT_DEVICE_FAULT_EXTENSION_NAME) &&
+            device_fault_supported(get)) {
+          deviceExtensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+          device_fault_features_.pNext = const_cast<void *>(dci.pNext);
+          dci.pNext = &device_fault_features_;
+        }
+#endif
         if (!std::strcmp(p.extensionName, swapExt)) {
           bool native_surface_supported = false;
 #if defined(_WIN32)
@@ -4956,7 +5116,13 @@ private:
     dci.enabledExtensionCount = unsigned(deviceExtensions.size());
     dci.ppEnabledExtensionNames = deviceExtensions.data();
     check(f.vkCreateDevice(gpu, &dci, nullptr, &device), "create device");
-#define MW34_VK_DLOAD(n)                                                       \
+#ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
+    if (device_fault_features_.deviceFault)
+      device_fault_info_ = reinterpret_cast<PFN_vkGetDeviceFaultInfoEXT>(
+          f.vkGetDeviceProcAddr(device, "vkGetDeviceFaultInfoEXT"));
+#endif
+    fault_owner().store(this);
+#define MW34_VK_DLOAD(n)                                                     \
   f.n = reinterpret_cast<PFN_##n>(f.vkGetDeviceProcAddr(device, #n));          \
   if (!f.n)                                                                    \
     throw std::runtime_error("Vulkan scene renderer: " #n " missing");
@@ -5330,6 +5496,7 @@ private:
                    diagnostic_props.driverVersion, diagnostic_props.apiVersion,
                    (unsigned long long)(local_bytes / 1048576));
     }
+    print_renderer_header_once();
     pool(256);
     // 1x1 opaque white texture for draws without a texture (D3DTA_TEXTURE then
     // reads 1.0).
@@ -6398,6 +6565,11 @@ private:
   // image/buffer handles precede their backing memory; the loader is released
   // last.
   void shutdown() {
+    // #521: stop being the renderer a lost device reports from, before anything
+    // is torn down. Only this renderer's own registration is cleared, so an old
+    // renderer's teardown never clears a newer one's.
+    Renderer *self = this;
+    fault_owner().compare_exchange_strong(self, nullptr);
 #if defined(_WIN32)
     editor_retire_for_shutdown();
 #endif
@@ -6465,6 +6637,7 @@ private:
                    (unsigned long long)emission_draw_records,
                    (unsigned long long)emission_payloads, sizeof(Draw));
     destroy_tiled();
+    destroy_gpu_hang();
     for (auto &[k, t] : textures)
       destroy(t);
     for (auto &[key, cached] : height_images)

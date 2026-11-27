@@ -3020,6 +3020,62 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
               "A texture that didn't fit did not draw once its pixels came back");
     }
     {
+      // #521: two textures that don't fit (three failed allocations): the
+      // per-heap memory table prints once for the session, and every heap's
+      // reported use fits its size.
+      auto twice = play_texture_fault(3, 0);
+      const auto first = twice->create_texture(2, 2, native_pixels, 1);
+      const auto second = twice->create_texture(2, 2, native_pixels, 1);
+      draw_texture(*twice, first);
+      draw_texture(*twice, second);
+      std::size_t heaps = 0;
+      const auto within = memory_report_heaps_within_size(*twice, heaps);
+      require(memory_table_log_count(*twice) == 1 && heaps > 0 && within == heaps,
+              "Two play allocation failures did not print the memory table exactly once");
+    }
+    {
+      // #521: the device fault report follows the live renderer. Destroying an
+      // older one leaves the newer registered; destroying that clears it. The
+      // report never throws, with or without VK_EXT_device_fault (asked on a
+      // working device, the driver may answer with an error, printed as one line).
+      auto older = play_texture_fault(0, 0);
+      draw_texture(*older, -1);
+      auto newer = play_texture_fault(0, 0);
+      draw_texture(*newer, -1);
+      require(is_device_fault_owner(*newer), "The newest renderer is not the device fault owner");
+      std::printf("Device fault report: VK_EXT_device_fault %s\n",
+                  device_fault_enabled(*newer) ? "on" : "not supported");
+      older.reset();
+      require(is_device_fault_owner(*newer), "Destroying an older renderer cleared the newer one's registration");
+      reset_device_fault_report();
+      report_device_fault();  // prints one line
+      report_device_fault();  // once only: prints nothing
+      reset_device_fault_report();
+      newer.reset();
+      require(!any_device_fault_owner(), "Destroying the last renderer left a device fault owner");
+    }
+    {
+      // #521: a scene reset builds a new backend Renderer, which reports into
+      // the same session, so the setup header block printed once stays printed.
+      // Its one recovered allocation stays in the health line's session total.
+      auto resets = play_texture_fault(1, 0);
+      draw_texture(*resets, resets->create_texture(2, 2, native_pixels, 1));
+      const auto session = health_session_of(*resets);
+      require(renderer_header_printed(*resets), "The first renderer did not print the setup header");
+      resets->reset_scene_resources();
+      draw_texture(*resets, -1);
+      require(health_session_of(*resets) == session && renderer_header_printed(*resets),
+              "A scene reset's new renderer did not keep the session's header state");
+      sdlfe::HealthSnapshot totals;
+      require(resets->health(totals) && totals.mem_recoveries == 1,
+              "The health line's memory recoveries did not survive a scene reset");
+      auto fresh = play_texture_fault(0, 0);
+      draw_texture(*fresh, -1);
+      require(health_session_of(*fresh) != session && renderer_header_printed(*fresh),
+              "A second frame renderer did not get its own session");
+      std::puts("#521 health session, memory table and device fault checks passed");
+    }
+    {
       // (f) Only textures unused past the age limit are freed, and a freed one
       // draws its pixels again on its next use.
       auto aging = play_texture_fault(0, 0);

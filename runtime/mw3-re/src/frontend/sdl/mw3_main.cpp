@@ -1101,6 +1101,21 @@ bool watched_arena(const Args& a) { return !a.watch.arena_path.empty() && !a.hid
 
 namespace {
 int program(int argc, char** argv);
+
+// The display facts the launcher puts in a report's header (#521). Read once
+// the window is shown, which applies fullscreen (before that it's a hidden
+// 1280x960 window); a hidden run reports itself as hidden.
+void print_display_header(const sdlfe::SdlWindow& window, bool hidden) {
+  int width = 0, height = 0;
+  SDL_GetWindowSizeInPixels(window.sdl(), &width, &height);
+  const char* mode = hidden ? "hidden" : window.fullscreen() ? "borderless" : "windowed";
+  const SDL_DisplayMode* display = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window.sdl()));
+  const int refresh_hz = display ? int(display->refresh_rate + 0.5f) : 0;
+  // The same window property the renderer reads for its own HDR choice.
+  const bool hdr = SDL_GetBooleanProperty(SDL_GetWindowProperties(window.sdl()), SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN,
+                                          false);
+  sdlfe::print_lines(stdout, sdlfe::display_header_lines(width, height, mode, refresh_hz, hdr));
+}
 }
 
 // Ours (sdl_restart.h): the run, then, when it asked, the program again into
@@ -1122,6 +1137,7 @@ int main(int argc, char** argv) {
 namespace {
 int program(int argc, char** argv) {
   const auto process_epoch = sdlfe::benchmark::process_creation_epoch();
+  sdlfe::process_seconds();  // fixes the origin of every health line's t= (#521)
   if (sdlfe::crash_box_main(argc, argv)) return 0;
   // In order with the log on stderr. Windows' CRT has no line buffering (and takes size 0 as
   // an invalid argument): unbuffered there.
@@ -1962,6 +1978,50 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
                   (unsigned long long)SDL_GetPerformanceFrequency());
       std::fflush(stdout);
     }
+    // #521: the minute health line and health events for playtest reports,
+    // always on. Per frame it is one clock read and a ring write; a line is
+    // printed once a minute of play, never per frame.
+    sdlfe::GameHealth health;
+    // Test switch (spec section 4): one stall of this many ms, 30 s into the first mission.
+    const int test_stall_ms = [] {
+      const char* v = std::getenv("MW3_TEST_STALL_MS");
+      return v ? std::max(0, std::atoi(v)) : 0;
+    }();
+    if (test_stall_ms) std::printf("mw3: test switch MW3_TEST_STALL_MS=%d\n", test_stall_ms);
+    double mission_started_at = -1, next_memory_check_at = 0;
+    bool was_in_mission = false, test_stalled = false;
+    auto report_health = [&](bool drew_scene) {
+      const bool in_mission = input.in_mission && input.in_mission();
+      const bool shown = !(SDL_GetWindowFlags(window.sdl()) & SDL_WINDOW_HIDDEN);
+      if ((shown || a.hidden) && health.take_display_header()) print_display_header(window, a.hidden);
+      double now = sdlfe::process_seconds();
+      if (in_mission && !was_in_mission) mission_started_at = now;
+      was_in_mission = in_mission;
+      if (test_stall_ms && !test_stalled && in_mission && drew_scene && now - mission_started_at >= 30) {
+        test_stalled = true;
+        SDL_Delay(Uint32(test_stall_ms));
+        now = sdlfe::process_seconds();
+      }
+      const auto result = health.frame(now, in_mission, drew_scene);
+      if (result.hitch_event) std::printf("%s\n", sdlfe::format_hitch_event(result.frame_ms, now).c_str());
+      sdlfe::HealthSnapshot snapshot;
+      const bool memory_check_due = in_mission && drew_scene && now >= next_memory_check_at;
+      const bool have_snapshot =
+          (memory_check_due || result.line_due) && window.render() && window.render()->health(snapshot);
+      if (memory_check_due) {
+        next_memory_check_at = now + 1;
+        const int heap = have_snapshot ? health.video_memory_crossing(snapshot, now, 0) : -1;
+        if (heap >= 0)
+          std::printf("%s\n", sdlfe::format_video_memory_event(std::size_t(heap), snapshot.heaps[heap].used_bytes,
+                                                               snapshot.heaps[heap].budget_bytes, now)
+                                  .c_str());
+      }
+      if (result.line_due)
+        std::printf("%s\n", sdlfe::format_health_line(now, health.take_summary(), have_snapshot ? &snapshot : nullptr,
+                                                      sdlfe::resident_kb() / 1024)
+                                .c_str());
+      if (result.hitch_event || result.line_due) std::fflush(stdout);
+    };
     uint64_t frame_last = 0;
     auto record_frame_time = [&](int frame) {
       if (a.frame_times <= 0 || frame < a.frame_times) return;
@@ -2129,6 +2189,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         }
         // Counted from the first frame with the scene: then every frame shown
         // (the pause and end screens draw none, and --frames must still end the run).
+        report_health(engine.drew_scene());
         if (!a.shot_any && !engine.drew_scene() && shots == 0) return;
         ++shots;
         record_frame_time(shots);
@@ -2351,6 +2412,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     if (!debug && !launch)
       engine.on_present = [&](int) {
         ++menu_frames;
+        report_health(engine.drew_scene());
         if (app.current() == &mech3::states().main) sdlfe::mark_menu_ready();
         record_frame_time(menu_frames);
         if (chain) chain->frame();

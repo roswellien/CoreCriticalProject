@@ -581,7 +581,27 @@ public:
   }
   void benchmark_load() override {
     drain();
+    retire_memory_pressure(renderer_->memory_pressure);
     renderer_->memory_pressure = {};
+  }
+  void retire_memory_pressure(const vk::Renderer::VideoMemoryPressure &pressure) {
+    retired_memory_pressure_.recoveries += pressure.recoveries;
+    retired_memory_pressure_.model_omissions += pressure.model_omissions;
+    retired_memory_pressure_.texture_substitutions += pressure.texture_substitutions;
+    retired_memory_pressure_.preload_stops += pressure.preload_stops;
+  }
+  bool health(sdlfe::HealthSnapshot &snapshot) override {
+    // The render thread's copy (heaps and memory trouble counts); renderer_ is
+    // replaced only on this producer thread, after the worker drains.
+    snapshot = renderer_ ? renderer_->health_snapshot() : sdlfe::HealthSnapshot{};
+    snapshot.mem_recoveries += retired_memory_pressure_.recoveries;
+    snapshot.models_skipped += retired_memory_pressure_.model_omissions;
+    snapshot.textures_swapped += retired_memory_pressure_.texture_substitutions;
+    snapshot.preload_stops += retired_memory_pressure_.preload_stops;
+    snapshot.skins = prepared_.skin_texture_loads();
+    snapshot.page_loads = retired_page_loads_ + surface_normals_.cache.page_loads;
+    snapshot.worker_waits = worker_ ? worker_->statistics().waits : 0;
+    return true;
   }
 
   bool benchmark_ready() override {
@@ -926,6 +946,22 @@ public:
     return {entry.width, entry.height, entry.source_width, entry.source_height,
             entry.generated_rgba, entry.pixels};
   }
+  // #521 test switches that act inside a mission. The fault lives on the
+  // Renderer, which every scene reset replaces, so it is armed at the first
+  // mission start (the worker is idle: mission_changed has just drained).
+  void arm_test_switches_once(const ::platform::MissionIdentity &identity) {
+    if (test_switches_armed_ || identity.world_index < 0 || identity.number <= 0 || !renderer_)
+      return;
+    test_switches_armed_ = true;
+    if (bridge_config_.test_fail_alloc) {
+      vk::PreloadFaultInjection fault{};
+      fault.fail_next_play_texture_allocations = bridge_config_.test_fail_alloc;
+      fault.injected_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+      renderer_->set_preload_fault(fault);
+    }
+    if (bridge_config_.test_device_lost)
+      renderer_->hang_gpu_after(std::chrono::seconds(30));
+  }
   void set_preload_fault_for_test(const vk::PreloadFaultInjection &fault) {
     drain();
     renderer_->set_preload_fault(fault);
@@ -1190,6 +1226,7 @@ public:
     staging_early_logged_ = false;
     staging_oversized_logged_ = false;
     staging_first_flush_pending_ = true;
+    arm_test_switches_once(identity);
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
     // An arena match (#507) may borrow a campaign mission's lighting for its
@@ -1301,6 +1338,7 @@ public:
     for (const auto &[index, handle] : surface_normal_textures_)
       textures_.at(handle) = {};
     surface_normal_textures_.clear();
+    retired_page_loads_ += surface_normals_.cache.page_loads;  // the health line's session total
     surface_normals_ = SurfaceNormalState{};
     deferred_material_binding_.reset();
     native_context_ = {};
@@ -2611,6 +2649,7 @@ private:
             lighting_.enabled,
         display_lighting(), geometry_mode_ != cc::geometry::Mode::legacy,
         bridge_config_);
+    renderer_->set_health_session(health_session_);
     renderer_->producer_view_observer = producer_observer_;
     texture_limit_ = renderer_->max_texture_dimension(native_window_);
     if (!native_wsi_ && !renderer_->dxgi_presenting()) {
@@ -2638,6 +2677,7 @@ private:
       retired_normal_draws_ += renderer_->normal_draws;
       retired_geometry_buffers_ += renderer_->retired_model_buffers;
       const auto pressure = renderer_->memory_pressure;
+      if (!benchmark_run_) retire_memory_pressure(pressure);  // a benchmark carries it over instead
       initialize_renderer();
       if (benchmark_run_) renderer_->memory_pressure = pressure;
       submitted_textures_.clear();
@@ -3337,6 +3377,13 @@ private:
   };
   std::map<std::uint64_t, NativeGeometry> native_geometry_;
   std::uint64_t native_geometry_prune_passes_{};
+  // #521: once-per-session report state shared by every Renderer this frame
+  // renderer builds; declared before renderer_ so it outlives each of them.
+  sdlfe::HealthSession health_session_;
+  // Totals the health line keeps across scene resets, which replace these sources.
+  std::uint64_t retired_page_loads_{};
+  bool test_switches_armed_{};
+  vk::Renderer::VideoMemoryPressure retired_memory_pressure_{};
   std::unique_ptr<vk::Renderer> renderer_;
   // Declared after renderer_: join before destroying the backend, including
   // unwinding. Only the producer accesses textures and builds the next scene.
@@ -3443,6 +3490,13 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   }
   auto config = RendererBridgeConfig::from_diagnostic_env(
       !assets.dynamic_lighting_explicit, !assets.sun_shadows_explicit);
+  // #521: a report made with a test switch says so.
+  if (config.test_vram_budget_mb)
+    std::printf("mw3: test switch MW3_TEST_VRAM_BUDGET_MB=%u\n", config.test_vram_budget_mb);
+  if (config.test_fail_alloc)
+    std::printf("mw3: test switch MW3_TEST_FAIL_ALLOC=%u\n", config.test_fail_alloc);
+  if (config.test_device_lost)
+    std::printf("mw3: test switch MW3_TEST_DEVICE_LOST=1\n");
   config.environment_packs_explicit = assets.environment_packs_explicit;
   if (assets.environment_packs_explicit) {
     // The launcher's selected environment packs own normal-map inputs. Stale
@@ -3694,6 +3748,32 @@ bool has_partial_model_buffer_entry(VulkanFrameRenderer &renderer, std::uint64_t
 std::size_t video_memory_full_log_count(VulkanFrameRenderer &renderer) {
   return preload_impl(renderer).backend_for_test().video_memory_full_log_count();
 }
+std::size_t memory_table_log_count(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).backend_for_test().health_session().memory_table_log_count.load();
+}
+std::size_t memory_report_heaps_within_size(VulkanFrameRenderer &renderer, std::size_t &heaps) {
+  const auto report = preload_impl(renderer).backend_for_test().memory_report();
+  heaps = report.size();
+  std::size_t within = 0;
+  for (const auto &heap : report)
+    within += heap.used <= heap.size;
+  return within;
+}
+const void *health_session_of(VulkanFrameRenderer &renderer) {
+  return &preload_impl(renderer).backend_for_test().health_session();
+}
+bool renderer_header_printed(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).backend_for_test().health_session().renderer_header_printed.load();
+}
+bool is_device_fault_owner(VulkanFrameRenderer &renderer) {
+  return vk::Renderer::device_fault_owner_for_test() == &preload_impl(renderer).backend_for_test();
+}
+bool device_fault_enabled(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).backend_for_test().device_fault_enabled_for_test();
+}
+bool any_device_fault_owner() { return vk::Renderer::device_fault_owner_for_test() != nullptr; }
+void reset_device_fault_report() { vk::Renderer::reset_device_fault_report_for_test(); }
+void report_device_fault() { vk::Renderer::report_device_fault_for_test(); }
 std::uint64_t scene_render_frame(VulkanFrameRenderer &renderer) {
   return preload_impl(renderer).backend_for_test().render_frame();
 }

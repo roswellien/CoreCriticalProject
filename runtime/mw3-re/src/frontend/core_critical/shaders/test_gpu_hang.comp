@@ -1,0 +1,16 @@
+#version 450
+// Test only (#521, MW3_TEST_DEVICE_LOST): a dispatch that never ends, so the
+// GPU timeout resets the driver and the game's lost-device report can be seen
+// working. The bound comes from a push constant (0xFFFFFFFF) and the counter
+// wraps before reaching it, so the compiler can't prove the loop ends; the
+// result is stored so the loop can't be removed as dead code.
+layout(local_size_x = 1) in;
+layout(push_constant) uniform Bound { uint limit; } bound;
+layout(std430, binding = 0) buffer Sink { uint value; } sink;
+
+void main() {
+  uint state = 1u;
+  for (uint i = 0u; i < bound.limit; i = (i + 1u) % bound.limit)
+    state = state * 1664525u + 1013904223u;
+  sink.value = state;
+}

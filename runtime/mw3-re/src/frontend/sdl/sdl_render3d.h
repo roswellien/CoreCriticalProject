@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "frontend/sdl/game_health.h"
 #include "frontend/sdl/sdl_fit.h"
 #include "platform/render3d.h"
 
@@ -104,6 +105,9 @@ struct CoreCriticalAssets {
 class FrameRenderer : public platform::Render3D {
  public:
   virtual bool ok() const = 0;
+  // #521: the renderer's figures for the minute health line, read on the
+  // producer thread without waiting for the GPU. False when the backend has none.
+  virtual bool health(sdlfe::HealthSnapshot&) { return false; }
   virtual void benchmark_load() {}
   virtual bool benchmark_ready() { return false; }
   virtual bool wait_benchmark_present(double) { return false; }
