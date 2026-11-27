@@ -21,6 +21,7 @@
 #include "gamez/zclass/cls_di.h"
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/cls_world.h"
+#include "gamez/zclass/interp.h"
 #include "gamez/zclass/object3d.h"
 #include "gamez/zclass/window.h"
 #include "gamez/zinput/zinput.h"
@@ -845,8 +846,11 @@ void radar_light(Mech& m) {
 
 void program_radar_light(void* mech) { if (mech) radar_light(*static_cast<Mech*>(mech)); }
 
+bool program_place_step_camera(zcls::Node* camera);
+
 void wire_hud() {
   set_hud_hooks(&g_hooks);
+  zcls::interp::set_step_camera_placer(&program_place_step_camera);  // ours (#485)
   // The mech's, the weapons' and the damage's calls on the HUD (playtest #6:
   // with no screen, Enter (0x27) and every HUD key found none): the screen,
   // the weapons list's layout 0x00446240, refresh 0x00446520, the fire mark
@@ -1015,6 +1019,7 @@ void wire_hud() {
 
 void unwire_hud() {
   set_hud_hooks(nullptr);
+  zcls::interp::set_step_camera_placer(nullptr);
   set_hud_in_steps(false);  // ours (#485): the next HUD starts on the drawn frame's path until a stepped frame says
 
   heat_calls().screen = nullptr;
@@ -1042,6 +1047,18 @@ void program_hud_update(float dt) {
 }
 void program_hud_step(float dt) {
   if (Mech* m = program_view_mech()) hud_step(*m, dt);
+}
+
+// Ours (#485): the viewed mech's zoom window camera, placed in each fixed step
+// from the exact player camera and reticle point (interp::prepare_cameras runs
+// it just before preparing that camera). The draw places it again from the
+// drawn (blended) camera for its own picture, and that never stays.
+bool program_place_step_camera(zcls::Node* camera) {
+  Mech* m = program_view_mech();
+  Hud* hud = m ? hud_of(*m) : nullptr;
+  if (!hud || g_hooks.node(hud->reticle.zoom.view.camera) != camera) return false;
+  hud->reticle.zoom.place_camera_pose();
+  return true;
 }
 
 void program_hud_force_over(bool on) { g_hooks.force_over = on; }

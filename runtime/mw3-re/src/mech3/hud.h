@@ -477,6 +477,9 @@ class HudZoomWindow : public HudZoomView {
   // reticle's aim point, in its zone; the text (distance, the aimed object's
   // name). Nothing while hidden with no scale.
   void place_camera();
+  // Ours (#485): place_camera's camera part alone (its place, angles and zone),
+  // which each fixed step runs from the exact scene (program_place_step_camera).
+  void place_camera_pose();
   // +0x28 0x00442f50: the zoom's 3D pass (hud.md section 23). Direct3D only
   // (the software path is not ported, CLAUDE.md Rendering).
   void draw3d(float dt) override;

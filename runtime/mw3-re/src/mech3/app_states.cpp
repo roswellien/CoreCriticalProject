@@ -29,6 +29,7 @@
 #include "mech3/fixed_step.h"
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/interp.h"
+#include "gamez/zinput/zinput.h"
 
 namespace mech3 {
 
@@ -329,15 +330,21 @@ void CoreState::start_mission() {
   Engine& en = e();
   const bool strict = en.replay_strict();
   en.timer_update();
+  const ztimer::State before_sleep = ztimer::state();
   if (!strict) en.sleep(30);
   en.timer_update();
   // Ours (#485): this frame's action lists are a simulation step too, so with
-  // the fixed step they run on 1/30 s, not on the time the sleep measured.
+  // the fixed step they run on 1/30 s, not on the time the sleep measured, and
+  // the clock's totals move on by that step too: the steps' clock starts from
+  // them (restart_fixed_step), so none of the sleep's measured time stays in it.
   // Not in a 3D replay, which keeps the drawn frame's clock (CoreState::frame),
   // its strict ticks their own frozen one (below).
   if (fixed_step_enabled() && !en.replay_on() && !strict) {
     ztimer::State& timer = ztimer::state();
-    timer.dt = timer.raw_dt = static_cast<float>(FixedStep::kStepSeconds);
+    const float step = static_cast<float>(FixedStep::kStepSeconds);
+    timer.dt = timer.raw_dt = step;
+    timer.total_scaled = before_sleep.total_scaled + step;
+    timer.total_raw = before_sleep.total_raw + step;
     sync_frame_step(timer.dt, timer.total_scaled);
   }
   en.debug_mark("Dummy Frame");
@@ -508,9 +515,9 @@ void CoreState::run_fixed_steps() {
 
 // Ours (#485): no time built up carries over a mission start or a return
 // from the pause menu; the steps' clock starts from the timer's.
-void CoreState::restart_fixed_step() {
+void CoreState::restart_fixed_step(bool resuming) {
   mission_fixed_step().reset();
-  zcls::interp::clear();
+  zcls::interp::clear(resuming);
   step_total_scaled_ = ztimer::state().total_scaled;
   step_total_raw_ = ztimer::state().total_raw;
 }
@@ -529,11 +536,14 @@ bool CoreState::frame() {
   // one pass of the lists a drawn frame, as before #485.
   const bool fixed = fixed_step_enabled() && !replay;
   std::optional<crt::DrawnFrameRandom> drawn_frame_random;
+  // The input the drawing reads, as one poll for the frame (zinput.h).
+  std::optional<zin::DrawnFrameInput> drawn_frame_input;
   world_tick_in_draw_ = !fixed;
   en.hud_in_steps(fixed);
   if (fixed) {
     run_fixed_steps();
     drawn_frame_random.emplace();
+    drawn_frame_input.emplace();
   } else if (!poll_and_run_lists(replay)) {
     return false;  // a replay that has stopped: no world frame
   }
@@ -955,7 +965,7 @@ void CoreState::suspend(uint32_t) {
 // goes on the mech), 7 is the start of the mission.
 void CoreState::resume(uint32_t arg) {
   Engine& en = e();
-  restart_fixed_step();  // ours (#485): the pause's time is not caught up
+  restart_fixed_step(true);  // ours (#485): the pause's time is not caught up
   en.mouse_set_accel(en.mouse_accel_x(), en.mouse_accel_y());
   en.set_screen_mode(en.in_game_vmode());
   pick_renderer();

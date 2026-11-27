@@ -25,6 +25,15 @@ constexpr int kWorldOffset = 0x60;
 constexpr uint32_t kWorldStale = 0x20;
 // Node flag: in the world tree, so node_to_world keeps its cache (0x004ed280).
 constexpr uint32_t kInWorldTree = 0x80000;
+constexpr uint32_t kActive = 4;
+// Node flag 0x2000000 (mech3ax UNK25): set on a node and its subtree when it
+// moves (0x004fb600, node_mark_unk25), which skips a child that still has it;
+// every renderer clears it on the nodes it walks, as do the line queries. The
+// original's one draw after each frame cleared it, so each frame's moves marked
+// the children again; here each step clears it (settle_world_caches) and
+// `restore` gives back what the draws cleared, so how many frames are drawn
+// between two steps (none below 30 fps) never changes what a move marks.
+constexpr uint32_t kChangedMark = 0x2000000;
 constexpr std::size_t kMatrixBytes = 12 * sizeof(float);
 
 struct Transforms {
@@ -185,6 +194,19 @@ std::vector<CameraBefore> g_cameras_before;
 // camera's +0x08 and +0x0c): put back as they were too.
 std::vector<Node*> g_followers;
 uint8_t g_zones_before[4];  // the zone list the weapons' casts read (zmod::zones)
+// The cameras the last mission frame drew (render_world's, in its order),
+// taken at `restore`: what each step prepares. Kept apart from
+// rendered_cameras, which a pause menu's own drawing may add to.
+std::vector<Node*> g_drawn_cameras;
+StepCameraPlacer g_step_placer = nullptr;
+// The cameras the placer placed in a step: a draw's changes to them never stay.
+std::vector<Node*> g_step_placed;
+// The nodes that had kChangedMark when the draw began.
+std::vector<Node*> g_marked;
+
+bool step_placed(const Node* node) {
+  return std::find(g_step_placed.begin(), g_step_placed.end(), node) != g_step_placed.end();
+}
 
 void keep_camera(Node* node) {
   auto* d = static_cast<Camera*>(node->data);
@@ -203,14 +225,16 @@ void restore_cameras() {
   g_blended_cameras.clear();
   for (const CameraBefore& c : g_cameras_before) {
     if (!is_live_camera(c.node)) continue;
-    // Placed again during the draw (the zoom window's view, by the HUD): its
-    // new place and what was worked out from it stand.
+    // Placed again during the draw (a HUD view, the debug or arena camera):
+    // its new place and what was worked out from it stand, unless the steps
+    // place it themselves (the zoom window's, set_step_camera_placer).
     CameraPose now;
-    if (c.posed && read_camera(c.node, &now) && !same_pose(now, c.left)) continue;
+    if (!step_placed(c.node) && c.posed && read_camera(c.node, &now) && !same_pose(now, c.left)) continue;
     std::memcpy(static_cast<Camera*>(c.node->data)->raw, c.data, sizeof c.data);
   }
   g_cameras_before.clear();
   std::memcpy(zmod::zones().list, g_zones_before, sizeof g_zones_before);
+  g_drawn_cameras = rendered_cameras();
 }
 
 Object3d* object_data(Node* node) { return static_cast<Object3d*>(node->data); }
@@ -365,6 +389,11 @@ void settle_world_caches() {
   update_changed();
   for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
     Node* node = item->node;
+    // The draw's clear of the changed mark (kChangedMark), once a step: on
+    // every active node in the world tree, as the original's draw walked them.
+    const uint32_t flags = node->flags();
+    if ((flags & kChangedMark) && (flags & kActive) && (flags & kInWorldTree))
+      node->set_flags(flags & ~kChangedMark);
     if (!is_live_object3d(node) || !(node->flags() & kInWorldTree)) continue;
     if (!(object_data(node)->get<uint32_t>(kFlagsOffset) & kWorldStale)) continue;
     // As class.cpp's world_matrix: the chain onto a matrix of its own, which
@@ -377,16 +406,25 @@ void settle_world_caches() {
   }
 }
 
+void set_step_camera_placer(StepCameraPlacer placer) { g_step_placer = placer; }
+
+namespace {
+void place_and_prepare(Node* camera) {
+  if (g_step_placer && g_step_placer(camera) && !step_placed(camera)) g_step_placed.push_back(camera);
+  camera_prepare(camera);
+}
+}  // namespace
+
 void prepare_cameras() {
   // Before the mission's first draw (a frame of two steps at below 30 fps
   // runs both before it), the cameras on the cameras' list a draw would draw.
-  if (rendered_cameras().empty()) {
+  if (g_drawn_cameras.empty()) {
     for (ListItem* item = list_head(kCameras); item; item = item->next)
-      if (is_live_camera(item->node) && camera_would_draw(item->node)) camera_prepare(item->node);
+      if (is_live_camera(item->node) && camera_would_draw(item->node)) place_and_prepare(item->node);
     return;
   }
-  for (Node* camera : rendered_cameras())
-    if (is_live_camera(camera)) camera_prepare(camera);
+  for (Node* camera : g_drawn_cameras)
+    if (is_live_camera(camera)) place_and_prepare(camera);
 }
 
 void apply(float alpha) {
@@ -398,8 +436,10 @@ void apply(float alpha) {
   std::memcpy(g_zones_before, zmod::zones().list, sizeof g_zones_before);
   // Walked from list 6, never from the records: only a node on the list is
   // known to be live, so a record is only ever read through a live node.
+  g_marked.clear();
   for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
     Node* node = item->node;
+    if (node->flags() & kChangedMark) g_marked.push_back(node);
     if (is_live_camera(node)) {
       keep_camera(node);
       apply_camera(node, alpha);
@@ -473,6 +513,9 @@ void restore() {
     data->put<uint32_t>(kFlagsOffset, b.data_flags);
   }
   g_before_draw.clear();
+  // The draw's renderers cleared the mark on what they walked; the steps do that.
+  for (Node* node : g_marked) node->set_flags(node->flags() | kChangedMark);
+  g_marked.clear();
   restore_cameras();
   set_drawing_between_steps(false);
 }
@@ -486,14 +529,14 @@ void forget(const Node* node) {
                                         [node](const CameraBefore& c) { return c.node == node; }),
                          g_cameras_before.end());
   g_followers.erase(std::remove(g_followers.begin(), g_followers.end(), node), g_followers.end());
-  std::vector<Node*>& drawn = rendered_cameras();
-  drawn.erase(std::remove(drawn.begin(), drawn.end(), node), drawn.end());
+  for (std::vector<Node*>* nodes : {&rendered_cameras(), &g_drawn_cameras, &g_step_placed, &g_marked})
+    nodes->erase(std::remove(nodes->begin(), nodes->end(), node), nodes->end());
   g_before_draw.erase(std::remove_if(g_before_draw.begin(), g_before_draw.end(),
                                      [node](const BeforeDraw& b) { return b.node == node; }),
                       g_before_draw.end());
 }
 
-void clear() {
+void clear(bool keep_drawn_cameras) {
   g_records.clear();
   g_order.clear();
   g_cameras.clear();
@@ -501,6 +544,8 @@ void clear() {
   g_cameras_before.clear();
   g_followers.clear();
   rendered_cameras().clear();
+  if (!keep_drawn_cameras) g_drawn_cameras.clear(), g_step_placed.clear();
+  g_marked.clear();
   g_before_draw.clear();
   // A draw that threw between apply and restore leaves no frame half drawn here.
   set_drawing_between_steps(false);

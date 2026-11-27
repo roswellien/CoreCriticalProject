@@ -1410,13 +1410,7 @@ void HudZoomWindow::place_camera() {
   HudHooks& h = *g_hooks;
   Hud* hd = static_cast<Hud*>(source);  // +0x168
   const zwep::HitRecord& hit = hd->reticle.hit;  // 0x00444330
-  float place[3], angles[3];
-  h.player_camera_place(place);
-  h.camera_set_position(view.camera, place);
-  const float to[3] = {hit.point.x, hit.point.y, hit.point.z};
-  zmth::direction_angles(place, to, angles);
-  h.camera_set_angles(view.camera, angles);
-  h.camera_set_zone(view.camera, h.player_camera_zone());
+  place_camera_pose();
   text.show_for(-1.0f);
   float distance = hd->reticle.aim_distance;  // 0x00444690
   const char* name = nullptr;
@@ -1436,6 +1430,19 @@ void HudZoomWindow::place_camera() {
   std::snprintf(d, sizeof d, "%.1f", static_cast<double>(distance));  // 0x005e406c
   if (name) text.set_text_id(0x22d, name, d);
   else text.set_text_id(0x22e, d);
+}
+
+void HudZoomWindow::place_camera_pose() {
+  if ((flags & ztwod::kHidden) && zoom == 0.0f) return;
+  HudHooks& h = *g_hooks;
+  const zwep::HitRecord& hit = static_cast<Hud*>(source)->reticle.hit;  // 0x00444330
+  float place[3], angles[3];
+  h.player_camera_place(place);
+  h.camera_set_position(view.camera, place);
+  const float to[3] = {hit.point.x, hit.point.y, hit.point.z};
+  zmth::direction_angles(place, to, angles);
+  h.camera_set_angles(view.camera, angles);
+  h.camera_set_zone(view.camera, h.player_camera_zone());
 }
 
 // Mech3.exe 1.2 @ 0x00442f50. The zoom camera placed and the player's own

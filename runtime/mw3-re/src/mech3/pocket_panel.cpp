@@ -7,6 +7,7 @@
 #include "crt/msvc_math.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "mech3/zai_brain.h"
+#include "mech3/hud.h"
 #include "mech3/mech.h"
 #include "mech3/mech_pocket.h"
 #include "mech3/sensors.h"
@@ -688,6 +689,11 @@ void pocket_frame(PocketControls& c, float dt) {
     default:
       break;
   }
+  // Ours (#485, docs/fixed-step.md): the pick request (+0x184) is the poll's,
+  // and pocket_draw clears it after the frame's one pass here. With the fixed
+  // step a frame may run two or more passes before its draw (below 30 fps), so
+  // each pass clears it itself and a later one doesn't skip the picking.
+  if (hud_in_steps()) c.x184 = 0;
 }
 
 }  // namespace mech3

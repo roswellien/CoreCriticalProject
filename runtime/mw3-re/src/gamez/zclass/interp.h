@@ -32,14 +32,23 @@ void settle_world_caches();
 // the last draw drew, from its exact place, as the original's draw after each
 // frame did; `restore` puts each draw's own, from blended places, back.
 void prepare_cameras();
+// A camera the draw places itself from the drawn (blended) scene, which the
+// simulation reads through prepare_cameras: the reticle's zoom window. Called by
+// prepare_cameras just before it prepares each camera; true when it placed the
+// camera from the step's exact scene, and then `restore` always puts back what
+// a draw did to that camera, so it moves only in the steps.
+using StepCameraPlacer = bool (*)(Node* camera);
+void set_step_camera_placer(StepCameraPlacer placer);
 void record();
 void apply(float alpha);
 void restore();
 // A node's slot is being freed: its records go, so a node made in the same
 // slot starts fresh (node_slot_free).
 void forget(const Node* node);
-// Everything dropped (a mission start).
-void clear();
+// Everything dropped (a mission start). A return from the pause menu keeps the
+// cameras the last mission frame drew, so the steps before the next draw
+// prepare the same cameras that frame did.
+void clear(bool keep_drawn_cameras = false);
 
 // The blend of two 3x4 transforms (rows right, up, forward, then the position)
 // at t in 0..1, as `apply` does it; for the tests.

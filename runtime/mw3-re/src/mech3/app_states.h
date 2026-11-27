@@ -144,7 +144,8 @@ class CoreState : public State {
   // variable step or as fixed 1/30 s steps, and the fixed step's restart.
   bool poll_and_run_lists(bool replay);  // false: a 3D replay that has stopped
   void run_fixed_steps();
-  void restart_fixed_step();
+  // resuming: back from the pause menu, the cameras the last frame drew kept.
+  void restart_fixed_step(bool resuming = false);
 
   Handle window_rect_ = 0;            // +0x08
   Handle display_rect_ = 0;           // +0x0c

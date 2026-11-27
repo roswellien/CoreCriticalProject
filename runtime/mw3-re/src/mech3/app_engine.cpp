@@ -687,7 +687,8 @@ void GameEngine::input_set_mode(uint32_t mode) { zin::set_mode(mode); }
 void GameEngine::input_poll(uint8_t callbacks) {
   zin::poll(callbacks != 0);
   for (int32_t key = 0; key < 0x100; ++key)
-    if (zin::key_state(key) == 1) fresh_keys_[key] = true;
+    // A press this poll: 1, or 5 when let go again before it (a quick tap).
+    if ((zin::key_state(key) & zin::kPressed) != 0) fresh_keys_[key] = true;
 }
 // Only the plain keys (DIK codes below 0x100) are kept; a key with Alt, Ctrl
 // or Shift (0x100 and up) is never fresh here.
@@ -697,6 +698,7 @@ bool GameEngine::key_pressed_this_frame(int32_t key) {
 }
 void GameEngine::frame_keys_begin() {
   for (bool& fresh : fresh_keys_) fresh = false;
+  zin::frame_input_begin();
 }
 
 bool GameEngine::replay_on() { return replay_hooks() != nullptr; }

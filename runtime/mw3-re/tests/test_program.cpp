@@ -8801,7 +8801,7 @@ TEST(mission_c4b_m6_camera_zone_follows_the_ground_headless) {
     EXPECT(outside.set == 1 && !std::memcmp(outside.cam, one, 4) && !std::memcmp(outside.render, one, 4));
     EXPECT(!std::memcmp(outside.mech, one, 4) && outside.node_zone == 1);
     EXPECT(outside.v1 == 1 && outside.v22 == 0 && outside.v44 == 0);
-    EXPECT(inside.node_zone == 1 || inside.node_zone == 44);
+    EXPECT(inside.node_zone == (mech3::fixed_step_enabled() ? 44 : 1));
     EXPECT(inside.set == 1 && !std::memcmp(inside.cam, tunnel, 4) && !std::memcmp(inside.render, tunnel, 4));
     EXPECT(!std::memcmp(inside.mech, tunnel, 4));
     EXPECT(inside.v1 == 1 && inside.v22 == 0 && inside.v44 == 1);
@@ -9284,7 +9284,9 @@ TEST(mission_c1m1_vehicles_run_their_frames_headless) {
         // so where it waits depends on the step: 3.6 m off at 1/30 s steps
         // (ours, #485), 0.7 m with a step per 16 ms frame.
         const float node08[3] = {-1826.3f, -20.0f, -1571.9f};
-        EXPECT(dist(k.at_go, node08) < 5.0f);
+        const float off = dist(k.at_go, node08);
+        if (mech3::fixed_step_enabled()) EXPECT(off > 3.4f && off < 3.8f);
+        else EXPECT(off < 3.0f);
     }
     app.stop_game();
     app.exit_instance();

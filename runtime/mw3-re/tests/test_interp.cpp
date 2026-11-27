@@ -114,6 +114,37 @@ TEST(interp_restore_gives_back_the_whole_flags_word) {
   zcls::interp::clear();
 }
 
+// A move marks a node and its children changed (0x2000000), skipping a child
+// that still has the mark; the renderers clear it on what they walk. With the
+// fixed step the draws' clearing never stays (two steps may run with no draw
+// between them, below 30 fps): restore gives the marks back, and each step's
+// settle_world_caches clears them on the active nodes in the world tree, so the
+// next step's move marks the child again.
+TEST(interp_changed_marks_are_cleared_by_the_step_not_the_draw) {
+  constexpr uint32_t kMark = 0x2000000, kActive = 4, kInWorldTree = 0x80000;
+  zcls::interp::clear();
+  zcls::Node* parent = zcls::object3d_create();
+  zcls::Node* child = zcls::object3d_create();
+  EXPECT(parent != nullptr && child != nullptr);
+  if (!parent || !child) return;
+  zcls::node_add_child(parent, child);
+  for (zcls::Node* n : {parent, child}) n->set_flags((n->flags() | kActive | kInWorldTree) & ~kMark);
+  zcls::node_mark_unk25(parent);
+  EXPECT((parent->flags() & kMark) && (child->flags() & kMark));
+  zcls::interp::record();
+  zcls::interp::apply(0.5f);
+  for (zcls::Node* n : {parent, child}) n->set_flags(n->flags() & ~kMark);  // what the renderers do
+  zcls::interp::restore();
+  EXPECT((parent->flags() & kMark) && (child->flags() & kMark));
+  zcls::interp::settle_world_caches();
+  EXPECT(!(parent->flags() & kMark) && !(child->flags() & kMark));
+  // The child's world cache brought up to date, then the parent moves again.
+  static_cast<zcls::Object3d*>(child->data)->put<uint32_t>(0, 0);
+  zcls::node_mark_unk25(parent);
+  EXPECT((child->flags() & kMark) && (static_cast<zcls::Object3d*>(child->data)->get<uint32_t>(0) & 0x20));
+  zcls::interp::clear();
+}
+
 TEST(interp_snaps_a_jump_and_a_new_node) {
   zcls::interp::clear();
   zcls::Node* node = zcls::object3d_create();

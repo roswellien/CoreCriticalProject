@@ -43,6 +43,14 @@ reads TARGET's bracket where it was last drawn, which the HUD places as it
 draws, so with the reticle at the bracket's very edge the answer can differ by
 a pixel's worth between frame rates.
 
+The pocket commander's pick request (`PocketControls` +0x184) is set by the
+panel's buttons and read by `pocket_frame` in the step; the original cleared it
+in the drawn frame after its one pass (`pocket_draw`). With the fixed step each
+pass clears it itself, so a frame of two steps doesn't skip the second's
+picking. The mission's first frame (`start_mission`'s dummy frame) runs on one
+step's time and moves the clock's totals on by that step, not by its measured
+30 ms sleep, so the steps' clock starts a whole step after the one before it.
+
 A 3D replay (`--replay3d`) runs as before #485, one pass of the lists a drawn
 frame with the replay's hooks around it: it simulates nothing (every mech is
 posed from the log's time), and its clock, its stop and its benchmark go by
@@ -83,15 +91,21 @@ each step `prepare_cameras` runs that part of the draw's set-up
 (`zcls::camera_prepare`, taken out of `render_world`) for the cameras the last
 draw drew, from their exact places, as the original's draw after each of its
 frames did. Below 30 fps, when a frame runs two steps, the step between them
-gets it too; before the mission's first draw, when no draw has named its
-cameras yet (a mission start, a return from the pause menu), it prepares the
-cameras on the engine's camera list (list 8) that have a world and a window
-with area. That stands in for the set a draw would draw; c2m1, c2m3 and c1m1
-match step for step at 100 and 4 ms against 33. It can differ where a camera
-with area is not drawn (the zoom window open across the pause menu), for the
-steps before the first draw after it. One exception: the zoom window's camera is placed by the HUD
-during the draw, from the drawn view, so with the zoom window open its own
-state follows the drawn (blended) view.
+gets it too. A return from the pause menu keeps the cameras the last mission
+frame drew (`interp::clear(true)`); before the mission's first draw, when no
+draw has named its cameras yet, it prepares the cameras on the engine's camera
+list (list 8) that have a world and a window with area, which stands in for the
+set a draw would draw.
+
+The reticle's zoom window places its camera itself, during the draw (0x004436c0:
+at the player camera, turned to the reticle point, in its zone), so it would
+follow the drawn (blended) view, and the last camera prepared leaves its zone
+list for the weapons' casts. So the HUD places it in each step from the exact
+view (`HudZoomWindow::place_camera_pose`, called by `prepare_cameras` through
+`interp::set_step_camera_placer` just before it prepares that camera), and each
+draw's own placing of it is always put back. Other cameras a draw moves (the
+debug and arena cameras, the HUD's MFD views, which draw one model, not the
+world) keep their new place, as before; none of them is prepared for the steps.
 
 The camera's move in a draw (`horizon_follow`) also runs the class lists'
 frame update (`frame_update`, 0x004f7f70): the sequences and animates by the
@@ -116,7 +130,19 @@ once a step however many frames are drawn. Before this, c2m3 ran differently
 at 7 and 33 ms frames: a Harasser's turret turned against a matrix the last
 draw had rebuilt from its blended hull. The picture is
 up to one step (33 ms) behind the newest simulation state, the usual cost of
-this method.
+this method: at exactly 30 fps each frame shows the step before the newest
+(`alpha` 0), where the original drew the newest.
+
+A move marks a node and its subtree changed (node flag 0x2000000, 0x004fb600),
+skipping a child that already has the mark, and the renderers clear it on the
+nodes they walk. The original cleared it once a frame, after the frame's moves.
+Here the draws' clearing is given back (`restore`), and each step's
+`settle_world_caches` clears it on every active node in the world tree, so a
+frame of two steps and no draw between them (below 30 fps) still marks the
+children at the second step's moves. The renderers also refresh each node's
+bounding sphere (+0x64..+0x70) and its "sphere stale" bit (+0x2c bit 0) from the
+blended place; those are read only by the renderers (the line and sphere queries
+work from the node's box and the matrix stack), so they stay as the draw left them.
 
 ## Input
 
@@ -127,13 +153,25 @@ mouse's motion between reads and latches buttons pressed in between
 (`frontend/sdl/sdl_input.cpp`).
 
 A drawn frame follows none, one or several polls, so drawn-frame code that
-checks a key for a fresh press (its state 1) uses `key_pressed_this_frame`,
-which keeps every plain key pressed at any poll since the mission frame began
-(`frame_keys_begin`): the multiplayer quit box's Escape, Y and N
-(`quit_box.cpp`), and Escape's stop in the three drawing paths. Read as the
-raw state, a press counted on every frame between two steps at 60 fps and up
-(the box toggled open and shut) and could be missed below 30. The menus poll
-once a drawn frame and are unchanged.
+checks a key for a fresh press uses `key_pressed_this_frame`, which keeps every
+plain key pressed at any poll since the mission frame began (`frame_keys_begin`;
+state 1, or 5 for a tap pressed and let go within one poll): the multiplayer
+quit box's Escape, Y and N (`quit_box.cpp`), and Escape's stop in the three
+drawing paths. Read as the raw state, a press counted on every frame between
+two steps at 60 fps and up (the box toggled open and shut) and could be missed
+below 30.
+
+The rest of the drawn frame's input, the windows' clicks (`Window::update`), a
+command's state (the editor's 0x9b) and every key, reads through
+`zin::DrawnFrameInput`, alive for the mission frame's drawing: the keys', the
+mouse buttons' and the joystick buttons' states as one poll for the whole frame
+would leave them. Each poll keeps its presses and releases (`zin::poll`), and
+the view is the last poll's state with every one of the frame's edges added, or
+with no poll in the frame the last poll's aged as the next poll would (a press
+held, a release up). At one poll a frame it is the polled state itself. After
+the frame the polled states come back, except where the drawing changed them.
+The SDL host's own command states (`command_state`) latch presses at the host.
+The menus poll once a drawn frame and are unchanged.
 
 ## Random numbers
 
