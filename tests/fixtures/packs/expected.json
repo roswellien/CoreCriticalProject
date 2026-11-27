@@ -1,0 +1,57 @@
+{
+  "valid": [
+    "gameplay-and-visuals",
+    "gameplay-only",
+    "visuals-only"
+  ],
+  "broken": {
+    "file-hash-mismatch": {
+      "code": "file-hash-mismatch",
+      "found_by": "pack-check"
+    },
+    "file-missing": {
+      "code": "file-missing",
+      "found_by": "pack-check"
+    },
+    "file-undeclared": {
+      "code": "file-undeclared",
+      "found_by": "pack-check"
+    },
+    "gameplay-root-invalid": {
+      "code": "gameplay-root-invalid",
+      "found_by": "pack-check"
+    },
+    "manifest-invalid": {
+      "code": "manifest-invalid",
+      "found_by": "pack-check"
+    },
+    "manifest-unknown-field": {
+      "code": "manifest-unknown-field",
+      "found_by": "pack-check"
+    },
+    "path-unsafe": {
+      "code": "path-unsafe",
+      "found_by": "pack-check"
+    },
+    "payload-executable": {
+      "code": "payload-executable",
+      "found_by": "pack-check"
+    },
+    "visual-file-undeclared": {
+      "code": "visual-file-undeclared",
+      "found_by": "pack-check"
+    },
+    "visual-needs-gameplay": {
+      "code": "visual-needs-gameplay",
+      "found_by": "pack-check"
+    },
+    "visual-target-invalid": {
+      "code": "visual-target-invalid",
+      "found_by": "pack-check"
+    },
+    "visual-target-unknown": {
+      "code": "visual-target-unknown",
+      "found_by": "runtime"
+    }
+  }
+}

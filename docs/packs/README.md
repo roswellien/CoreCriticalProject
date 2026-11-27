@@ -10,9 +10,9 @@ This folder is the starting point for anyone working on that system.
 - [Workstreams](workstreams.md): who owns which folders, what depends on what, and the
   rules for changing a contract.
 
-Status on 2026-11-27: design only. Nothing here is implemented beyond what "What exists
-today" below describes. Tracked in
-[issue 630](https://github.com/roswellien/CoreCriticalProject/issues/630).
+Status on 2026-11-27: contracts 1 to 4 are at version 1.0, with schema files, example
+packs and a check for contract 1. Nothing else is implemented beyond what "What exists
+today" below describes.
 
 ## Decisions
 
@@ -38,6 +38,10 @@ The owner made these on 2026-11-27. Treat them as settled.
 7. **Distribution.** Our packs come from our feed. A third party hosts its own feed and a
    player adds its address. Packs are data only: no executables and no scripts.
 8. **First proof.** A new mech with an HD model, installed from the launcher and playable.
+9. **One pack may dress another pack's content**, for example a skin for a mech a
+   different pack added, by declaring a dependency on that pack.
+10. **A pack file can be installed by hand** with no feed behind it. It passes the same
+    checks, is labelled as having no update source, and never auto-updates.
 
 The earlier modular content work in the separate MW3-RE repository (its `src/content`
 library and `mw3content` tool) is not used. Its ideas may be borrowed; its code is not

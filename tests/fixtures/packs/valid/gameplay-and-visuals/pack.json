@@ -1,0 +1,69 @@
+{
+  "schema_version": 3,
+  "game_id": "mw3",
+  "id": "example-both",
+  "name": "Example: gameplay and visuals",
+  "version": "1.0.0",
+  "author": "Core Critical examples",
+  "description": "A mech row with its own HD model, close and distant.",
+  "dependencies": [
+    {
+      "id": "example-visuals",
+      "min_version": "1.0.0",
+      "optional": true
+    }
+  ],
+  "provides": {
+    "mechs": [
+      "example_thor_b"
+    ]
+  },
+  "gameplay": {
+    "root": "mod"
+  },
+  "visuals": [
+    {
+      "target": "mech-model:thor",
+      "kind": "model",
+      "lod": 0,
+      "files": {
+        "mesh": "visuals/thor_close.bwmesh",
+        "textures": "visuals/thor.bwtex"
+      },
+      "options": {
+        "headlights": []
+      }
+    },
+    {
+      "target": "mech-model:thor",
+      "kind": "model",
+      "lod": 1,
+      "files": {
+        "mesh": "visuals/thor_far.bwmesh",
+        "textures": "visuals/thor.bwtex"
+      }
+    }
+  ],
+  "files": {
+    "mod/about_this_mod.txt": {
+      "sha256": "72bb421d67dae8d2fccb72fcea0dac53119fdd588f22862a32f893b889c020cf",
+      "bytes": 207
+    },
+    "mod/mod.txt": {
+      "sha256": "2a4480d7350fc46d7e9297615824c38d00ffbb6d95533ffe7731a75831c80501",
+      "bytes": 220
+    },
+    "visuals/thor.bwtex": {
+      "sha256": "8d1f404e6026b3187f3586e0281ceef421e63d8a903c0bd13f467a4694e5230e",
+      "bytes": 97
+    },
+    "visuals/thor_close.bwmesh": {
+      "sha256": "d3a3bd3cd6f94c179b257ce91e03ea9b2792210f8305995eef75b294ff7d8d42",
+      "bytes": 104
+    },
+    "visuals/thor_far.bwmesh": {
+      "sha256": "9a7b0494e9eec64147d2122135a697f592651c7a2f3ac090b85884ef90fd4ca3",
+      "bytes": 102
+    }
+  }
+}
