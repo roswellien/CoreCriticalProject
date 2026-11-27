@@ -78,7 +78,7 @@ std::shared_ptr<const ::platform::DeferredMaterialBinding>
 bool reject_surface_binding(const char *reason) {
   ++binding_rejected_mismatch_;
   if (binding_rejected_mismatch_ <= 8)
-    std::fprintf(stderr, "[SURFACE_BINDING_REJECT] epoch=%llu reason=%s\n",
+    MW3_LOG(I, "[SURFACE_BINDING_REJECT] epoch=%llu reason=%s\n",
                  (unsigned long long)group_load_epoch_, reason);
   return false;
 }
@@ -300,7 +300,7 @@ ensure_region_surface_materials(const std::string &region) {
       catalog.by_material_name.emplace(rec.material_name, idx);
     }
   }
-  std::fprintf(stderr,
+  MW3_LOG(I,
                "[POM] Region surface materials loaded: region=%s records=%zu height_materials=%zu images=%zu\n",
                region.c_str(), catalog.pack->records.size(),
                catalog.by_material_name.size(), catalog.pack->images.size());
@@ -370,8 +370,8 @@ bool native_surface_binding_matches(const mw34::materials::SurfaceKey &key,
   if (bridge_config_.trace_native_bindings &&
       surface_normals_.traced_native.size() < 512 &&
       surface_normals_.traced_native.emplace(*fingerprint, key.hash).second)
-    std::fprintf(
-        stderr,
+    MW3_LOG(
+        I,
         "[NATIVE_SURFACE_IDENTITY] node=%.32s texture=%.20s polygon=%u "
         "polygons=%u mesh_uv_hash=0x%llx "
         "surface={%u,%u,%u,0x%llx} epoch=%llu uv_metadata=%s\n",

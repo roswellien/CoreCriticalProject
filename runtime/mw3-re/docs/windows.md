@@ -260,7 +260,8 @@ bucket unpacks it into the user's folder, `iscc` on the PATH):
 /ENTRY:mainCRTStartup`, so `main` stays the entry), and no console window
 opens beside the game. With no console, its output goes to `mw3.log` in
 the write dir, the start before's kept as `mw3.old.log`
-(`sdlfe::log_to_file`), and the helpers it starts (mw3import, the Video for
+(`sdlfe::RunLog`; each line stamped with its time and level, problems also in
+`mw3-problems.log`), and the helpers it starts (mw3import, the Video for
 Windows helper; console programs) start without a window of their own
 (`sdlfe::start_child`: SDL's background process, `CREATE_NO_WINDOW`). The
 development build stays a console program. `mw3import.exe` stays one too,

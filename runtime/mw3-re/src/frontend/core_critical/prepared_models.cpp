@@ -5,6 +5,7 @@
 #include "renderer/donor_retarget.hpp"
 #include "platform/sha256.hpp"
 #include "platform/prepared_skins.h"
+#include "frontend/sdl/log.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -377,7 +378,7 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
             auto input = open(normal->second);
             model.normals = platform::prepared::read_normals(input, model.textures);
             normals.erase(normal);
-            std::fprintf(stderr, "Prepared normals loaded: %s, %zu images\n",
+            MW3_LOG(I, "Prepared normals loaded: %s, %zu images\n",
                          model.source_asset.c_str(), model.normals.images.size());
         }
         if (mat != surface_materials.end()) {
@@ -429,7 +430,7 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
                 platform::integrity::sha256_file(std::filesystem::u8path(mat->second)) != sidecar_sha)
                 throw std::runtime_error("Prepared height source changed during admission");
             surface_materials.erase(mat);
-            std::fprintf(stderr, "Prepared surface materials loaded: %s, %zu records\n",
+            MW3_LOG(I, "Prepared surface materials loaded: %s, %zu records\n",
                          model.source_asset.c_str(), model.surface_materials->records.size());
         }
         // Mesh colors are diagnostics from preparation. As in Core Critical's
@@ -452,7 +453,7 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
                     throw std::runtime_error(
                         "Prepared donor rig is missing a required source reference");
         }
-        std::fprintf(stderr, "Prepared model loaded: %s, BWMESH%u, %zu batches, %zu materials\n",
+        MW3_LOG(I, "Prepared model loaded: %s, BWMESH%u, %zu batches, %zu materials\n",
                      model.source_asset.c_str(), model.mesh.version, model.mesh.batches.size(),
                      model.textures.images.size());
         models_.push_back(std::move(model));
@@ -486,21 +487,21 @@ PreparedModels::resolve_skin(const std::string &source_asset, int32_t index) con
             const auto prior_evictions = skin_cache_.evictions();
             auto textures = skin_cache_.resolve_normalized(found->second, model->mesh);
             if (skin_cache_.evictions() > prior_evictions && !warned_skin_eviction_) {
-                std::fprintf(stderr,
+                MW3_LOG(I,
                              "Prepared skin cache eviction: %zu bytes decoded, budget %zu, %zu evictions\n",
                              skin_cache_.bytes(), skin_cache_.budget(),
                              skin_cache_.evictions());
                 warned_skin_eviction_ = true;
             }
             if (model->logged_skins.insert(index).second)
-                std::fprintf(stderr, "Prepared skin selected: %s index %d\n", model->source_asset.c_str(), index);
+                MW3_LOG(I, "Prepared skin selected: %s index %d\n", model->source_asset.c_str(), index);
             return textures;
         } catch (const std::exception &) {
             model->failed_skins.insert(index);
         }
     }
     if (!model->warned_skin_fallback) {
-        std::fprintf(stderr, "Prepared skin fallback: %s index %d missing or invalid; using primary\n",
+        MW3_LOG(W, "Prepared skin fallback: %s index %d missing or invalid; using primary\n",
                      model->source_asset.c_str(), index);
         model->warned_skin_fallback = true;
     }
@@ -623,7 +624,7 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
         // Native distance geometry can be untextured. Report the declined
         // replacement once per selected model instead of silently drawing it flat.
         if (!selected->warned_cross_lod_fallback) {
-            std::fprintf(stderr,
+            MW3_LOG(W,
                          "Prepared model fallback: %s cannot use %s (missing live frames); "
                          "retaining native geometry, which may be untextured. "
                          "Load a matching prepared LOD.\n",
@@ -693,7 +694,7 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
         guard_weights = orion_guard_weights(live, *guard_fit);
         if (!selected->logged_guard_clearance && (guard_weights[0] > 0.0f || guard_weights[1] > 0.0f)) {
             selected->logged_guard_clearance = true;
-            std::fprintf(stderr, "Orion guard clearance applied: %s, weights %.3f %.3f\n",
+            MW3_LOG(I, "Orion guard clearance applied: %s, weights %.3f %.3f\n",
                          selected->source_asset.c_str(), guard_weights[0], guard_weights[1]);
         }
     }

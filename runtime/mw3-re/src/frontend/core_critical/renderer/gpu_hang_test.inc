@@ -14,7 +14,7 @@ void hang_gpu_if_due() {
   if (!hang_gpu_at_ || std::chrono::steady_clock::now() < *hang_gpu_at_)
     return;
   hang_gpu_at_.reset();
-  std::printf("mw3: test switch MW3_TEST_DEVICE_LOST: submitting a dispatch that never ends\n");
+  MW3_LOG(I, "mw3: test switch MW3_TEST_DEVICE_LOST: submitting a dispatch that never ends\n");
   std::fflush(stdout);
   const VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                                              VK_SHADER_STAGE_COMPUTE_BIT, nullptr};

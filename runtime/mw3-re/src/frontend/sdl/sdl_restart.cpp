@@ -151,7 +151,8 @@ std::string restart_handle_name(int) { return {}; }
 // ends. The arguments are quoted as its own splitting reads them
 // (win_cmdline.h); the working directory and the environment are this
 // process's; no handle is inherited. The log, <write dir>/mw3.log, is this
-// run's stdout and stderr when there is no console (log_to_file), and the
+// run's stdout and stderr when there is no console (RunLog reopens them onto
+// it as the run ends), and the
 // new start renames it to mw3.old.log and opens a new one, which fails while
 // anything holds the old file. Two things would hold it. This process: so
 // the new one is made suspended, and stdout and stderr are closed here

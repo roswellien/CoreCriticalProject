@@ -148,7 +148,12 @@ void reporter() {
     ++stalls;
     clock += ms / 1000.0;
   };
-  hooks.print = [&](const std::string& line) { lines.push_back(line); };
+  hooks.print = [&](const std::string& line) {
+    // A level marker (log.h) is RunLog's to take off; the video memory event is a warning.
+    const bool marked = line.size() > 2 && line[0] == log::kMarker;
+    if (marked) require(line[1] == 'W' && line.find("video_memory") != std::string::npos, "only the memory event is marked");
+    lines.push_back(marked ? line.substr(2) : line);
+  };
   hooks.flush = [&] { ++flushes; };
   HealthReporter r(std::move(hooks), 250);
   r.frame(false);  // hidden window, menus: nothing

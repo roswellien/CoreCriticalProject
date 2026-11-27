@@ -1219,13 +1219,11 @@ int program(int argc, char** argv) {
     if (ec) std::fprintf(stderr, "mw3: cannot make the write dir %s: %s\n", a.write_dir.c_str(), ec.message().c_str());
   }
   // Everything printed from here also goes to <write dir>/mw3.log, the last
-  // start's kept as mw3.old.log (ours): with no console (the Windows package
-  // build) stdout and stderr go to the file (log_to_file), else they are
-  // copied to it (run_log.h).
+  // start's kept as mw3.old.log (ours), each line stamped with its time and
+  // level, problems also in mw3-problems.log (run_log.h). With no console (the
+  // launcher's runs) the files are the only output.
   sdlfe::RunLog run_log;
-  if (sdlfe::log_to_file(a.write_dir))
-    std::printf("mw3 (MechWarrior 3 rebuild) %s: %s\n", MW3_VERSION, argc > 1 ? "started with arguments" : "started");
-  else if (!a.write_dir.empty() && run_log.open(a.write_dir))
+  if (!a.write_dir.empty() && run_log.open(a.write_dir))
     std::printf("mw3 (MechWarrior 3 rebuild) %s, log %s\n", MW3_VERSION, run_log.path().c_str());
   std::printf("mw3: timing log-open at %lld ms since process start\n",
               platform::loading::since_process_start_ms());
@@ -1672,7 +1670,7 @@ int program(int argc, char** argv) {
     result = run(a, vfw.get());
     std::printf("mw3: closed, result %d\n", result);
   } catch (const std::exception& error) {
-    std::fprintf(stderr, "mw3: rendering failed: %s\n", error.what());
+    sdlfe::log::line(sdlfe::log::Level::error, "mw3: rendering failed: %s\n", error.what());
     if (a.watch.benchmark_run) a.watch.benchmark_run->invalidate({}, error.what());
   }
   if (auto& benchmark = a.watch.benchmark_run) {

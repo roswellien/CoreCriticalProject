@@ -195,7 +195,7 @@ std::vector<HeightImage *> prepare_height_images(const Scene &scene,
         if (!draw.height_binding->streamed_image)
           throw std::runtime_error("POM resident GPU height cache exceeds its byte bound");
         deferred.insert(key);
-        std::fprintf(stderr, "[C1_HEIGHT_GPU] deferred=resident_budget width=%u height=%u\n",
+        MW3_LOG(W, "[C1_HEIGHT_GPU] deferred=resident_budget width=%u height=%u\n",
                      source.width, source.height);
         continue;
       }
@@ -216,7 +216,7 @@ std::vector<HeightImage *> prepare_height_images(const Scene &scene,
         if (!draw.height_binding->streamed_image)
           throw;
         deferred.insert(key);
-        std::fprintf(stderr, "[C1_HEIGHT_GPU] deferred=allocation width=%u height=%u\n",
+        MW3_LOG(W, "[C1_HEIGHT_GPU] deferred=allocation width=%u height=%u\n",
                      source.width, source.height);
         continue;
       } catch (...) {
@@ -228,7 +228,7 @@ std::vector<HeightImage *> prepare_height_images(const Scene &scene,
       cached.texture.hash = source.hash;
       height_resident_bytes += size;
       if (draw.height_binding->streamed_image)
-        std::fprintf(stderr, "[C1_HEIGHT_GPU] admitted width=%u height=%u "
+        MW3_LOG(I, "[C1_HEIGHT_GPU] admitted width=%u height=%u "
                              "image_bytes=%llu resident_image_bytes=%llu\n",
                      source.width, source.height, static_cast<unsigned long long>(size),
                      static_cast<unsigned long long>(height_resident_bytes));
@@ -276,7 +276,7 @@ std::vector<HeightImage *> prepare_height_images(const Scene &scene,
         destroy(it->second.texture);
         it = height_images.erase(it);
       }
-      std::fprintf(stderr, "[C1_HEIGHT_GPU] deferred=staging images=%zu\n", discarded.size());
+      MW3_LOG(W, "[C1_HEIGHT_GPU] deferred=staging images=%zu\n", discarded.size());
       if (required_bytes)
         ensure(height_upload, required_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
     }

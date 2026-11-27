@@ -1,5 +1,5 @@
 #pragma once
-// Ours (sdl_child.h's log_to_file; docs/mods-campaigns-plan.md, the restart
+// Ours (run_log.cpp's RunLog::open; docs/mods-campaigns-plan.md, the restart
 // on Windows): how a start takes over the log file. The last start's log is
 // moved aside (mw3.log to mw3.old.log) and a new one begun; when the move
 // cannot be made (on Windows, while anything still holds the old file) the

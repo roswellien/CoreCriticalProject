@@ -5,14 +5,14 @@
 // --watch runs the check twice, in DIR\plain and DIR\wait, waits for each to end, prints the logs and returns 0
 // when both passed (it stays in the foreground, so a remote session that ends with its command sees it all).
 //
-// One check: the first run takes <dir>\check.log as its stdout and stderr (as the game's log_to_file does), then
+// One check: the first run takes <dir>\check.log as its stdout and stderr (as the game's log is at the end of a run), then
 // starts itself again through sdlfe::restart_into with arguments that are hard to quote. The second run moves
 // check.log to check.old.log before it opens anything (as the game rotates its log; Windows refuses while
 // anything holds the file), trying up to 20 times 50 ms apart (log_start), then opens a new check.log and says
 // at which try the move went through, and whether its arguments and working directory are the first run's.
 //   plain: the move is tried at once.
 //   wait:  the second run first waits for the first run's process to end (its id is in MW3_RESTARTED_FROM,
-//          as the game's log_to_file reads it; 2 s at most), and says how long.
+//          as the game's RunLog::open reads it; 2 s at most), and says how long.
 // In both the move must go through within the tries, and the try is printed. (On the PC, 2026-11-10, both
 // needed the second try, the wait mode with the first process already ended: the holder for those few
 // milliseconds is not the first process, and the tries, not the wait, are what protects the log.)

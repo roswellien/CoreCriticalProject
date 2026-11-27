@@ -76,7 +76,7 @@ void present() override {
     window_bound_ = renderer_->presents != before;
     presented_frames_ += renderer_->presents - before;
     if (window_bound_ && !presented_) {
-      std::fprintf(stderr, "%s first frame: %s (upload)\n", driver_name(),
+      MW3_LOG(I, "%s first frame: %s (upload)\n", driver_name(),
                    renderer_->device_name.c_str());
       sdlfe::mark_ready();
     }
@@ -168,7 +168,7 @@ void present() override {
     }
   }
   if (!reported_resident_ && resident_draws_.load()) {
-    std::fprintf(stderr, "%s resident frame: %llu Vulkan draws\n",
+    MW3_LOG(I, "%s resident frame: %llu Vulkan draws\n",
                  driver_name(),
                  static_cast<unsigned long long>(resident_draws_.load()));
     reported_resident_ = true;

@@ -1,4 +1,6 @@
 #include "frontend/sdl/crash_report.h"
+#include "frontend/sdl/log.h"
+#include "frontend/sdl/run_log.h"
 
 #include <SDL3/SDL.h>
 
@@ -200,6 +202,8 @@ DWORD WINAPI dump_worker(void*) {
     // independent stack, including for stack overflow.
     report_exception();
     write_minidump();
+    // The last lines printed before the crash into mw3.log (run_log.h), before anything can end the process.
+    sdlfe::run_log_drain(500);
     // Completion means "dump and log are written". It is published BEFORE the message box, so
     // the faulting thread's bounded wait never expires while the box is open.
     SetEvent(g_dump_complete_event);
@@ -302,7 +306,7 @@ void set_text(const std::string& program, const std::string& log) {
     what = e.what();
   } catch (...) {
   }
-  std::fprintf(stderr, "%s: uncaught exception: %s\n", g_program, what);
+  sdlfe::log::line(sdlfe::log::Level::error, "%s: uncaught exception: %s\n", g_program, what);
   std::abort();  // the crash's report from here
 #endif
 }
@@ -320,7 +324,6 @@ void say_crash() {
                   g_dump_exception_record.ExceptionCode);
     reason = exception_reason;
   }
-  Sleep(100);  // the log's thread passes this on (run_log.cpp)
   std::snprintf(text, sizeof text, "MechWarrior 3 crashed (%s)%s", reason, g_tail);
   // Topmost: with no owner it could open behind a fullscreen game.
   if (g_box)
@@ -702,7 +705,7 @@ bool crash_box_main(int argc, char** argv) {
 }
 
 void fatal_box(const std::string& message, bool hidden) {
-  std::fprintf(stderr, "mw3: %s\n", message.c_str());
+  log::line(log::Level::error, "mw3: %s\n", message.c_str());
   if (!hidden && !SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "MechWarrior 3", message.c_str(), nullptr))
     std::fprintf(stderr, "mw3: no message box either: %s\n", SDL_GetError());
 }

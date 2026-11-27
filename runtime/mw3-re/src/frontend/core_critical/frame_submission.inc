@@ -43,7 +43,7 @@ void flush() override {
         staging_first_flush_pending_ = false;
         staging_first_flush_bytes_ = pending_local_bytes_;
         staging_first_flush_packets_ = pending_local_packets_.size();
-        std::fprintf(stderr,
+        MW3_LOG(I,
                      "Local light staging first flush after mission change: pending packets=%zu "
                      "pending_bytes=%zu recycled_scenes=%zu; first packet total=%zu scene=%zu "
                      "vertices=%zu color_depth=%zu draws=%zu order=%zu textures=%zu "
@@ -74,7 +74,7 @@ void flush() override {
         if (!staging_early_logged_) {
           staging_early_logged_ = true;
           ++staging_early_log_lines_;
-          std::fprintf(stderr,
+          MW3_LOG(I,
                        "Local light staging: early completion packets=%zu pending_bytes=%zu "
                        "next_packet_bytes=%zu budget=%zu (earlier packets use the lights "
                        "known so far); next packet terms: scene=%zu vertices=%zu "
@@ -129,7 +129,7 @@ void flush() override {
         if (!staging_oversized_logged_) {
           staging_oversized_logged_ = true;
           ++staging_oversized_log_lines_;
-          std::fprintf(stderr,
+          MW3_LOG(W,
                        "Local light staging: warning: one packet of %zu bytes exceeds the "
                        "budget of %zu; staged alone instead of failing (logged once per "
                        "mission); terms: scene=%zu vertices=%zu color_depth=%zu draws=%zu "

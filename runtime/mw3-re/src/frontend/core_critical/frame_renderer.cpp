@@ -1,6 +1,7 @@
 #include "frame_renderer.hpp"
 #include "crt/msvc_rand.h"
 #include "frontend/sdl/cpu_interval.h"
+#include "frontend/sdl/log.h"
 #include "gamez/zclass/cls_zbd.h"
 #include "gamez/zclass/class.h"
 #include "gamez/zclass/cls_node.h"
@@ -515,7 +516,7 @@ public:
         // input or reentering the game. DXGI may send one while waiting.
         cc_mw3_re::platform::pump_presentation_messages();
       });
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "Core Critical render worker: enabled (8 jobs, 1024 MiB)\n");
     }
     std::vector<zcls::ZbdSourceRequest> requests;
@@ -567,9 +568,9 @@ public:
       try {
         std::rethrow_exception(failure);
       } catch (const std::exception &error) {
-        std::fprintf(stderr, "Core editor best-effort detach: %s\n", error.what());
+        MW3_LOG(W, "Core editor best-effort detach: %s\n", error.what());
       } catch (...) {
-        std::fprintf(stderr, "Core editor best-effort detach: non-standard exception\n");
+        MW3_LOG(W, "Core editor best-effort detach: non-standard exception\n");
       }
       std::fflush(stderr);
     }
@@ -1162,7 +1163,7 @@ public:
     }
     streamed_height_deferred_.swap(deferred);
     streamed_height_sample_ = budget->used();
-    std::fprintf(stderr,
+    MW3_LOG(I,
                  "[C1_HEIGHT_STREAM] world=%d cell=%d,%d available=%zu deferred=%zu "
                  "decoded_bytes=%llu peak_decoded_bytes=%llu\n",
                  world, x, z, admitted, streamed_height_deferred_.size(),
@@ -1264,13 +1265,13 @@ public:
       current_mission_lighting_ = resolved;
       if (lighting_.enabled && identity.world_index >= 0 &&
           identity.number > 0 && !resolved.has_profile)
-        std::fprintf(stderr,
+        MW3_LOG(W,
                      "[MISSION_CHANGED] warning=unknown-mission world_index=%d "
                      "number=%d; configured stock lighting restored\n",
                      identity.world_index, identity.number);
       else if (lighting_.enabled)
-        std::fprintf(
-            stderr,
+        MW3_LOG(
+            I,
             "[MISSION_CHANGED] id=%s world_index=%d number=%d has_profile=%d\n",
             current_mission_id_.c_str(), static_cast<int>(identity.world_index),
             static_cast<int>(identity.number), resolved.has_profile ? 1 : 0);
@@ -1353,7 +1354,7 @@ public:
     native_context_ = {};
     logged_first_normal_trace_ = false;
     if (bridge_config_.trace_native_bindings)
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "[SURFACE_EPOCH_RESET] epoch=%llu decoded_bytes=%llu "
                    "normal_handles=%zu\n",
                    (unsigned long long)group_load_epoch_,
@@ -1365,27 +1366,27 @@ public:
     try {
       detach_editor();
     } catch (...) {
-      std::fprintf(stderr, "Core editor detach failed during renderer shutdown\n");
+      MW3_LOG(E, "Core editor detach failed during renderer shutdown\n");
       std::fflush(stderr);
       std::_Exit(3);
     }
     try {
       drain();
     } catch (const std::exception &error) {
-      std::fprintf(stderr, "Core Critical render worker shutdown: %s\n",
+      MW3_LOG(W, "Core Critical render worker shutdown: %s\n",
                    error.what());
     }
     local_lights_report();
     if (worker_) {
       worker_->stop();
       const auto statistics = worker_->statistics();
-      std::fprintf(
-          stderr,
+      MW3_LOG(
+          I,
           "Render worker: %zu submitted, %zu completed, %zu peak jobs, "
           "%zu peak bytes, %zu producer waits\n",
           statistics.submitted, statistics.completed, statistics.peak_jobs,
           statistics.peak_bytes, statistics.waits);
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "Local light staging: peak %zu bytes of %zu, %zu early completions, "
                    "%zu oversized packets\n",
                    staging_peak_bytes_, local_staging_budget_, staging_early_completions_,
@@ -1395,7 +1396,7 @@ public:
     }
     if (cpu_profile_) {
       const double milliseconds = 1000.0 / SDL_GetPerformanceFrequency();
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "CPU renderer profile (includes warmup): %llu presents, "
                    "%llu GPU sharp draws, "
                    "%llu render calls, render %.4f ms, "
@@ -1406,7 +1407,7 @@ public:
                    render_ticks_ * milliseconds,
                    transport_ticks_ * milliseconds);
       const auto &models = prepared_.cpu_statistics();
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "CPU prepared profile (includes warmup, nested intervals): "
                    "%llu calls, "
                    "selection %.4f ms, retarget %.4f ms, deform %.4f ms, "
@@ -1418,11 +1419,11 @@ public:
                    prepared_emit_ticks_ * milliseconds,
                    append_ticks_ * milliseconds);
       if (worker_render_ticks_ || worker_present_ticks_)
-        std::fprintf(stderr,
+        MW3_LOG(I,
                      "CPU worker profile: render %.4f ms, present %.4f ms\n",
                      worker_render_ticks_ * milliseconds,
                      worker_present_ticks_ * milliseconds);
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "CPU prepared vertices: %llu vertices, stage %.4f ms, "
                    "assembly %.4f ms\n",
                    static_cast<unsigned long long>(prepared_cpu_.vertices),
@@ -1430,18 +1431,18 @@ public:
                    prepared_cpu_.assembly_ticks * milliseconds);
     }
     if (geometry_mode_ != cc::geometry::Mode::legacy)
-      std::fprintf(
-          stderr,
-          "Prepared geometry: %llu GPU vertices, %llu reference CPU vertices, "
+      MW3_LOG(
+          I,
+          "Prepared geometry:%llu GPU vertices, %llu reference CPU vertices, "
           "%llu early models, %llu CPU fallback batches\n",
           (unsigned long long)gpu_prepared_vertices_,
           (unsigned long long)prepared_reference_vertices_,
           (unsigned long long)early_prepared_models_,
           (unsigned long long)prepared_cpu_fallback_batches_);
     if (geometry_mode_ != cc::geometry::Mode::legacy)
-      std::fprintf(
-          stderr,
-          "Geometry handoff: %llu submitted models, %llu CPU vertex "
+      MW3_LOG(
+          I,
+          "Geometry handoff:%llu submitted models, %llu CPU vertex "
           "preparations skipped, %llu CPU polygon preparations skipped, %llu "
           "unsupported models, %llu CPU 3D draw calls observed\n",
           (unsigned long long)geometry_statistics_.submitted_models,
@@ -1450,8 +1451,8 @@ public:
           (unsigned long long)geometry_statistics_.unsupported_models,
           (unsigned long long)geometry_statistics_.cpu_draw_calls);
     const auto quality = quality_statistics();
-    std::fprintf(
-        stderr,
+    MW3_LOG(
+        I,
         "%s: %llu draws, %llu resident presents, %llu FXAA passes, %llu AF "
         "samplers, %llu mip "
         "levels\n",
@@ -1464,9 +1465,9 @@ public:
         static_cast<unsigned long long>(quality.mip_levels));
     const auto assets = asset_statistics();
     if (lighting_.normals)
-      std::fprintf(
-          stderr,
-          "World normal pages: %llu decoded bytes, %llu peak decoded bytes, "
+      MW3_LOG(
+          I,
+          "World normal pages:%llu decoded bytes, %llu peak decoded bytes, "
           "%llu loaded pages, %llu page reads (536870912-byte limit)\n",
           (unsigned long long)assets.world_normal_decoded_bytes,
           (unsigned long long)assets.world_normal_peak_decoded_bytes,
@@ -1474,16 +1475,16 @@ public:
           (unsigned long long)assets.world_normal_page_loads);
     const auto &cache = prepared_draw_cache_.statistics();
     if (cache.hits || cache.misses || cache.bypasses)
-      std::fprintf(stderr,
-                   "Prepared staging cache: %llu hits, %llu misses, %llu "
+      MW3_LOG(I,
+                   "Prepared staging cache:%llu hits, %llu misses, %llu "
                    "bypasses, %zu bytes\n",
                    (unsigned long long)cache.hits,
                    (unsigned long long)cache.misses,
                    (unsigned long long)cache.bypasses, cache.bytes);
     if (assets.prepared_batches || assets.named_textures)
-      std::fprintf(
-          stderr,
-          "Prepared visuals: %llu batches, %llu GPU model draws, %llu "
+      MW3_LOG(
+          I,
+          "Prepared visuals:%llu batches, %llu GPU model draws, %llu "
           "CPU-clipped "
           "triangles, %llu named texture uploads\n",
           static_cast<unsigned long long>(assets.prepared_batches),
@@ -1491,22 +1492,22 @@ public:
           static_cast<unsigned long long>(assets.cpu_clipped_triangles),
           static_cast<unsigned long long>(assets.named_textures));
     if (prepared_.skin_texture_loads() > 0 || prepared_.skin_cache_evictions() > 0)
-      std::fprintf(
-          stderr,
-          "Prepared skins: %zu loads, %zu evictions, %zu bytes (budget %zu)\n",
+      MW3_LOG(
+          I,
+          "Prepared skins:%zu loads, %zu evictions, %zu bytes (budget %zu)\n",
           prepared_.skin_texture_loads(), prepared_.skin_cache_evictions(),
           prepared_.skin_cache_bytes(), prepared_.skin_cache_budget());
     if (lighting_.enabled)
-      std::fprintf(
-          stderr,
-          "Prepared materials: %llu per-pixel draws, %llu normal-map draws\n",
+      MW3_LOG(
+          I,
+          "Prepared materials:%llu per-pixel draws, %llu normal-map draws\n",
           static_cast<unsigned long long>(assets.lit_draws),
           static_cast<unsigned long long>(assets.normal_draws));
     if (bridge_config_.parallax_materials) {
       const char *quality_label =
           bridge_config_.parallax_quality == 1U ? "low" : "high";
-      std::fprintf(
-          stderr,
+      MW3_LOG(
+          I,
           "Parallax occlusion mapping (%s): %llu draws, %llu height uploads "
           "(%llu bytes), %llu cache hits, %llu retired\n",
           quality_label,
@@ -1862,7 +1863,7 @@ private:
         scene_.height > std::uint32_t(std::numeric_limits<std::int32_t>::max())) {
       static std::atomic_flag invalid_world_zoom_scissor_logged = ATOMIC_FLAG_INIT;
       if (!invalid_world_zoom_scissor_logged.test_and_set())
-        std::fprintf(stderr,
+        MW3_LOG(W,
                      "Core renderer: invalid WorldZoom scissor inputs; "
                      "using full scene (logged once)\n");
       return full_scene;
@@ -2153,8 +2154,8 @@ private:
         }
         if (norm_idx >= 0 && !logged_first_normal_trace_) {
           logged_first_normal_trace_ = true;
-          std::fprintf(
-              stderr,
+          MW3_LOG(
+              I,
               "[SURFACE_NORMAL_TRACE] First authenticated surface "
               "normal bound: "
               "name=%s key={w=%u, h=%u, fmt=%u, hash=0x%llx} slot=%d "
@@ -2228,8 +2229,8 @@ private:
           queue = "transparent";
         else if (state.queue == ::platform::DrawQueue::Overlay)
           queue = "overlay";
-        std::fprintf(
-            stderr,
+        MW3_LOG(
+            I,
             "[FLARE_TEXTURE] slot=%d name=\"%s\" uploaded=%ux%u replacement=%s %s "
             "half_size_screen_px=%g half_size_target_px=[%g,%g] sampler=0x%x "
             "queue=%s source=%ux%u viewport=%dx%d target=%ux%u hud=%d\n",
@@ -3025,7 +3026,7 @@ private:
             std::chrono::duration_cast<std::chrono::microseconds>(
                 start_time.time_since_epoch())
                 .count();
-        fprintf(stderr, "[PRELOAD_TIMING] start_us=%lld\n",
+        MW3_LOG(I, "[PRELOAD_TIMING] start_us=%lld\n",
                 static_cast<long long>(start_us));
       }
 
@@ -3041,7 +3042,7 @@ private:
             std::chrono::duration_cast<std::chrono::microseconds>(
                 end_time - start_time)
                 .count();
-        fprintf(stderr, "[PRELOAD_TIMING] end_us=%lld elapsed_us=%lld\n",
+        MW3_LOG(I, "[PRELOAD_TIMING] end_us=%lld elapsed_us=%lld\n",
                 static_cast<long long>(end_us),
                 static_cast<long long>(elapsed_us));
       }
@@ -3240,7 +3241,7 @@ private:
     preload_test_state_.native_staged_bytes += native_bytes;
     if (renderer_->preload_stopped() && !preload_test_state_.stop_log_lines) {
       const auto &info = renderer_->preload_stop_info();
-      std::fprintf(stderr,
+      MW3_LOG(W,
                    "[PRELOAD] stopped reason=%s result=%d heap=%u requested=%llu "
                    "usage=%llu budget=%llu headroom=%llu; remaining=lazy\n",
                    vk::preload_stop_reason_name(info.reason), int(info.vk_result), info.heap_index,
@@ -3249,7 +3250,7 @@ private:
       ++preload_test_state_.stop_log_lines;
     }
     if (producer_resource_timing_.enabled)
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "[RESOURCE_TIMING] owner=producer stage=prepared_preload "
                    "source_assets=%zu albedos=%zu normals=%zu staged_bytes=%llu "
                    "world_staged_bytes=%llu native_textures=%zu native_staged_bytes=%llu "
@@ -3260,7 +3261,7 @@ private:
                    (unsigned long long)renderer_->preload_peak_bytes(),
                    (unsigned long long)renderer_->texture_staging_size());
     if (producer_resource_timing_.enabled)
-      std::fprintf(stderr, "[PRELOAD_PROFILE] prepared_cpu_us=%llu\n",
+      MW3_LOG(I, "[PRELOAD_PROFILE] prepared_cpu_us=%llu\n",
                    (unsigned long long)(prepared_cpu_nanoseconds / 1000));
   }
 
@@ -3502,11 +3503,11 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
       !assets.dynamic_lighting_explicit, !assets.sun_shadows_explicit);
   // #521: a report made with a test switch says so.
   if (config.test_vram_budget_mb)
-    std::printf("mw3: test switch MW3_TEST_VRAM_BUDGET_MB=%u\n", config.test_vram_budget_mb);
+    MW3_LOG(I, "mw3: test switch MW3_TEST_VRAM_BUDGET_MB=%u\n", config.test_vram_budget_mb);
   if (config.test_fail_alloc)
-    std::printf("mw3: test switch MW3_TEST_FAIL_ALLOC=%u\n", config.test_fail_alloc);
+    MW3_LOG(I, "mw3: test switch MW3_TEST_FAIL_ALLOC=%u\n", config.test_fail_alloc);
   if (config.test_device_lost)
-    std::printf("mw3: test switch MW3_TEST_DEVICE_LOST=1\n");
+    MW3_LOG(I, "mw3: test switch MW3_TEST_DEVICE_LOST=1\n");
   config.environment_packs_explicit = assets.environment_packs_explicit;
   if (assets.environment_packs_explicit) {
     // The launcher's selected environment packs own normal-map inputs. Stale
@@ -3549,7 +3550,7 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.water_detail = assets.water_detail_explicit && assets.water_detail;
   config.cloud_detail = assets.cloud_detail_explicit && assets.cloud_detail;
   if (assets.environment) {
-    std::fprintf(stderr,
+    MW3_LOG(I,
                  "Environment renderer catalogs: %zu authored, %zu world\n",
                  assets.environment->authored_manifests.size(),
                  assets.environment->world_manifests.size());
@@ -3631,14 +3632,14 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.normal_maps_enabled = (assets.lighting == "normal");
 
   if (assets.lighting == "off" && config.sun_shadows) {
-    std::fprintf(stderr,
+    MW3_LOG(I,
                  "Sun shadows requested without sun lighting; sun shadows are disabled\n");
     config.sun_shadows = false;
   }
 
   if (!config.sun &&
       (config.effect_lights || config.fixture_lights || config.mech_headlights)) {
-    std::fprintf(stderr,
+    MW3_LOG(I,
                  "Dynamic lights requested without sun lighting; effect, "
                  "fixture, and mech headlights are disabled\n");
     config.effect_lights = false;

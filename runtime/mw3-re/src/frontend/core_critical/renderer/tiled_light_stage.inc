@@ -2,6 +2,7 @@
 #pragma once
 
 #include "effect_lighting.hpp"
+#include "frontend/sdl/log.h"
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -373,7 +374,7 @@ inline bool try_draw_view_or_no_effect_lights(View &view, unsigned &draw_view_in
     // here still costs only this draw's effect lights, never the frame.
     draw_view_index = no_effect_lights;
     if (!fallback_reported) {
-      std::fprintf(stderr,
+      MW3_LOG(W,
                    "Tiled lights: warning: a draw's projection is unusable (%s; near %g ax %g "
                    "ay %g); it gets no effect lights (logged once)\n",
                    error.what(), double(p[0]), double(p[1]), double(p[2]));

@@ -22,6 +22,8 @@
 #include <utility>
 #include <vector>
 
+#include "frontend/sdl/log.h"
+
 namespace sdlfe {
 
 // Wall seconds since the first call; main calls it once at startup to fix the origin.
@@ -405,13 +407,17 @@ class HealthReporter {
       const int heap = have_snapshot ? health_.video_memory_crossing(snapshot, now, 0) : -1;
       if (heap >= 0) {
         const auto& figures = snapshot.heaps[std::size_t(heap)];
-        hooks_.print(format_video_memory_event(std::size_t(heap), figures.used_bytes, figures.budget_bytes, now));
+        // A warning: it makes the launcher offer a report after a clean exit (log.h).
+        hooks_.print(std::string{log::kMarker, 'W'} +
+                     format_video_memory_event(std::size_t(heap), figures.used_bytes, figures.budget_bytes, now));
         printed = true;
       }
     }
     if (result.line_due) {
       hooks_.print(format_health_line(now, health_.take_summary(), have_snapshot ? &snapshot : nullptr,
                                       hooks_.ram_mib()));
+      // Lines MW3_LOG held back since the last health line, by call site (log.h).
+      for (const auto& site : log::skipped_lines(false)) hooks_.print("mw3: log skipped " + site);
       printed = true;
     }
     if (printed) hooks_.flush();

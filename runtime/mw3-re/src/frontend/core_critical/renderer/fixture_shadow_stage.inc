@@ -209,7 +209,7 @@ void init_fixture_shadow() {
   check(f.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline,
                                     nullptr, &fixtureShadowPipeline),
         "fixture shadow pipeline");
-  std::fprintf(stderr,
+  MW3_LOG(I,
                "Fixture shadows: %u lights, six %ux%u views each, %ux%u atlas; "
                "original world and model casters, alpha-tested cutouts\n",
                mw34::effects::capacity, fixtureTile, fixtureTile,
@@ -562,7 +562,7 @@ void record_fixture_shadows(const mw34::effects::Uniform &lights) {
 
 void drop_fixture_shadow() {
   if (fixture_atlas_reuse_enabled())
-    std::fprintf(stderr,
+    MW3_LOG(I,
                  "Fixture atlas reuse: %llu unchanged passes reused, %llu "
                  "changed passes submitted, %llu tracked hits fully audited\n",
                  (unsigned long long)fixtureAtlasHits,

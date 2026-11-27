@@ -1148,7 +1148,7 @@ one ends:
 - `CreateProcessW` with no inherited handles, the same working directory and
   environment, made suspended;
 - the log: with no console stdout and stderr are `<write dir>\mw3.log`
-  (`log_to_file`), and the next start renames that file and opens a new one.
+  (`RunLog`, which reopens them onto that file when the run ends), and the next start renames that file and opens a new one.
   So this process writes its last line ("starting again as process N: ..."),
   closes stdout and stderr, and only then lets the new process run
   (`ResumeThread`); the new one cannot reach the log while the old one holds
@@ -1165,7 +1165,7 @@ one ends:
   program with nothing open. When they are a console or a pipe (a
   developer's run, a test reading the output) they are left, so the output
   still shows; neither holds a log;
-- the new start's side (`log_to_file`, `frontend/sdl/log_start`): with that
+- the new start's side (`RunLog::open`, `frontend/sdl/log_start`): with that
   fix the move still went through only at the second try on the PC (50 ms
   later), so something holds the old log for a moment after the new process
   runs. The new start is therefore safe against it, whatever it is: it is

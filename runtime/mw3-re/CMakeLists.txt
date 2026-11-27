@@ -660,6 +660,14 @@ if(MSVC)
 endif()
 add_test(NAME mw3game_health_checks COMMAND mw3game_health_checks)
 set_tests_properties(mw3game_health_checks PROPERTIES TIMEOUT 15)
+# Log line stamping, the problems log and MW3_LOG repeat counts (#521).
+add_executable(mw3log_lines_checks tests/test_log_lines.cpp)
+target_include_directories(mw3log_lines_checks PRIVATE src)
+if(MSVC)
+  target_compile_options(mw3log_lines_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3log_lines_checks COMMAND mw3log_lines_checks)
+set_tests_properties(mw3log_lines_checks PROPERTIES TIMEOUT 15)
 add_executable(mw3derived_cache_checks tests/test_derived_cache.cpp)
 target_include_directories(mw3derived_cache_checks PRIVATE src)
 target_link_libraries(mw3derived_cache_checks PRIVATE Threads::Threads)
@@ -1035,6 +1043,7 @@ if(SDL3_FOUND)
       src/frontend/sdl/sdl_update.cpp
       src/frontend/sdl/sdl_restart.cpp
       src/frontend/sdl/crash_report.cpp
+      src/frontend/sdl/run_log.cpp
       src/frontend/sdl/win_cmdline.cpp
       tests/test_net_enet.cpp
       tests/test_net_upnp.cpp
