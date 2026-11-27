@@ -333,8 +333,9 @@ void CoreState::start_mission() {
   en.timer_update();
   // Ours (#485): this frame's action lists are a simulation step too, so with
   // the fixed step they run on 1/30 s, not on the time the sleep measured.
-  // Not in a 3D replay, which keeps the drawn frame's clock (CoreState::frame).
-  if (fixed_step_enabled() && !en.replay_on()) {
+  // Not in a 3D replay, which keeps the drawn frame's clock (CoreState::frame),
+  // its strict ticks their own frozen one (below).
+  if (fixed_step_enabled() && !en.replay_on() && !strict) {
     ztimer::State& timer = ztimer::state();
     timer.dt = timer.raw_dt = static_cast<float>(FixedStep::kStepSeconds);
     sync_frame_step(timer.dt, timer.total_scaled);
