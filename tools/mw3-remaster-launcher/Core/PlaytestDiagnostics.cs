@@ -316,12 +316,16 @@ public static class PlaytestDiagnostics
         return head + "...\n" + tail;
     }
 
+    /// <summary>The private folders every report redacts: the launcher, repository, game, user profile and data.</summary>
+    public static string[] ReportRoots(LauncherSettings settings, string applicationRoot) =>
+        new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
+
     public static object CreateCrashReport(LauncherSettings settings, IEnumerable<PackManifest> packs,
         string? launchLog, string applicationRoot, string? runtimeVersion = null, int? exitCode = null,
-        HardwareInventoryData? hardwareInventory = null)
+        HardwareInventoryData? hardwareInventory = null, IReadOnlyDictionary<string, object>? header = null)
     {
-        var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
+        var roots = ReportRoots(settings, applicationRoot);
         var logs = ReadSessionLogs(launchLog, roots);
         var failureSummary = Redact(FailureSummary(launchLog, exitCode), roots);
         if (failureSummary.Length > 2000) failureSummary = failureSummary[..2000];
@@ -337,24 +341,25 @@ public static class PlaytestDiagnostics
         var architecture = RuntimeInformation.ProcessArchitecture.ToString();
         var dotnetRuntime = RuntimeInformation.FrameworkDescription;
 
-        object BuildPayload(Dictionary<string, string> currentLogs) => new
+        object BuildPayload(Dictionary<string, string> currentLogs)
         {
-            format_version = 1,
-            report_id = reportId,
-            created_utc = createdUtc,
-            launcher_version = launcherVersion,
-            runtime_version = resolvedRuntimeVersion,
-            mode = settings.EngineMode,
-            exit_code = exitCode,
-            os,
-            architecture,
-            dotnet_runtime = dotnetRuntime,
-            hardware,
-            failure_summary = failureSummary,
-            settings = settingsObject,
-            packs = packArray,
-            logs = currentLogs
-        };
+            var payload = StartPayload(header);
+            payload["report_id"] = reportId;
+            payload["created_utc"] = createdUtc;
+            payload["launcher_version"] = launcherVersion;
+            payload["runtime_version"] = resolvedRuntimeVersion;
+            payload["mode"] = settings.EngineMode;
+            payload["exit_code"] = exitCode;
+            payload["os"] = os;
+            payload["architecture"] = architecture;
+            payload["dotnet_runtime"] = dotnetRuntime;
+            payload["hardware"] = hardware;
+            payload["failure_summary"] = failureSummary;
+            payload["settings"] = settingsObject;
+            payload["packs"] = packArray;
+            payload["logs"] = currentLogs;
+            return payload;
+        }
 
         TrimLogsToFitRequest(logs, BuildPayload);
         return BuildPayload(logs);
@@ -403,6 +408,17 @@ public static class PlaytestDiagnostics
             remainingBudget -= text.Length;
         }
         return logs;
+    }
+
+    /// <summary>
+    /// A report's first fields: the format version, then the setup header when it has a field,
+    /// so a reader of the upload meets the header (and then the problems log) first.
+    /// </summary>
+    internal static Dictionary<string, object?> StartPayload(IReadOnlyDictionary<string, object>? header)
+    {
+        var payload = new Dictionary<string, object?> { ["format_version"] = 1 };
+        if (header is { Count: > 0 }) payload["header"] = header;
+        return payload;
     }
 
     internal static string SessionLogPath(string launchLog, string sessionFolder, string relativePath) =>

@@ -1045,8 +1045,10 @@ namespace MW3RemasterLauncher
             try
             {
                 var hardwareInventory = await Task.Run(HardwareInventory.Capture);
+                var basePath = _basePath;
+                var header = await Task.Run(() => BuildReportHeader(settingsSnapshot, packsSnapshot, launchLog, basePath));
                 var report = PlaytestDiagnostics.CreateCrashReport(settingsSnapshot, packsSnapshot,
-                    launchLog, _basePath, runtimeVersion, exitCode, hardwareInventory);
+                    launchLog, _basePath, runtimeVersion, exitCode, hardwareInventory, header);
                 var result = await new CrashReportService().SubmitAsync(report);
                 var detail = result.ArchivedOnly
                     ? "The report was saved to the private admin archive. GitHub issue delivery was unavailable."
@@ -1148,8 +1150,9 @@ namespace MW3RemasterLauncher
                 await System.Threading.Tasks.Task.Run(() =>
                 {
                     var hardwareInventory = HardwareInventory.Capture();
+                    var header = BuildReportHeader(settingsSnapshot, packsSnapshot, launchLog, basePath);
                     ReportExport.Export(destination, settingsSnapshot, packsSnapshot,
-                        launchLog, basePath, hardwareInventory, runtimeVersion, exitCode);
+                        launchLog, basePath, hardwareInventory, runtimeVersion, exitCode, header);
                 });
                 MessageBox.Show("Report saved. It contains build/system details, selected settings, pack metadata and redacted game and launcher logs. Review it before sharing.",
                     "Playtest report saved", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1193,8 +1196,33 @@ namespace MW3RemasterLauncher
                 Version = pack.Version,
                 SchemaVersion = pack.SchemaVersion,
                 IsEnabled = pack.IsEnabled,
-                Priority = pack.Priority
+                Priority = pack.Priority,
+                // The report header sums texture sizes from the file list; it is only read.
+                Files = pack.Files
             }).ToArray();
+        }
+
+        /// <summary>
+        /// The report's setup header for a session. It lists attached input devices, so it runs
+        /// on a background task like the hardware inventory.
+        /// </summary>
+        private static Dictionary<string, object> BuildReportHeader(LauncherSettings settings,
+            IEnumerable<PackManifest> packs, string? launchLog, string basePath)
+        {
+            var sessionFolder = launchLog == null ? null : Path.GetDirectoryName(launchLog);
+            var sessionGameLog = string.IsNullOrEmpty(sessionFolder)
+                ? null
+                : Path.Combine(sessionFolder, "native", PlaytestDiagnostics.NativeRunFileName);
+            List<string> inputDevices;
+            try
+            {
+                inputDevices = DirectInputJoystickCatalog.EnumerateAttached()
+                    .Select(device => device.ProductName)
+                    .ToList();
+            }
+            catch { inputDevices = new List<string>(); }
+            return ReportHeader.Build(sessionGameLog, packs, inputDevices,
+                PlaytestDiagnostics.ReportRoots(settings, basePath));
         }
 
         private void BtnOpenScreenshots_Click(object sender, RoutedEventArgs e)

@@ -25,30 +25,26 @@ public static class ReportExport
 
     public static void Export(string destination, LauncherSettings settings, IEnumerable<PackManifest> packs,
         string? launchLog, string applicationRoot, HardwareInventoryData? hardwareInventory = null,
-        string? runtimeVersion = null, int? exitCode = null)
+        string? runtimeVersion = null, int? exitCode = null, IReadOnlyDictionary<string, object>? header = null)
     {
         // No profiles, settings files, saves, archives, media, dumps or recursive directory walks.
-        var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
+        var roots = PlaytestDiagnostics.ReportRoots(settings, applicationRoot);
         var failureSummary = PlaytestDiagnostics.Redact(PlaytestDiagnostics.FailureSummary(launchLog, exitCode), roots);
         if (failureSummary.Length > 2000) failureSummary = failureSummary[..2000];
-        var report = new
-        {
-            format_version = 1,
-            created_utc = DateTimeOffset.UtcNow,
-            launcher_version = PlaytestDiagnostics.LauncherVersionString(),
-            runtime_version = runtimeVersion ?? "unknown",
-            mode = settings.EngineMode,
-            exit_code = exitCode,
-            os = PlaytestDiagnostics.OperatingSystemDescription(),
-            architecture = RuntimeInformation.ProcessArchitecture.ToString(),
-            dotnet_runtime = RuntimeInformation.FrameworkDescription,
-            hardware = hardwareInventory ?? HardwareInventory.Capture(),
-            failure_summary = failureSummary,
-            settings = PlaytestDiagnostics.ReportSettings(settings),
-            packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
-            note = "Review this local report before sharing. It includes selected settings, pack metadata, a limited hardware inventory and the whole redacted game and launcher logs, unless a log was cut to fit the 19 MB export."
-        };
+        var report = PlaytestDiagnostics.StartPayload(header);
+        report["created_utc"] = DateTimeOffset.UtcNow;
+        report["launcher_version"] = PlaytestDiagnostics.LauncherVersionString();
+        report["runtime_version"] = runtimeVersion ?? "unknown";
+        report["mode"] = settings.EngineMode;
+        report["exit_code"] = exitCode;
+        report["os"] = PlaytestDiagnostics.OperatingSystemDescription();
+        report["architecture"] = RuntimeInformation.ProcessArchitecture.ToString();
+        report["dotnet_runtime"] = RuntimeInformation.FrameworkDescription;
+        report["hardware"] = hardwareInventory ?? HardwareInventory.Capture();
+        report["failure_summary"] = failureSummary;
+        report["settings"] = PlaytestDiagnostics.ReportSettings(settings);
+        report["packs"] = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray();
+        report["note"] = "Review this local report before sharing. It includes selected settings, pack metadata, a limited hardware inventory, a setup header and the whole redacted game and launcher logs, unless a log was cut to fit the 19 MB export.";
         var reportJson = PlaytestDiagnostics.Redact(
             JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), roots);
         var logs = ReadWholeSessionLogs(launchLog, roots);
