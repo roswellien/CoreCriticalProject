@@ -24054,7 +24054,9 @@ TEST(mission_c1m2_damage_decals_are_painted_headless) {
   std::printf("  c1m2: %d bullet holes loaded; %d decals painted (%d at the UV's (0, 0)) on%s; %d texture updates\n",
               holes_loaded, painted, at_corner, names.c_str(), updates);
   EXPECT(holes_loaded == 8 && painted > 0);
-  EXPECT(at_corner < painted / 10);
+  // Fewer than a tenth of them at the corner, without the integer division
+  // that read 0 < 0 when fewer than ten were painted.
+  EXPECT(at_corner * 10 < painted);
   zrdr::close_archives(true);
   mech3::reset_states();
   reset_process_state();

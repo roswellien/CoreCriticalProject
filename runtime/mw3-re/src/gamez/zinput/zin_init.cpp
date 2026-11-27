@@ -33,14 +33,20 @@ struct SavedInput {
 };
 SavedInput g_saved;
 
-uint32_t* mouse_slot(State& s, int i) { return i == 0 ? &s.mouse.left : i == 1 ? &s.mouse.right : &s.mouse.middle; }
+uint32_t* mouse_slot(State& s, int i) {
+  if (i == 0) return &s.mouse.left;
+  if (i == 1) return &s.mouse.right;
+  return &s.mouse.middle;
+}
+
+uint8_t edges_of(uint32_t state) { return static_cast<uint8_t>(state & kEdges); }
 
 void keep_frame_edges() {
   State& s = g_state;
   ++g_frame.polls;
-  for (int k = 0; k < kKeys; ++k) g_frame.keys[k] |= static_cast<uint8_t>(s.keys[k].state & kEdges);
-  for (int i = 0; i < kMouseButtons; ++i) g_frame.mouse[i] |= static_cast<uint8_t>(*mouse_slot(s, i) & kEdges);
-  for (int i = 0; i < kJoyButtons; ++i) g_frame.joy[i] |= static_cast<uint8_t>(joy_button(i + 1) & kEdges);
+  for (int k = 0; k < kKeys; ++k) g_frame.keys[k] |= edges_of(s.keys[k].state);
+  for (int i = 0; i < kMouseButtons; ++i) g_frame.mouse[i] |= edges_of(*mouse_slot(s, i));
+  for (int i = 0; i < kJoyButtons; ++i) g_frame.joy[i] |= edges_of(joy_button(i + 1));
 }
 
 // One button's state as a single poll for the whole frame would leave it: the
@@ -220,7 +226,8 @@ DrawnFrameInput::DrawnFrameInput() {
   // A joystick button's state is worked out from this read and the one before
   // (joy_button), so the view is set as the pair that gives it.
   for (int i = 0; i < kJoyButtons; ++i) {
-    v.joy_now[i] = s.joy.buttons[i], v.joy_before[i] = s.joy_prev.buttons[i];
+    v.joy_now[i] = s.joy.buttons[i];
+    v.joy_before[i] = s.joy_prev.buttons[i];
     const uint32_t view = frame_view(joy_button(i + 1), g_frame.joy[i]);
     const bool now = (view & kPressed) || (!(view & kReleased) && (view & kHeld));
     const bool before = !(view & kPressed) && (view & (kHeld | kReleased));

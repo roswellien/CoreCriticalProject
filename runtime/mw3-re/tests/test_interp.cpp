@@ -1,6 +1,7 @@
 #include <cmath>
 
 #include "check.h"
+#include "gamez/zclass/camera.h"
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/interp.h"
@@ -142,6 +143,54 @@ TEST(interp_changed_marks_are_cleared_by_the_step_not_the_draw) {
   static_cast<zcls::Object3d*>(child->data)->put<uint32_t>(0, 0);
   zcls::node_mark_unk25(parent);
   EXPECT((child->flags() & kMark) && (static_cast<zcls::Object3d*>(child->data)->get<uint32_t>(0) & 0x20));
+  zcls::interp::clear();
+}
+
+namespace {
+zcls::Node* g_zoom_camera = nullptr;
+int g_zoom_placed = 0;
+bool place_zoom_camera(zcls::Node* camera) {
+  if (camera != g_zoom_camera) return false;
+  ++g_zoom_placed;
+  zcls::camera_set_position(camera, 1.0f, 2.0f, 3.0f);
+  return true;
+}
+float camera_x(zcls::Node* camera) { return static_cast<zcls::Camera*>(camera->data)->get<float>(0x14); }
+}  // namespace
+
+// The reticle's zoom window camera is placed in each step through the placer
+// (interp::set_step_camera_placer), so a draw's own placing of it never stays;
+// another camera a draw moves (a debug or HUD view) keeps its new place. A
+// return from the pause menu (clear(true)) keeps the cameras the last frame drew.
+TEST(interp_a_step_placed_camera_never_keeps_a_draws_place) {
+  zcls::interp::clear();
+  zcls::Node* zoom = zcls::camera_create();
+  zcls::Node* other = zcls::camera_create();
+  EXPECT(zoom != nullptr && other != nullptr);
+  if (!zoom || !other) return;
+  g_zoom_camera = zoom;
+  g_zoom_placed = 0;
+  zcls::interp::set_step_camera_placer(&place_zoom_camera);
+  zcls::interp::record();
+  zcls::interp::apply(0.5f);
+  zcls::rendered_cameras().push_back(zoom);  // what render_world does for each camera it draws
+  zcls::rendered_cameras().push_back(other);
+  zcls::interp::restore();
+  zcls::interp::prepare_cameras();
+  EXPECT(g_zoom_placed == 1 && camera_x(zoom) == 1.0f);
+  zcls::interp::record();
+  zcls::interp::apply(0.5f);
+  zcls::camera_set_position(zoom, 9.0f, 9.0f, 9.0f);  // the draw places both again
+  zcls::camera_set_position(other, 7.0f, 7.0f, 7.0f);
+  zcls::rendered_cameras().push_back(zoom);
+  zcls::rendered_cameras().push_back(other);
+  zcls::interp::restore();
+  EXPECT(camera_x(zoom) == 1.0f);
+  EXPECT(camera_x(other) == 7.0f);
+  zcls::interp::clear(true);
+  zcls::interp::prepare_cameras();
+  EXPECT(g_zoom_placed == 2);
+  zcls::interp::set_step_camera_placer(nullptr);
   zcls::interp::clear();
 }
 

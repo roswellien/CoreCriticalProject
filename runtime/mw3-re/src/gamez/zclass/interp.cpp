@@ -208,6 +208,23 @@ bool step_placed(const Node* node) {
   return std::find(g_step_placed.begin(), g_step_placed.end(), node) != g_step_placed.end();
 }
 
+// Node +0x2c bit 0: the bounding sphere (+0x64..+0x70) is out of date, so the
+// next renderer to walk the node works it out again and clears the bit. A node
+// drawn at a blended place gets it before and after each draw: every draw
+// between two steps then culls it with a sphere from its own place, and the
+// first draw once it stops moving with one from its exact place.
+constexpr int kBoundsFlagsOffset = 0x2c;
+constexpr uint32_t kSphereStale = 1;
+void mark_sphere_stale(Node* node) {
+  node->put<uint32_t>(kBoundsFlagsOffset, node->get<uint32_t>(kBoundsFlagsOffset) | kSphereStale);
+}
+
+bool on_camera_list(const Node* node) {
+  for (ListItem* item = list_head(kCameras); item; item = item->next)
+    if (item->node == node) return true;
+  return false;
+}
+
 void keep_camera(Node* node) {
   auto* d = static_cast<Camera*>(node->data);
   CameraBefore& c = g_cameras_before.emplace_back();
@@ -229,7 +246,8 @@ void restore_cameras() {
     // its new place and what was worked out from it stand, unless the steps
     // place it themselves (the zoom window's, set_step_camera_placer).
     CameraPose now;
-    if (!step_placed(c.node) && c.posed && read_camera(c.node, &now) && !same_pose(now, c.left)) continue;
+    const bool placed_by_draw = c.posed && read_camera(c.node, &now) && !same_pose(now, c.left);
+    if (placed_by_draw && !step_placed(c.node)) continue;
     std::memcpy(static_cast<Camera*>(c.node->data)->raw, c.data, sizeof c.data);
   }
   g_cameras_before.clear();
@@ -410,7 +428,8 @@ void set_step_camera_placer(StepCameraPlacer placer) { g_step_placer = placer; }
 
 namespace {
 void place_and_prepare(Node* camera) {
-  if (g_step_placer && g_step_placer(camera) && !step_placed(camera)) g_step_placed.push_back(camera);
+  const bool placed = g_step_placer && g_step_placer(camera);
+  if (placed && !step_placed(camera)) g_step_placed.push_back(camera);
   camera_prepare(camera);
 }
 }  // namespace
@@ -420,11 +439,14 @@ void prepare_cameras() {
   // runs both before it), the cameras on the cameras' list a draw would draw.
   if (g_drawn_cameras.empty()) {
     for (ListItem* item = list_head(kCameras); item; item = item->next)
-      if (is_live_camera(item->node) && camera_would_draw(item->node)) place_and_prepare(item->node);
+      if (is_live_camera(item->node) && camera_would_draw(item->node))
+        place_and_prepare(item->node);
     return;
   }
+  // Still a camera of the engine's: a set kept across the pause menu
+  // (clear(true)) could name one the menu's own pools have since dropped.
   for (Node* camera : g_drawn_cameras)
-    if (is_live_camera(camera)) place_and_prepare(camera);
+    if (on_camera_list(camera) && is_live_camera(camera)) place_and_prepare(camera);
 }
 
 void apply(float alpha) {
@@ -478,6 +500,7 @@ void apply(float alpha) {
     std::memcpy(b.applied_local, data->floats(kLocalOffset), kMatrixBytes);
     b.blended = true;
     r.blended = true;
+    mark_sphere_stale(node);
   }
 }
 
@@ -488,6 +511,7 @@ void restore() {
     if (b.blended) {
       auto found = g_records.find(node);
       if (found != g_records.end()) found->second.blended = false;
+      mark_sphere_stale(node);  // the draw's sphere is the blended place's
     }
     Object3d* data = object_data(node);
     const uint32_t flags = data->get<uint32_t>(kFlagsOffset);
@@ -529,7 +553,9 @@ void forget(const Node* node) {
                                         [node](const CameraBefore& c) { return c.node == node; }),
                          g_cameras_before.end());
   g_followers.erase(std::remove(g_followers.begin(), g_followers.end(), node), g_followers.end());
-  for (std::vector<Node*>* nodes : {&rendered_cameras(), &g_drawn_cameras, &g_step_placed, &g_marked})
+  std::vector<Node*>* const lists[] = {&rendered_cameras(), &g_drawn_cameras, &g_step_placed,
+                                       &g_marked};
+  for (std::vector<Node*>* nodes : lists)
     nodes->erase(std::remove(nodes->begin(), nodes->end(), node), nodes->end());
   g_before_draw.erase(std::remove_if(g_before_draw.begin(), g_before_draw.end(),
                                      [node](const BeforeDraw& b) { return b.node == node; }),
@@ -544,7 +570,10 @@ void clear(bool keep_drawn_cameras) {
   g_cameras_before.clear();
   g_followers.clear();
   rendered_cameras().clear();
-  if (!keep_drawn_cameras) g_drawn_cameras.clear(), g_step_placed.clear();
+  if (!keep_drawn_cameras) {
+    g_drawn_cameras.clear();
+    g_step_placed.clear();
+  }
   g_marked.clear();
   g_before_draw.clear();
   // A draw that threw between apply and restore leaves no frame half drawn here.

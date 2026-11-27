@@ -37,11 +37,13 @@ The zoom window's light, which read the reticle's state right after the lock's
 aim state set it, reads it as the last step's aim state left it
 (`state_seen`). The rest of the
 HUD's frame stays in the drawn frame: its 2D parts draw themselves as they
-update (the radar's blips are blitted in `HudRadar::update`). One input of the
-lock still comes from the drawn frame: whether the reticle is over the target
-reads TARGET's bracket where it was last drawn, which the HUD places as it
-draws, so with the reticle at the bracket's very edge the answer can differ by
-a pixel's worth between frame rates.
+update (the radar's blips are blitted in `HudRadar::update`). Whether the
+reticle is over the target reads TARGET's bracket and lead circle, which the
+HUD places as it draws (`HudTarget::track`, projected through the view); drawn
+between steps that view is blended, up to a step's turn from the exact one, so
+`lock_step` places them again from the step's exact view just before its test
+(no time passing, any ECM jitter on the drawn frame's random numbers), as the
+exe's frame placed them just before its aim state.
 
 The pocket commander's pick request (`PocketControls` +0x184) is set by the
 panel's buttons and read by `pocket_frame` in the step; the original cleared it
@@ -140,9 +142,12 @@ Here the draws' clearing is given back (`restore`), and each step's
 `settle_world_caches` clears it on every active node in the world tree, so a
 frame of two steps and no draw between them (below 30 fps) still marks the
 children at the second step's moves. The renderers also refresh each node's
-bounding sphere (+0x64..+0x70) and its "sphere stale" bit (+0x2c bit 0) from the
-blended place; those are read only by the renderers (the line and sphere queries
-work from the node's box and the matrix stack), so they stay as the draw left them.
+bounding sphere (+0x64..+0x70) when its "sphere stale" bit (+0x2c bit 0) is
+set, and clear the bit. Only the renderers read them (the line and sphere
+queries work from the node's box and the matrix stack), so the steps never see
+a blended sphere; but a later draw between the same two steps would cull a
+moving node with the first draw's sphere, so `apply` and `restore` set the bit
+on each node drawn blended, and each draw works out its own.
 
 ## Input
 
@@ -170,8 +175,11 @@ the view is the last poll's state with every one of the frame's edges added, or
 with no poll in the frame the last poll's aged as the next poll would (a press
 held, a release up). At one poll a frame it is the polled state itself. After
 the frame the polled states come back, except where the drawing changed them.
-The SDL host's own command states (`command_state`) latch presses at the host.
-The menus poll once a drawn frame and are unchanged.
+Not in the view: the SDL host's own command states (`command_state`, the
+controller's and the extended bindings'), which the host sets at each poll and
+a drawn frame between two steps reads as the last poll left them; of the
+drawn frame's readers only the editor's 0x9b goes through them. The menus poll
+once a drawn frame and are unchanged.
 
 ## Random numbers
 
