@@ -465,19 +465,32 @@ public static class PlaytestDiagnostics
     /// </summary>
     public static string FailureSummary(string? launchLog, int? exitCode = null)
     {
+        // After a clean exit, the problems log's first error (else warning) names the report.
+        if (exitCode == 0 && SessionFolder(launchLog) is { } sessionFolder &&
+            GameProblemsLog.FirstProblemSummary(sessionFolder) is { } problem)
+            return problem;
         var specificFailure = FindSpecificFailure(launchLog);
         if (specificFailure != null) return specificFailure;
         var windowsClosedHungGame = exitCode == ApplicationHangExitCode;
         return windowsClosedHungGame ? ApplicationHangSummary : GenericFailureSummary;
     }
 
+    private static string? SessionFolder(string? launchLog)
+    {
+        if (launchLog == null) return null;
+        try
+        {
+            var folder = Path.GetDirectoryName(launchLog);
+            return string.IsNullOrEmpty(folder) ? null : folder;
+        }
+        catch { return null; }
+    }
+
     private static string? FindSpecificFailure(string? launchLog)
     {
         if (launchLog == null) return null;
-        string? directory;
-        try { directory = Path.GetDirectoryName(launchLog); }
-        catch { return null; }
-        if (string.IsNullOrEmpty(directory)) return null;
+        var directory = SessionFolder(launchLog);
+        if (directory == null) return null;
 
         // 1. Check native/crash.txt first for direct crash_report.cpp fault lines.
         var crashFile = Path.Combine(directory, "native", NativeCrashFileName);

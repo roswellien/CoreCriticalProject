@@ -970,10 +970,18 @@ namespace MW3RemasterLauncher
                     ? await sessionCompletion
                     : await GameRunner.WaitForCompletionAsync(process);
                 RecordSessionExit(context, exit);
+                // Read before ResetNativeLaunchControls allows a new launch, which resets it.
+                var playProblems = exit == 0
+                    ? CleanExitPlayProblems(context, _nativeGameRunner.LastFirstFrameMilliseconds)
+                    : Array.Empty<string>();
                 ResetNativeLaunchControls();
                 TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "\u26A0 MW3-RE ENDED WITH AN ERROR";
                 if (exit != 0)
-                    await HandleCrashReportAsync(exit, context);
+                    await HandleCrashReportAsync(exit, context,
+                        ReportPrompt.ForCrash(context.Settings, exit, context.LaunchLog));
+                else if (playProblems.Count > 0)
+                    await HandleCrashReportAsync(exit, context,
+                        ReportPrompt.ForProblems(playProblems.Count, context.LaunchLog));
             }
             catch (Exception error)
             {
@@ -982,6 +990,15 @@ namespace MW3RemasterLauncher
                 MessageBox.Show(error.Message, "Game session details", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally { process.Dispose(); }
+        }
+
+        /// <summary>Problems the game logged after its first frame in this session's folder.</summary>
+        private static IReadOnlyList<string> CleanExitPlayProblems(CrashReportSessionContext context,
+            long? firstFrameMilliseconds)
+        {
+            var sessionFolder = context.LaunchLog == null ? null : Path.GetDirectoryName(context.LaunchLog);
+            if (string.IsNullOrEmpty(sessionFolder)) return Array.Empty<string>();
+            return GameProblemsLog.PlayProblems(sessionFolder, firstFrameMilliseconds);
         }
 
         private void ResetNativeLaunchControls()
@@ -1003,7 +1020,9 @@ namespace MW3RemasterLauncher
                 BtnLaunchGame.IsEnabled = true;
                 BtnLaunchGame.Content = "▶  LAUNCH ORIGINAL (D7VK)";
                 TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "⚠ ORIGINAL GAME OR WRAPPER FAILED";
-                if (exit != 0) await HandleCrashReportAsync(exit, context);
+                if (exit != 0)
+                    await HandleCrashReportAsync(exit, context,
+                        ReportPrompt.ForCrash(context.Settings, exit, context.LaunchLog));
             }
             catch (Exception error)
             {
@@ -1015,30 +1034,23 @@ namespace MW3RemasterLauncher
             finally { process.Dispose(); }
         }
 
-        private async Task HandleCrashReportAsync(int exitCode, CrashReportSessionContext context)
+        private async Task HandleCrashReportAsync(int exitCode, CrashReportSessionContext context, ReportPrompt prompt)
         {
             var settingsSnapshot = context.Settings;
             var packsSnapshot = context.Packs;
             var launchLog = context.LaunchLog;
             var runtimeVersion = context.RuntimeVersion;
-            var summary = PlaytestDiagnostics.FailureSummary(launchLog, exitCode);
-            var engineTitle = settingsSnapshot.EngineMode == "d7vk" ? "Original Game (D7VK)" : "MW3-RE";
-            var exitStatus = PlaytestDiagnostics.FormatExitCode(exitCode);
-            var statusLabel = $"{engineTitle} stopped (exit {exitStatus})";
-            var dialogSummary = summary == PlaytestDiagnostics.GenericFailureSummary
-                ? $"{summary} Exit code: {exitStatus}."
-                : summary;
 
-            if (_settingsMgr.Current.AutomaticCrashReports)
+            if (!prompt.AlwaysAsk && _settingsMgr.Current.AutomaticCrashReports)
             {
-                MessageBox.Show(dialogSummary + "\n\nUse Open Logs or Export Report under Settings & Steam.",
-                    statusLabel, MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(prompt.Summary + "\n\nUse Open Logs or Export Report under Settings & Steam.",
+                    prompt.Title, MessageBoxButton.OK, MessageBoxImage.Error);
             }
             else
             {
                 var choice = MessageBox.Show(this,
-                    dialogSummary + "\n\nSend the redacted recent launcher and native logs, hardware inventory (CPU, installed memory, graphics adapters and drivers), launcher/runtime details, selected graphics settings and pack metadata to Core Critical for review? The inventory does not request serial numbers or device identifiers. Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. Saves, original media or memory dumps are not included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
-                    statusLabel, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+                    prompt.Summary + "\n\nSend the redacted recent launcher and native logs, hardware inventory (CPU, installed memory, graphics adapters and drivers), launcher/runtime details, selected graphics settings and pack metadata to Core Critical for review? The inventory does not request serial numbers or device identifiers. Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. Saves, original media or memory dumps are not included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
+                    prompt.Title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
                 if (choice != MessageBoxResult.Yes) return;
             }
 
@@ -1056,14 +1068,14 @@ namespace MW3RemasterLauncher
                         ? "Report sent, thanks. The report was added to the daily overflow queue."
                         : "Report sent, thanks.";
                 MessageBox.Show(this, detail + "\nReport ID: " + result.ReportId,
-                    "Crash report sent", MessageBoxButton.OK, MessageBoxImage.Information);
+                    prompt.SentTitle, MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception error)
             {
                 MessageBox.Show(this,
                     "The crash report could not be sent. Your logs remain on this PC. " + error.Message +
                     "\n\nUse Export Report under Settings & Steam to save a local copy.",
-                    "Crash report not sent", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    prompt.NotSentTitle, MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
