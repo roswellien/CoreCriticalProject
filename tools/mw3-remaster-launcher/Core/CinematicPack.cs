@@ -78,23 +78,40 @@ public static class CinematicPack
         if (videos != 1 || audios > 1) throw new InvalidDataException("Replacement AVI requires one video stream and at most one audio stream.");
     }
 
-    public static List<Clip> Read(string root, PackManifest manifest)
+    // Checks one pinned pack file's size and SHA-256 against pack.json.
+    private static void VerifyPinned(string root, PackManifest manifest, string name)
     {
-        void Verify(string name)
-        {
-            if (!manifest.Files!.TryGetValue(name, out var pin)) throw new InvalidDataException("Undeclared cinematic resource.");
-            using var stream = File.OpenRead(PackStorage.Resolve(root, name));
-            if (stream.Length != pin.Bytes || !Convert.ToHexString(SHA256.HashData(stream)).Equals(pin.Sha256, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Cinematic resource integrity failure: " + name);
-        }
-        Verify(Registry);
+        if (!manifest.Files!.TryGetValue(name, out var pin)) throw new InvalidDataException("Undeclared cinematic resource.");
+        using var stream = File.OpenRead(PackStorage.Resolve(root, name));
+        if (stream.Length != pin.Bytes || !Convert.ToHexString(SHA256.HashData(stream)).Equals(pin.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Cinematic resource integrity failure: " + name);
+    }
+
+    // The registry after its pin and shape are checked; its clips are checked by the caller.
+    private static JsonArray ReadRegistry(string root, PackManifest manifest)
+    {
+        VerifyPinned(root, manifest, Registry);
         if (new FileInfo(PackStorage.Resolve(root, Registry)).Length > PackStorage.MaxJsonBytes)
             throw new InvalidDataException("Cinematic registry is too large.");
         var data = JsonNode.Parse(File.ReadAllText(PackStorage.Resolve(root, Registry)))!.AsObject();
         if (!new HashSet<string> { "schema_version", "payload_profile", "clips" }.SetEquals(data.Select(x => x.Key)) ||
             data["schema_version"]!.GetValue<int>() != 2 || data["payload_profile"]!.GetValue<string>() != Profile)
             throw new InvalidDataException("Unsupported cinematic registry.");
-        var clips = data["clips"]!.AsArray();
+        return data["clips"]!.AsArray();
+    }
+
+    // Only the file type is checked; whether Windows can decode it is known at playback.
+    private static void RequireMp4(string path)
+    {
+        using var reader = new BinaryReader(File.OpenRead(path));
+        if (reader.BaseStream.Length < 16 || reader.ReadUInt32() == 0 || Encoding.ASCII.GetString(reader.ReadBytes(4)) != "ftyp")
+            throw new InvalidDataException("Library additions must be MP4 movies. Playback also requires a Windows-supported codec.");
+    }
+
+    public static List<Clip> Read(string root, PackManifest manifest)
+    {
+        void Verify(string name) => VerifyPinned(root, manifest, name);
+        var clips = ReadRegistry(root, manifest);
         if (clips.Count is < 1 or > 64) throw new InvalidDataException("Invalid cinematic count.");
         var result = new List<Clip>(); var ids = new HashSet<string>(); var targets = new HashSet<string>();
         var files = new HashSet<string> { Registry }; var formats = new HashSet<string>();
@@ -115,12 +132,7 @@ public static class CinematicPack
             if (manifest.Files![source].Format != format) throw new InvalidDataException("Unsupported cinematic format declaration.");
             var path = PackStorage.Resolve(root, source);
             if (target != null) ValidateAvi(path);
-            else
-            {
-                using var reader = new BinaryReader(File.OpenRead(path));
-                if (reader.BaseStream.Length < 16 || reader.ReadUInt32() == 0 || Encoding.ASCII.GetString(reader.ReadBytes(4)) != "ftyp")
-                    throw new InvalidDataException("Library additions must be MP4 movies. Playback also requires a Windows-supported codec.");
-            }
+            else RequireMp4(path);
             result.Add(new(id, title, path, target));
         }
         if (!files.SetEquals(manifest.Files!.Keys) || !formats.SetEquals(manifest.NativePayload!.RequiredFormats))
@@ -137,6 +149,52 @@ public static class CinematicPack
             if (manifest.NativePayload?.Profile == Profile) result.AddRange(Read(root, manifest).Where(c => c.Replaces == null));
         }
         return result;
+    }
+
+    /// <summary>
+    /// The first enabled pack's library MP4 with this id, or null. Only the registry and that one
+    /// clip are checked, so a launch doesn't hash every movie in a large HD pack. A damaged
+    /// registry or clip throws, as in <see cref="Read"/>, unless <paramref name="skipDamaged"/> is
+    /// given: then that pack is reported and the search goes on to the next enabled pack.
+    /// </summary>
+    public static Clip? FindLibraryClip(IEnumerable<string> directories, string id, Action<string, Exception>? skipDamaged = null)
+    {
+        foreach (var root in directories)
+        {
+            try
+            {
+                var clip = FindLibraryClipIn(root, id);
+                if (clip != null) return clip;
+            }
+            // InvalidOperationException: a registry value of the wrong JSON type (JsonNode.GetValue).
+            catch (Exception error) when (skipDamaged != null && error is IOException or InvalidDataException or
+                UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException)
+            {
+                skipDamaged(root, error);
+            }
+        }
+        return null;
+    }
+
+    private static Clip? FindLibraryClipIn(string root, string id)
+    {
+        var manifest = PackStorage.ReadManifest(Path.Combine(root, "pack.json"));
+        if (manifest.NativePayload?.Profile != Profile) return null;
+        foreach (var item in ReadRegistry(root, manifest))
+        {
+            var obj = item!.AsObject();
+            if (obj["id"]?.GetValue<string>() != id || obj["replaces"] != null) continue;
+            var source = "cinematics/media/" + id + ".mp4";
+            if (obj["source"]?.GetValue<string>() != source || !manifest.Files!.TryGetValue(source, out var pin) ||
+                pin.Format != "MP4-library-v1")
+                throw new InvalidDataException("Invalid cinematic source for " + id + ".");
+            var title = obj["title"]?.GetValue<string>() ?? id;
+            VerifyPinned(root, manifest, source);
+            var path = PackStorage.Resolve(root, source);
+            RequireMp4(path);
+            return new Clip(id, title, path, null);
+        }
+        return null;
     }
 
     public static void Apply(JsonObject profile, IEnumerable<string> directories, string session, string game)

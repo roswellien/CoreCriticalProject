@@ -252,6 +252,17 @@ static class NativeRuntimeLayoutChecks
                 throw new Exception("A runtime without controller capability was marked compatible.");
             File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(descriptor));
             CheckVsyncProjection(root, descriptor);
+            foreach (var hdMovieVersions in new[] { null, new[] { 2 }, new[] { 1 } })
+            {
+                var candidate = descriptor.DeepClone().AsObject();
+                if (hdMovieVersions == null) candidate["capabilities"]!.AsObject().Remove("hd-movie");
+                else candidate["capabilities"]!["hd-movie"] = new JsonArray(hdMovieVersions.Select(v => (JsonNode)JsonValue.Create(v)).ToArray());
+                File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(candidate));
+                var supported = hdMovieVersions is [1];
+                if (Mw3ReRuntimeContract.ReadStructure(root).SupportsHdMovies != supported)
+                    throw new Exception("HD movie capability version was not respected.");
+            }
+            File.WriteAllText(Path.Combine(root, "runtime.json"), GameRunner.SerializeLaunchProfile(descriptor));
             void RejectDescriptor(Action<JsonObject> change, string reason = "")
             {
                 var candidate = descriptor.DeepClone().AsObject();
