@@ -1070,15 +1070,16 @@ void prepare_benchmark(Args& a, std::optional<double> process_epoch) {
       throw std::runtime_error("benchmark camera subject missing or destroyed during shot: " +
                                std::to_string(shot.mech));
   // The scene's look, set before the mission loads (platform/render3d.h). Every
-  // field is written, so a scene without one never inherits an earlier value.
-  platform::arena_lighting_mission().clear();
+  // field is written, so a scene without one never inherits an earlier value, and
+  // the scope puts the old values back when the run's watch arguments are destroyed.
+  std::string lighting;
   if (!scene->time_of_day.empty()) {
-    const char* lighting = mech3::arena::time_of_day_lighting(scene->time_of_day);
-    if (!lighting) throw std::runtime_error("unknown benchmark time_of_day");
-    platform::arena_lighting_mission() = lighting;
+    const char* borrowed = mech3::arena::time_of_day_lighting(scene->time_of_day);
+    if (!borrowed) throw std::runtime_error("unknown benchmark time_of_day");
+    lighting = borrowed;
   }
-  platform::arena_weather() = scene->weather;
-  platform::arena_headlights() = scene->headlights;
+  watch.benchmark_look =
+      std::make_shared<platform::ArenaLookScope>(lighting, scene->weather, scene->headlights);
 
   watch.benchmark_run = std::make_shared<sdlfe::benchmark::Run>(
       std::move(*scene), start, size.width, size.height, watch.benchmark_output,

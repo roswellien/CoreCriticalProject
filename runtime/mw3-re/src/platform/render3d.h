@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <utility>
 #include "frontend/core_critical/renderer/geometry/resource.hpp"
 #include "platform/producer_view.h"
 
@@ -316,5 +317,30 @@ inline bool& arena_headlights() {
   static bool on = false;
   return on;
 }
+
+// Ours (benchmark scenes): sets the three arena look globals above for one scene
+// and puts back what was there when it is destroyed, also when the scene fails or
+// exits early by an exception, so nothing later in the process inherits them.
+class ArenaLookScope {
+ public:
+  ArenaLookScope(std::string lighting_mission, std::string weather, bool headlights)
+      : lighting_(arena_lighting_mission()), weather_(arena_weather()),
+        headlights_(arena_headlights()) {
+    arena_lighting_mission() = std::move(lighting_mission);
+    arena_weather() = std::move(weather);
+    arena_headlights() = headlights;
+  }
+  ~ArenaLookScope() {
+    arena_lighting_mission() = std::move(lighting_);
+    arena_weather() = std::move(weather_);
+    arena_headlights() = headlights_;
+  }
+  ArenaLookScope(const ArenaLookScope&) = delete;
+  ArenaLookScope& operator=(const ArenaLookScope&) = delete;
+
+ private:
+  std::string lighting_, weather_;
+  bool headlights_;
+};
 
 }  // namespace platform
