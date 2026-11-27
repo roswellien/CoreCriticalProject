@@ -2,7 +2,8 @@
 
 Usage, from the repository root:
     python tools/check.py --setup          install the pinned tools the checks need
-    python tools/check.py                  build, CTest, C++ format check and style check
+    python tools/check.py                  build, CTest, C++ format check, style check and
+                                           content pack contracts check
     python tools/check.py --only style     run only the named checks (repeatable)
     python tools/check.py --area launcher  add an area's own checks to the run
 
@@ -227,6 +228,14 @@ def check_launcher_dispatch(earlier: EarlierResults) -> Result:
     return pass_or_fail("launcher-dispatch", run_command(command))
 
 
+def check_pack_contracts(earlier: EarlierResults) -> Result:
+    # The example packs in tests/fixtures/packs against docs/packs/contracts.md.
+    # Standard library only, so it needs no setup step.
+    command = [sys.executable, "-m", "unittest", "discover", "-s", "tools/packs"]
+    command += ["-p", "test_*.py"]
+    return pass_or_fail("pack-contracts", run_command(command))
+
+
 @dataclass(frozen=True)
 class Check:
     name: str
@@ -243,8 +252,9 @@ CHECKS = (
     Check("style", check_style, needs=("venv", "npm", "psscriptanalyzer")),
     Check("launcher-wpf", check_launcher_wpf, needs=("sdl3",), windows_only=True),
     Check("launcher-dispatch", check_launcher_dispatch),
+    Check("pack-contracts", check_pack_contracts),
 )
-DEFAULT_CHECKS = ("build", "ctest", "format-check", "style")
+DEFAULT_CHECKS = ("build", "ctest", "format-check", "style", "pack-contracts")
 AREAS = {"launcher": ("launcher-wpf", "launcher-dispatch")}
 
 
