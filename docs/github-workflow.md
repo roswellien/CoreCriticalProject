@@ -397,6 +397,41 @@ For an urgent repair, use the same feature/fix PR and release PR route. Any
 different route requires an explicit owner instruction for that specific case;
 agents must not invent a direct-push exception.
 
+### Launcher publication gate
+
+For each approved launcher release, including native MW3-RE changes shipped
+inside it, the release operator completes these steps on the same Release
+checklist issue. A live feed by itself is not a completed release.
+
+1. Before promoting the feed, prepare one GitHub Release draft for the
+   exact launcher version, against the reviewed source SHA recorded in the
+   build receipt. Check that the source commit contains the
+   [Discord release observer](../.github/workflows/discord-release-detect.yml).
+   For a preview, use the matching `vX.Y.Z-preview` tag and prerelease flag;
+   for a stable build, use `vX.Y.Z`. Check whether the tag or release already
+   exists; do not move existing tags or create duplicates.
+2. Describe player-facing launcher and bundled MW3-RE changes in the release
+   notes. End the notes with `<!-- corecritical-discord-targets: corecritical=X.Y.Z -->`,
+   substituting the numeric signed launcher version, without the tag suffix.
+   The bundled native runtime ships through the launcher. The retired legacy
+   runtime is not a new release target or an announcement prerequisite. Do
+   not attach protected artifacts or include private download references in
+   the announcement summary.
+3. After the existing signing, install and update checks pass, promote the
+   signed feed and verify that its live launcher entry matches the tested
+   bundle. Then publish the draft via GitHub's release UI or another
+   authorized maintainer publisher that emits `release: published`.
+   A tag, draft, or publish using Actions' built-in `GITHUB_TOKEN` will not
+   trigger the release announcement.
+4. Check the published release URL, tag, source commit, notes, and release
+   type. Verify the observer and sender ran and record the GitHub Release URL,
+   signed catalog sequence and Discord message URL on the checklist issue.
+   If any step is missing, keep the issue open and report what succeeded and
+   what failed. Follow the
+   [announcement recovery instructions](../tools/github/discord-release-announcement.md#recovery)
+   rather than recreating a tag, deleting a reservation or guessing whether
+   a post was sent.
+
 ## Synchronize the branches
 
 `develop` advances through feature PRs; `main` advances through release PRs.

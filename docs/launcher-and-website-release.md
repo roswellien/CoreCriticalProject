@@ -213,6 +213,12 @@ inputs and release artifacts outside Git.
    `playtest.corecritical.dev`. Keep this protected installer publication
    separate from the public update-only feed.
 
+10. **Publish and verify the matching GitHub Release.** Prepare the draft
+    before feed promotion and publish only after the live signed feed is
+    verified. Follow the
+    [launcher publication gate](github-workflow.md#launcher-publication-gate)
+    for the launcher-only marker and the GitHub and Discord receipts.
+
 ## Website deployment
 
 The public project site at `corecritical.dev` uses the existing Cloudflare Pages

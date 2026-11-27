@@ -54,6 +54,9 @@ task-specific commit instructions; it does not expand a task's file scope.
 - Run relevant checks and describe behavior, validation and release impact in
   each PR. Build normal playtest releases from merged `main`, recording its SHA.
   An explicitly requested development preview must be identified as such.
+- For a launcher release, follow the [GitHub publication gate](docs/github-workflow.md#launcher-publication-gate).
+  A live signed feed alone is not completion; verify the matching published
+  GitHub Release and the Discord announcement.
 - Track each task as an issue on the project board, and move its card as the
   task starts and its PR opens (see "Project board" in `docs/github-workflow.md`).
 - Report the topic branch, PR URL, checks and remaining limitations at handoff.
