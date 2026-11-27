@@ -9,14 +9,45 @@ using Microsoft.Win32;
 
 namespace MW3RemasterLauncher.Core;
 
+/// <summary>
+/// A file's identity before launch (whether it existed, its times and length), so the
+/// launcher can tell a file this session wrote from one left over by an earlier run.
+/// </summary>
+public sealed record FileStamp(string Path, bool Existed, DateTime CreationTimeUtc,
+    DateTime LastWriteTimeUtc, long Length)
+{
+    /// <summary>The file's stamp now; a missing file or one reached through a link counts as absent.</summary>
+    public static FileStamp Capture(string path)
+    {
+        try
+        {
+            if (File.Exists(path) && !PlaytestDiagnostics.HasLinkInChain(path))
+            {
+                var info = new FileInfo(path);
+                return new FileStamp(path, true, info.CreationTimeUtc, info.LastWriteTimeUtc, info.Length);
+            }
+        }
+        catch { }
+        return new FileStamp(path, false, DateTime.MinValue, DateTime.MinValue, 0);
+    }
+
+    /// <summary>True when the file exists now and wasn't there, or differs from this stamp.</summary>
+    public bool ChangedSince()
+    {
+        var now = Capture(Path);
+        if (!now.Existed) return false;
+        return !Existed ||
+            now.LastWriteTimeUtc != LastWriteTimeUtc ||
+            now.CreationTimeUtc != CreationTimeUtc ||
+            now.Length != Length;
+    }
+}
+
 /// <summary>Pre-launch profile state so current-session native logs can be separated from stale prior runs.</summary>
 public sealed record NativeSessionDiagnosticsBaseline(
     string WriteDirectory,
-    string LogPath,
-    bool LogExisted,
-    DateTime LogCreationTimeUtc,
-    DateTime LogLastWriteTimeUtc,
-    long LogLength,
+    FileStamp RunLog,
+    FileStamp ProblemsLog,
     string CrashPath,
     long CrashOffset,
     DateTime StartedUtc);
@@ -36,6 +67,8 @@ public static class PlaytestDiagnostics
     public const string ApplicationHangSummary = "The game stopped responding and Windows closed it.";
     public const string NativeCrashFileName = "crash.txt";
     public const string NativeRunFileName = "mw3.log";
+    public const string NativeOldRunFileName = "mw3.old.log";
+    public const string NativeProblemsFileName = "mw3-problems.log";
 
     // Keep only the fixed diagnostic suffix of the legacy host fault record (issue #150).
     private static readonly Regex WindowsPathWithNativeSuffix = new(
@@ -137,24 +170,9 @@ public static class PlaytestDiagnostics
     public static NativeSessionDiagnosticsBaseline CaptureNativeBaseline(string writeDirectory)
     {
         var fullWriteDir = Path.GetFullPath(writeDirectory);
-        var logPath = Path.Combine(fullWriteDir, NativeRunFileName);
         var crashPath = Path.Combine(fullWriteDir, NativeCrashFileName);
-        bool logExisted = false;
-        DateTime logCreated = DateTime.MinValue;
-        DateTime logWritten = DateTime.MinValue;
-        long logLength = 0;
-        try
-        {
-            if (File.Exists(logPath) && !HasLinkInChain(logPath))
-            {
-                var info = new FileInfo(logPath);
-                logExisted = true;
-                logCreated = info.CreationTimeUtc;
-                logWritten = info.LastWriteTimeUtc;
-                logLength = info.Length;
-            }
-        }
-        catch { }
+        var runLog = FileStamp.Capture(Path.Combine(fullWriteDir, NativeRunFileName));
+        var problemsLog = FileStamp.Capture(Path.Combine(fullWriteDir, NativeProblemsFileName));
 
         long crashOffset = 0;
         try
@@ -168,11 +186,8 @@ public static class PlaytestDiagnostics
 
         return new NativeSessionDiagnosticsBaseline(
             fullWriteDir,
-            logPath,
-            logExisted,
-            logCreated,
-            logWritten,
-            logLength,
+            runLog,
+            problemsLog,
             crashPath,
             crashOffset,
             DateTime.UtcNow);
@@ -209,32 +224,49 @@ public static class PlaytestDiagnostics
             }
             catch { }
 
-            // 2. Current-session mw3.log, guarded against stale pre-launch log files.
-            try
+            // 2. The whole current-session mw3.log, skipped when it is a stale pre-launch file.
+            // The game renames the previous log to mw3.old.log when it starts, so a fresh
+            // mw3.log means mw3.old.log is the previous session's and worth keeping too.
+            var runLogFresh = baseline.RunLog.ChangedSince();
+            if (runLogFresh)
             {
-                if (File.Exists(baseline.LogPath) && !HasLinkInChain(baseline.LogPath))
-                {
-                    var info = new FileInfo(baseline.LogPath);
-                    var fresh = !baseline.LogExisted ||
-                        info.LastWriteTimeUtc != baseline.LogLastWriteTimeUtc ||
-                        info.CreationTimeUtc != baseline.LogCreationTimeUtc ||
-                        info.Length != baseline.LogLength;
-                    if (fresh)
-                    {
-                        var text = ReadLogForSession(baseline.LogPath);
-                        if (!string.IsNullOrWhiteSpace(text))
-                        {
-                            File.WriteAllText(Path.Combine(nativeDir, NativeRunFileName), text, new UTF8Encoding(false));
-                        }
-                    }
-                }
+                CopyWholeLog(baseline.RunLog.Path, Path.Combine(nativeDir, NativeRunFileName));
+                CopyWholeLog(Path.Combine(baseline.WriteDirectory, NativeOldRunFileName),
+                    Path.Combine(nativeDir, NativeOldRunFileName));
             }
-            catch { }
+
+            // 3. The whole problems log, under the same freshness test as mw3.log.
+            if (baseline.ProblemsLog.ChangedSince())
+                CopyWholeLog(baseline.ProblemsLog.Path, Path.Combine(nativeDir, NativeProblemsFileName));
         }
         catch { }
     }
 
-    private static bool HasLinkInChain(string path)
+    private static void CopyWholeLog(string source, string destination)
+    {
+        try
+        {
+            var text = ReadWholeLog(source);
+            if (!string.IsNullOrWhiteSpace(text))
+                File.WriteAllText(destination, text, new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// The whole file as text, or "" when it is missing. It shares the file with a game
+    /// still writing it, and refuses a path that runs through a link.
+    /// </summary>
+    internal static string ReadWholeLog(string path)
+    {
+        if (!File.Exists(path)) return "";
+        PackStorage.EnsureNoLinks(path);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        return reader.ReadToEnd();
+    }
+
+    internal static bool HasLinkInChain(string path)
     {
         try
         {

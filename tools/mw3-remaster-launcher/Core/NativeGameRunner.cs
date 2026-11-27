@@ -59,6 +59,12 @@ public sealed class NativeGameRunner
 
     public string? LastLogPath { get; private set; }
     public string? LastRuntimeVersion { get; private set; }
+
+    /// <summary>
+    /// Milliseconds from process start to the game's first frame in the latest launch, or
+    /// null when it never drew one. Problems logged before it are startup noise.
+    /// </summary>
+    public long? LastFirstFrameMilliseconds { get; private set; }
     public Task<int>? LastSessionCompletion { get; private set; }
 
     public static Mw3ReWindowMode WindowModeForSettings(string savedWindowMode) => savedWindowMode switch
@@ -285,6 +291,7 @@ public sealed class NativeGameRunner
         }
 
         LastRuntimeVersion = null;
+        LastFirstFrameMilliseconds = null;
         LastSessionCompletion = null;
         NativeSessionDiagnosticsBaseline? baseline = null;
         // Keep updates and pack changes out of the active MW3-RE session.
@@ -453,7 +460,8 @@ public sealed class NativeGameRunner
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         log("MW3-RE PID " + process.Id);
-        _ = ObserveReadinessAsync(process, readyFile, log);
+        _ = ObserveReadinessAsync(process, readyFile, log,
+            milliseconds => LastFirstFrameMilliseconds = milliseconds);
         return process;
     }
 
@@ -534,7 +542,8 @@ public sealed class NativeGameRunner
     /// Follows the game's ready/status files (they work even when the GUI native host sends its
     /// stdout to its own log) until the main menu is on screen, logging timings and progress.
     /// </summary>
-    public static async Task ObserveReadinessAsync(Process process, string readyFile, Action<string> log)
+    public static async Task ObserveReadinessAsync(Process process, string readyFile, Action<string> log,
+        Action<long>? onFirstFrame = null)
     {
         var clock = Stopwatch.StartNew();
         string lastStatus = "";
@@ -563,7 +572,9 @@ public sealed class NativeGameRunner
                 if (!shown && File.Exists(readyFile))
                 {
                     shown = true;
-                    log($"Native first frame: {clock.ElapsedMilliseconds} ms after process start");
+                    var firstFrameMilliseconds = clock.ElapsedMilliseconds;
+                    onFirstFrame?.Invoke(firstFrameMilliseconds);
+                    log($"Native first frame: {firstFrameMilliseconds} ms after process start");
                 }
                 if (!menu && File.Exists(readyFile + ".menu"))
                 {
