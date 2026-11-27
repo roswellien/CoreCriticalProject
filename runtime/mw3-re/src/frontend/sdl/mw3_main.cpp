@@ -96,6 +96,7 @@
 #include "upgrades/mods/save_mods.h"
 #include "upgrades/valve_map/valve_map.h"
 #include "frontend/sdl/sdl_child.h"
+#include "frontend/sdl/game_health.h"
 #include "frontend/sdl/sdl_focus.h"
 #include "frontend/sdl/launcher.h"
 #include "frontend/sdl/watch_launch.h"
@@ -2867,9 +2868,10 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         std::sort(s.begin(), s.end());
         double sum = 0;
         for (double v : s) sum += v;
-        auto at = [&](double q) { return s[std::min(s.size() - 1, static_cast<size_t>(q * s.size()))]; };
+        // The one percentile rule the arena benchmark and the health line use (#521).
+        auto at = [&](std::size_t percent) { return sdlfe::nearest_rank(s, percent); };
         std::printf("mw3: frame times over %zu frames: mean %.4f ms, median %.4f, p95 %.4f, p99 %.4f, max %.4f\n",
-                    s.size(), sum / s.size(), at(0.5), at(0.95), at(0.99), s.back());
+                    s.size(), sum / s.size(), at(50), at(95), at(99), s.back());
       }
     }
     light_trace.finish();

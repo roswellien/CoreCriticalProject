@@ -1,4 +1,5 @@
 #include "frontend/sdl/arena_benchmark.h"
+#include "frontend/sdl/game_health.h"
 
 #include <algorithm>
 #include <cctype>
@@ -429,9 +430,8 @@ std::optional<Statistics> Measurements::statistics() const {
         if (sample.interval_ms)
             intervals.push_back(*sample.interval_ms);
     std::sort(intervals.begin(), intervals.end());
-    const auto rank = [&](size_t percent) {
-        return intervals[(intervals.size() * percent + 99) / 100 - 1];
-    };
+    // The one percentile rule the health line and --frame-times use too (#521).
+    const auto rank = [&](size_t percent) { return sdlfe::nearest_rank(intervals, percent); };
     const size_t tail = (intervals.size() + 99) / 100;
     const double slowest = std::accumulate(intervals.end() - tail, intervals.end(), 0.0);
     return Statistics{std::accumulate(intervals.begin(), intervals.end(), 0.0) / intervals.size(),
