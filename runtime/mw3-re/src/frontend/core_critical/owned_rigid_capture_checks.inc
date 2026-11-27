@@ -262,10 +262,13 @@ void check_owned_rigid_capture(SDL_Window *window, sdlfe::RendererBackend backen
             "Captured normal pixels mismatch");
     require(captured->ranges()[0].height_binding != nullptr &&
                 captured->ranges()[0].height_binding->image != nullptr &&
-                captured->ranges()[0].surface_parameters[0] == 0.65f &&
+                captured->ranges()[0].height_binding->material.roughness == 0.65f &&
+                captured->ranges()[0].surface_parameters[3] == 0.0f &&
                 captured->ranges()[2].height_binding != nullptr &&
-                captured->ranges()[2].surface_parameters[0] == 0.8f,
-            "Captured height binding or surface parameters missing");
+                captured->ranges()[2].height_binding->image != nullptr &&
+                captured->ranges()[2].height_binding->material.roughness == 0.8f &&
+                captured->ranges()[2].surface_parameters[3] == 0.0f,
+            "Captured height binding missing or changed baseline lighting");
     require(Hook::validate_captured_original_rigid(*renderer, *captured),
             "Fresh capture failed producer validation");
     require(!Hook::validate_captured_original_rigid(*other_renderer, *captured),
