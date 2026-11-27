@@ -42,6 +42,58 @@ def units(text):
     return len(text.encode("utf-16-le")) // 2
 
 
+SECTION_TITLES = (
+    ("updates", "Updates & Changes"),
+    ("known_issues", "Known Issues and Bugs"),
+)
+
+
+def unique_fields(pairs):
+    fields = {}
+    for key, value in pairs:
+        if key in fields:
+            raise ChangelogError("Duplicate changelog section")
+        fields[key] = value
+    return fields
+
+
+def changelog_sections(raw):
+    if not isinstance(raw, str) or len(raw) > 24000:
+        raise ChangelogError("Bullet input must be bounded JSON")
+    try:
+        decoded = json.loads(raw, object_pairs_hook=unique_fields)
+    except (ValueError, RecursionError):
+        raise ChangelogError("Bullet input must be valid JSON") from None
+    if isinstance(decoded, list):
+        decoded = {"updates": decoded}
+    if not isinstance(decoded, dict) or decoded.keys() - {key for key, _ in SECTION_TITLES}:
+        raise ChangelogError("Use an array or the updates and known_issues sections")
+
+    sections = []
+    count = 0
+    for key, title in SECTION_TITLES:
+        bullets = decoded.get(key, [])
+        if not isinstance(bullets, list):
+            raise ChangelogError("Each changelog section must be an array")
+        count += len(bullets)
+        if count > 60:
+            raise ChangelogError("Supply 1 to 60 substantive bullets across both sections")
+        if not bullets:
+            continue
+        for bullet in bullets:
+            if not isinstance(bullet, str) or not bullet.strip():
+                raise ChangelogError("Every bullet must be nonempty text")
+            if any(
+                ord(c) < 32 or 127 <= ord(c) <= 159 or 0xD800 <= ord(c) <= 0xDFFF for c in bullet
+            ):
+                raise ChangelogError("Use a single line without control characters per bullet")
+        lines = "\n".join(f"- {bullet.strip()}" for bullet in bullets)
+        sections.append(f"**{title}**\n{lines}")
+    if not count:
+        raise ChangelogError("Supply 1 to 60 substantive bullets across both sections")
+    return "\n\n".join(sections)
+
+
 def format_payload(inputs, today):
     if not isinstance(inputs, dict):
         raise ChangelogError("Inputs are missing")
@@ -51,22 +103,8 @@ def format_payload(inputs, today):
     version = inputs.get("version")
     if not isinstance(version, str) or not VERSION.fullmatch(version):
         raise ChangelogError("Use a verified public version number")
-    raw = inputs.get("bullets")
-    if not isinstance(raw, str) or len(raw) > 24000:
-        raise ChangelogError("Bullet input must be a bounded JSON array")
-    try:
-        bullets = json.loads(raw)
-    except (ValueError, RecursionError):
-        raise ChangelogError("Bullet input must be a JSON array") from None
-    if not isinstance(bullets, list) or not 1 <= len(bullets) <= 60:
-        raise ChangelogError("Supply 1 to 60 substantive bullets")
-    for bullet in bullets:
-        if not isinstance(bullet, str) or not bullet.strip():
-            raise ChangelogError("Every bullet must be nonempty text")
-        if any(ord(c) < 32 or 127 <= ord(c) <= 159 or 0xD800 <= ord(c) <= 0xDFFF for c in bullet):
-            raise ChangelogError("Use a single line without control characters per bullet")
+    changes = changelog_sections(inputs.get("bullets"))
     heading = f"CoreCritical MW3 Recomp | What Changed Today | {day}"
-    changes = "\n".join(f"- {bullet.strip()}" for bullet in bullets)
     footer = (
         f"*Latest version: {version}. Don’t forget to update!*\n\n"
         f"Enjoying CoreCritical? Share the [project website]({WEBSITE}) "

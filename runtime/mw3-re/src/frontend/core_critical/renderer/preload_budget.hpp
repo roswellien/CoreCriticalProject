@@ -108,6 +108,7 @@ struct PreloadFaultInjection {
   // injected_result, one after another.
   std::size_t fail_next_play_model_allocations{};
   std::size_t fail_next_play_texture_allocations{};
+  std::size_t fail_next_height_staging_allocations{};
 };
 
 } // namespace mw34::vkscene

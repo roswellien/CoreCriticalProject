@@ -951,6 +951,50 @@ void parallax_stand_in_while_texture_waits(vk::Renderer &renderer) {
           "POM did not return once the waiting texture fit again");
   std::printf("pom_stand_in_while_texture_waits pass\n");
 }
+void height_staging_allocation_fallback(vk::Renderer &renderer) {
+  auto source = fixture(Route::tl, Height::ramp_u, .08f, .1f, .7);
+  auto streamed = std::make_shared<mat::HeightBinding>(*source.scene.draws[0].height_binding);
+  streamed->streamed_image = true;
+  source.scene.draws[0].height_binding = streamed;
+  auto normal_only = source.scene;
+  normal_only.draws[0].height_binding.reset();
+  renderer.render(normal_only);
+  const auto uploads = renderer.height_uploads;
+  const auto active_draws = renderer.height_draws;
+  const auto decoded = source.budget->used();
+  vk::PreloadFaultInjection fault{};
+  fault.fail_next_height_staging_allocations = 1;
+  renderer.set_preload_fault(fault);
+  auto deferred = source.scene;
+  renderer.render(deferred);
+  require(deferred.pom_rgba8 == normal_only.pom_rgba8 &&
+              deferred.pom_depth32 == normal_only.pom_depth32 &&
+              renderer.height_uploads == uploads && renderer.height_draws == active_draws &&
+              source.budget->used() == decoded,
+          "POM staging allocation failure did not produce normal-only streamed rendering");
+  renderer.render(source.scene);
+  require(renderer.height_uploads == uploads + 1 &&
+              renderer.height_draws == active_draws + 1 &&
+              source.scene.pom_rgba8 != normal_only.pom_rgba8,
+          "Deferred POM staging upload did not retry on the next frame");
+
+  auto optional = fixture(Route::tl, Height::constant, .08f, .1f, .7);
+  auto legacy = fixture(Route::tl, Height::one, .08f, .1f, .7);
+  auto snapshot = std::make_shared<mat::HeightBinding>(*optional.scene.draws[0].height_binding);
+  snapshot->streamed_image = true;
+  optional.scene.draws[0].height_binding = snapshot;
+  optional.scene.draws.push_back(legacy.scene.draws[0]);
+  optional.scene.order.push_back({false, 1});
+  const auto mixed_uploads = renderer.height_uploads;
+  const auto mixed_draws = renderer.height_draws;
+  renderer.set_preload_fault(fault);
+  renderer.render(optional.scene);
+  require(renderer.height_uploads == mixed_uploads + 1 &&
+              renderer.height_draws == mixed_draws + 1,
+          "POM staging fallback discarded required legacy images or drew deferred images");
+  renderer.set_preload_fault({});
+  std::printf("pom_streamed_height_staging_allocation_fallback pass\n");
+}
 void height_replacement_and_queued_retirement(vk::Renderer &renderer) {
   auto old = fixture(Route::tl, Height::constant, .04f, 0, .3);
   auto replacement = fixture(Route::tl, Height::ramp_u, .04f, 0, .3);
@@ -1193,6 +1237,7 @@ void check_parallax(SDL_Window *window, sdlfe::RendererBackend backend) {
     descriptor_identity_and_mixed_draws(renderer, uncombined);
     immutable_height_reuse_across_admission_stamps(renderer);
     height_replacement_and_queued_retirement(renderer);
+    height_staging_allocation_fallback(renderer);
     parallax_stand_in_while_texture_waits(renderer);
     for (const auto quality : {vk::Renderer::Quality{1, 1, 16, true},
                                vk::Renderer::Quality{2, 1, 16, false},

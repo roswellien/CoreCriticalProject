@@ -601,6 +601,10 @@ def _source_capabilities(source):
             and _file_contains_bytes(planner, br'BWMESH7\0')):
         caps.extend((("prepared-mechs", (1,)), ("mesh-payload", tuple(range(1, 8))),
                      ("normal-map", (1, 2, 3)), ("surface-materials", (1,))))
+    environment_reader = source / "runtime/mw3-re/src/platform/prepared_environment.inc"
+    if (_file_contains_bytes(environment_reader, b"MW34-c1-height-stream-v1")
+            and _file_contains_bytes(renderer_source, b"void select_terrain_cell(")):
+        caps.extend((("environment-resources", (1,)), ("c1-height-stream", (1,))))
     return tuple(caps)
 
 

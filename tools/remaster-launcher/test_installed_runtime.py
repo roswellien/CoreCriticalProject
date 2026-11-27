@@ -45,6 +45,7 @@ class InstalledPreparationTests(unittest.TestCase):
         self.assertEqual(repo_caps, producer._DEFAULT_CAPABILITIES + (
             ("prepared-mechs", (1,)), ("mesh-payload", (1, 2, 3, 4, 5, 6, 7)),
             ("normal-map", (1, 2, 3)), ("surface-materials", (1,)),
+            ("environment-resources", (1,)), ("c1-height-stream", (1,)),
         ))
         with tempfile.TemporaryDirectory() as temporary:
             old_source = Path(temporary)

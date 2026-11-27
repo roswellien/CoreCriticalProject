@@ -18,6 +18,7 @@
 #include "gamez/zclass/cls_di.h"
 #include "gamez/zclass/cls_util.h"
 #include "gamez/zclass/cls_world.h"
+#include "gamez/zclass/cls_zbd.h"
 #include "gamez/zclass/list.h"
 #include "gamez/zclass/window.h"
 #include "gamez/zclass/object3d.h"
@@ -1237,6 +1238,8 @@ int pick_cells(Node* world, Camera* cam) {
   for (ScreenRing& r : g_walk.rings) r.count = 0;
   int32_t cx, cz;
   world_cell_clamped(world, &cx, cam->get<float>(0x2c), cam->get<float>(0x34), &cz);
+  if (auto *renderer = zvid::render3d())
+    renderer->select_terrain_cell(node_index_of(world), cx, cz);
   zmth::Mat34 local;
   zmth::push(&local);
   zmth::load_identity();
@@ -1276,6 +1279,8 @@ int pick_cells_virtual(Node* world, Camera* cam) {
   for (ScreenRing& r : g_walk.rings) r.count = 0;
   int32_t cx, cz, wx, wz, inside;
   world_cell_wrapped(world, &cx, cam->get<float>(0x2c), cam->get<float>(0x34), &cz, &wx, &wz, &inside);
+  if (auto *renderer = zvid::render3d())
+    renderer->select_terrain_cell(node_index_of(world), wx, wz);
   zmth::Mat34 local;
   zmth::push(&local);
   zmth::load_identity();
