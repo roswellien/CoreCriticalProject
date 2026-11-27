@@ -715,6 +715,29 @@ static class PlaytestSupportChecks
         Check(launcherFactsOnly.Keys.SequenceEqual(new[] { "pack_texture_bytes" }),
             "A header without game lines held more than pack texture sizes");
 
+        // The game's own header lines, from the sample its checks compare its output with
+        // (runtime/mw3-re/tests/test_game_health.cpp): every field parses, so a format change
+        // on either side fails a check.
+        var sharedSample = Path.Combine(RepositoryRoot.Find(), "tests", "fixtures", "game_header_lines.txt");
+        var sampleHeader = ReportHeader.Build(sharedSample, Array.Empty<PackManifest>(), Array.Empty<string>(), roots);
+        using (var sampleDoc = JsonSerializer.SerializeToDocument(sampleHeader, webOptions))
+        {
+            var s = sampleDoc.RootElement;
+            var sampleHeaps = s.GetProperty("heaps");
+            Check(s.GetProperty("vulkan_device").GetString() == "NVIDIA GeForce RTX 5070" &&
+                s.GetProperty("vulkan_api_version").GetString() == "1.4.312" &&
+                s.GetProperty("vulkan_driver_version").GetString() == "570.41.0.0 (0x8E8A4000)" &&
+                sampleHeaps.GetArrayLength() == 2 &&
+                sampleHeaps[0].GetProperty("budget_bytes").GetInt64() == 11811160064 &&
+                sampleHeaps[1].GetProperty("index").GetInt32() == 1 &&
+                !sampleHeaps[1].GetProperty("device_local").GetBoolean() &&
+                s.GetProperty("resolution").GetString() == "2560x1080" &&
+                s.GetProperty("window_mode").GetString() == "borderless" &&
+                s.GetProperty("refresh_hz").GetInt32() == 144 &&
+                !s.GetProperty("hdr").GetBoolean(),
+                "The game's shared header sample did not fill every report header field: " + s);
+        }
+
         // The upload stays within 256 KB, keeps the problems log's first E line and last line,
         // leads with the header, and puts the last health lines first in the game log.
         var uploadLauncherLog = NewSession(root, "session-521-upload", Lines("launcher", 20_000));

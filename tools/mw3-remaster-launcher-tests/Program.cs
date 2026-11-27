@@ -11,6 +11,19 @@ if (args.Length == 3 && args[0] == "--run-arena-match")
     return;
 }
 
+// Manual check (#521): read a game's mw3.log the way a playtest report does, to see
+// the header the game's lines fill and the health lines the upload leads with.
+// Usage: --read-game-log MW3_LOG
+if (args.Length == 2 && args[0] == "--read-game-log")
+{
+    var header = ReportHeader.Build(args[1], Array.Empty<PackManifest>(), Array.Empty<string>(), Array.Empty<string>());
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(header,
+        new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web) { WriteIndented = true }));
+    foreach (var line in GameProblemsLog.LastHealthLines(File.ReadAllText(args[1]), 20))
+        Console.WriteLine(line);
+    return;
+}
+
 if (args.Length == 2 && args[0] == "--modular-content-only") { await ModProfilesChecks.Run(args[1]); return; }
 
 if(args.Length==3 && args[0]=="--check-update-notification") { UpdateNotificationUiChecks.Run(args[1],args[2]); return; }
