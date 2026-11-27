@@ -18,8 +18,11 @@ material in workflow inputs; this is a public repository.
    administrators; do not move it to another channel.
 2. From the cloud, dispatch **Discord changelog** on `develop` with `date`
    (current Mountain YYYY-MM-DD), `version` (verified public version), and
-   `bullets` (JSON array of single-line public bullet strings). Leave
-   `live` unchecked or false. The dry-run job has no secret and makes no
+   `bullets` (JSON with `updates` and `known_issues` arrays of single-line public bullet
+   strings). Example: `{"updates":["Improved mission loading"],"known_issues":["A high-FPS collision bug is still open"]}`.
+   Empty sections are omitted. A flat JSON array is still accepted for
+   updates-only posts.
+   Leave `live` unchecked or false. The dry-run job has no secret and makes no
    Discord request. Confirm that the dry-run job executed and passed, not just
    that GitHub accepted the dispatch.
 3. With approval, dispatch the actual report once with `live` true. Confirm
