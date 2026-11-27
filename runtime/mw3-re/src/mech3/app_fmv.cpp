@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -21,6 +22,7 @@
 #include "mech3/app.h"
 #include "mech3/app_engine.h"
 #include "mech3/app_movie.h"
+#include "mech3/hd_movie.h"
 #include "mech3/movie_shape.h"
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
@@ -109,7 +111,11 @@ class GameFmvHost : public zfmv::Host {
   // The movies are the importer's files (app_movie.h): "found" when the
   // The AVI through the helper's Video for Windows, else the imported .fmv.
   // FIX (A): no AVIFile or Indeo 5 here (docs/fmv.md, The Indeo helper).
-  int32_t file_stat(const char* path) override { return remote_path(path).empty() && movie_base(path).empty() ? -1 : 0; }
+  // Ours (#559): a mapped HD movie is found without the AVI.
+  int32_t file_stat(const char* path) override {
+    if (hd_movie_valid(path)) return 0;
+    return remote_path(path).empty() && movie_base(path).empty() ? -1 : 0;
+  }
 
   // Video for Windows: Windows' own and the install's codec in the 32-bit
   // helper when there is one (platform::VideoForWindows), else the imported
@@ -120,6 +126,11 @@ class GameFmvHost : public zfmv::Host {
     *stream = 0;
     auto o = std::make_unique<Open>();
     o->video = type == 0x73646976;  // 'vids'
+    if (open_hd_movie(*o, path)) {
+      *stream = e_->handle_of(o.get());
+      streams_[*stream] = std::move(o);
+      return 0;
+    }
     const std::string host = remote_path(path);
     std::unique_lock<std::mutex> lock(vfw_mu_);
     if (!host.empty() && vfw()->open(host, type, &o->remote) == 0 && o->remote) {
@@ -163,6 +174,7 @@ class GameFmvHost : public zfmv::Host {
   int32_t avi_read(Handle stream, int32_t start, int32_t samples, void* buffer, int32_t bytes) override {
     Open* m = movie(stream);
     if (!m) return -1;
+    if (m->hd) return m->video ? 0 : m->hd->read_audio(start, samples, buffer, bytes);  // no picture bytes
     if (!m->remote) return m->imported->read(start, samples, buffer, bytes);
     std::lock_guard<std::mutex> g(vfw_mu_);
     return vfw()->read(m->remote, start, samples, buffer, bytes);
@@ -170,6 +182,7 @@ class GameFmvHost : public zfmv::Host {
   int32_t avi_find_sample(Handle stream, int32_t pos, uint32_t flags) override {
     Open* m = movie(stream);
     if (!m) return -1;
+    if (m->hd) return pos;  // every stand-in frame a key frame: the player never catches up
     if (!m->remote) return m->imported->find_sample(pos, flags);
     std::lock_guard<std::mutex> g(vfw_mu_);
     return vfw()->find_sample(m->remote, pos, flags);
@@ -178,6 +191,9 @@ class GameFmvHost : public zfmv::Host {
     auto it = streams_.find(stream);
     if (it == streams_.end()) return;
     if (decoding_ == it->second.get()) decoding_ = nullptr;
+    // The stream goes with its first release (~Stream releases the sound
+    // first), so hd_frame() never reads a freed stream.
+    if (it->second->hd) hd_stream_ = nullptr;
     if (it->second->video) shapes().play_end();
     if (it->second->remote && vfw()) {
       std::lock_guard<std::mutex> g(vfw_mu_);
@@ -185,6 +201,10 @@ class GameFmvHost : public zfmv::Host {
     }
     e_->forget_object(it->second.get());
     streams_.erase(it);
+    if (hd_ && hd_.use_count() == 1) {  // the stand-in's last stream released
+      hd_.reset();
+      e_->hd_movie_ended();
+    }
   }
   // The Indeo 5 codec: the picture stream opened last decodes.
   Handle ic_locate(uint32_t, uint32_t, const void*, const void*, uint32_t) override {
@@ -205,6 +225,10 @@ class GameFmvHost : public zfmv::Host {
     std::memcpy(&compression, static_cast<const uint8_t*>(out) + 16, 4);
     if (bits != 16) return -1;
     const int32_t rows = h < 0 ? -h : h, pitch = ((w + 3) & ~3) * 2;
+    if (decoding_->hd) {  // the stand-in's picture: black, never shown (the HD frame is)
+      std::memset(image, 0, static_cast<size_t>(rows) * pitch);
+      return 0;
+    }
     if (decoding_->remote) {  // the header and, for BI_BITFIELDS, its three masks
       std::lock_guard<std::mutex> g(vfw_mu_);
       return vfw()->decompress(decoding_->remote, flags, out, size + (compression == 3 ? 12 : 0), image,
@@ -222,6 +246,7 @@ class GameFmvHost : public zfmv::Host {
     ++st.drawn;
     st.last = stream->shown, st.length = stream->length;
     shown_image_ = &stream->image, shown_frame_ = stream->shown;
+    if (Open* picture = movie(stream->video); picture && picture->hd) hd_stream_ = stream;
     return e_->handle_of(&stream->image);
   }
   // zSound's streaming buffer (zsnd_create.cpp, ported).
@@ -257,6 +282,25 @@ class GameFmvHost : public zfmv::Host {
     return static_cast<double>(static_cast<float>(ms) * 0.001f);
   }
 
+  // Ours (#559): the playing HD movie's picture for the sound played so far,
+  // and the movie's shape (movie_shape.h) as rows of the clip: the shape
+  // table's rows are the original's 480, so 79..400 become 158..801 of 960.
+  bool hd_frame(HdPresentFrame* out) {
+    if (!hd_ || !hd_stream_) return false;
+    const double seconds = hd_stream_->sound_seconds();
+    if (seconds < 0) return false;
+    if (!hd_->frame_at(seconds, &out->frame)) return false;
+    out->src_top = out->src_bottom = -1;
+    int32_t top = -1, bottom = -1;
+    frame_rows(static_cast<int32_t>(seconds * 15), &top, &bottom);
+    const int clip_height = hd_->clip_height(), table_height = hd_->table_height();
+    if (top >= 0 && bottom >= top && table_height > 0) {
+      out->src_top = top * clip_height / table_height;
+      out->src_bottom = std::min(clip_height - 1, (bottom + 1) * clip_height / table_height - 1);
+    }
+    return true;
+  }
+
  private:
   zimg::Texture* texture(Handle h) const { return static_cast<zimg::Texture*>(e_->object_of(h)); }
   // An opened stream: the helper's (remote, its id) or the imported files'.
@@ -267,12 +311,66 @@ class GameFmvHost : public zfmv::Host {
     std::vector<uint8_t> format;
     zfmv::AviStreamInfo info;
     std::string shape_key;  // the picture's (movie_shape.h)
+    std::shared_ptr<HdMovieStandIn> hd;  // ours (#559): a mapped HD movie's stand-in
   };
   Open* movie(Handle h) const {
     auto it = streams_.find(h);
     return it == streams_.end() ? nullptr : it->second.get();
   }
   platform::VideoForWindows* vfw() const { return e_->platform_parts().vfw; }
+  // Ours (#559): the HD MP4 the option maps this AVI's movie to, or null.
+  const std::string* hd_movie_path(const char* path, std::string* name) const {
+    const std::map<std::string, std::string>& mapped = e_->platform_parts().hd_movies;
+    if (mapped.empty() || !path) return nullptr;
+    *name = hd_movie_name(path);
+    auto it = mapped.find(*name);
+    return it == mapped.end() ? nullptr : &it->second;
+  }
+  // Whether the mapped HD movie can stand in, checked once a run (at the
+  // script's load: open, check, close; HdMovieStandIn::validate). A refusal
+  // is logged here, once; the original is used from then on.
+  bool hd_movie_valid(const char* path) {
+    std::string name;
+    const std::string* hd_path = hd_movie_path(path, &name);
+    if (!hd_path) return false;
+    auto known = hd_valid_.find(name);
+    if (known != hd_valid_.end()) return known->second;
+    std::string reason;
+    const bool valid = HdMovieStandIn::validate(name, *hd_path, hd_movie_factory(), &reason);
+    if (!valid) log_hd_line("mw3: hd movie " + name + " not used (" + reason + "); playing the original");
+    hd_valid_[name] = valid;
+    return valid;
+  }
+  // The platform's decoder for HD movies, or a test's (Platform::hd_movie_factory).
+  HdMovieFactory hd_movie_factory() const {
+    const HdMovieFactory& given = e_->platform_parts().hd_movie_factory;
+    return given ? given : default_hd_movie_factory();
+  }
+  // The AVI's stream from its HD stand-in, when mapped and valid: its first
+  // stream (the sound) starts the stand-in, the second shares it.
+  bool open_hd_movie(Open& o, const char* path) {
+    std::string name;
+    const std::string* hd_path = hd_movie_path(path, &name);
+    if (!hd_path || !hd_movie_valid(path)) return false;
+    if (!hd_ || hd_->name() != name) {
+      auto stand_in = std::make_shared<HdMovieStandIn>(name, *hd_path, hd_movie_factory(), log_hd_line);
+      if (!stand_in->start()) {
+        hd_valid_[name] = false;  // its line is logged; the original from now on
+        return false;
+      }
+      hd_ = std::move(stand_in);
+      e_->hd_movie_started();
+    }
+    o.hd = hd_;
+    o.format = o.video ? hd_->video_format() : hd_->audio_format();
+    o.info = o.video ? hd_->video_info() : hd_->audio_info();
+    if (o.video) shape_open(o, path, false);  // the shape table's key: known, never measured
+    return true;
+  }
+  static void log_hd_line(const std::string& line) {
+    std::fprintf(stderr, "%s\n", line.c_str());
+    std::fflush(stderr);
+  }
   // The AVI's host path when the helper is up and the mounts have the file.
   std::string remote_path(const char* path) const {
     platform::VideoForWindows* v = vfw();
@@ -375,12 +473,19 @@ class GameFmvHost : public zfmv::Host {
   Play play_;
   const zimg::Texture* shown_image_ = nullptr;  // the movie's picture drawn last, and its frame
   int32_t shown_frame_ = -1;
+  // Ours (#559): the mapped movies checked so far (name: valid), the playing
+  // stand-in (shared by its two streams) and the player's stream showing it.
+  std::map<std::string, bool> hd_valid_;
+  std::shared_ptr<HdMovieStandIn> hd_;
+  zfmv::Stream* hd_stream_ = nullptr;
   std::unique_ptr<MovieShapeStore> shapes_;  // last: its thread uses the members above
 };
 
 std::unique_ptr<GameFmvHost> g_host;
 
 }  // namespace
+
+bool hd_movie_frame(HdPresentFrame* out) { return g_host && out && g_host->hd_frame(out); }
 
 void wire_fmv(GameEngine* e) {
   if (e) {
@@ -431,6 +536,9 @@ uint32_t GameEngine::movie_playing(Handle m) {
   auto* s = static_cast<zfmv::Script*>(object_of(m));
   const bool on = s && s->playing();
   if (!on) movie_cd_resume(m);
+  // Ours (#559): an HD movie's 24 frames a second shown between the
+  // script's 15 fps flips, each pass, when a newer one is due.
+  if (on && hd_movie_active_) present_hd_movie(false);
   return on;
 }
 void GameEngine::movie_stop(Handle m, int32_t all) {
@@ -442,6 +550,40 @@ void GameEngine::movie_delete(Handle m) {
   auto* s = static_cast<zfmv::Script*>(object_of(m));
   forget_object(s);
   delete s;
+}
+
+// Ours (#559, docs/fmv.md section 9): an HD movie's frames shown in place
+// of the 16-bit buffer while it plays; its texture let go at its end.
+void GameEngine::hd_movie_started() {
+  hd_movie_active_ = true;
+  hd_movie_serial_shown_ = 0;
+}
+void GameEngine::hd_movie_ended() {
+  hd_movie_active_ = false;
+  hd_movie_serial_shown_ = 0;
+  if (p_.screen) p_.screen->release_frame_rgba();
+}
+bool GameEngine::present_hd_movie(bool counted) {
+  if (!hd_movie_active_ || !p_.screen) return false;
+  HdPresentFrame shown;
+  if (!hd_movie_frame(&shown) || !shown.frame.rgba) return false;  // none decoded yet
+  const HdFrame& frame = shown.frame;
+  const bool already_shown = frame.serial == hd_movie_serial_shown_;
+  if (!counted && already_shown) return true;
+  if (!p_.screen->present_frame_rgba(frame.rgba->data(), frame.width, frame.height, frame.pitch, frame.serial,
+                                     shown.src_top, shown.src_bottom)) {
+    if (!hd_movie_no_presenter_logged_) {
+      hd_movie_no_presenter_logged_ = true;
+      std::fprintf(stderr, "mw3: hd movie: no frame presenter; the movie plays without its picture\n");
+    }
+    return false;
+  }
+  hd_movie_serial_shown_ = frame.serial;
+  if (counted) {
+    ++frames_presented;
+    if (on_present) on_present(frames_presented);
+  }
+  return true;
 }
 
 // The pause screen's blur: 0x00599f70(4, 1) on the stack, its vtable the

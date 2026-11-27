@@ -109,6 +109,10 @@ class SdlScreen2D : public platform::Screen2D {
   static bool layer_empty(const uint16_t* pixels, int width, int height, int pitch, uint16_t key);
   void overlay_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, uint16_t key,
                   const uint8_t* alpha, const uint16_t* colour) override;
+  // Ours (#559): an HD movie's frame over the whole window (platform.h).
+  bool present_frame_rgba(const uint8_t* rgba, int width, int height, int pitch, uint64_t serial, int src_top,
+                          int src_bottom) override;
+  void release_frame_rgba() override;
   int frames = 0;  // frames shown
   // True while the mission's own state runs (not a menu or the pause); the same signal
   // SdlInput::in_mission uses. The live GPU menu and its 4:3 menu layout never apply then, so a
@@ -130,6 +134,11 @@ class SdlScreen2D : public platform::Screen2D {
   const FrameShape* hud_shape_{};
   int32_t texture_ = -1;
   int tw_ = 0, th_ = 0;
+  // Ours (#559): the HD movie frame's own texture (texture_ is shared with the
+  // menu background), its size and the frame uploaded.
+  int32_t movie_texture_ = -1;
+  int movie_texture_w_ = 0, movie_texture_h_ = 0;
+  uint64_t movie_serial_ = 0;
   std::vector<uint8_t> rgba_;
   // The compositor shares texture_; only a native upload can validate these cached bytes.
   bool native_texture_current_ = false;

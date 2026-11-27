@@ -244,6 +244,35 @@ int32_t Stream::audio_frame() {
   return static_cast<int32_t>(rate ? (base + played) * fps / rate : 0);
 }
 
+// Ours (#559): audio_frame()'s arithmetic, read only. Where audio_frame()
+// would refill a half now, `read` is taken as already advanced by it, so
+// the answer equals the frame audio_frame() gives, divided by fps. Signed,
+// so the start's cursor-at-0 quirk (a huge unsigned frame there) reads as 0.
+double Stream::sound_seconds() const {
+  if (!audio_ok || !streamed || first) return -1.0;
+  const uint32_t block = audio_info.sample_size ? audio_info.sample_size : 1;
+  const int64_t half_samples = half / block;
+  const uint32_t cursor = host().sound_stream_position(sound);
+  const int64_t played = cursor / block;
+  const int64_t read_so_far = read;
+  int64_t base;
+  if (fill_second) {
+    const bool wrapped = cursor == 0 && zfix::options().fixed && read_so_far > half_samples;
+    const bool second_half_refills_now = (cursor > 0 || wrapped) && cursor < half;
+    if (second_half_refills_now) base = read_so_far + half_samples - 2 * half_samples;
+    else base = read_so_far - 3 * half_samples;
+  } else if (cursor > half) {
+    base = read_so_far + half_samples - 3 * half_samples;  // the first half refills now
+  } else {
+    base = read_so_far - 2 * half_samples;
+  }
+  const uint32_t rate = rd32(wave, 4);
+  if (!rate) return -1.0;
+  const double movie_seconds = fps ? static_cast<double>(length) / fps : 0.0;
+  const double seconds = static_cast<double>(base + played) / rate;
+  return std::clamp(seconds, 0.0, movie_seconds);
+}
+
 // Mech3.exe 1.2 @ 0x0059ae50: before frame `want`, with the next key frame
 // one ahead (or at it) that key frame is decoded instead (shown a frame early);
 // past skipped frames, they are decoded from the key frame before (or the

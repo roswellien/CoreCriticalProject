@@ -141,6 +141,16 @@ TEST(movie_shape_cache_lines) {
     EXPECT(!mech3::movie_shape_parse(bad, &key, &back));
 }
 
+TEST(movie_shape_key_parts_undo_the_key) {
+  mech3::MovieShapeKeyParts parts;
+  const std::string key = mech3::movie_shape_key("./video\\C4 WIN.AVI", 1083, 640, -480);
+  EXPECT(mech3::movie_shape_key_parts(key, &parts));
+  EXPECT(parts.name == "c4_win" && parts.frames == 1083 && parts.width == 640 && parts.height == 480);
+  for (const char* bad : {"", "intro", "intro/2737", "/2737/640x480", "intro/2737/640", "intro/x/640x480",
+                          "intro/2737/640x", "intro/2737/640x480/1", "intro/-1/640x480"})
+    EXPECT(!mech3::movie_shape_key_parts(bad, &parts));
+}
+
 namespace {
 // A fresh cache path in the test's temp dir.
 std::string shapes_cache(const char* name, const char* text = nullptr) {

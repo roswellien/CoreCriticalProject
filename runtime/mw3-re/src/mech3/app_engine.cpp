@@ -877,6 +877,10 @@ void GameEngine::video_clear(Handle) {
 // 0x00576ea0: the back buffer to the screen.
 // A frame whose 3D scene was drawn (the Core state's) shows that instead.
 void GameEngine::video_flip(int32_t, int32_t, int32_t, int32_t) {
+  // Ours (#559): an HD movie playing shows its own frame instead of the
+  // 16-bit buffer (the stand-in's black picture), before any menu
+  // observation is armed: no menu draws during a movie.
+  if (hd_movie_active_ && present_hd_movie(true)) return;
   struct MenuFrameBoundary {
     GameEngine* engine;
     ~MenuFrameBoundary() {

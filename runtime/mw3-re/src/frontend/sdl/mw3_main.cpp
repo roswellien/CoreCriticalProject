@@ -47,6 +47,9 @@
 //   --window WxH         window size (default 1280x960; with any_resolution the
 //                        frame's shape, and a given size pillarboxes the frame)
 //   --nosound            no audio device (a silent DirectSound stand-in)
+//   --hd-movie NAME PATH an HD MP4 played in place of the movie NAME (intro, ...),
+//                        repeatable; the original plays if it can't stand in
+//                        (ours, #559, docs/fmv.md section 9; Windows' decoder only)
 //   --hidden             keep the window hidden
 //   --windowed           a window, not fullscreen (also --window, or windowed=1 in mw3.cfg)
 //   --cc-vulkan          experimental Windows Vulkan/DXGI backend
@@ -70,6 +73,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <deque>
@@ -281,6 +285,7 @@ struct Args {
   std::string ready_file;     // --ready-file F (ours, sdl_child.h): written at the first frame shown, for mw3launcher
   std::string other_write_dir, other_install;  // --other-write-dir, --other-install (ours, W15): the other game's, from mw3launcher
   std::string vfw_helper;     // --vfw-helper EXE (ours, sdl_vfw.h): the movies' Video for Windows helper; "-" none
+  std::map<std::string, std::string> hd_movies;  // --hd-movie NAME PATH (ours, #559): name (lower case) to MP4
   std::string patch;          // --patch PATH (ours, patch_import.h): the official 1.2 patch into the write dir's overlay
   std::string install_from, install_to;  // --install-from PATH, --install-to DIR (ours, disc_install.h)
   bool windowed = false;      // --windowed (or windowed=1 in mw3.cfg): not fullscreen
@@ -369,7 +374,7 @@ void usage() {
       "    [--cc-vsync 0|1 (default 1)]\n"
       "    [--cc-controller FILE] (launcher-exported controller profile)\n"
       "    [--cc-input FILE] (launcher-exported extended mouse and combo bindings)\n"
-      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--variable-step] [--step-log FILE] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
+      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--hd-movie NAME PATH]... [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--variable-step] [--step-log FILE] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [--benchmark DEF.json --benchmark-scene ID --benchmark-out DIR]\n"
       "    [--benchmark-strict [--benchmark-strict-capture TICK]]\n"
       "    [--arena SETUP.json --seed N --frame-ms N [--arena-record-every-update]] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
@@ -764,6 +769,12 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--install-to" && next(1)) a.install_to = argv[++i];
     else if (s == "--vfw-helper" && next(1)) a.vfw_helper = argv[++i];
     else if (s == "--no-vfw-helper") a.vfw_helper = "-";
+    else if (s == "--hd-movie" && next(2)) {
+      std::string name = argv[++i];
+      std::transform(name.begin(), name.end(), name.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      a.hd_movies[name] = argv[++i];
+    }
     else if (s == "--verbose") a.verbose = true;
     else if (s == "--pos" && next(3)) {
       for (float& v : a.pos) v = std::strtof(argv[++i], nullptr);
@@ -1848,6 +1859,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
 
   mech3::Platform p;
   p.window = &window, p.alert = &alert, p.clock = &clock, p.input = &input, p.force = &force, p.vfw = vfw, p.sound = sound.get();
+  p.hd_movies = a.hd_movies;
   if (stepped) p.movie_clock = &movie_clock;
   p.music = &music, p.files = &files, p.render = window.render(), p.screen = &screen;
   p.window_width = a.win_w, p.window_height = a.win_h;
