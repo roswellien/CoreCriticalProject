@@ -318,8 +318,8 @@ class MfHdMovieSource : public HdMovieSource {
     halve_carry_.assign(joined.begin() + static_cast<std::ptrdiff_t>(2 * pairs * channels), joined.end());
   }
 
-  // The worker: every picture, decoded in order, copied top row first with
-  // its alpha set, into the queue (which waits while it is full).
+  // The worker: every picture, decoded in order, copied top row first as
+  // opaque RGBA, into the queue (which waits while it is full).
   void decode_pictures() {
     const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     uint64_t serial = 0;
