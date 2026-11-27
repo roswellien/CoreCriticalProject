@@ -296,6 +296,34 @@ class SyncTests(FixtureTree):
         self.assertTrue(self.copy("core-critical-new/SKILL.md").exists())
         self.assertFalse(self.copy("core-critical-demo").exists())
 
+    def test_ignored_untracked_copy_file_with_no_source_is_left_in_place(self):
+        # OS litter such as Thumbs.db in a copy skill folder should not stop sync.
+        self.write_skill()
+        self.write(".claude/skills/core-critical-demo/Thumbs.db", "litter\n")
+        ignored = frozenset([".claude/skills/core-critical-demo/Thumbs.db"])
+        changes = syncer.sync(self.root, [], ignored_paths=ignored)
+        self.assertEqual(changes, ["added .claude/skills/core-critical-demo/SKILL.md"])
+        self.assertTrue(self.copy("core-critical-demo/Thumbs.db").exists())
+
+    def test_ignored_source_file_is_not_copied(self):
+        # An ignored file in a source skill folder should be omitted from the copy.
+        self.write_skill()
+        self.write(".agents/skills/core-critical-demo/Thumbs.db", "litter\n")
+        ignored = frozenset([".agents/skills/core-critical-demo/Thumbs.db"])
+        changes = syncer.sync(self.root, [], ignored_paths=ignored)
+        self.assertEqual(changes, ["added .claude/skills/core-critical-demo/SKILL.md"])
+        self.assertTrue(self.copy("core-critical-demo/SKILL.md").exists())
+        self.assertFalse(self.copy("core-critical-demo/Thumbs.db").exists())
+
+    def test_file_under_ignored_folder_is_left_alone(self):
+        # Build artifacts in an ignored folder should not stop sync and stay in place.
+        self.write_skill()
+        self.write(".claude/skills/core-critical-demo/__pycache__/x.pyc", "bytecode\n")
+        ignored = frozenset([".claude/skills/core-critical-demo/__pycache__/"])
+        changes = syncer.sync(self.root, [], ignored_paths=ignored)
+        self.assertEqual(changes, ["added .claude/skills/core-critical-demo/SKILL.md"])
+        self.assertTrue(self.copy("core-critical-demo/__pycache__/x.pyc").exists())
+
     def test_missing_source_stops(self):
         self.write(".claude/skills/core-critical-demo/SKILL.md", SKILL)
         with self.assertRaisesRegex(syncer.SyncStopped, "missing"):
