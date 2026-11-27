@@ -1015,6 +1015,8 @@ void wire_hud() {
 
 void unwire_hud() {
   set_hud_hooks(nullptr);
+  set_hud_in_steps(false);  // ours (#485): the next HUD starts on the drawn frame's path until a stepped frame says
+
   heat_calls().screen = nullptr;
   heat_calls().screen_power_down = nullptr, heat_calls().screen_power_up = nullptr;
   command_calls().hud_weapon = nullptr;

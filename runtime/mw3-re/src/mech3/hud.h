@@ -524,11 +524,13 @@ class HudReticle : public ztwod::Image {
   float aim_distance = 0.0f;         // +0x924 to the aim point from the near plane (0x00444690)
   zwep::HitRecord hit{};             // +0x928 what the aim hit (its node 0: nothing)
   int32_t lock = 0;                  // +0x950 the missile lock: 0 none, 1 acquiring, 2 waiting, 3 locked, 4 lost
-  float lock_timer = 0.0f;           // +0x954 0.6 after a reset ([0x005e3a0c]); counts down in update
+  float lock_timer = 0.0f;           // +0x954 0.6 after a reset ([0x005e3a0c]); counts down in lock_tick
   float locked_for = 0.0f;           // ours: seconds the lock (state 3) has held, for the shots' log
-  // Ours (#485): `state` as the last step's lists left it (before its aim
-  // state), what the zoom window's light read in the exe's frame.
-  int32_t state_seen = 5;
+  // Ours (#485): `state` as the last step's aim state left it, before the
+  // step's reset to 5: what the zoom window's light (update -> zoom.update)
+  // read in the exe's frame. 0 to 3 like the light's images; 0 as `state`
+  // starts, for a frame drawn before the first step.
+  int32_t state_seen = 0;
   void aim_state(bool over);         // 0x00443d20: the lock and the reticle's image
   void lock_tick(float dt);          // ours (#485): update's lock timers, on their own
   void* source = nullptr;            // +0x958 (not set by the constructor)

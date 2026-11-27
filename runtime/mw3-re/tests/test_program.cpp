@@ -5621,6 +5621,7 @@ TEST(mission_c1m1_hud_zoom_drawn_headless) {
   p.render = &gpu;
   mech3::HudReport r, at10;
   int gpu_rects_from5 = 0;
+  int light_frames = 0, lights_out_of_range = 0, no_gauge_seen = -1;
   struct ModeHost : ztwod::Host {  // the zTwoD host's video mode and messages, the engine's (as the SDL host's)
     mech3::GameEngine* e = nullptr;
     int32_t video_mode() override { return e->video_mode(); }
@@ -5649,9 +5650,24 @@ TEST(mission_c1m1_hud_zoom_drawn_headless) {
       if (frames == 4) mech3::program_hud_mfd_mode(2), mech3::program_hud_zoom_show();  // no MFD view; the zoom up
       if (frames == 5) mech3::program_hud_report(&r), gpu_rects_from5 = gpu.depth_rects;  // the counts from here
       if (frames == 10) mech3::program_hud_report(&at10), gpu_rects_from5 = gpu.depth_rects - gpu_rects_from5;
+      // Ours (#485): the window at full size picks its light from the
+      // reticle's state, one of its four images, with the lock in the steps too.
+      auto* h = static_cast<mech3::Hud*>(mech3::program_mech_hud(mech3::mech_mission_player()));
+      if (h && h->reticle.zoom.zoom == 1.0f) {
+        ++light_frames;
+        const int32_t light = h->reticle.zoom.light.current;
+        if (light < 0 || light > 3) ++lights_out_of_range;
+      }
+      // A step whose lists set no aim state (no ammo gauge ran): the lock
+      // sets one, and the light's copy is that, never the "none" 5.
+      if (h && frames == 20) {
+        h->reticle.state = 5;
+        h->lock_step(1.0f / 30.0f);
+        no_gauge_seen = h->reticle.state_seen;
+      }
     };
     CountingPump pump;
-    pump.stop = [&] { return frames >= 10; };
+    pump.stop = [&] { return frames >= 40; };
     pump.limit = 3000;
     app.run(pump);
     mech3::missions().cleanup(false);
@@ -5667,6 +5683,10 @@ TEST(mission_c1m1_hud_zoom_drawn_headless) {
   EXPECT(at10.zoom_round ? at10.depth_fills == 10 && at10.mask_fans == 20 : at10.depth_fills == 5 && at10.mask_fans == 0);
   EXPECT(at10.zoom_cam_off >= 0.0f && at10.zoom_cam_off < 1e-3f);  // at the player camera's place
   EXPECT(at10.zoom_text[0] != 0);  // the distance (and the aimed object's name)
+  std::printf("  zoom light: %d frames at full size, %d out of 0..3; a step with no gauge leaves it %d\n", light_frames,
+              lights_out_of_range, no_gauge_seen);
+  EXPECT(light_frames > 0 && lights_out_of_range == 0);
+  EXPECT(no_gauge_seen >= 0 && no_gauge_seen <= 3);
   zrdr::close_archives(true);
   mech3::reset_states();
   reset_process_state();

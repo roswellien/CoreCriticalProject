@@ -3517,9 +3517,9 @@ void Hud::update(float dt) {
 void Hud::lock_step(float dt) {
   if (!mech) return;
   HudHooks& h = hud_hooks();
-  reticle.state_seen = reticle.state;
   if (reticle.state == 5)
     h.reticle_aim_state(&reticle, h.reticle_over_target(&target, reticle.get_x(), reticle.get_y()));
+  reticle.state_seen = reticle.state;  // the light's (HudZoomWindow::update), as after the exe's aim state
   reticle.lock_tick(dt);
   reticle.state = 5;
 }

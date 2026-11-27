@@ -33,8 +33,9 @@ wait counted drawn frames' time, so a lock could come a step apart between
 frame rates. So with the fixed step both run once a step, after
 `prepare_cameras`, in the original's order (`hud_step`: `Hud::lock_step`, then
 the aim), and the drawn frame's HUD update leaves them out (`hud_in_steps`).
-The zoom window's light, which read the reticle's state between the lists and
-the lock, reads it as the last step left it (`state_seen`). The rest of the
+The zoom window's light, which read the reticle's state right after the lock's
+aim state set it, reads it as the last step's aim state left it
+(`state_seen`). The rest of the
 HUD's frame stays in the drawn frame: its 2D parts draw themselves as they
 update (the radar's blips are blitted in `HudRadar::update`). One input of the
 lock still comes from the drawn frame: whether the reticle is over the target
