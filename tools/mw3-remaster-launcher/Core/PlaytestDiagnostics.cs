@@ -573,7 +573,10 @@ public static class PlaytestDiagnostics
             var text = Path.GetFileName(path).Equals(NativeRunFileName, StringComparison.OrdinalIgnoreCase)
                 ? ReadLogForSession(path)
                 : ReadTail(path);
-            return text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            // The game stamps each mw3.log line with its time and level; the summary rules match the text.
+            return text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(GameProblemsLog.WithoutStamp)
+                .ToArray();
         }
         catch
         {

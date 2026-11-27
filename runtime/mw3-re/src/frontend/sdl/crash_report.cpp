@@ -202,8 +202,6 @@ DWORD WINAPI dump_worker(void*) {
     // independent stack, including for stack overflow.
     report_exception();
     write_minidump();
-    // The last lines printed before the crash into mw3.log (run_log.h), before anything can end the process.
-    sdlfe::run_log_drain(500);
     // Completion means "dump and log are written". It is published BEFORE the message box, so
     // the faulting thread's bounded wait never expires while the box is open.
     SetEvent(g_dump_complete_event);
@@ -416,6 +414,9 @@ void request_crash_report(EXCEPTION_POINTERS* exception, CrashReportCause cause)
   const HANDLE handles[] = {g_dump_complete_event, g_dump_worker_thread};
   const DWORD result = WaitForMultipleObjects(2, handles, FALSE, 5000);
   const CrashReportWaitOutcome outcome = crash_report_classify_wait_result(result);
+  // The last lines printed before the crash reach mw3.log before anything below can end the process
+  // (log.h's drain: no lock, no allocation, no call on the pipes; at most 500 ms).
+  sdlfe::log::drain(500);
   // There is deliberately no logging here: even an error/timeout must not touch the stderr pipe.
   const bool report_written =
       crash_report_report_was_written(outcome, g_dump_worker_failed.load());

@@ -40,7 +40,10 @@ class LineStamper {
         }
         line_.push_back(log::kMarker);  // not a level after all: kept as printed
       }
-      if (line_.empty() && level_ == 0 && c == log::kMarker) {
+      if (c == log::kMarker) {
+        // A marker mid-line: another print began before this one's newline. The part so far ends here
+        // as a line of its own, so the marked line keeps its level.
+        if (!line_.empty() || level_ != 0) finish(seconds, out);
         pending_marker_ = true;
         continue;
       }
@@ -49,6 +52,8 @@ class LineStamper {
         continue;
       }
       line_.push_back(c);
+      // A line that never ends (a progress line redrawn with \r) is written in parts, not held forever.
+      if (line_.size() >= kMaxLine) finish(seconds, out);
     }
   }
 
@@ -56,6 +61,8 @@ class LineStamper {
   void flush(double seconds, LogOutput& out) {
     if (!line_.empty() || level_ != 0) finish(seconds, out);
   }
+
+  static constexpr std::size_t kMaxLine = 8192;
 
  private:
   void finish(double seconds, LogOutput& out) {

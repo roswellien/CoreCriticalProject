@@ -179,9 +179,10 @@ void log_loop_exception(std::exception_ptr failure) noexcept {
   try {
     std::rethrow_exception(failure);
   } catch (const std::exception& error) {
-    std::fprintf(stderr, "mw3: game loop exception (%s): %s\n", typeid(error).name(), error.what());
+    sdlfe::log::line(sdlfe::log::Level::error, "mw3: game loop exception (%s): %s\n", typeid(error).name(),
+                     error.what());
   } catch (...) {
-    std::fprintf(stderr, "mw3: game loop exception (non-standard C++ exception)\n");
+    sdlfe::log::line(sdlfe::log::Level::error, "mw3: game loop exception (non-standard C++ exception)\n");
   }
   std::fflush(stderr);
 }
@@ -2795,8 +2796,9 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
           try {
             r->detach_editor();
           } catch (...) {
-            std::fprintf(stderr, "mw3: editor detach failed; terminating before CPU owner destruction\n");
-            std::fflush(stderr);
+            sdlfe::log::line(sdlfe::log::Level::error,
+                             "mw3: editor detach failed; terminating before CPU owner destruction\n");
+            sdlfe::log::drain();  // into mw3.log before _Exit (log.h)
             std::_Exit(3);
           }
         }
@@ -2888,6 +2890,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         // Leave renderer resources to process teardown.
         std::fflush(stdout);
         std::fflush(stderr);
+        sdlfe::log::drain();  // the last lines into mw3.log before _Exit (log.h)
         std::_Exit(1);
       };
       try {

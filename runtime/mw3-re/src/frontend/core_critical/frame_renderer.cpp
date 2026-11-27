@@ -1368,6 +1368,7 @@ public:
     } catch (...) {
       MW3_LOG(E, "Core editor detach failed during renderer shutdown\n");
       std::fflush(stderr);
+      sdlfe::log::drain();  // the line above into mw3.log before _Exit (log.h)
       std::_Exit(3);
     }
     try {
@@ -1433,7 +1434,7 @@ public:
     if (geometry_mode_ != cc::geometry::Mode::legacy)
       MW3_LOG(
           I,
-          "Prepared geometry:%llu GPU vertices, %llu reference CPU vertices, "
+          "Prepared geometry: %llu GPU vertices, %llu reference CPU vertices, "
           "%llu early models, %llu CPU fallback batches\n",
           (unsigned long long)gpu_prepared_vertices_,
           (unsigned long long)prepared_reference_vertices_,
@@ -1442,7 +1443,7 @@ public:
     if (geometry_mode_ != cc::geometry::Mode::legacy)
       MW3_LOG(
           I,
-          "Geometry handoff:%llu submitted models, %llu CPU vertex "
+          "Geometry handoff: %llu submitted models, %llu CPU vertex "
           "preparations skipped, %llu CPU polygon preparations skipped, %llu "
           "unsupported models, %llu CPU 3D draw calls observed\n",
           (unsigned long long)geometry_statistics_.submitted_models,
@@ -1467,7 +1468,7 @@ public:
     if (lighting_.normals)
       MW3_LOG(
           I,
-          "World normal pages:%llu decoded bytes, %llu peak decoded bytes, "
+          "World normal pages: %llu decoded bytes, %llu peak decoded bytes, "
           "%llu loaded pages, %llu page reads (536870912-byte limit)\n",
           (unsigned long long)assets.world_normal_decoded_bytes,
           (unsigned long long)assets.world_normal_peak_decoded_bytes,
@@ -1476,7 +1477,7 @@ public:
     const auto &cache = prepared_draw_cache_.statistics();
     if (cache.hits || cache.misses || cache.bypasses)
       MW3_LOG(I,
-                   "Prepared staging cache:%llu hits, %llu misses, %llu "
+                   "Prepared staging cache: %llu hits, %llu misses, %llu "
                    "bypasses, %zu bytes\n",
                    (unsigned long long)cache.hits,
                    (unsigned long long)cache.misses,
@@ -1484,7 +1485,7 @@ public:
     if (assets.prepared_batches || assets.named_textures)
       MW3_LOG(
           I,
-          "Prepared visuals:%llu batches, %llu GPU model draws, %llu "
+          "Prepared visuals: %llu batches, %llu GPU model draws, %llu "
           "CPU-clipped "
           "triangles, %llu named texture uploads\n",
           static_cast<unsigned long long>(assets.prepared_batches),
@@ -1494,13 +1495,13 @@ public:
     if (prepared_.skin_texture_loads() > 0 || prepared_.skin_cache_evictions() > 0)
       MW3_LOG(
           I,
-          "Prepared skins:%zu loads, %zu evictions, %zu bytes (budget %zu)\n",
+          "Prepared skins: %zu loads, %zu evictions, %zu bytes (budget %zu)\n",
           prepared_.skin_texture_loads(), prepared_.skin_cache_evictions(),
           prepared_.skin_cache_bytes(), prepared_.skin_cache_budget());
     if (lighting_.enabled)
       MW3_LOG(
           I,
-          "Prepared materials:%llu per-pixel draws, %llu normal-map draws\n",
+          "Prepared materials: %llu per-pixel draws, %llu normal-map draws\n",
           static_cast<unsigned long long>(assets.lit_draws),
           static_cast<unsigned long long>(assets.normal_draws));
     if (bridge_config_.parallax_materials) {

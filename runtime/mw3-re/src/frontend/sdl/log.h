@@ -54,24 +54,45 @@ inline const char* base_name(const char* path) {
   return name;
 }
 
+// Set by RunLog while its log is open (run_log.cpp): waits up to `max_ms` for
+// the lines already printed to reach the files. Here, as a pointer, so code in
+// libraries without RunLog (the game core, the renderer) can call drain().
+inline std::atomic<void (*)(unsigned)> g_drain{nullptr};
+
+// Before a process ends without unwinding (_Exit, std::exit, the crash
+// handler): the last lines printed reach mw3.log. Takes no lock and allocates
+// nothing, so a crashed thread can't block it. Nothing to do without a log.
+inline void drain(unsigned max_ms = 500) {
+  if (void (*fn)(unsigned) = g_drain.load()) fn(max_ms);
+}
+
+// `text` with level `level`'s marker in front when a log is open to take it off.
+inline std::string marked(Level level, const std::string& text) {
+  return g_drain.load() ? std::string{kMarker, static_cast<char>(level)} + text : text;
+}
+
 // One whole line, marker first, in a single write so threads don't interleave.
+// Without an open log (before RunLog::open, tools and checks) no marker is
+// written: nothing would take it off.
 inline void vprint(Level level, const char* fmt, va_list args) {
   char buf[2048];
+  const size_t start = g_drain.load() ? 2 : 0;
   buf[0] = kMarker, buf[1] = static_cast<char>(level);
-  int n = std::vsnprintf(buf + 2, sizeof buf - 3, fmt, args);
+  int n = std::vsnprintf(buf + start, sizeof buf - start - 1, fmt, args);
   if (n < 0) n = 0;
-  size_t len = 2 + (static_cast<size_t>(n) < sizeof buf - 3 ? static_cast<size_t>(n) : sizeof buf - 4);
-  if (buf[len - 1] != '\n') buf[len++] = '\n';
+  const size_t room = sizeof buf - start - 2;
+  size_t len = start + (static_cast<size_t>(n) < room ? static_cast<size_t>(n) : room);
+  if (len == 0 || buf[len - 1] != '\n') buf[len++] = '\n';
   std::FILE* out = level == Level::info ? stdout : stderr;
   std::fwrite(buf, 1, len, out);
   std::fflush(out);
 }
 
+// MW3_LOG's call: counted first (the macro), so a held-back line costs no formatting.
 #if defined(__GNUC__)
-__attribute__((format(printf, 3, 4)))
+__attribute__((format(printf, 2, 3)))
 #endif
-inline void print(Site& site, Level level, const char* fmt, ...) {
-  if (!count(site)) return;
+inline void print_counted(Level level, const char* fmt, ...) {
   va_list args;
   va_start(args, fmt);
   vprint(level, fmt, args);
@@ -115,7 +136,8 @@ inline uint64_t skipped_total() {
 #define MW3_LOG(level, ...)                                                              \
   do {                                                                                   \
     static ::sdlfe::log::Site mw3_log_site_{__FILE__, __LINE__};                         \
-    ::sdlfe::log::print(mw3_log_site_, ::sdlfe::log::mw3_level_##level, __VA_ARGS__);    \
+    if (::sdlfe::log::count(mw3_log_site_))                                              \
+      ::sdlfe::log::print_counted(::sdlfe::log::mw3_level_##level, __VA_ARGS__);         \
   } while (0)
 
 namespace sdlfe::log {

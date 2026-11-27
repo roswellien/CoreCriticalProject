@@ -527,8 +527,9 @@ public static class ArenaMatchRunner
         return string.Join(Environment.NewLine, meaningfulLines);
     }
 
-    private static bool IsRoutineStartupLine(string line)
+    private static bool IsRoutineStartupLine(string stampedLine)
     {
+        var line = GameProblemsLog.WithoutStamp(stampedLine);
         return line.StartsWith("Startup: ", StringComparison.Ordinal) ||
             line.StartsWith("Starting MW3-RE: ", StringComparison.Ordinal) ||
             line.StartsWith("MW3-RE PID ", StringComparison.Ordinal) ||

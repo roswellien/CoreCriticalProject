@@ -63,6 +63,7 @@ private:
                  operation, int(initiating), int(completion));
     std::fflush(stderr);
     std::fflush(stdout);
+    sdlfe::log::drain();  // the line above into mw3.log before _Exit (log.h)
     std::_Exit(3);
   }
   static void editor_check(VkResult result, const char *operation) {

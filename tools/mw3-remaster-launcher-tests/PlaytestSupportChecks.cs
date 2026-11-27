@@ -369,6 +369,11 @@ static class PlaytestSupportChecks
             }
             Check(SummaryFor("Startup: Checking game files...\n" + gameLoopLine + "\n") == gameLoopLine,
                 "Game loop exception line was not the failure summary");
+            // The game stamps each mw3.log line with its time and level; the summary is the text.
+            Check(SummaryFor("[0.250] I mw3: timing log-open\n[12.500] E " + gameLoopLine + "\n") == gameLoopLine,
+                "A stamped game loop exception line was not the failure summary");
+            Check(SummaryFor("Startup: x\n", "[3.000] I " + nativeFaultLine + "\n") == nativeFaultLine,
+                "A stamped native crash line was not the failure summary");
             Check(SummaryFor("ERROR: authored earlier error\n" + gameLoopLine + "\n") == gameLoopLine,
                 "Earlier ERROR line beat the game loop exception line");
             Check(SummaryFor("mw3: rendering failed: authored render failure\n") ==

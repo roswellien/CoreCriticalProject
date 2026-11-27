@@ -30,7 +30,7 @@ void splitting_and_stamping() {
   LineStamper err_stream('W');
   LogOutput err;
   err_stream.feed("mw3: cannot open x\n", 19, 12, err);
-  require(err.log == "[12.000] W mw3: cannot open x\n", "stderr defaults to W: " + err.log);
+  require(err.log == "[12.000] W mw3: cannot open x\n", "a stream's default level applies: " + err.log);
   require(err.problems == err.log, "W lines go to the problems log");
   require(std::regex_match(err.problems.substr(0, err.problems.size() - 1), launcher), "the launcher reads it");
 }
@@ -49,6 +49,19 @@ void markers() {
   LineStamper t('I');
   t.feed(not_level.data(), not_level.size(), 0, odd);
   require(odd.console == not_level, "a marker without a level is kept as printed");
+  // A marked line that starts while another print's line is still open keeps its level.
+  LineStamper mid('I');
+  LogOutput split;
+  const std::string interleaved = std::string("mw3: half") + log::kMarker + "Emw3: broken\n";
+  mid.feed(interleaved.data(), interleaved.size(), 5, split);
+  require(split.log == "[5.000] I mw3: half\n[5.000] E mw3: broken\n", "a mid-line marker starts a line: " + split.log);
+  require(split.problems == "[5.000] E mw3: broken\n", "and its E reaches the problems log");
+  // A line with no newline is written in parts at its cap, not held forever.
+  LineStamper endless('I');
+  LogOutput parts;
+  const std::string progress(LineStamper::kMaxLine + 10, 'x');
+  endless.feed(progress.data(), progress.size(), 6, parts);
+  require(parts.console.size() == LineStamper::kMaxLine + 1, "the capped part goes out at once");
 }
 
 void header_and_events_are_problems() {

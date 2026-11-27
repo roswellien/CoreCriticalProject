@@ -408,8 +408,7 @@ class HealthReporter {
       if (heap >= 0) {
         const auto& figures = snapshot.heaps[std::size_t(heap)];
         // A warning: it makes the launcher offer a report after a clean exit (log.h).
-        hooks_.print(std::string{log::kMarker, 'W'} +
-                     format_video_memory_event(std::size_t(heap), figures.used_bytes, figures.budget_bytes, now));
+        hooks_.print(log::marked(log::Level::warn, format_video_memory_event(std::size_t(heap), figures.used_bytes, figures.budget_bytes, now)));
         printed = true;
       }
     }

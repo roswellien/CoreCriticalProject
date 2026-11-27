@@ -26,6 +26,15 @@ public static class GameProblemsLog
         @"\A\[(?<seconds>[0-9]{1,9}(?:\.[0-9]{1,6})?)\] (?<level>[WE]) (?<text>.+)\z",
         RegexOptions.CultureInvariant);
 
+    private static readonly Regex Stamp = new(
+        @"\A\[[0-9]{1,9}(?:\.[0-9]{1,6})?\] [IWE] ", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The line without the game's leading time and level stamp (<c>[12.345] I </c>), which the game
+    /// puts on every mw3.log line; lines without one come back unchanged.
+    /// </summary>
+    public static string WithoutStamp(string line) => Stamp.Replace(line, "", 1);
+
     /// <summary>The line parsed, or null when it isn't in the problems-log format.</summary>
     public static Problem? Parse(string line)
     {

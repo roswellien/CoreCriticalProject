@@ -28,9 +28,9 @@ class RunLog {
   std::string path_;
 };
 
-// For the crash handler (crash_report.cpp): waits up
-// to `max_ms` for the open log to take in what is in its pipes, then writes out
-// any line still missing its newline. Nothing happens without an open log.
+// log::drain's work (log.h) while a log is open: waits up to `max_ms` for
+// the open log to take in what is in its pipes. Takes no lock and allocates
+// nothing. Nothing happens without an open log.
 void run_log_drain(unsigned max_ms);
 
 }  // namespace sdlfe
