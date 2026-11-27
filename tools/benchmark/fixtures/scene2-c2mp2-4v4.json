@@ -1,82 +1,90 @@
 {
-  "map": "c3mp1",
+  "map": "c2mp2",
   "minutes": 3,
-  "out": "local/benchmark/c3mp1",
+  "out": "local/benchmark/scene2",
   "sides": [
     [
       {
-        "mech": "madcat",
+        "mech": "avatar",
         "loadout": 0,
         "preset": {
           "world": "c1",
           "mission": "ia1",
           "record": "Enemy_01"
-        }
+        },
+        "spot": 0
       },
       {
-        "mech": "madcat",
+        "mech": "owens",
         "loadout": 0,
         "preset": {
           "world": "c1",
           "mission": "ia1",
           "record": "Enemy_01"
-        }
+        },
+        "spot": 4
       },
       {
-        "mech": "orion",
+        "mech": "cauldron",
         "loadout": 0,
         "preset": {
           "world": "c1",
           "mission": "ia1",
           "record": "Enemy_01"
-        }
+        },
+        "spot": 1
       },
       {
-        "mech": "orion",
+        "mech": "shadowcat",
         "loadout": 0,
         "preset": {
           "world": "c1",
           "mission": "ia1",
           "record": "Enemy_01"
-        }
+        },
+        "spot": 2
       }
     ],
     [
       {
-        "mech": "madcat",
+        "mech": "blackhawk",
         "loadout": 0,
         "preset": {
           "world": "c1",
           "mission": "ia1",
           "record": "Enemy_01"
-        }
+        },
+        "spot": 8
       },
       {
-        "mech": "madcat",
+        "mech": "bushwacker",
         "loadout": 0,
         "preset": {
           "world": "c1",
           "mission": "ia1",
           "record": "Enemy_01"
-        }
+        },
+        "spot": 15
       },
       {
-        "mech": "orion",
+        "mech": "strider",
         "loadout": 0,
         "preset": {
           "world": "c1",
           "mission": "ia1",
           "record": "Enemy_01"
-        }
+        },
+        "spot": 6
       },
       {
-        "mech": "orion",
+        "mech": "champion",
         "loadout": 0,
         "preset": {
           "world": "c1",
           "mission": "ia1",
           "record": "Enemy_01"
-        }
+        },
+        "spot": 5
       }
     ]
   ]

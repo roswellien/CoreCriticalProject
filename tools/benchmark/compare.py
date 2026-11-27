@@ -37,10 +37,13 @@ PINNED_KEYS = {
     "present_mode",
     "render_worker",
     "scene",
+    "scene_headlights",
     "seed",
     "stress",
+    "time_of_day",
     "vsync",
     "warmup_seconds",
+    "weather",
 }
 FEATURE_CATALOG_DIGESTS = {
     "effects_catalog_sha256",

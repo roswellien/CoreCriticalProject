@@ -13,6 +13,7 @@
 #include "gamez/zreader/zreader.h"
 #include "gamez/zrender/zrndr_fog.h"
 #include "gamez/zvideo/zvid_format.h"
+#include "platform/render3d.h"
 
 namespace mech3 {
 
@@ -211,6 +212,20 @@ bool world_read_params(MissionWorld& m, const char* file, const char* key) {
         w.put(0x70, gravity);
         float gradient[2] = {0.0f, 0.0f};
         if (zrdr::get_vec2(weather, "alpha_gradient", gradient)) w.put(0x4c, gradient[1]), w.put(0x48, gradient[0]);
+        h.weather_add(m.weather);
+      }
+    }
+    // Ours (benchmark scenes): rain for a watched arena map without weather of
+    // its own, with the values c3mp2's stock RAIN uses (100 particles, colour
+    // 128 128 172, wind 0.2, gravity 3, alpha gradient 0.5 to 0).
+    if (!m.weather && platform::arena_weather() == "rain") {
+      m.weather = h.create_rain(100);
+      if (m.weather) {
+        Weather& w = *m.weather;
+        w.put<uint16_t>(0x44, zvid::pack_bytes(128, 128, 172));
+        w.put(0x68, 0.0f), w.put(0x6c, 0.2f);
+        w.put(0x70, 3.0f);
+        w.put(0x48, 0.5f), w.put(0x4c, 0.0f);
         h.weather_add(m.weather);
       }
     }

@@ -769,6 +769,25 @@ inline std::filesystem::path resolve_default_cache_root() {
   return {};
 }
 
+// A second, small cache that only remembers full-file pack digests
+// (verified_digest.hpp). The benchmark keeps the derived asset cache off so every
+// scene decodes and uploads the same way, but rehashing about 29 GB of environment
+// packs took about 94 s of each scene's start. MW3_DIGEST_CACHE_DIR names an absolute
+// folder for it; the benchmark runner shares one folder across scenes and arms.
+// A digest depends only on the file's bytes, which its key's file identity pins.
+inline Cache& digest_cache() {
+  static Cache s_digest_cache({}, 0, false);
+  return s_digest_cache;
+}
+
+// The digest cache's folder from MW3_DIGEST_CACHE_DIR; empty (off) unless absolute.
+inline std::filesystem::path digest_cache_dir_from_env() {
+  const char* env = std::getenv("MW3_DIGEST_CACHE_DIR");
+  if (env == nullptr || env[0] == '\0') return {};
+  const std::filesystem::path dir = std::filesystem::u8path(env);
+  return dir.is_absolute() ? dir : std::filesystem::path{};
+}
+
 // Global default cache instance accessible across all components.
 inline Cache& default_cache() {
   // The native frontend opts in after identifying its binary and user write

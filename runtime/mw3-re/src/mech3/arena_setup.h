@@ -49,6 +49,9 @@ struct Bot {
   // The record's pilot name and radio voice (AiParams::pilot, sound_tag), kept
   // as text for the same reason; empty when the record has none.
   std::string pilot, voice;
+  // Optional: the spawn spot (remote_<spot>, 0..15) it starts at; -1 lets the
+  // seed choose (arena_spawn_spots). A setup gives every bot a spot or none.
+  int32_t spot = -1;
 };
 
 constexpr int kSides = 2;

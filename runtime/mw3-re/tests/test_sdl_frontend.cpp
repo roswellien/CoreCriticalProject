@@ -107,6 +107,31 @@
 #include <cstdio>
 #include <map>
 
+// A benchmark scene's look never outlives the scene, also when it ends by an exception.
+TEST(arena_look_scope_restores_previous_look) {
+  platform::arena_lighting_mission() = "c3m1";
+  platform::arena_weather().clear();
+  platform::arena_headlights() = false;
+  {
+    platform::ArenaLookScope scene("c1m3", "rain", true);
+    EXPECT(platform::arena_lighting_mission() == "c1m3");
+    EXPECT(platform::arena_weather() == "rain");
+    EXPECT(platform::arena_headlights());
+  }
+  EXPECT(platform::arena_lighting_mission() == "c3m1");
+  EXPECT(platform::arena_weather().empty());
+  EXPECT(!platform::arena_headlights());
+  try {
+    platform::ArenaLookScope failing("t1m1", "rain", true);
+    throw std::runtime_error("scene failed");
+  } catch (const std::runtime_error&) {
+  }
+  EXPECT(platform::arena_lighting_mission() == "c3m1");
+  EXPECT(platform::arena_weather().empty());
+  EXPECT(!platform::arena_headlights());
+  platform::arena_lighting_mission().clear();
+}
+
 TEST(crash_report_rva_requires_address_inside_image) {
   uintptr_t rva = 99;
   EXPECT(sdlfe::crash_report_address_rva(0x1000, 0x200, 0x1000, &rva));
