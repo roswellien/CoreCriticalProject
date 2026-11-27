@@ -2409,3 +2409,20 @@ details p {
         linear-gradient(135deg, rgba(239, 163, 72, 0.08), transparent 55%),
         #111615 url("assets/plates/surface-texture.webp") repeat;
 }
+/* The smallest phones (320px with a scrollbar) can't fit the 14px wordmark beside the button. */
+@media (max-width: 400px) {
+    .site-header {
+        padding-inline: 16px;
+    }
+    .site-header .brand {
+        gap: 8px;
+    }
+    .site-header .brand span {
+        font-size: 12px;
+        letter-spacing: 1px;
+    }
+    .menu-toggle {
+        gap: 8px;
+        padding-inline: 10px;
+    }
+}
