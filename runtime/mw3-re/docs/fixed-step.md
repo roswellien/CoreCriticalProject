@@ -39,11 +39,15 @@ aim state set it, reads it as the last step's aim state left it
 HUD's frame stays in the drawn frame: its 2D parts draw themselves as they
 update (the radar's blips are blitted in `HudRadar::update`). Whether the
 reticle is over the target reads TARGET's bracket and lead circle, which the
-HUD places as it draws (`HudTarget::track`, projected through the view); drawn
-between steps that view is blended, up to a step's turn from the exact one, so
-`lock_step` places them again from the step's exact view just before its test
-(no time passing, any ECM jitter on the drawn frame's random numbers), as the
-exe's frame placed them just before its aim state.
+exe's frame placed (`HudTarget::track`) just before its aim state: projected
+through the view, sized by a new target's pulse (frame time) and, by an ECM
+target, jittered from the one random state. Drawn between steps the view is
+blended, up to a step's turn from the exact one, and the pulse and the jitter
+would follow the drawn frames, so `lock_step` runs `track` itself, from the
+step's exact view, on the step's time and the simulation's random numbers, as
+the exe's 30 fps frame did; a drawn frame's `track` only places the shapes
+again for the picture, with no time passing (its jitter, if any, from the
+drawn frame's random numbers).
 
 The pocket commander's pick request (`PocketControls` +0x184) is set by the
 panel's buttons and read by `pocket_frame` in the step; the original cleared it

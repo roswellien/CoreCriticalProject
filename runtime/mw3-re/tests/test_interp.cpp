@@ -5,6 +5,7 @@
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zclass/cls_node.h"
 #include "gamez/zclass/interp.h"
+#include "gamez/zclass/list.h"
 #include "gamez/zclass/object3d.h"
 
 // #485 (docs/fixed-step.md): frames drawn between simulation steps blend each
@@ -155,7 +156,9 @@ bool place_zoom_camera(zcls::Node* camera) {
   zcls::camera_set_position(camera, 1.0f, 2.0f, 3.0f);
   return true;
 }
-float camera_x(zcls::Node* camera) { return static_cast<zcls::Camera*>(camera->data)->get<float>(0x14); }
+float camera_x(zcls::Node* camera) {
+  return static_cast<zcls::Camera*>(camera->data)->get<float>(0x14);
+}
 }  // namespace
 
 // The reticle's zoom window camera is placed in each step through the placer
@@ -191,6 +194,37 @@ TEST(interp_a_step_placed_camera_never_keeps_a_draws_place) {
   zcls::interp::prepare_cameras();
   EXPECT(g_zoom_placed == 2);
   zcls::interp::set_step_camera_placer(nullptr);
+  zcls::interp::clear();
+  zcls::node_destroy(zoom);
+  zcls::node_destroy(other);
+}
+
+// A node drawn at a blended place gets its sphere-stale bit (+0x2c bit 0)
+// before and after each draw, so every draw between two steps works out its
+// sphere from its own place; a node not blended keeps the bit as it was.
+TEST(interp_a_blended_node_gets_its_sphere_worked_out_each_draw) {
+  constexpr uint32_t kSphereStale = 1;
+  zcls::interp::clear();
+  zcls::Node* moving = zcls::object3d_create();
+  zcls::Node* still = zcls::object3d_create();
+  EXPECT(moving != nullptr && still != nullptr);
+  if (!moving || !still) return;
+  float m[12];
+  yaw_at(0, 0, m);
+  zcls::object3d_set_matrix(moving, m);
+  zcls::object3d_set_matrix(still, m);
+  zcls::interp::record();
+  yaw_at(0, 2, m);
+  zcls::object3d_set_matrix(moving, m);
+  zcls::interp::record();
+  for (zcls::Node* n : {moving, still}) n->put<uint32_t>(0x2c, n->get<uint32_t>(0x2c) & ~kSphereStale);
+  zcls::interp::apply(0.5f);
+  EXPECT((moving->get<uint32_t>(0x2c) & kSphereStale) != 0);
+  EXPECT((still->get<uint32_t>(0x2c) & kSphereStale) == 0);
+  moving->put<uint32_t>(0x2c, moving->get<uint32_t>(0x2c) & ~kSphereStale);  // a renderer's refresh
+  zcls::interp::restore();
+  EXPECT((moving->get<uint32_t>(0x2c) & kSphereStale) != 0);
+  EXPECT((still->get<uint32_t>(0x2c) & kSphereStale) == 0);
   zcls::interp::clear();
 }
 

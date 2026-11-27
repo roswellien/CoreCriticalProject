@@ -3485,7 +3485,9 @@ void Hud::data_update(float dt) {
   if (negative) hours = -hours;
   timer.set_text("%02d:%02d:%02d", crt::msvc_ftol(hours), crt::msvc_ftol(mins), crt::msvc_ftol(secs));  // [0x005e3d88]
   objectives.data_update(dt);
-  target.track(dt);
+  // Ours (#485): with the fixed step the step's track (Hud::lock_step) keeps the
+  // time and the rolls; a drawn frame's only places the shapes for the picture.
+  target.track(hud_in_steps() ? 0.0f : dt);
   h.network_data(active, dt);
 }
 
@@ -3519,22 +3521,19 @@ void Hud::update(float dt) {
 // weapons fire locked or not, set_lock_shown), timed by the frame's dt, so it
 // runs once a 1/30 s step, as in the exe's 30 fps frame: the aim state while
 // none was set in the step (the ammo gauge's, 0x004b0d80, sets one when the
-// player fires), then the timers. Over the target is TARGET's bracket, which
-// the exe's frame placed (the data update's track) just before its aim state;
-// the drawn frame places it from the drawn (blended) view, so the step places
-// it first from its exact one, no time passing (the bracket's pulse and the
-// marker's age run in the drawn frame) and any ECM jitter on the drawn frame's
-// random numbers, as the drawing's always are.
+// player fires), then the timers. Over the target is TARGET's bracket and lead
+// circle, which the exe's frame placed (the data update's track) just before
+// its aim state, with its time (the new target's pulse) and, by an ECM target,
+// a jitter from the one random state. So the step runs that track, from its
+// exact view, on its time and the simulation's random numbers, as the exe's
+// 30 fps frame did; the drawn frame's track then only places them again from
+// the drawn (blended) view for the picture, with no time passing.
 void Hud::lock_step(float dt) {
   if (!mech) return;
   HudHooks& h = hud_hooks();
-  if (reticle.state == 5) {
-    {
-      crt::DrawnFrameRandom drawing_rolls;
-      target.track(0.0f);
-    }
+  target.track(dt);
+  if (reticle.state == 5)
     h.reticle_aim_state(&reticle, h.reticle_over_target(&target, reticle.get_x(), reticle.get_y()));
-  }
   reticle.state_seen = reticle.state;  // the light's (HudZoomWindow::update), as after the exe's aim state
   reticle.lock_tick(dt);
   reticle.state = 5;
