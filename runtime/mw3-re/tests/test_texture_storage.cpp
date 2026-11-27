@@ -112,18 +112,17 @@ std::uint32_t texel(unsigned red, unsigned green, unsigned blue, unsigned alpha)
   return red | green << 8 | blue << 16 | alpha << 24;
 }
 
-// Every 16-bit value of one format, widened one way into RGBA8, is recognized
-// as that format and packs back to its own 16-bit value.
+// Every 16-bit value of one format, widened one way into RGBA8, packs back to
+// its own 16-bit value.
 void check_round_trip(Pack16 format, const char *what, std::vector<std::uint32_t> rgba,
                       const std::vector<std::uint16_t> &expected) {
-  check(staging::exact_pack16(rgba.data(), rgba.size(), staging::kAllPack16) == format, what);
   std::vector<std::uint16_t> packed(rgba.size());
   staging::pack16(reinterpret_cast<unsigned char *>(packed.data()), rgba.data(), rgba.size(),
                   format);
   check(packed == expected, what);
 }
 
-void check_exact_formats() {
+void check_pack_formats() {
   std::vector<std::uint16_t> r5g6b5, a1r5g5b5, b4g4r4a4;
   std::vector<std::uint32_t> r5g6b5_replicated, r5g6b5_rounded, a1r5g5b5_replicated,
       a1r5g5b5_rounded, b4g4r4a4_widened;
@@ -157,34 +156,14 @@ void check_exact_formats() {
   check_round_trip(Pack16::b4g4r4a4, "ARGB4444 widened into B4G4R4A4", b4g4r4a4_widened,
                    b4g4r4a4);
 
-  // One byte no format holds makes the whole texture stay RGBA8.
-  auto off_by_one = r5g6b5_replicated;
-  off_by_one[12345] = (off_by_one[12345] & ~0xffu) | 1u;
-  check(staging::exact_pack16(off_by_one.data(), off_by_one.size(), staging::kAllPack16) ==
-            Pack16::none,
-        "A red value of 1 did not keep the texture at RGBA8");
-  auto alpha_254 = a1r5g5b5_replicated;
-  alpha_254[54321] = (alpha_254[54321] & 0x00ffffffu) | 254u << 24;
-  check(staging::exact_pack16(alpha_254.data(), alpha_254.size(), staging::kAllPack16) ==
-            Pack16::none,
-        "An alpha of 254 did not keep the texture at RGBA8");
-  // Two widenings mixed in one texture are not the same 16-bit data.
-  auto mixed = r5g6b5_replicated;
-  mixed.insert(mixed.end(), r5g6b5_rounded.begin(), r5g6b5_rounded.end());
-  check(staging::exact_pack16(mixed.data(), mixed.size(), staging::kAllPack16) == Pack16::none,
-        "Texels from two different widenings counted as one 16-bit format");
-
-  // Opaque black and white fit every format: the mask decides which is used.
-  const std::vector<std::uint32_t> black_white{texel(0, 0, 0, 255), texel(255, 255, 255, 255)};
-  const auto pick = [&](unsigned allowed) {
-    return staging::exact_pack16(black_white.data(), black_white.size(), allowed);
-  };
-  check(pick(staging::kAllPack16) == Pack16::r5g6b5, "R5G6B5 is not preferred");
-  check(pick(staging::kAllPack16 & ~staging::pack16_bit(Pack16::r5g6b5)) == Pack16::a1r5g5b5,
-        "A1R5G5B5 is not next when R5G6B5 is off");
-  check(pick(staging::pack16_bit(Pack16::b4g4r4a4)) == Pack16::b4g4r4a4,
-        "B4G4R4A4 alone was not used");
-  check(pick(0) == Pack16::none, "A texture was narrowed with every format off");
+  // The game's upload key format codes (zvid's create_texture and reload_texture).
+  check(staging::pack16_for_upload_format(1) == Pack16::r5g6b5 &&
+            staging::pack16_for_upload_format(2) == Pack16::a1r5g5b5 &&
+            staging::pack16_for_upload_format(3) == Pack16::b4g4r4a4,
+        "An upload key format code names the wrong 16-bit format");
+  check(staging::pack16_for_upload_format(0) == Pack16::none &&
+            staging::pack16_for_upload_format(4) == Pack16::none,
+        "No key, or an unknown code, named a 16-bit format");
 }
 
 void check_staging_sizes() {
@@ -215,58 +194,55 @@ void check_sources_and_rule() {
             !staging::may_pack16(TextureSource::height),
         "A normal map, canvas or height image may be stored at 16 bits");
 
-  const std::vector<std::uint32_t> opaque{texel(0, 0, 0, 255), texel(255, 255, 255, 255)};
-  const std::vector<std::uint32_t> cutout{texel(0, 0, 0, 0), texel(255, 255, 255, 255)};
-  const std::vector<std::uint32_t> eight_bit{texel(1, 2, 3, 255)};
-  const auto choose = [](staging::Pack16Rule rule, bool has_image, Pack16 current, bool eligible,
-                         const std::vector<std::uint32_t> &rgba) {
-    return staging::choose_pack16(rule, has_image, current, eligible, rgba.data(), rgba.size(),
-                                  staging::kAllPack16);
+  // `content` is the 16-bit format the texels came from; none means 8-bit data,
+  // an unknown origin, or a source that may not narrow.
+  const auto choose = [](staging::Pack16Rule rule, bool has_image, Pack16 current,
+                         Pack16 content, unsigned allowed = staging::kAllPack16) {
+    return staging::choose_pack16(rule, has_image, current, content, allowed);
   };
   const auto is = [](staging::Pack16Choice choice, Pack16 pack, bool recreate) {
     return choice.pack == pack && choice.recreate == recreate;
   };
   using staging::Pack16Rule;
   for (const auto rule : {Pack16Rule::from_content, Pack16Rule::keep_or_widen}) {
-    check(is(choose(rule, false, Pack16::none, true, opaque), Pack16::r5g6b5, false),
-          "A new image with exact content was not made 16-bit");
-    check(is(choose(rule, false, Pack16::none, true, eight_bit), Pack16::none, false),
+    check(is(choose(rule, false, Pack16::none, Pack16::r5g6b5), Pack16::r5g6b5, false),
+          "A new image with 16-bit content was not made 16-bit");
+    check(is(choose(rule, false, Pack16::none, Pack16::none), Pack16::none, false),
           "A new image with 8-bit content was not made RGBA8");
-    check(is(choose(rule, false, Pack16::none, false, opaque), Pack16::none, false),
-          "A new image from a source that may not narrow was made 16-bit");
+    check(is(choose(rule, false, Pack16::none, Pack16::b4g4r4a4,
+                    staging::kAllPack16 & ~staging::pack16_bit(Pack16::b4g4r4a4)),
+             Pack16::none, false),
+          "A new image used a format the device can't");
   }
   // At a preload the format follows the content, in either direction.
-  check(is(choose(Pack16Rule::from_content, true, Pack16::none, true, opaque), Pack16::r5g6b5,
-           true),
-        "Preload kept an RGBA8 image for new exact content");
-  check(is(choose(Pack16Rule::from_content, true, Pack16::r5g6b5, true, opaque),
+  check(is(choose(Pack16Rule::from_content, true, Pack16::none, Pack16::r5g6b5),
+           Pack16::r5g6b5, true),
+        "Preload kept an RGBA8 image for new 16-bit content");
+  check(is(choose(Pack16Rule::from_content, true, Pack16::r5g6b5, Pack16::r5g6b5),
            Pack16::r5g6b5, false),
         "Preload remade an image whose format already fits");
-  check(is(choose(Pack16Rule::from_content, true, Pack16::r5g6b5, true, cutout),
+  check(is(choose(Pack16Rule::from_content, true, Pack16::r5g6b5, Pack16::a1r5g5b5),
            Pack16::a1r5g5b5, true),
-        "Preload did not move an image to the format its new content needs");
-  check(is(choose(Pack16Rule::from_content, true, Pack16::a1r5g5b5, true, eight_bit),
-           Pack16::none, true),
-        "Preload kept a 16-bit image for 8-bit content");
-  check(is(choose(Pack16Rule::from_content, true, Pack16::r5g6b5, false, opaque), Pack16::none,
+        "Preload did not move an image to the format its new content came in");
+  check(is(choose(Pack16Rule::from_content, true, Pack16::a1r5g5b5, Pack16::none), Pack16::none,
            true),
-        "Preload kept a 16-bit image for a source that may not narrow");
+        "Preload kept a 16-bit image for 8-bit content");
   // During play an image never narrows and never changes 16-bit format.
-  check(is(choose(Pack16Rule::keep_or_widen, true, Pack16::none, true, opaque), Pack16::none,
+  check(is(choose(Pack16Rule::keep_or_widen, true, Pack16::none, Pack16::r5g6b5), Pack16::none,
            false),
         "Play narrowed an RGBA8 image");
-  check(is(choose(Pack16Rule::keep_or_widen, true, Pack16::r5g6b5, true, opaque),
+  check(is(choose(Pack16Rule::keep_or_widen, true, Pack16::r5g6b5, Pack16::r5g6b5),
            Pack16::r5g6b5, false),
-        "Play remade a 16-bit image whose content still fits");
-  check(is(choose(Pack16Rule::keep_or_widen, true, Pack16::r5g6b5, true, cutout), Pack16::none,
-           true),
+        "Play remade a 16-bit image whose new content came in its format");
+  check(is(choose(Pack16Rule::keep_or_widen, true, Pack16::r5g6b5, Pack16::a1r5g5b5),
+           Pack16::none, true),
         "Play moved an image to another 16-bit format instead of RGBA8");
-  check(is(choose(Pack16Rule::keep_or_widen, true, Pack16::b4g4r4a4, true, eight_bit),
+  check(is(choose(Pack16Rule::keep_or_widen, true, Pack16::b4g4r4a4, Pack16::none),
            Pack16::none, true),
         "Play kept a 16-bit image for 8-bit content");
-  check(is(choose(Pack16Rule::keep_or_widen, true, Pack16::r5g6b5, false, opaque), Pack16::none,
-           true),
-        "Play kept a 16-bit image for a source that may not narrow");
+  check(is(choose(Pack16Rule::keep_or_widen, true, Pack16::r5g6b5, Pack16::r5g6b5, 0),
+           Pack16::none, true),
+        "Play kept a 16-bit format the device no longer allows");
 }
 
 } // namespace
@@ -275,7 +251,7 @@ int main() {
   check_memory_line_totals();
   check_memory_line_sizes();
   check_periodic_gate();
-  check_exact_formats();
+  check_pack_formats();
   check_staging_sizes();
   check_sources_and_rule();
   if (g_failures) {

@@ -11,6 +11,7 @@
 #include "renderer/preload_budget.hpp"
 #include "renderer/renderer_bridge_config.hpp"
 #include "renderer/texture_source.hpp"
+#include "renderer/texture_staging.hpp"
 #include "producer_view_test_hook.hpp"
 
 namespace mw34::vkscene {
@@ -153,6 +154,9 @@ std::size_t texture_memory_log_count(VulkanFrameRenderer &renderer);
 // The source the renderer recorded for a texture's GPU copy (#518).
 mw34::vkscene::TextureSource texture_source(VulkanFrameRenderer &renderer, int32_t handle,
                                             bool sharp = false);
+// The storage format of a texture's GPU copy (#518).
+mw34::texture_staging::Pack16 texture_format(VulkanFrameRenderer &renderer, int32_t handle,
+                                             bool sharp = false);
 bool has_partial_texture_cache_entry(VulkanFrameRenderer &renderer,
                                      int32_t handle, bool sharp = false);
 bool is_model_geometry_gpu_uploaded(VulkanFrameRenderer &renderer,

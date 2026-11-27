@@ -44,8 +44,9 @@ unsigned pack16_allowed() const { return pack16_allowed_ & ~pack16_disabled_for_
 
 // The storage for an upload of `texture_ref` over `existing` (null when the
 // cache has no entry), under the preload or play rule. Only RGBA8 pixels from a
-// source may_pack16 allows are scanned; anything else is stored as RGBA8, and an
-// existing 16-bit image for it is remade.
+// source may_pack16 allows keep the 16-bit format the frontend gave them;
+// anything else is stored as RGBA8, and an existing 16-bit image for it is
+// remade. No texel is read here.
 mw34::texture_staging::Pack16Choice choose_storage(mw34::texture_staging::Pack16Rule rule,
                                                    const Tex *existing,
                                                    const TextureRef &texture_ref) const {
@@ -56,8 +57,8 @@ mw34::texture_staging::Pack16Choice choose_storage(mw34::texture_staging::Pack16
       texture_ref.pixels32.size() == std::size_t(texture_ref.width) * texture_ref.height &&
       mw34::texture_staging::may_pack16(texture_ref.source);
   return mw34::texture_staging::choose_pack16(
-      rule, has_image, has_image ? existing->pack : Pack16::none, eligible,
-      texture_ref.pixels32.data(), texture_ref.pixels32.size(), pack16_allowed());
+      rule, has_image, has_image ? existing->pack : Pack16::none,
+      eligible ? texture_ref.pack16 : Pack16::none, pack16_allowed());
 }
 
 unsigned pack16_allowed_{};

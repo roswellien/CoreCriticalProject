@@ -16,6 +16,7 @@
 #include "gamez/zmodel/gmod_draw.h"
 #include "gamez/zmodel/gmod_geometry.h"
 #include "gamez/zmodel/gmod_light.h"
+#include "gamez/zimage/zimg_library.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_const.h"
@@ -1989,6 +1990,120 @@ void check_16bit_texture_staging() {
   }
 }
 
+// The frontend trusts the game's upload key for a texture's 16-bit format
+// (#518), so the game's own decode must produce exactly that format's widened
+// values: every 16-bit value through texture_rgba, in each mode the upload key
+// tells apart (zvid's create_texture: 1 opaque RGB565, 2 ARGB1555 with or
+// without an alpha plane, 3 ARGB4444 from an alpha plane).
+void check_upload_format_matches_decode() {
+  namespace staging = mw34::texture_staging;
+  using staging::Pack16;
+  const auto widen = [](unsigned value, unsigned bits) {
+    unsigned widened = 0, filled = 0;
+    while (filled < 8) {
+      widened = widened << bits | value;
+      filled += bits;
+    }
+    return (widened >> (filled - 8)) & 0xff;
+  };
+  // The texel the card samples for a packed value, widened back by repetition.
+  const auto unpack = [&](std::uint16_t packed, Pack16 format) {
+    unsigned red = 0, green = 0, blue = 0, alpha = 255;
+    if (format == Pack16::r5g6b5) {
+      red = widen(packed >> 11, 5), green = widen((packed >> 5) & 63, 6);
+      blue = widen(packed & 31, 5);
+    } else if (format == Pack16::a1r5g5b5) {
+      red = widen((packed >> 10) & 31, 5), green = widen((packed >> 5) & 31, 5);
+      blue = widen(packed & 31, 5), alpha = (packed >> 15) ? 255 : 0;
+    } else {
+      blue = widen(packed >> 12, 4), green = widen((packed >> 8) & 15, 4);
+      red = widen((packed >> 4) & 15, 4), alpha = widen(packed & 15, 4);
+    }
+    return std::uint32_t(red | green << 8 | blue << 16 | alpha << 24);
+  };
+  std::vector<std::uint16_t> values(65536);
+  std::vector<std::uint8_t> plane(65536);
+  for (unsigned value = 0; value < 65536; ++value) {
+    values[value] = std::uint16_t(value);
+    plane[value] = std::uint8_t(value * 37 >> 8);
+  }
+  auto &display = zvid::display();
+  const auto saved_alpha_4444 = display.alpha_4444;
+  struct Restore {
+    zvid::Display &display;
+    std::int32_t alpha_4444;
+    ~Restore() { display.alpha_4444 = alpha_4444; }
+  } restore{display, saved_alpha_4444};
+  struct Mode {
+    std::int32_t alpha, alpha_4444;
+    bool with_plane;
+    std::uint32_t key_format;
+    const char *what;
+  };
+  for (const Mode mode : {Mode{0, 1, false, 1, "opaque RGB565"},
+                          Mode{1, 1, false, 2, "one-bit alpha without a plane"},
+                          Mode{1, 0, true, 2, "an alpha plane without ARGB4444"},
+                          Mode{1, 1, true, 3, "an alpha plane as ARGB4444"}}) {
+    display.alpha_4444 = mode.alpha_4444;
+    zimg::Texture image{};
+    image.width = image.height = 256;
+    image.pixel_count = 65536;
+    image.flags = mode.alpha ? 2 : 0;
+    image.pixels = values.data();
+    image.alpha = mode.with_plane ? plane.data() : nullptr;
+    std::vector<std::uint32_t> rgba(65536);
+    zvid::texture_rgba(image, mode.alpha, reinterpret_cast<std::uint8_t *>(rgba.data()));
+    const Pack16 format = staging::pack16_for_upload_format(mode.key_format);
+    for (const auto texel : rgba)
+      if (unpack(staging::pack16_texel(texel, format), format) != texel)
+        throw std::runtime_error(std::string("The game's decode of ") + mode.what +
+                                 " is not exact in the format its upload key names");
+  }
+}
+
+// A game texture uploaded under the game's upload key reaches the card in the
+// key's 16-bit format; one uploaded with no key stays RGBA8 (#518).
+void check_upload_key_formats(SDL_Window *window, sdlfe::RendererBackend backend) {
+  using cc_mw3_re::testing::is_texture_gpu_resident;
+  using cc_mw3_re::testing::texture_format;
+  using mw34::texture_staging::Pack16;
+  auto renderer = make_check_renderer(window, backend);
+  renderer->set_viewport(0, 0, 64, 64);
+  // Red, green, blue and white; the cutout's first texel is clear.
+  const std::uint8_t opaque[16] = {255, 0, 0, 255, 0, 255, 0, 255,
+                                   0, 0, 255, 255, 255, 255, 255, 255};
+  const std::uint8_t cutout[16] = {0, 0, 0, 0, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255};
+  const auto upload = [&](std::uint32_t key_format, const std::uint8_t *pixels) {
+    if (key_format)
+      mw34::materials::set_active_surface_key({2, 2, key_format, 0x51800000ULL + key_format});
+    const auto handle = renderer->create_texture(2, 2, pixels, 1);
+    mw34::materials::clear_active_surface_key();
+    return handle;
+  };
+  const auto opaque_handle = upload(1, opaque);
+  const auto cutout_handle = upload(2, cutout);
+  const auto unkeyed_handle = upload(0, opaque);
+  for (const auto handle : {opaque_handle, cutout_handle, unkeyed_handle}) {
+    renderer->clear(true, 0, 0, 0);
+    platform::DrawState state{};
+    state.texture = handle;
+    quad(*renderer, 0, 64, .1f, 0xffffffff, state);
+    std::vector<std::uint32_t> pixels;
+    int width = 0, height = 0;
+    require(renderer->read_back(&pixels, &width, &height), "Upload key fixture did not draw");
+  }
+  const auto format_of = [&](std::int32_t handle) {
+    for (const bool sharp : {false, true})
+      if (is_texture_gpu_resident(*renderer, handle, sharp))
+        return texture_format(*renderer, handle, sharp);
+    throw std::runtime_error("Upload key fixture texture never reached the card");
+  };
+  require(format_of(opaque_handle) == Pack16::r5g6b5 &&
+              format_of(cutout_handle) == Pack16::a1r5g5b5 &&
+              format_of(unkeyed_handle) == Pack16::none,
+          "A game texture did not reach the card in its upload key's 16-bit format");
+}
+
 // 16-bit storage on the device (#518): which textures are stored at 16 bits,
 // what reaches the card, how the format changes in each path, and what the
 // device mask and the mip chain do.
@@ -2001,11 +2116,22 @@ void check_16bit_texture_storage() {
   const std::vector<std::uint32_t> cutout{0x00000000, 0xffffffff, 0xff0000ff, 0x00ff0000};
   const std::vector<std::uint32_t> four_bit{0x11223344, 0x8899aabb, 0xffeeddcc, 0x00112233};
   const std::vector<std::uint32_t> eight_bit{0xff010203, 0xff040506, 0xff070809, 0xff0a0b0c};
-  const auto reference = [](std::uint64_t key, std::uint64_t hash,
-                            const std::vector<std::uint32_t> &pixels,
-                            TextureSource source = TextureSource::guest) {
+  // Each content's 16-bit format, as the frontend would name it.
+  const auto content_of = [&](const std::vector<std::uint32_t> &pixels) {
+    if (pixels == opaque)
+      return Pack16::r5g6b5;
+    if (pixels == cutout)
+      return Pack16::a1r5g5b5;
+    if (pixels == four_bit)
+      return Pack16::b4g4r4a4;
+    return Pack16::none;
+  };
+  const auto reference = [&](std::uint64_t key, std::uint64_t hash,
+                             const std::vector<std::uint32_t> &pixels,
+                             TextureSource source = TextureSource::guest) {
     TextureRef texture{key, hash, 2, 2, TexFormat::rgba8888, {}, pixels};
     texture.source = source;
+    texture.pack16 = content_of(pixels);
     return texture;
   };
   const auto packed = [](const std::vector<std::uint32_t> &pixels, Pack16 format) {
@@ -2053,13 +2179,15 @@ void check_16bit_texture_storage() {
   require(preloaded.texture_levels_for_test(1) == 2 && preloaded.texture_levels_for_test(2) == 2,
           "A 16-bit image has no mip chain under anisotropy");
   // Tiny images can share one allocation size, so compare two 64x64 ones.
-  const auto large = [](std::uint64_t key, std::uint32_t texel) {
-    return TextureRef{key, 1, 64, 64, TexFormat::rgba8888, {},
-                      std::vector<std::uint32_t>(64 * 64, texel)};
+  const auto large = [](std::uint64_t key, std::uint32_t texel, Pack16 content) {
+    TextureRef texture{key, 1, 64, 64, TexFormat::rgba8888, {},
+                       std::vector<std::uint32_t>(64 * 64, texel)};
+    texture.pack16 = content;
+    return texture;
   };
   preloaded.begin_preload();
-  require(preloaded.preload_texture(large(7, 0xff0000ff)) &&
-              preloaded.preload_texture(large(8, 0xff010203)),
+  require(preloaded.preload_texture(large(7, 0xff0000ff, Pack16::r5g6b5)) &&
+              preloaded.preload_texture(large(8, 0xff010203, Pack16::none)),
           "64x64 preload fixtures were rejected");
   preloaded.finalize_preload();
   preloaded.end_preload();
@@ -2602,12 +2730,9 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       geometry.key = 0x4241544348000001ULL;
       geometry.hash = 1;
       geometry.vertices.resize(3);
-      // The green value of 1 in the first texel keeps these fixtures RGBA8:
-      // pure colors are exact 16-bit data and would be stored at half the
-      // bytes these byte-cap checks count (#518).
       const auto texture = [](std::uint64_t key) {
         return TextureRef{key, 1, 2, 2, TexFormat::rgba8888, {},
-                          {0xff0001ff, 0xff00ff00, 0xffff0000, 0xffffffff}};
+                          {0xff0000ff, 0xff00ff00, 0xffff0000, 0xffffffff}};
       };
       Renderer mixed(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
       mixed.set_preload_batch_cap_for_test(256);
@@ -2866,9 +2991,8 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                   limited.preload_pending_count() == 0,
               "Preload staging or queued payload exceeded the hard byte cap");
       limited.begin_preload();
-      // Values of 1 keep it RGBA8 (64 bytes); at 16 bits it would fit the cap (#518).
       TextureRef oversized{24, 1, 4, 4, TexFormat::rgba8888, {},
-                           std::vector<std::uint32_t>(16, 0xff0101ff)};
+                           std::vector<std::uint32_t>(16, 0xffffffff)};
       require(!limited.preload_texture(oversized) && limited.preload_stopped() &&
                   !limited.partial_texture(24) && !limited.texture_resident(24) &&
                   limited.preload_allocation_attempts() == 4,
@@ -4762,6 +4886,8 @@ int main(int argc, char **argv) {
         check_lab_preview_lighting(window, backend);
       }
       check_16bit_texture_staging();
+      check_upload_format_matches_decode();
+      check_upload_key_formats(window, backend);
       check_16bit_texture_storage();
       check_texture_memory_line(window, backend);
       check_prepared(window, backend, quality, material_check);

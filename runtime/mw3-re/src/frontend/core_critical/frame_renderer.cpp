@@ -387,7 +387,25 @@ struct Texture {
   // What the texture holds; set when the slot is allocated and sent with every
   // upload, so the renderer can count memory by it and pick a storage format (#518).
   vk::TextureSource source{vk::TextureSource::guest};
+  // The 16-bit format `pixels` was widened from, exactly (#518; content_pack16).
+  mw34::texture_staging::Pack16 pack16{mw34::texture_staging::Pack16::none};
 };
+
+// The 16-bit format a texture's current texels were widened from, exactly
+// (#518), from what made them. The game's own decode names it in the upload
+// key (format 1 RGB565, 2 ARGB1555, 3 ARGB4444). A pack replacement is RGB565
+// widened by image_pixels with the game texture's alpha, so it is exact only
+// where that texture was opaque (key format 1). A generated flare is drawn in
+// 8 bits. No key, or a kind that may not be narrowed, means none.
+mw34::texture_staging::Pack16 content_pack16(const Texture &entry,
+                                             const mw34::materials::SurfaceKey &key) {
+  using mw34::texture_staging::Pack16;
+  if (!mw34::texture_staging::may_pack16(entry.source) || entry.generated_rgba)
+    return Pack16::none;
+  if (entry.replacement)
+    return key.format == 1 ? Pack16::r5g6b5 : Pack16::none;
+  return mw34::texture_staging::pack16_for_upload_format(key.format);
+}
 
 struct LoggedFlareTexture {
   std::string name;
@@ -1561,6 +1579,7 @@ public:
     entry.pixels.resize(std::size_t(width) * height);
     std::memcpy(entry.pixels.data(), rgba,
                 entry.pixels.size() * sizeof(std::uint32_t));
+    entry.pack16 = content_pack16(entry, source_key);
     publish_texture_update(handle, source_key);
   }
 
@@ -1585,6 +1604,9 @@ public:
       entry.source_height = unsigned(height);
       entry.surface_key = active_key;
       entry.group_load_epoch = group_load_epoch_;
+      // create_texture's upload read the game's key before this was marked a
+      // flare; the generated texels are 8-bit (#518).
+      entry.pack16 = content_pack16(entry, active_key);
       // Generated and plain named textures are excluded from the prepared
       // replacement upload count.
       return handle;
@@ -1607,6 +1629,9 @@ public:
                        reinterpret_cast<const uint8_t *>(pixels.data()), type);
     auto &entry = textures_[handle];
     entry.replacement = replacement;
+    // create_texture's upload read the game's key before this was marked a
+    // replacement; the texels are image_pixels' RGB565 (#518).
+    entry.pack16 = content_pack16(entry, active_key);
     entry.source_width = unsigned(width);
     entry.source_height = unsigned(height);
     if (name)
@@ -2396,7 +2421,7 @@ private:
   }
 
   int32_t create_owned_texture(int width, int height, std::vector<std::uint32_t> pixels,
-                               vk::TextureSource source) {
+                               vk::TextureSource source, mw34::texture_staging::Pack16 pack16) {
     const auto handle = allocate_texture_slot(width, height, source);
     mw34::materials::SurfaceKey source_key{};
     mw34::materials::get_active_surface_key(&source_key);
@@ -2409,6 +2434,7 @@ private:
     // Prepared albedo conversion already owns this complete RGBA plane. Keep
     // that allocation instead of zeroing and copying a second full image.
     entry.pixels = std::move(pixels);
+    entry.pack16 = pack16;
     publish_texture_update(handle, source_key);
     return handle;
   }
@@ -2462,7 +2488,9 @@ private:
     auto pixels = image_pixels(image);
     const auto handle =
         create_owned_texture(int(image.width), int(image.height), std::move(pixels),
-                             vk::TextureSource::prepared_skin);
+                             vk::TextureSource::prepared_skin,
+                             // image_pixels widened the prepared RGB565 plane, alpha 255 (#518).
+                             mw34::texture_staging::Pack16::r5g6b5);
     // The prepared reader preserves a declared hash without checking it. This
     // immutable slot gets an exact key from its complete visible RGB565 plane.
     textures_.at(handle).surface_key = prepared_fixture_key(image);
@@ -2897,7 +2925,8 @@ private:
                                vk::TexFormat::rgba8888,
                                {},
                                entry.pixels,
-                               entry.source};
+                               entry.source,
+                               entry.pack16};
     if (!renderer_->preload_texture(texture_ref)) {
       preload_test_state_.failed_texture_handle = handle;
       return;
@@ -3221,7 +3250,7 @@ private:
     const auto w = entry.width;
     const auto h = entry.height;
     vk::TextureRef ref{key, entry.version, w, h, vk::TexFormat::rgba8888, {},
-                       {}, entry.source};
+                       {}, entry.source, entry.pack16};
     const auto current = submitted_textures_.find(ref.key);
     if (current == submitted_textures_.end() ||
         current->second != std::array<std::uint64_t, 3>{ref.hash, w, h}) {
@@ -3656,6 +3685,11 @@ bool is_texture_gpu_resident(VulkanFrameRenderer &renderer, int32_t handle, bool
 }
 std::size_t texture_memory_log_count(VulkanFrameRenderer &renderer) {
   return preload_impl(renderer).texture_memory_log_count_for_test();
+}
+mw34::texture_staging::Pack16 texture_format(VulkanFrameRenderer &renderer, int32_t handle,
+                                             bool sharp) {
+  return preload_impl(renderer).backend_for_test().texture_format_for_test(
+      std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
 }
 vk::TextureSource texture_source(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
   return preload_impl(renderer).backend_for_test().texture_source_for_test(

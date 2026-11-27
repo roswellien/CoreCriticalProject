@@ -1383,14 +1383,24 @@ void check_gpu_prepared_skin_eviction(SDL_Window *window, sdlfe::RendererBackend
     // keeps that tag, so the skins and their normal map are counted as what they are.
     {
         std::set<mw34::vkscene::TextureSource> sources;
+        bool skin_at_16_bits = false;
         for (const auto handle :
              cc_mw3_re::testing::preload_test_state(*renderer).completed_texture_handles)
-            for (const bool sharp : {false, true})
-                if (cc_mw3_re::testing::is_texture_gpu_resident(*renderer, handle, sharp))
-                    sources.insert(cc_mw3_re::testing::texture_source(*renderer, handle, sharp));
+            for (const bool sharp : {false, true}) {
+                if (!cc_mw3_re::testing::is_texture_gpu_resident(*renderer, handle, sharp))
+                    continue;
+                const auto source = cc_mw3_re::testing::texture_source(*renderer, handle, sharp);
+                sources.insert(source);
+                // A skin is the prepared RGB565 plane widened, so it is stored as R5G6B5.
+                if (source == mw34::vkscene::TextureSource::prepared_skin &&
+                    cc_mw3_re::testing::texture_format(*renderer, handle, sharp) ==
+                        mw34::texture_staging::Pack16::r5g6b5)
+                    skin_at_16_bits = true;
+            }
         require(sources.count(mw34::vkscene::TextureSource::prepared_skin) &&
                     sources.count(mw34::vkscene::TextureSource::normal),
                 "A prepared skin or its normal map reached the card without its source");
+        require(skin_at_16_bits, "A prepared skin was not stored as R5G6B5");
     }
     // Evicted sets' slots wait for a scene boundary; a mission reset releases all of
     // them once (no double release later) and a fresh scene draws normally.

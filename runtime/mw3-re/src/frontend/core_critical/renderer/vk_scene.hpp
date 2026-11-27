@@ -124,6 +124,10 @@ struct TextureRef {
   std::vector<std::uint32_t> pixels32;
   // What the texture holds (#518). Last, so references built without it stay guest surfaces.
   TextureSource source{TextureSource::guest};
+  // The 16-bit format pixels32 was widened from, exactly (#518): the frontend
+  // knows it from the game's upload key or its own conversion. None when the
+  // texels are real 8-bit data or their origin is unknown; never guessed.
+  mw34::texture_staging::Pack16 pack16{mw34::texture_staging::Pack16::none};
 };
 // Fixed-function state that selects a pipeline: blend enable/source/destination
 // (D3DBLEND), depth enable/function (D3DCMP)/write, cull mode (D3DCULL).
@@ -1504,7 +1508,7 @@ public:
         if (texture_completed(texture_ref.key, texture_ref.hash,
                               texture_ref.width, texture_ref.height))
             return true;
-        // #518: the content picks the storage format before staging is sized.
+        // #518: the content's 16-bit format picks the storage before staging is sized.
         // A reference without its pixels reaches the "without pixels" throw below.
         const std::size_t texel_count = std::size_t(texture_ref.width) * texture_ref.height;
         const bool has_pixels = (texture_ref.format == TexFormat::rgba8888
@@ -1512,8 +1516,6 @@ public:
                                      : texture_ref.pixels.size()) == texel_count;
         mw34::texture_staging::Pack16Choice storage{};
         if (has_pixels) {
-            mw34::timing::ScopedDuration scan_timer(
-                gpu_resource_timing_.enabled ? &preload_scan_nanoseconds_ : nullptr);
             const auto existing = textures.find(texture_ref.key);
             storage = choose_storage(mw34::texture_staging::Pack16Rule::from_content,
                                      existing == textures.end() ? nullptr : &existing->second,
@@ -1949,8 +1951,8 @@ private:
       mw34::timing::ScopedDuration texture_allocation_timer(
           needs_upload ? gpu_resource_timing_.texture_upload_target()
                        : nullptr);
-      // #518: only new pixels are scanned; during play an image never narrows,
-      // and a 16-bit image whose content no longer fits it becomes RGBA8.
+      // #518: during play an image never narrows, and a 16-bit image whose new
+      // content comes in another format, or none, becomes RGBA8.
       mw34::texture_staging::Pack16Choice storage{c.pack, false};
       if (needs_upload && has_pixels)
         storage = choose_storage(mw34::texture_staging::Pack16Rule::keep_or_widen, &c, t);
@@ -3862,8 +3864,6 @@ private:
   std::uint64_t preload_record_nanoseconds_{}, preload_flush_nanoseconds_{};
   std::uint64_t preload_wait_nanoseconds_{}, preload_submit_nanoseconds_{};
   std::uint64_t preload_budget_nanoseconds_{}, preload_allocate_nanoseconds_{};
-  // Time spent finding each preloaded texture's storage format (#518).
-  std::uint64_t preload_scan_nanoseconds_{};
   bool preload_stopped_{};
   PreloadStopInfo preload_stop_{};
   PreloadFaultInjection preload_fault_{};
@@ -4452,7 +4452,6 @@ public:
     preload_record_nanoseconds_ = preload_flush_nanoseconds_ = 0;
     preload_wait_nanoseconds_ = preload_submit_nanoseconds_ = 0;
     preload_budget_nanoseconds_ = preload_allocate_nanoseconds_ = 0;
-    preload_scan_nanoseconds_ = 0;
     // A previous lazy scene may have grown the shared buffer beyond this
     // phase's bound. Its fence is complete before releasing that allocation.
     if (texUpload.size > preload_batch_cap_)
@@ -4490,7 +4489,7 @@ public:
       std::fprintf(stderr,
                    "[PRELOAD_PROFILE] geometry_us=%llu hash_us=%llu image_us=%llu "
                    "staging_us=%llu record_us=%llu flush_us=%llu budget_us=%llu allocate_us=%llu "
-                   "wait_us=%llu submit_us=%llu scan_us=%llu\n",
+                   "wait_us=%llu submit_us=%llu\n",
                    (unsigned long long)(preload_geometry_nanoseconds_ / 1000),
                    (unsigned long long)(preload_hash_nanoseconds_ / 1000),
                    (unsigned long long)(preload_image_nanoseconds_ / 1000),
@@ -4500,8 +4499,7 @@ public:
                    (unsigned long long)(preload_budget_nanoseconds_ / 1000),
                    (unsigned long long)(preload_allocate_nanoseconds_ / 1000),
                    (unsigned long long)(preload_wait_nanoseconds_ / 1000),
-                   (unsigned long long)(preload_submit_nanoseconds_ / 1000),
-                   (unsigned long long)(preload_scan_nanoseconds_ / 1000));
+                   (unsigned long long)(preload_submit_nanoseconds_ / 1000));
   }
   void end_preload() noexcept {
     preload_active_ = false;
