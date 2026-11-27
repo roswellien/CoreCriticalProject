@@ -250,9 +250,9 @@ CHECKS = (
     Check("ctest", check_ctest),
     Check("format-check", check_format, needs=("venv",)),
     Check("style", check_style, needs=("venv", "npm", "psscriptanalyzer")),
+    Check("pack-contracts", check_pack_contracts),
     Check("launcher-wpf", check_launcher_wpf, needs=("sdl3",), windows_only=True),
     Check("launcher-dispatch", check_launcher_dispatch),
-    Check("pack-contracts", check_pack_contracts),
 )
 DEFAULT_CHECKS = ("build", "ctest", "format-check", "style", "pack-contracts")
 AREAS = {"launcher": ("launcher-wpf", "launcher-dispatch")}
