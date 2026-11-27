@@ -774,6 +774,7 @@ unsigned headlight_mouse_{};
 bool headlight_key_suppressed_latch_{};
 bool headlight_mouse_suppressed_latch_{};
 std::size_t headlight_peak_{};
+bool replay_headlights_warned_{};
 std::array<float, 6> local_projection_{};
 std::array<float, 12> local_camera_{};
 bool local_active_{};
@@ -908,6 +909,55 @@ void player_headlight_tick(const ::platform::PlayerHeadlightTick &tick) override
     // Native fixture IDs occupy the low range, while weapons have a separate namespace.
     if (auto candidate = mw34::headlights::spotlight(lamp, *pose, intensity, (1ULL << 63) + i))
       headlight_candidates_.push_back(*candidate);
+  }
+  headlight_peak_ = std::max(headlight_peak_, headlight_candidates_.size());
+}
+
+void replay_headlights(const void *const *nodes, std::size_t count) override {
+  VisualFloatScope guard;
+  headlight_candidates_.clear();
+  // Unlike the player's lamps this needs no campaign mission id: arena maps have none.
+  if (headlight_catalog_.empty()) {
+    if (count && !replay_headlights_warned_) {
+      std::fprintf(stderr, "[HEADLIGHTS] replay: no stock headlight catalog loaded\n");
+      replay_headlights_warned_ = true;
+    }
+    return;
+  }
+  // Player lamps use ids from 1 << 63 + lamp; each replayed mech gets its own
+  // block of 64 so no two mechs' lamps share an id.
+  constexpr std::uint64_t kReplayLampBase = (1ULL << 63) + (1ULL << 32);
+  for (std::size_t mech = 0; mech < count; ++mech) {
+    const auto *node = static_cast<const zcls::Node *>(nodes[mech]);
+    const auto *asset = node && node->source_asset_root ? node->source_asset.get() : nullptr;
+    const auto *profile = asset ? mw34::headlights::match_original(
+        headlight_catalog_, asset->name, asset->member_sha256) : nullptr;
+    if (!profile)
+      continue;
+    zmth::Mat34 world;
+    zmth::push(&world);
+    zmth::load_identity();
+    const auto transformed = zcls::node_to_world(const_cast<zcls::Node *>(node), 1);
+    zmth::pop();
+    if (transformed)
+      continue;
+    ::platform::ModelDrawContext context{};
+    context.node = node;
+    context.model_to_world = world.m;
+    context.ordinary = true;
+    for (std::size_t i = 0; i < profile->lamps.size() && i < 64; ++i) {
+      const auto &lamp = profile->lamps[i];
+      std::optional<::platform::prepared::Matrix> pose;
+      if (lamp.space == "donor_bone")
+        pose = prepared_.donor_headlight_socket(context, lamp.attachment, nullptr);
+      else
+        pose = original_headlight_socket(context, lamp.attachment, nullptr);
+      if (!pose)
+        continue;
+      if (auto candidate =
+              mw34::headlights::spotlight(lamp, *pose, 1.0f, kReplayLampBase + mech * 64 + i))
+        headlight_candidates_.push_back(*candidate);
+    }
   }
   headlight_peak_ = std::max(headlight_peak_, headlight_candidates_.size());
 }

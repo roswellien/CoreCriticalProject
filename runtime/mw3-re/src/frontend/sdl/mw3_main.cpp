@@ -148,6 +148,7 @@ extern "C" const char mw3_version_tag[] = "MW3-PROGRAM-VERSION:" MW3_VERSION;
 #include "mech3/app_engine.h"
 #include "mech3/app_hud.h"
 #include "mech3/arena.h"
+#include "platform/render3d.h"
 #include "mech3/options.h"
 #include "mech3/app_keys.h"
 #include "mech3/pilot.h"
@@ -1068,6 +1069,14 @@ void prepare_benchmark(Args& a, std::optional<double> process_epoch) {
     if (!log.mech_alive_during(shot.mech, start + shot.start, start + shot.start + shot.duration))
       throw std::runtime_error("benchmark camera subject missing or destroyed during shot: " +
                                std::to_string(shot.mech));
+  // The scene's look, set before the mission loads (platform/render3d.h).
+  if (!scene->time_of_day.empty()) {
+    const char* lighting = mech3::arena::time_of_day_lighting(scene->time_of_day);
+    if (!lighting) throw std::runtime_error("unknown benchmark time_of_day");
+    platform::arena_lighting_mission() = lighting;
+  }
+  platform::arena_weather() = scene->weather;
+  platform::arena_headlights() = scene->headlights;
 
   watch.benchmark_run = std::make_shared<sdlfe::benchmark::Run>(
       std::move(*scene), start, size.width, size.height, watch.benchmark_output,
@@ -1234,6 +1243,12 @@ int program(int argc, char** argv) {
           static_cast<unsigned long long>(platform::derived_cache::default_cache().cap() >> 20));
     } else {
       std::printf("mw3: disk cache disabled by MW3_DISK_CACHE\n");
+      // Pack digests only (derived_cache.hpp, digest_cache): no decoded asset is reused.
+      const auto digests = platform::derived_cache::digest_cache_dir_from_env();
+      if (!digests.empty()) {
+        platform::derived_cache::digest_cache().reconfigure(digests, 64ull << 20, true);
+        std::printf("mw3: pack digest cache at %s\n", digests.u8string().c_str());
+      }
     }
   } catch (const std::exception& error) {
     platform::derived_cache::default_cache().reconfigure({}, 0, false);

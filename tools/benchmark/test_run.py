@@ -190,7 +190,7 @@ class BenchmarkLaunchTest(unittest.TestCase):
         )
         profiles = []
 
-        def fake_scene(definition, scene, output, profile, *inputs):
+        def fake_scene(definition, scene, output, profile, *inputs, **options):
             self.assertFalse(profile.exists())
             profiles.append(profile)
             profile.mkdir(parents=True)

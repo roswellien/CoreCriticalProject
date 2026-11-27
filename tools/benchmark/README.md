@@ -2,7 +2,8 @@
 
 The four-scene suite measures successful Vulkan present throughput during native arena
 replay. It also reports process startup, scene loading, frame-time tails, and 1% low FPS.
-The scene recipes and camera sequences are in [fixtures](fixtures/README.md). Run
+The scene recipes, lighting, weather and camera sequences are in
+[fixtures](fixtures/README.md). Run
 these commands in PowerShell from the repository root.
 
 ## Build
@@ -35,18 +36,14 @@ separate writable profiles and log directories. It verifies byte identity and th
 timestamps, and writes the canonical log and a provenance receipt.
 
 ```powershell
-python -B tools/benchmark/freeze.py --game-dir $game --seed 7 `
-  --setup tools/benchmark/fixtures/c1mp1-4v4-reference.json --out local/benchmark/reference
-python -B tools/benchmark/freeze.py --game-dir $game --seed 7 `
-  --setup tools/benchmark/fixtures/c2mp2-4v4-reference.json --out local/benchmark/c2mp2
-python -B tools/benchmark/freeze.py --game-dir $game --seed 7 `
-  --setup tools/benchmark/fixtures/c3mp1-4v4-reference.json --out local/benchmark/c3mp1
-python -B tools/benchmark/freeze.py --game-dir $game --seed 7 `
-  --setup tools/benchmark/fixtures/c4mp2-8v8-stress.json --out local/benchmark/c4mp2
+foreach ($recipe in 'scene1-c1mp1-2v2', 'scene2-c2mp2-4v4', 'scene3-c3mp1-6v6', 'scene4-c4mp2-8v8') {
+  python -B tools/benchmark/freeze.py --game-dir $game --seed 7 `
+    --setup tools/benchmark/fixtures/$recipe.json --out local/benchmark/freeze/$recipe
+}
 ```
 
 Compare the emitted digests with `fixtures/suite-benchmark.json`. Use the qualified
-recordings for both arms. The c1mp1 entry pins the step 1 reference recording.
+recordings for both arms. Each recording takes about 15 to 45 s.
 If a new generator or install changes a digest, qualify the new workload under a
 new definition and use `--definition` in every invocation. Keep that materialized
 definition and the logs under `local/benchmark/`, with log paths relative to the
@@ -58,7 +55,11 @@ Use one machine and a fixed desktop resolution, window mode, power configuration
 set of installed packs. Keep the replay in focus and wait for each command to return
 before starting the next. The runner reads the saved Play settings and packs under
 `%LOCALAPPDATA%\MW3Remaster`. It puts each process in a fresh writable profile and sets
-`MW3_DISK_CACHE=0`. A1 first runs a separate c1mp1 replay to condition the GPU. Its
+`MW3_DISK_CACHE=0`, so decoded assets load cold in every scene. It also sets
+`MW3_DIGEST_CACHE_DIR` to `local/benchmark/digest-cache`, which only remembers the
+SHA-256 of each environment pack file by its file identity, size and times. The first
+scene of a new cache hashes about 29 GB of packs (about 100 s); every later scene and
+arm reuses the digests (about 4 s). A rewritten pack file is hashed again. A1 first runs a separate c1mp1 replay to condition the GPU. Its
 results are stored under `A1/conditioning` and excluded from the comparison.
 
 ```powershell
@@ -192,33 +193,45 @@ Use fresh processes without a sampler for the scored A-B-B-A block.
 
 ## Windows validation
 
-The four-scene diagnostic smoke and both stress candidates ran on an AMD Radeon
-RX 9070 with Windows driver `32.0.32029.2010` and Vulkan driver value
-`8389024`. The 3440×1440 desktop was at 144 Hz. Borderless mode used the full
-3440×1440 window, drawable and internal sizes. Each scene verified Vulkan WSI,
-IMMEDIATE mode, the render worker on, v-sync off, and disk cache disabled.
-The smoke used the saved Play packs with the planner's compatibility exclusions.
-Every scene completed its 10 s warm-up and 30 s measured interval. Validation
-checked the frame CSV and effective settings hashes and all four pressure
-counters were zero in every scene.
+### Load time
 
-| Scene | Measured presents | Mean frame time (ms) | FPS | Startup (s) | Scene load (s) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| c1mp1 | 1,948 | 15.396 | 64.93 | 144.13 | 26.77 |
-| c2mp2 | 1,430 | 20.973 | 47.67 | 149.38 | 34.93 |
-| c3mp1 | 2,170 | 13.821 | 72.33 | 148.20 | 34.63 |
-| c4mp2 | 1,869 | 16.039 | 62.30 | 150.88 | 35.80 |
+Before this change each scene spent about 94 s of a 144 to 150 s start rehashing the
+environment packs, because `MW3_DISK_CACHE=0` also turned off the remembered pack
+digests. The 2026-11-26 four-scene smoke took 786 s for 2 min of measured play
+(about 195 s per scene). With the digest cache, measured on 2026-11-27 on the same
+RX 9070 machine, packs and settings:
 
-Both c4mp2 routes peaked at about 5,525 MiB of sampled process dedicated GPU
-memory and completed without pressure events. The selected route started
-measurement at log time 10.033 s. It had the higher recorded co-occurrence of
-standing mechs and rounds plus beams, and averaged 0.99 replay explosions per
-measured frame. The 11 s candidate averaged 0.83. The diagnostic smoke and
-memory samples are under `local/benchmark/`.
+| Phase per scene | Before | After |
+| --- | ---: | ---: |
+| Environment pack registration | 93.7 to 94.7 s | 3.6 to 4.1 s (103 s once, filling a new cache) |
+| Window and renderer start | 12.0 to 14.9 s | 12.3 to 13.7 s |
+| Mission load | 22.8 to 31.0 s | 30.8 to 36.1 s |
+| Process start to measured scene | 144.1 to 150.9 s | 68.5 to 73.9 s |
 
-A full serial A/A block used the same Windows build, GPU and window mode with
-stock assets (`--active-packs ','` on all four suite commands). The separate
-c1mp1 conditioning replay and all 16 scored scenes completed. The comparator
-accepted the block and reported **no change**, with a −0.601% overall mean
-frame-time change and a 3.250% noise bound. c4mp2 in arm A set that bound.
-The comparison is saved at `local/benchmark/aa/comparison.json`.
+The 2026-11-27 smoke of the new suite (`local/benchmark/smoke2`, digest cache already
+filled) completed all four scenes, each valid with zero memory pressure counters, in
+583 s against 786 s before, with twice the measured play. Each process start reached
+its measured scene in 51 to 69 s; pack registration took 2.4 s in each.
+
+| Scene | Start to scene (s) | Scene load (s) | Measured presents | Wall time (s) |
+| --- | ---: | ---: | ---: | ---: |
+| c1mp1 | 50.6 | 30.4 | 619 | 108.8 |
+| c2mp2 | 63.3 | 43.3 | 587 | 161.7 |
+| c3mp1 | 64.9 | 44.3 | 837 | 164.2 |
+| c4mp2 | 69.3 | 46.5 | 293 | 148.1 |
+
+The c4mp2 renderer reported 52 replay headlight lamps at its peak; the other scenes
+report none, as intended. Captured frames confirmed dawn and rain in c1mp1, mid-day in
+c2mp2 with the fight in clear view in seven frames from 5 s to 90 s, dawn in c3mp1,
+and night, rain and lit headlights in c4mp2.
+
+Measured play per suite went from 2 min to 4 min 20 s (40, 80, 80 and 60 s).
+
+### Frame rate on 2026-11-27
+
+The frame rates in this smoke are not comparable with 2026-11-26. On 2026-11-27 the
+old c2mp2 scene and log, replayed by the merged step 3 executable, averaged 7.3 FPS
+where it averaged 47.7 FPS the day before; this build gave 6.6 FPS on the same
+replay. The machine itself had slowed: the desktop compositor held about 21.9 GB of
+video memory earlier that day. Rerun the smoke and the scene 1 frame-time check after
+a restart before scoring a block.

@@ -1,7 +1,7 @@
 {
   "map": "c4mp2",
   "minutes": 3,
-  "out": "local/benchmark/c4mp2",
+  "out": "local/benchmark/scene4",
   "sides": [
     [
       {
@@ -14,7 +14,7 @@
         }
       },
       {
-        "mech": "madcat",
+        "mech": "thor",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -23,7 +23,7 @@
         }
       },
       {
-        "mech": "orion",
+        "mech": "vulture",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -32,7 +32,7 @@
         }
       },
       {
-        "mech": "orion",
+        "mech": "avatar",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -41,7 +41,7 @@
         }
       },
       {
-        "mech": "madcat",
+        "mech": "owens",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -50,7 +50,7 @@
         }
       },
       {
-        "mech": "madcat",
+        "mech": "strider",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -59,7 +59,7 @@
         }
       },
       {
-        "mech": "orion",
+        "mech": "daishi",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -68,7 +68,7 @@
         }
       },
       {
-        "mech": "orion",
+        "mech": "shadowcat",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -79,7 +79,7 @@
     ],
     [
       {
-        "mech": "madcat",
+        "mech": "blackhawk",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -88,7 +88,7 @@
         }
       },
       {
-        "mech": "madcat",
+        "mech": "bushwacker",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -97,7 +97,7 @@
         }
       },
       {
-        "mech": "orion",
+        "mech": "champion",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -106,7 +106,7 @@
         }
       },
       {
-        "mech": "orion",
+        "mech": "cauldron",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -115,7 +115,7 @@
         }
       },
       {
-        "mech": "madcat",
+        "mech": "puma",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -124,7 +124,7 @@
         }
       },
       {
-        "mech": "madcat",
+        "mech": "sunder",
         "loadout": 0,
         "preset": {
           "world": "c1",
@@ -133,7 +133,7 @@
         }
       },
       {
-        "mech": "orion",
+        "mech": "supernova",
         "loadout": 0,
         "preset": {
           "world": "c1",
