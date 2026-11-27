@@ -14,8 +14,9 @@ files trustworthy:
   stay under 200 lines.
 - The must-follow part of `AGENTS.md` (everything before the first
   "## Commands and layout" or "## Where to find more" heading) fits in 4,000
-  characters, because Copilot code review reads only the first 4,000 characters
-  of an instruction file.
+  characters. Every agent reads it first, and short rule lists are followed more
+  reliably, so reference material belongs further down or in docs/. (GitHub's
+  documentation names no character limit for Copilot; checked 2026-11-27.)
 
 Shared skills live in `.agents/skills/core-critical-<task>/`, with an exact copy
 in `.claude/skills/` for Claude Code (made by `tools/agents/sync_skills.py`):
@@ -269,7 +270,8 @@ def _check_size(agents_text: str) -> list[Finding]:
             Finding(
                 "error",
                 f"AGENTS.md's must-follow part is {must_follow} characters, over the "
-                f"{MAX_MUST_FOLLOW_CHARACTERS} that Copilot code review reads; {SHRINK_ADVICE}.",
+                f"{MAX_MUST_FOLLOW_CHARACTERS}-character limit that keeps the rules every agent reads "
+                f"first short; {SHRINK_ADVICE}.",
             )
         )
     return findings
