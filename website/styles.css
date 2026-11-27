@@ -407,7 +407,8 @@ article[id] {
     margin-top: 8px;
     color: #dfdfd7;
 }
-a.family-project:hover {
+a.family-project:hover,
+a.family-project:focus-visible {
     border-color: var(--amber);
 }
 .updates {
