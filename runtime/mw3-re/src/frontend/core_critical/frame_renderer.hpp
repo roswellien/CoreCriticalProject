@@ -159,18 +159,15 @@ std::size_t video_memory_full_log_count(VulkanFrameRenderer &renderer);
 // their size (of how many heaps).
 std::size_t memory_table_log_count(VulkanFrameRenderer &renderer);
 std::size_t memory_report_heaps_within_size(VulkanFrameRenderer &renderer, std::size_t &heaps);
-// #521 device fault report: whether this renderer's device is the one a lost
-// device reports from, whether VK_EXT_device_fault is on for it, and the
-// report itself (printed once until reset).
-// The session object the current backend reports into, and whether it has
-// printed the renderer header block.
+// #521: the session object the current backend reports into, and whether it
+// has printed the renderer header block.
 const void *health_session_of(VulkanFrameRenderer &renderer);
 bool renderer_header_printed(VulkanFrameRenderer &renderer);
+// #521 device fault report: whether this renderer's device is the one a lost
+// device reports from, and whether VK_EXT_device_fault is on for it.
 bool is_device_fault_owner(VulkanFrameRenderer &renderer);
 bool device_fault_enabled(VulkanFrameRenderer &renderer);
 bool any_device_fault_owner();
-void reset_device_fault_report();
-void report_device_fault();
 std::uint64_t scene_render_frame(VulkanFrameRenderer &renderer);
 void free_unused_model_buffers(VulkanFrameRenderer &renderer, std::uint64_t min_age_frames);
 void free_unused_textures(VulkanFrameRenderer &renderer, std::uint64_t min_age_frames);

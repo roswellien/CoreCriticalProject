@@ -946,13 +946,22 @@ public:
     return {entry.width, entry.height, entry.source_width, entry.source_height,
             entry.generated_rgba, entry.pixels};
   }
-  // #521 test switches that act inside a mission. The fault lives on the
-  // Renderer, which every scene reset replaces, so it is armed at the first
-  // mission start (the worker is idle: mission_changed has just drained).
+  // #521 test switches that act inside a mission. They live on the Renderer,
+  // which a scene reset replaces, so the first mission start only marks them
+  // wanted; they are applied to the live Renderer, never one a pending reset is
+  // about to replace (then ensure_extent applies them to the new one).
   void arm_test_switches_once(const ::platform::MissionIdentity &identity) {
-    if (test_switches_armed_ || identity.world_index < 0 || identity.number <= 0 || !renderer_)
+    if (test_switches_requested_ || identity.world_index < 0 || identity.number <= 0)
       return;
-    test_switches_armed_ = true;
+    test_switches_requested_ = true;
+    apply_pending_test_switches();
+  }
+  void apply_pending_test_switches() {
+    if (!test_switches_requested_ || test_switches_applied_ || reset_pending_ || !renderer_)
+      return;
+    // Both callers have the worker idle: mission_changed has just drained, and
+    // ensure_extent drained before replacing the Renderer.
+    test_switches_applied_ = true;
     if (bridge_config_.test_fail_alloc) {
       vk::PreloadFaultInjection fault{};
       fault.fail_next_play_texture_allocations = bridge_config_.test_fail_alloc;
@@ -2688,6 +2697,7 @@ private:
       invalidate_scene_bindings();
       present_window_width_ = present_window_height_ = 0;
       reset_pending_ = false;
+      apply_pending_test_switches();
     }
     scene_.detail_settings = surface_detail_settings();
     scene_.detail_time = mw34::detail::presentation_time(
@@ -3382,7 +3392,7 @@ private:
   sdlfe::HealthSession health_session_;
   // Totals the health line keeps across scene resets, which replace these sources.
   std::uint64_t retired_page_loads_{};
-  bool test_switches_armed_{};
+  bool test_switches_requested_{}, test_switches_applied_{};
   vk::Renderer::VideoMemoryPressure retired_memory_pressure_{};
   std::unique_ptr<vk::Renderer> renderer_;
   // Declared after renderer_: join before destroying the backend, including
@@ -3756,7 +3766,7 @@ std::size_t memory_report_heaps_within_size(VulkanFrameRenderer &renderer, std::
   heaps = report.size();
   std::size_t within = 0;
   for (const auto &heap : report)
-    within += heap.used <= heap.size;
+    within += heap.used_bytes <= heap.size_bytes;
   return within;
 }
 const void *health_session_of(VulkanFrameRenderer &renderer) {
@@ -3772,8 +3782,6 @@ bool device_fault_enabled(VulkanFrameRenderer &renderer) {
   return preload_impl(renderer).backend_for_test().device_fault_enabled_for_test();
 }
 bool any_device_fault_owner() { return vk::Renderer::device_fault_owner_for_test() != nullptr; }
-void reset_device_fault_report() { vk::Renderer::reset_device_fault_report_for_test(); }
-void report_device_fault() { vk::Renderer::report_device_fault_for_test(); }
 std::uint64_t scene_render_frame(VulkanFrameRenderer &renderer) {
   return preload_impl(renderer).backend_for_test().render_frame();
 }

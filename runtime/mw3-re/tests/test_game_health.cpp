@@ -103,7 +103,7 @@ void video_memory_edge() {
   GameHealth h;
   HealthSnapshot s;
   s.heap_count = 1;
-  s.heaps[0] = {0, 1000, true, true};
+  s.heaps[0] = {0, 2000, 0, 1000, true, true};
   auto at = [&](uint64_t used, double now) {
     s.heaps[0].used_bytes = used;
     return h.video_memory_crossing(s, now, 0);
@@ -113,14 +113,74 @@ void video_memory_edge() {
   require(at(850, 20) == -1 && at(950, 40) == -1, "no re-fire above 80%");
   require(at(700, 60) == -1 && at(950, 80) == 0, "re-arms below 80%");
   require(h.video_memory_crossing(s, 100, 100) == -1, "already fired, with the test budget too");
+  // Two heaps crossing together: the second reports on a later check, not never.
+  GameHealth two;
+  HealthSnapshot both;
+  both.heap_count = 2;
+  both.heaps[0] = {0, 2000, 950, 1000, true, true};
+  both.heaps[1] = {1, 2000, 950, 1000, true, true};
+  require(two.video_memory_crossing(both, 0, 0) == 0, "first heap reports");
+  require(two.video_memory_crossing(both, 5, 0) == -1, "limiter holds the second back");
+  require(two.video_memory_crossing(both, 10, 0) == 1, "second heap reports once the limiter allows");
+}
+
+// The main loop's reporter, with a fake clock and renderer: the display header
+// once, one stall 30 s into the mission, the memory check at most once a
+// second, a line every 60 s, and one flush per printed batch.
+void reporter() {
+  double clock = 0;
+  bool in_mission = false, shown = false;
+  int headers = 0, stalls = 0, renderer_reads = 0, flushes = 0;
+  std::vector<std::string> lines;
+  HealthHooks hooks;
+  hooks.now = [&] { return clock; };
+  hooks.in_mission = [&] { return in_mission; };
+  hooks.window_ready = [&] { return shown; };
+  hooks.print_display_header = [&] { ++headers; };
+  hooks.renderer = [&](HealthSnapshot& s) {
+    ++renderer_reads;
+    s.heap_count = 1;
+    s.heaps[0] = {0, 2000, 950, 1000, true, true};
+    return true;
+  };
+  hooks.ram_mib = [] { return uint64_t(512); };
+  hooks.stall = [&](int ms) {
+    ++stalls;
+    clock += ms / 1000.0;
+  };
+  hooks.print = [&](const std::string& line) { lines.push_back(line); };
+  hooks.flush = [&] { ++flushes; };
+  HealthReporter r(std::move(hooks), 250);
+  r.frame(false);  // hidden window, menus: nothing
+  require(headers == 0 && lines.empty(), "nothing before the window is ready");
+  shown = true;
+  r.frame(false);
+  r.frame(false);
+  require(headers == 1, "the display header prints once");
+  in_mission = true;
+  for (int i = 0; i < 6100; ++i) {  // 61 s of 10 ms frames
+    clock += 0.01;
+    r.frame(true);
+  }
+  require(stalls == 1, "one stall 30 s into the mission");
+  require(renderer_reads >= 60 && renderer_reads <= 63, "memory checked about once a second, got " +
+                                                             std::to_string(renderer_reads));
+  std::size_t hitch = 0, memory = 0, health = 0;
+  for (const auto& line : lines) {
+    hitch += line.rfind("mw3: health event hitch", 0) == 0;
+    memory += line.rfind("mw3: health event video_memory", 0) == 0;
+    health += line.rfind("mw3: health t=", 0) == 0;
+  }
+  require(hitch == 1 && memory == 1 && health == 1, "one hitch, one memory event and one line in 61 s");
+  require(flushes == 3, "one flush per printed batch, got " + std::to_string(flushes));
 }
 
 void formats() {
   FrameSummary f{3600, 6.94, 8.5, 12.25, 140, 2};
   HealthSnapshot s;
   s.heap_count = 2;
-  s.heaps[0] = {3221225472ull, 11811160064ull, true, true};
-  s.heaps[1] = {104857600ull, 0, false, false};
+  s.heaps[0] = {0, 12884901888ull, 3221225472ull, 11811160064ull, true, true};
+  s.heaps[1] = {1, 33285996544ull, 104857600ull, 0, false, false};
   s.skins = 4, s.page_loads = 12, s.worker_waits = 3, s.mem_recoveries = 1, s.models_skipped = 0,
   s.textures_swapped = 2, s.preload_stops = 0;
   require(format_health_line(61.4, f, &s, 2048) ==
@@ -155,9 +215,9 @@ void driver_versions() {
 void header_matches_shared_sample() {
   std::vector<std::string> lines = renderer_header_lines(
       "NVIDIA GeForce RTX 5070", (1u << 22) | (4u << 12) | 312u, 0x10DE, 0x8E8A4000u,
-      {{0, 12884901888ull, 11811160064ull, true, true},
-       {1, 33285996544ull, 16642998272ull, false, true},
-       {2, 268435456ull, 0, true, false}});  // no driver figures: left out
+      {{0, 12884901888ull, 0, 11811160064ull, true, true},
+       {1, 33285996544ull, 0, 16642998272ull, false, true},
+       {2, 268435456ull, 0, 0, true, false}});  // no driver figures: left out
   for (auto& line : display_header_lines(2560, 1080, "borderless", 144, false)) lines.push_back(line);
   std::ifstream sample(MW3_HEADER_SAMPLE);
   require(bool(sample), std::string("can't open ") + MW3_HEADER_SAMPLE);
@@ -179,6 +239,7 @@ int main() {
     hitch_quiet_spell();
     pause_and_mission_start();
     video_memory_edge();
+    reporter();
     formats();
     driver_versions();
     header_matches_shared_sample();

@@ -16,8 +16,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sdlfe {
@@ -123,14 +125,19 @@ class EventLimiter {
 
 constexpr std::size_t kMaxHealthHeaps = 16;
 
-struct HealthHeap {
-  uint64_t used_bytes = 0, budget_bytes = 0;
+// One video memory heap, as the renderer reports it for the health line, the
+// setup header and the memory table. used/budget are the driver's figures when
+// driver_figures is set (VK_EXT_memory_budget); otherwise used is the game's
+// own tracked allocations and budget is 0, since a heap's size isn't a budget.
+struct HeapFigures {
+  unsigned index = 0;
+  uint64_t size_bytes = 0, used_bytes = 0, budget_bytes = 0;
   bool device_local = false, driver_figures = false;
 };
 
 // What the renderer reports for the health line (FrameRenderer::health).
 struct HealthSnapshot {
-  std::array<HealthHeap, kMaxHealthHeaps> heaps{};
+  std::array<HeapFigures, kMaxHealthHeaps> heaps{};
   std::size_t heap_count = 0;
   uint64_t skins = 0, page_loads = 0, worker_waits = 0;
   uint64_t mem_recoveries = 0, models_skipped = 0, textures_swapped = 0, preload_stops = 0;
@@ -168,6 +175,7 @@ class GameHealth {
     if (in_mission && !was_in_mission_) {  // a mission starts: a fresh window
       window_.clear();
       next_line_at_ = now + kHealthLineSeconds;
+      mission_started_at_ = now;
     }
     was_in_mission_ = in_mission;
     if (!in_mission || !counted) {
@@ -188,6 +196,8 @@ class GameHealth {
   }
 
   FrameSummary take_summary() { return window_.take_summary(); }
+  // When the current (or last) mission started, or -1 before any.
+  double mission_started_at() const { return mission_started_at_; }
 
   // Edge-triggered per heap: fires on crossing 90% of budget and re-arms only
   // below 80%, so a card sitting near its budget logs once, not every 10 s.
@@ -200,9 +210,12 @@ class GameHealth {
       if (!heap.device_local || !budget || (!heap.driver_figures && !test_budget_bytes)) continue;
       const double percent = 100.0 * double(heap.used_bytes) / double(budget);
       if (percent < kVideoMemoryRearmPercent) armed_[i] = true;
-      if (percent >= kVideoMemoryFirePercent && armed_[i]) {
+      // Disarmed only when reported, so a heap that crossed while another
+      // was reported (or the limiter held it back) reports on a later check.
+      if (percent >= kVideoMemoryFirePercent && armed_[i] && fired < 0 &&
+          limiter_.allow(HealthEvent::video_memory, now)) {
         armed_[i] = false;
-        if (fired < 0 && limiter_.allow(HealthEvent::video_memory, now)) fired = int(i);
+        fired = int(i);
       }
     }
     return fired;
@@ -215,7 +228,7 @@ class GameHealth {
  private:
   FrameWindow window_;
   EventLimiter limiter_;
-  double previous_ = -1, next_line_at_ = 0;
+  double previous_ = -1, next_line_at_ = 0, mission_started_at_ = -1;
   bool was_in_mission_ = false;
   std::array<bool, kMaxHealthHeaps> armed_ = [] {
     std::array<bool, kMaxHealthHeaps> a{};
@@ -313,18 +326,12 @@ inline std::string vulkan_driver_version_text(uint32_t vendor_id, uint32_t raw) 
   return text;
 }
 
-struct HeaderHeap {
-  unsigned index = 0;
-  uint64_t size_bytes = 0, budget_bytes = 0;
-  bool device_local = false, driver_figures = false;
-};
-
 // The renderer's block: device, API and driver versions, and one line per heap
 // with driver budget figures (a heap's size isn't a budget, so heaps without
 // them are left out).
 inline std::vector<std::string> renderer_header_lines(const std::string& device_name, uint32_t api_version,
                                                       uint32_t vendor_id, uint32_t driver_version,
-                                                      const std::vector<HeaderHeap>& heaps) {
+                                                      const std::vector<HeapFigures>& heaps) {
   std::vector<std::string> lines;
   lines.push_back("mw3: header vulkan_device=" + device_name);
   lines.push_back("mw3: header vulkan_api_version=" + vulkan_api_version_text(api_version));
@@ -355,5 +362,67 @@ inline void print_lines(std::FILE* out, const std::vector<std::string>& lines) {
   for (const auto& line : lines) std::fprintf(out, "%s\n", line.c_str());
   std::fflush(out);
 }
+
+// The main loop's side of the health lines, called once per present. Every
+// outside thing it needs comes in through these hooks, so a check can drive
+// it with a fake clock and fake renderer figures.
+struct HealthHooks {
+  std::function<double()> now;                     // process_seconds() in the game
+  std::function<bool()> in_mission;                // a mission is on screen
+  std::function<bool()> window_ready;              // shown, or a hidden run
+  std::function<void()> print_display_header;      // once, when window_ready
+  std::function<bool(HealthSnapshot&)> renderer;   // FrameRenderer::health
+  std::function<uint64_t()> ram_mib;               // process RAM, read only for a line
+  std::function<void(int)> stall;                  // test switch: SDL_Delay
+  std::function<void(const std::string&)> print;  // one line on stdout
+  std::function<void()> flush;
+};
+
+class HealthReporter {
+ public:
+  // test_stall_ms: MW3_TEST_STALL_MS, one stall 30 s into the first mission (0 is off).
+  HealthReporter(HealthHooks hooks, int test_stall_ms) : hooks_(std::move(hooks)), stall_ms_(test_stall_ms) {}
+
+  void frame(bool drew_scene) {
+    if (hooks_.window_ready() && health_.take_display_header()) hooks_.print_display_header();
+    const bool in_mission = hooks_.in_mission();
+    double now = hooks_.now();
+    const double started = health_.mission_started_at();
+    if (stall_ms_ && !stalled_ && in_mission && drew_scene && started >= 0 && now - started >= 30) {
+      stalled_ = true;
+      hooks_.stall(stall_ms_);
+      now = hooks_.now();
+    }
+    const auto result = health_.frame(now, in_mission, drew_scene);
+    if (result.hitch_event) hooks_.print(format_hitch_event(result.frame_ms, now));
+    // Video memory is checked once a second of play, from the renderer's copy.
+    const bool memory_check_due = in_mission && drew_scene && now >= next_memory_check_at_;
+    HealthSnapshot snapshot;
+    const bool have_snapshot = (memory_check_due || result.line_due) && hooks_.renderer(snapshot);
+    bool printed = result.hitch_event;
+    if (memory_check_due) {
+      next_memory_check_at_ = now + 1;
+      const int heap = have_snapshot ? health_.video_memory_crossing(snapshot, now, 0) : -1;
+      if (heap >= 0) {
+        const auto& figures = snapshot.heaps[std::size_t(heap)];
+        hooks_.print(format_video_memory_event(std::size_t(heap), figures.used_bytes, figures.budget_bytes, now));
+        printed = true;
+      }
+    }
+    if (result.line_due) {
+      hooks_.print(format_health_line(now, health_.take_summary(), have_snapshot ? &snapshot : nullptr,
+                                      hooks_.ram_mib()));
+      printed = true;
+    }
+    if (printed) hooks_.flush();
+  }
+
+ private:
+  HealthHooks hooks_;
+  GameHealth health_;
+  int stall_ms_ = 0;
+  bool stalled_ = false;
+  double next_memory_check_at_ = 0;
+};
 
 }  // namespace sdlfe

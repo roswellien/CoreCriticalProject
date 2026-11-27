@@ -3,6 +3,7 @@
 // printed on stderr beside the existing "video memory full" line.
 #pragma once
 
+#include "frontend/sdl/game_health.h"
 #include "platform/vk_loader.hpp"
 
 #include <algorithm>
@@ -14,26 +15,23 @@
 
 namespace mw34::vkscene {
 
-// One memory heap's size and use. used/budget are the driver's figures when
-// driver_figures is set (VK_EXT_memory_budget); otherwise used is the game's
-// own tracked allocations and budget is 0, since a heap's size isn't a budget.
-struct HeapReport {
-  unsigned index = 0;
-  VkDeviceSize size = 0, used = 0, budget = 0;
-  bool device_local = false, driver_figures = false;
-};
-
 // The table printed once per session at the first failed play allocation:
 // one line per heap, DXVK-style.
-inline void print_memory_table(std::FILE* out, const std::vector<HeapReport>& heaps) {
+inline void print_memory_table(std::FILE* out, const std::vector<sdlfe::HeapFigures>& heaps) {
   constexpr double mib = 1024.0 * 1024.0;
   for (const auto& heap : heaps) {
+    const double size = double(heap.size_bytes) / mib, used = double(heap.used_bytes) / mib;
+    const int local = heap.device_local ? 1 : 0;
     if (heap.driver_figures)
-      std::fprintf(out, "mw3: memory table heap=%u size_mib=%.0f used_mib=%.0f budget_mib=%.0f device_local=%d\n",
-                   heap.index, heap.size / mib, heap.used / mib, heap.budget / mib, heap.device_local ? 1 : 0);
+      std::fprintf(out,
+                   "mw3: memory table heap=%u size_mib=%.0f used_mib=%.0f budget_mib=%.0f "
+                   "device_local=%d\n",
+                   heap.index, size, used, double(heap.budget_bytes) / mib, local);
     else
-      std::fprintf(out, "mw3: memory table heap=%u size_mib=%.0f used_mib=%.0f budget_mib=n/a device_local=%d\n",
-                   heap.index, heap.size / mib, heap.used / mib, heap.device_local ? 1 : 0);
+      std::fprintf(out,
+                   "mw3: memory table heap=%u size_mib=%.0f used_mib=%.0f budget_mib=n/a "
+                   "device_local=%d\n",
+                   heap.index, size, used, local);
   }
   std::fflush(out);
 }

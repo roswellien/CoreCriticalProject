@@ -11,7 +11,7 @@ static class NativePreviewSigningChecks
 {
     public static void Run()
     {
-        var repoRoot = FindRepositoryRoot();
+        var repoRoot = RepositoryRoot.Find();
         var launcherDir = Path.Combine(repoRoot, "tools", "mw3-remaster-launcher");
         var checksProject = Path.Combine(repoRoot, "tools", "mw3-remaster-launcher-tests", "LauncherChecks.csproj");
         var signWindowsScript = Path.Combine(launcherDir, "sign_windows.ps1");
@@ -580,7 +580,6 @@ Assert-AllBinariesSigned -Root '{{EscapeSingleQuoted(publishRoot)}}'
         File.WriteAllText(Path.Combine(root, "runtime.json"), manifest.ToJsonString(), new UTF8Encoding(false));
     }
 
-    private static string FindRepositoryRoot() => RepositoryRoot.Find();
 
     private static string FindPowerShellExecutable()
     {

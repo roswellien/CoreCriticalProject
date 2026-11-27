@@ -1,5 +1,6 @@
 #include "frame_renderer.hpp"
 #include "prepared_models.hpp"
+#include "renderer/device_diagnostics.hpp"
 
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/sdl_platform.h"
@@ -94,6 +95,75 @@ void require(bool condition, const char *message) {
   if (!condition) {
     throw std::runtime_error(message);
   }
+}
+
+// #521: the device fault report's printing, against a fake driver entry point
+// (no GPU, no lost device), so every answer a driver can give is covered.
+#ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
+struct FakeFault {
+  VkResult first = VK_SUCCESS, second = VK_SUCCESS;
+  std::uint32_t addresses = 0, vendors = 0;
+};
+FakeFault fake_fault;
+VKAPI_ATTR VkResult VKAPI_CALL fake_fault_info(VkDevice, VkDeviceFaultCountsEXT *counts,
+                                                 VkDeviceFaultInfoEXT *info) {
+  if (!info) {
+    counts->addressInfoCount = fake_fault.addresses;
+    counts->vendorInfoCount = fake_fault.vendors;
+    return fake_fault.first;
+  }
+  std::snprintf(info->description, VK_MAX_DESCRIPTION_SIZE, "page fault");
+  for (std::uint32_t i = 0; i < counts->addressInfoCount; ++i)
+    info->pAddressInfos[i] = {VK_DEVICE_FAULT_ADDRESS_TYPE_READ_INVALID_EXT, 0x1000u * (i + 1), 16};
+  for (std::uint32_t i = 0; i < counts->vendorInfoCount; ++i) {
+    info->pVendorInfos[i] = {};
+    std::snprintf(info->pVendorInfos[i].description, VK_MAX_DESCRIPTION_SIZE, "vendor %u", i);
+  }
+  return fake_fault.second;
+}
+#endif
+
+std::vector<std::string> device_fault_lines(VkDevice device, mw34::vkscene::DeviceFaultInfoFn fn) {
+  std::FILE *out = std::tmpfile();
+  require(out != nullptr, "Device fault print check could not open a temporary file");
+  mw34::vkscene::print_device_fault(out, device, fn);
+  std::rewind(out);
+  std::vector<std::string> lines;
+  char line[512];
+  while (std::fgets(line, sizeof line, out)) {
+    std::string text(line);
+    if (!text.empty() && text.back() == '\n')
+      text.pop_back();
+    lines.push_back(text);
+  }
+  std::fclose(out);
+  return lines;
+}
+
+void check_device_fault_print() {
+  const auto unsupported = device_fault_lines(VK_NULL_HANDLE, {});
+  require(unsupported.size() == 1 && unsupported[0] == "mw3: device fault: not supported",
+          "A device without VK_EXT_device_fault did not print only 'not supported'");
+#ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
+  const auto device = reinterpret_cast<VkDevice>(std::uintptr_t{1});  // never dereferenced by the fake
+  fake_fault = {VK_SUCCESS, VK_SUCCESS, 1, 1};
+  const auto full = device_fault_lines(device, fake_fault_info);
+  require(full.size() == 3 && full[0] == "mw3: device fault: page fault; 1 addresses, 1 vendor faults" &&
+              full[1].find("address=0x0000000000001000") != std::string::npos &&
+              full[2].find("vendor 0") != std::string::npos,
+          "A device fault report did not print its description, address and vendor lines");
+  fake_fault = {VK_SUCCESS, VK_INCOMPLETE, 2, 0};
+  const auto incomplete = device_fault_lines(device, fake_fault_info);
+  require(!incomplete.empty() && incomplete[0].ends_with("(incomplete)"),
+          "An incomplete device fault report did not say so");
+  fake_fault = {VK_SUCCESS, VK_SUCCESS, 40, 40};
+  require(device_fault_lines(device, fake_fault_info).size() == 1 + 32,
+          "A device fault report printed more than 32 detail lines");
+  fake_fault = {VK_ERROR_UNKNOWN, VK_SUCCESS, 0, 0};
+  const auto failed = device_fault_lines(device, fake_fault_info);
+  require(failed.size() == 1 && failed[0] == "mw3: device fault: query failed (-13)",
+          "A failed device fault query did not print one 'query failed' line");
+#endif
 }
 
 #include "local_light_checks.inc"
@@ -3047,12 +3117,9 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                   device_fault_enabled(*newer) ? "on" : "not supported");
       older.reset();
       require(is_device_fault_owner(*newer), "Destroying an older renderer cleared the newer one's registration");
-      reset_device_fault_report();
-      report_device_fault();  // prints one line
-      report_device_fault();  // once only: prints nothing
-      reset_device_fault_report();
       newer.reset();
       require(!any_device_fault_owner(), "Destroying the last renderer left a device fault owner");
+      check_device_fault_print();
     }
     {
       // #521: a scene reset builds a new backend Renderer, which reports into

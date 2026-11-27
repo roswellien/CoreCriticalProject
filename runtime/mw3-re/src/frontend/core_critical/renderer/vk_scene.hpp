@@ -4044,12 +4044,9 @@ private:
       return;
     VkPhysicalDeviceProperties properties{};
     f.vkGetPhysicalDeviceProperties(gpu, &properties);
-    std::vector<sdlfe::HeaderHeap> heaps;
-    for (const auto &heap : memory_report())
-      heaps.push_back({heap.index, heap.size, heap.budget, heap.device_local, heap.driver_figures});
     sdlfe::print_lines(stdout, sdlfe::renderer_header_lines(properties.deviceName, properties.apiVersion,
                                                             properties.vendorID, properties.driverVersion,
-                                                            heaps));
+                                                            memory_report()));
   }
   // #521 device fault report. check() is static and is where every VkResult
   // passes, so the renderer to report from is registered here: set when its
@@ -4064,20 +4061,25 @@ private:
     return reported;
   }
   // Prints the driver's fault report once per process, on the first lost device.
+  // With no registered device (a lost device during vkCreateDevice, or after
+  // shutdown) there is nothing to ask, and the once flag stays free for a
+  // later real loss.
   static void report_device_fault_once() noexcept {
-    if (fault_reported().exchange(true))
-      return;
     Renderer *owner = fault_owner().load();
-    print_device_fault(stderr, owner ? owner->device : VK_NULL_HANDLE,
-                       owner ? owner->device_fault_info_ : DeviceFaultInfoFn{});
+    if (!owner || !owner->device || fault_reported().exchange(true))
+      return;
+    print_device_fault(stderr, owner->device, owner->device_fault_info_);
   }
 #ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
-  VkPhysicalDeviceFaultFeaturesEXT device_fault_features_{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
+  VkPhysicalDeviceFaultFeaturesEXT device_fault_features_{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
   // True when the device reports VK_EXT_device_fault's deviceFault feature.
   bool device_fault_supported(PFN_vkGetInstanceProcAddr get) {
-    auto features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(get(instance, "vkGetPhysicalDeviceFeatures2"));
+    auto features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+        get(instance, "vkGetPhysicalDeviceFeatures2"));
     if (!features2)
-      features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(get(instance, "vkGetPhysicalDeviceFeatures2KHR"));
+      features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+          get(instance, "vkGetPhysicalDeviceFeatures2KHR"));
     if (!features2)
       return false;
     VkPhysicalDeviceFaultFeaturesEXT fault{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
@@ -4098,11 +4100,10 @@ private:
       return;
     health_refreshed_at_ = now;
     sdlfe::HealthSnapshot snapshot;
-    const auto heaps = memory_report();
-    for (const auto &heap : heaps) {
+    for (const auto &heap : memory_report()) {
       if (snapshot.heap_count == snapshot.heaps.size())
         break;
-      snapshot.heaps[snapshot.heap_count++] = {heap.used, heap.budget, heap.device_local, heap.driver_figures};
+      snapshot.heaps[snapshot.heap_count++] = heap;
     }
     if (bridge_config.test_vram_budget_mb)  // test switch: a small budget a normal mission crosses
       for (std::size_t i = 0; i < snapshot.heap_count; ++i)
@@ -4716,9 +4717,7 @@ public:
   std::size_t video_memory_full_log_count() const { return video_memory_full_log_count_; }
   // #521: the session this Renderer reports into; set before init().
   void set_health_session(sdlfe::HealthSession &session) { health_session_ = &session; }
-  // For checks: the device fault report's registration and once flag.
-  static void reset_device_fault_report_for_test() { fault_reported().store(false); }
-  static void report_device_fault_for_test() { report_device_fault_once(); }
+  // For checks: the device fault report's registration.
   static Renderer *device_fault_owner_for_test() { return fault_owner().load(); }
   bool device_fault_enabled_for_test() const { return device_fault_info_ != DeviceFaultInfoFn{}; }
   // #521 test switch MW3_TEST_DEVICE_LOST: from this long after the call, the
@@ -4730,18 +4729,17 @@ public:
   sdlfe::HealthSession &health_session() const { return *health_session_; }
   // Each heap's size and use: the driver's figures where VK_EXT_memory_budget
   // gives them, the game's tracked allocations otherwise. The one budget read.
-  std::vector<HeapReport> memory_report() const {
-    std::vector<HeapReport> heaps;
+  std::vector<sdlfe::HeapFigures> memory_report() const {
+    std::vector<sdlfe::HeapFigures> heaps;
     for (unsigned heap = 0; heap < memory.memoryHeapCount; ++heap) {
-      HeapReport report;
+      sdlfe::HeapFigures report;
       report.index = heap;
-      report.size = memory.memoryHeaps[heap].size;
+      report.size_bytes = memory.memoryHeaps[heap].size;
       report.device_local = memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
-      report.driver_figures = heap_budget(heap, report.used, report.budget);
-      if (!report.driver_figures) {
-        report.used = tracked_heap_bytes(heap);
-        report.budget = 0;
-      }
+      VkDeviceSize used = 0, budget = 0;
+      report.driver_figures = heap_budget(heap, used, budget);
+      report.used_bytes = report.driver_figures ? used : tracked_heap_bytes(heap);
+      report.budget_bytes = report.driver_figures ? budget : 0;
       heaps.push_back(report);
     }
     return heaps;
@@ -5121,7 +5119,7 @@ private:
           f.vkGetDeviceProcAddr(device, "vkGetDeviceFaultInfoEXT"));
 #endif
     fault_owner().store(this);
-#define MW34_VK_DLOAD(n)                                                     \
+#define MW34_VK_DLOAD(n)                                                       \
   f.n = reinterpret_cast<PFN_##n>(f.vkGetDeviceProcAddr(device, #n));          \
   if (!f.n)                                                                    \
     throw std::runtime_error("Vulkan scene renderer: " #n " missing");

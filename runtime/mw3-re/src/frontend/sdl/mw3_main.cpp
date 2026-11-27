@@ -1981,47 +1981,28 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     // #521: the minute health line and health events for playtest reports,
     // always on. Per frame it is one clock read and a ring write; a line is
     // printed once a minute of play, never per frame.
-    sdlfe::GameHealth health;
     // Test switch (spec section 4): one stall of this many ms, 30 s into the first mission.
     const int test_stall_ms = [] {
       const char* v = std::getenv("MW3_TEST_STALL_MS");
       return v ? std::max(0, std::atoi(v)) : 0;
     }();
     if (test_stall_ms) std::printf("mw3: test switch MW3_TEST_STALL_MS=%d\n", test_stall_ms);
-    double mission_started_at = -1, next_memory_check_at = 0;
-    bool was_in_mission = false, test_stalled = false;
-    auto report_health = [&](bool drew_scene) {
-      const bool in_mission = input.in_mission && input.in_mission();
-      const bool shown = !(SDL_GetWindowFlags(window.sdl()) & SDL_WINDOW_HIDDEN);
-      if ((shown || a.hidden) && health.take_display_header()) print_display_header(window, a.hidden);
-      double now = sdlfe::process_seconds();
-      if (in_mission && !was_in_mission) mission_started_at = now;
-      was_in_mission = in_mission;
-      if (test_stall_ms && !test_stalled && in_mission && drew_scene && now - mission_started_at >= 30) {
-        test_stalled = true;
-        SDL_Delay(Uint32(test_stall_ms));
-        now = sdlfe::process_seconds();
-      }
-      const auto result = health.frame(now, in_mission, drew_scene);
-      if (result.hitch_event) std::printf("%s\n", sdlfe::format_hitch_event(result.frame_ms, now).c_str());
-      sdlfe::HealthSnapshot snapshot;
-      const bool memory_check_due = in_mission && drew_scene && now >= next_memory_check_at;
-      const bool have_snapshot =
-          (memory_check_due || result.line_due) && window.render() && window.render()->health(snapshot);
-      if (memory_check_due) {
-        next_memory_check_at = now + 1;
-        const int heap = have_snapshot ? health.video_memory_crossing(snapshot, now, 0) : -1;
-        if (heap >= 0)
-          std::printf("%s\n", sdlfe::format_video_memory_event(std::size_t(heap), snapshot.heaps[heap].used_bytes,
-                                                               snapshot.heaps[heap].budget_bytes, now)
-                                  .c_str());
-      }
-      if (result.line_due)
-        std::printf("%s\n", sdlfe::format_health_line(now, health.take_summary(), have_snapshot ? &snapshot : nullptr,
-                                                      sdlfe::resident_kb() / 1024)
-                                .c_str());
-      if (result.hitch_event || result.line_due) std::fflush(stdout);
+    sdlfe::HealthHooks health_hooks;
+    health_hooks.now = [] { return sdlfe::process_seconds(); };
+    health_hooks.in_mission = [&input] { return input.in_mission && input.in_mission(); };
+    health_hooks.window_ready = [&window, hidden = a.hidden] {
+      return hidden || !(SDL_GetWindowFlags(window.sdl()) & SDL_WINDOW_HIDDEN);
     };
+    health_hooks.print_display_header = [&window, hidden = a.hidden] { print_display_header(window, hidden); };
+    health_hooks.renderer = [&window](sdlfe::HealthSnapshot& s) {
+      return window.render() && window.render()->health(s);
+    };
+    health_hooks.ram_mib = [] { return uint64_t(sdlfe::resident_kb() / 1024); };
+    health_hooks.stall = [](int ms) { SDL_Delay(Uint32(ms)); };
+    health_hooks.print = [](const std::string& line) { std::printf("%s\n", line.c_str()); };
+    health_hooks.flush = [] { std::fflush(stdout); };
+    sdlfe::HealthReporter health(std::move(health_hooks), test_stall_ms);
+    auto report_health = [&health](bool drew_scene) { health.frame(drew_scene); };
     uint64_t frame_last = 0;
     auto record_frame_time = [&](int frame) {
       if (a.frame_times <= 0 || frame < a.frame_times) return;
