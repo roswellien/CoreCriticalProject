@@ -552,18 +552,20 @@ stand-in for the AVI (`mech3/hd_movie.h`):
   (`mp4_sound_edit`).
 
 The MP4's pictures are decoded on a thread of their own, at most three
-waiting, each already in the RGBA order the renderer's textures take, so
-the game's thread uploads a new one without a pass over its pixels. The decoder runs in low-latency mode, which holds about 95 MB less;
-its timestamps are wrong for B-frames there, so each picture is timed by the
-durations of those before it, from 0. Measured against ffmpeg's decode of
-INTRO, the sound matches to the sample at 5, 60, 150 and 180 s and picture
-*n* is ffmpeg's picture *n*, so neither leads the other. `zfmv::Stream::sound_seconds()` gives the sound's position between
-the 15 fps frames. Each pass, and at each of the script's flips, the
-newest picture at or before it is drawn over the whole window
+waiting, each already in the RGBA order the renderer's textures take, so the
+game's thread uploads a new one without a pass over its pixels. The decoder
+runs in low-latency mode, which holds about 95 MB less; its timestamps are
+wrong for B-frames there, so each picture is timed by the durations of those
+before it, from 0. Measured against ffmpeg's decode of INTRO, the sound
+lines up with no offset at 5, 60, 150 and 180 s (the two AAC decoders'
+sample values differ slightly) and picture *n* is ffmpeg's picture *n*, so
+neither leads the other. `zfmv::Stream::sound_seconds()` gives the sound's
+position between the 15 fps frames. Each pass, and at each of the script's
+flips, the newest picture at or before it is drawn over the whole window
 (`SdlScreen2D::present_frame_rgba`) at its own resolution, not through the
 16-bit buffer. On a window wider than 4:3, the picture keeps the shape's
-rows as `fmv_stretch` keeps a 16-bit movie's: INTRO's rows 79-400 of 480
-are rows 158-801 of the HD clip, filling a 16:9 window's width
+rows as `fmv_stretch` keeps a 16-bit movie's: INTRO's rows 79-400 of 480 are
+rows 158-801 of the HD clip, filling a 16:9 window's width
 (`sdlfe::movie_frame_fit`).
 
 The clip is checked when the script loads and again when it starts. It is
