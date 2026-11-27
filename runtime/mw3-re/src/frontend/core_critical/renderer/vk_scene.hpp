@@ -55,6 +55,8 @@
 #include "sun_world_vert.h"
 #include "surface_detail.hpp"
 #include "surface_materials.hpp"
+#include "texture_memory_report.hpp"
+#include "texture_source.hpp"
 #include "texture_staging.hpp"
 #include "tiled_light_stage.inc"
 #include "world_binding.hpp"
@@ -120,6 +122,8 @@ struct TextureRef {
   TexFormat format;
   std::vector<std::uint16_t> pixels;
   std::vector<std::uint32_t> pixels32;
+  // What the texture holds (#518). Last, so references built without it stay guest surfaces.
+  TextureSource source{TextureSource::guest};
 };
 // Fixed-function state that selects a pipeline: blend enable/source/destination
 // (D3DBLEND), depth enable/function (D3DCMP)/write, cull mode (D3DCULL).
@@ -1278,7 +1282,7 @@ public:
               destroy(texture);
               // Track before create(): a failed allocation can own partial resources.
               allocated_keys.push_back(reference.key);
-              create(texture, reference.width, reference.height);
+              create(texture, reference.width, reference.height, TextureSource::canvas);
           }
       } catch (...) {
           for (const auto key : allocated_keys)
@@ -1561,7 +1565,10 @@ public:
                 if (cached_texture.image && needs_image_allocation)
                     destroy(cached_texture);
                 if (!cached_texture.image)
-                    create(cached_texture, texture_ref.width, texture_ref.height);
+                    create(cached_texture, texture_ref.width, texture_ref.height,
+                           texture_ref.source);
+                // A key the frontend reuses for another kind of texture keeps its image.
+                cached_texture.source = texture_ref.source;
             }
 
             {
@@ -1940,6 +1947,8 @@ private:
                 mw34::materials::normal_hash(t.pixels.data(), t.pixels.size() * 2);
           }
         }
+        // A key the frontend reuses for another kind of texture keeps its image.
+        c.source = t.source;
         changed.push_back({&c, &t});
         texBytes += VkDeviceSize(t.width) * t.height * 4;
       }
@@ -3105,6 +3114,8 @@ private:
     // render_frame_ of the last frame that created or drew this texture;
     // textures unused for long enough are freed when video memory runs out (#496).
     std::uint64_t last_used_frame{};
+    // Set when the image is made; the texture memory line sums by it (#518).
+    TextureSource source{};
   };
 #include "parallax_gpu.inc"
   cc_mw3_re::platform::VulkanLoader loader;
@@ -4111,7 +4122,7 @@ private:
     auto create_once = [&] {
       if (take_play_fault(preload_fault_.fail_next_play_texture_allocations))
         check_allocation(static_cast<VkResult>(preload_fault_.injected_result), "image memory");
-      create(c, t.width, t.height);
+      create(c, t.width, t.height, t.source);
     };
     try {
       create_once();
@@ -4501,6 +4512,9 @@ public:
     const auto block = preload_memory_blocks_.find(texture.memory);
     return {texture.memory_offset, texture.memory_size, texture.memory_alignment,
             block == preload_memory_blocks_.end() ? 0 : block->second.capacity};
+  }
+  TextureSource texture_source_for_test(std::uint64_t key) const {
+    return textures.at(key).source;
   }
   // Copies a resident RGBA8 texture's base level back to the CPU, so checks can
   // compare what reached the card with what the staging copy should have written.
@@ -5320,8 +5334,8 @@ private:
     pool(256);
     // 1x1 opaque white texture for draws without a texture (D3DTA_TEXTURE then
     // reads 1.0).
-    create(white, 1, 1);
-    create(flatNormal, 1, 1);
+    create(white, 1, 1, TextureSource::guest);
+    create(flatNormal, 1, 1, TextureSource::normal);
     ensure(texUpload, 8, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
     const std::uint32_t one = 0xffffffffu;
     const std::uint32_t flat_norm = 0xffff8080u;
@@ -5642,7 +5656,8 @@ private:
       throw;
     }
   }
-  void create(Tex &t, unsigned w, unsigned h) {
+  void create(Tex &t, unsigned w, unsigned h, TextureSource source) {
+    t.source = source;
     t.levels = 1;
     t.last_used_frame = render_frame_;
     if (anisotropy() > 1)
