@@ -262,9 +262,15 @@ def run_scene(
     plan = build_launch(
         definition, scene, output, profile, data_root, runtime, executable, settings
     )
-    if digest_cache is not None:
+    # The game honours only an absolute folder; an empty value turns the cache off
+    # even if the parent environment names one.
+    environment = plan.setdefault("environment", {})
+    if digest_cache is None:
+        environment["MW3_DIGEST_CACHE_DIR"] = ""
+    else:
+        digest_cache = Path(digest_cache).resolve()
         digest_cache.mkdir(parents=True, exist_ok=True)
-        plan.setdefault("environment", {})["MW3_DIGEST_CACHE_DIR"] = str(digest_cache)
+        environment["MW3_DIGEST_CACHE_DIR"] = str(digest_cache)
     if strict:
         plan["argv"].append("--benchmark-strict")
         if strict_capture is not None:

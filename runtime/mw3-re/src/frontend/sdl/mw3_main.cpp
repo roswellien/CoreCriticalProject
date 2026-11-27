@@ -1255,6 +1255,7 @@ int program(int argc, char** argv) {
     }
   } catch (const std::exception& error) {
     platform::derived_cache::default_cache().reconfigure({}, 0, false);
+    platform::derived_cache::digest_cache().reconfigure({}, 0, false);
     std::fprintf(stderr, "mw3: disk cache unavailable: %s; decoding normally\n", error.what());
   }
   zutl::repair_old_names(a.write_dir);

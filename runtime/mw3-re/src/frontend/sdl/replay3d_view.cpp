@@ -554,7 +554,10 @@ void Replay3dView::State::pose() {
   }
   // A benchmark scene with headlights on (platform::arena_headlights): every
   // standing mech's lamps lit, posed after this frame's puppets.
-  if (platform::arena_headlights()) {
+  // Off, the lamps are cleared each frame, so no earlier scene's lamps stay lit.
+  if (!platform::arena_headlights()) {
+    if (auto* renderer = zvid::render3d()) renderer->replay_headlights(nullptr, 0);
+  } else {
     std::vector<const void*> lit;
     for (auto& [id, puppet] : puppets) {
       const MechPose* p = pose_of(frame, id);
