@@ -1275,8 +1275,11 @@ public:
               ensure(replacement, upload_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
           for (const auto &reference : references) {
               auto &texture = textures[reference.key];
+              // A canvas stays RGBA8 (#518): a 16-bit image made for this key
+              // before it became a canvas is remade here, not mid-frame.
               if (texture.image && texture.width == reference.width &&
-                  texture.height == reference.height) {
+                  texture.height == reference.height &&
+                  texture.pack == mw34::texture_staging::Pack16::none) {
                   continue;
               }
               destroy(texture);
@@ -1504,20 +1507,17 @@ public:
         // #518: the content picks the storage format before staging is sized.
         // A reference without its pixels reaches the "without pixels" throw below.
         const std::size_t texel_count = std::size_t(texture_ref.width) * texture_ref.height;
-        const bool rgba8 = texture_ref.format == TexFormat::rgba8888;
-        const bool has_pixels =
-            (rgba8 ? texture_ref.pixels32.size() : texture_ref.pixels.size()) == texel_count;
+        const bool has_pixels = (texture_ref.format == TexFormat::rgba8888
+                                     ? texture_ref.pixels32.size()
+                                     : texture_ref.pixels.size()) == texel_count;
         mw34::texture_staging::Pack16Choice storage{};
         if (has_pixels) {
             mw34::timing::ScopedDuration scan_timer(
                 gpu_resource_timing_.enabled ? &preload_scan_nanoseconds_ : nullptr);
             const auto existing = textures.find(texture_ref.key);
-            const bool has_image = existing != textures.end() && existing->second.image;
-            storage = mw34::texture_staging::choose_pack16(
-                mw34::texture_staging::Pack16Rule::from_content, has_image,
-                has_image ? existing->second.pack : mw34::texture_staging::Pack16::none,
-                rgba8 && mw34::texture_staging::may_pack16(texture_ref.source),
-                texture_ref.pixels32.data(), texel_count, pack16_allowed());
+            storage = choose_storage(mw34::texture_staging::Pack16Rule::from_content,
+                                     existing == textures.end() ? nullptr : &existing->second,
+                                     texture_ref);
         }
         const VkDeviceSize texture_bytes = mw34::texture_staging::staged_bytes(
             texture_ref.width, texture_ref.height, storage.pack);
@@ -1953,10 +1953,7 @@ private:
       // and a 16-bit image whose content no longer fits it becomes RGBA8.
       mw34::texture_staging::Pack16Choice storage{c.pack, false};
       if (needs_upload && has_pixels)
-        storage = mw34::texture_staging::choose_pack16(
-            mw34::texture_staging::Pack16Rule::keep_or_widen, c.image != VK_NULL_HANDLE, c.pack,
-            t.format == TexFormat::rgba8888 && mw34::texture_staging::may_pack16(t.source),
-            t.pixels32.data(), t.pixels32.size(), pack16_allowed());
+        storage = choose_storage(mw34::texture_staging::Pack16Rule::keep_or_widen, &c, t);
       if (c.image && (c.width != t.width || c.height != t.height || storage.recreate))
         destroy(c);
       if (!c.image && !create_play_texture(c, t, storage.pack)) {

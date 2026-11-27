@@ -42,5 +42,23 @@ void probe_pack16_formats() {
 // check switched off. Kept apart so device setup never undoes a check's mask.
 unsigned pack16_allowed() const { return pack16_allowed_ & ~pack16_disabled_for_test_; }
 
+// The storage for an upload of `texture_ref` over `existing` (null when the
+// cache has no entry), under the preload or play rule. Only RGBA8 pixels from a
+// source may_pack16 allows are scanned; anything else is stored as RGBA8, and an
+// existing 16-bit image for it is remade.
+mw34::texture_staging::Pack16Choice choose_storage(mw34::texture_staging::Pack16Rule rule,
+                                                   const Tex *existing,
+                                                   const TextureRef &texture_ref) const {
+  using mw34::texture_staging::Pack16;
+  const bool has_image = existing && existing->image;
+  const bool eligible =
+      texture_ref.format == TexFormat::rgba8888 &&
+      texture_ref.pixels32.size() == std::size_t(texture_ref.width) * texture_ref.height &&
+      mw34::texture_staging::may_pack16(texture_ref.source);
+  return mw34::texture_staging::choose_pack16(
+      rule, has_image, has_image ? existing->pack : Pack16::none, eligible,
+      texture_ref.pixels32.data(), texture_ref.pixels32.size(), pack16_allowed());
+}
+
 unsigned pack16_allowed_{};
 unsigned pack16_disabled_for_test_{};

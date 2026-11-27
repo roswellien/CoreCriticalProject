@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 
 #include "texture_source.hpp"
 
@@ -18,13 +19,18 @@ inline std::uint32_t expand(std::uint16_t p,unsigned format) {
     else {r=((p>>8)&15)*17;g=((p>>4)&15)*17;b=(p&15)*17;a=((p>>12)&15)*17;}
     return r|(g<<8)|(b<<16)|(a<<24);
 }
+// The three tables take 768 KB, so they are built once on the heap: a copy of
+// that size on the stack could overflow the render worker's thread.
 inline const std::array<std::uint32_t,65536>& table(unsigned format) {
-    static const auto tables=[] {
-        std::array<std::array<std::uint32_t,65536>,3> values{};
-        for(unsigned f=0;f<3;++f)for(unsigned p=0;p<65536;++p)values[f][p]=expand(std::uint16_t(p),f);
-        return values;
+    using Tables = std::array<std::array<std::uint32_t, 65536>, 3>;
+    static const std::unique_ptr<const Tables> tables = [] {
+        auto values = std::make_unique<Tables>();
+        for (unsigned staging_format = 0; staging_format < 3; ++staging_format)
+            for (unsigned value = 0; value < 65536; ++value)
+                (*values)[staging_format][value] = expand(std::uint16_t(value), staging_format);
+        return std::unique_ptr<const Tables>(std::move(values));
     }();
-    return tables.at(format);
+    return tables->at(format);
 }
 inline void copy(unsigned char* destination,const std::uint16_t* source,std::size_t count,unsigned format) {
     const auto& lookup=table(format);

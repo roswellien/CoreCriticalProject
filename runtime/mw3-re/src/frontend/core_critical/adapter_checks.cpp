@@ -2092,9 +2092,9 @@ void check_16bit_texture_storage() {
   require(flat.preload_texture(reference(3, 1, four_bit)), "4-bit preload was rejected");
   flat.finalize_preload();
   flat.end_preload();
-  require(flat.texture_format_for_test(3) == Pack16::b4g4r4a4 &&
-              flat.texture_pixels_for_test(3) == packed(four_bit, Pack16::b4g4r4a4),
-          "4-bit content was not stored as B4G4R4A4 without mip chains");
+  require(flat.texture_format_for_test(3) == four_bit_format(flat) &&
+              flat.texture_pixels_for_test(3) == four_bit_texels(flat),
+          "4-bit content was not stored as the device allows without mip chains");
 
   // The checks' mask: every format off, then only B4G4R4A4 off.
   Renderer masked(Renderer::ColorTarget::rgba8, {}, {1, 1, 1, false}, true);
@@ -2153,11 +2153,26 @@ void check_16bit_texture_storage() {
               played.texture_format_for_test(14) == Pack16::none &&
               played.texture_pixels_for_test(14) == opaque,
           "Play narrowed an image or kept a 16-bit format its new content does not fit");
+  // A size change and a format change in one upload: the new image is RGBA8.
+  const TextureRef resized{12, 2, 4, 4, TexFormat::rgba8888, {},
+                           std::vector<std::uint32_t>(16, 0xff010203)};
+  render({resized});
+  require(played.texture_format_for_test(12) == Pack16::none &&
+              played.texture_pixels_for_test(12) == resized.pixels32,
+          "A resized texture with 8-bit content kept its 16-bit format");
   // A canvas image stays RGBA8 even when given exact content.
   played.prepare_canvas_textures({reference(16, 1, {}, TextureSource::canvas)});
   render({reference(16, 1, opaque, TextureSource::canvas)});
   require(played.texture_format_for_test(16) == Pack16::none,
           "A canvas texture was stored at 16 bits");
+  // A key first drawn as a 16-bit guest texture is remade as RGBA8 when it
+  // becomes a canvas, at canvas setup rather than in a later frame.
+  render({reference(17, 1, opaque)});
+  require(played.texture_format_for_test(17) == Pack16::r5g6b5,
+          "Canvas fixture did not start as a 16-bit texture");
+  played.prepare_canvas_textures({reference(17, 2, {}, TextureSource::canvas)});
+  require(played.texture_format_for_test(17) == Pack16::none,
+          "Canvas setup kept a 16-bit image for a canvas");
 }
 
 // The texture memory line prints once per mission, after the first world

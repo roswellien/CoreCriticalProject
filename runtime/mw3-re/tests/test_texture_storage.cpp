@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "frontend/core_critical/renderer/resource_timing.hpp"
 #include "frontend/core_critical/renderer/texture_memory_report.hpp"
 #include "frontend/core_critical/renderer/texture_staging.hpp"
 
@@ -75,6 +76,23 @@ void check_memory_line_sizes() {
   check(line.find("3x3 n=1 1.0 MiB") != std::string::npos &&
             line.find("2x2 n=1") == std::string::npos,
         "The size list is not cut to the eight largest");
+}
+
+// The periodic memory line's gate: nothing while timing is off, the first
+// report at once, then one per interval.
+void check_periodic_gate() {
+  using std::chrono::seconds;
+  const std::chrono::steady_clock::time_point start{};
+  mw34::timing::PeriodicReportGate off;
+  check(!off.should_report(false, start, seconds(3)), "The gate reported with timing off");
+  mw34::timing::PeriodicReportGate gate;
+  check(gate.should_report(true, start, seconds(3)), "The gate held back the first report");
+  check(!gate.should_report(true, start + seconds(2), seconds(3)),
+        "The gate reported again inside the interval");
+  check(gate.should_report(true, start + seconds(3), seconds(3)),
+        "The gate held back a report once the interval passed");
+  check(!gate.should_report(true, start + seconds(5), seconds(3)),
+        "The interval did not restart at the last report");
 }
 
 namespace staging = mw34::texture_staging;
@@ -256,6 +274,7 @@ void check_sources_and_rule() {
 int main() {
   check_memory_line_totals();
   check_memory_line_sizes();
+  check_periodic_gate();
   check_exact_formats();
   check_staging_sizes();
   check_sources_and_rule();
