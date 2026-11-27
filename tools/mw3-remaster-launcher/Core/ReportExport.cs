@@ -116,7 +116,7 @@ public static class ReportExport
         var head = text[..KeptLogHeadChars];
         var lastHeadNewline = head.LastIndexOf('\n');
         if (lastHeadNewline >= 0) head = head[..(lastHeadNewline + 1)];
-        var tail = PlaytestDiagnostics.SliceTailOnLineBoundary(text[KeptLogHeadChars..], tailChars);
+        var tail = UploadLogCuts.SliceTailOnLineBoundary(text[KeptLogHeadChars..], tailChars);
         return head + CutMarker + "\n" + tail;
     }
 

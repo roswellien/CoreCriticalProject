@@ -8,40 +8,6 @@ using Microsoft.Win32;
 
 namespace MW3RemasterLauncher.Core;
 
-/// <summary>
-/// A file's identity before launch (whether it existed, its times and length), so the
-/// launcher can tell a file this session wrote from one left over by an earlier run.
-/// </summary>
-public sealed record FileStamp(string Path, bool Existed, DateTime CreationTimeUtc,
-    DateTime LastWriteTimeUtc, long Length)
-{
-    /// <summary>The file's stamp now; a missing file or one reached through a link counts as absent.</summary>
-    public static FileStamp Capture(string path)
-    {
-        try
-        {
-            if (File.Exists(path) && !PlaytestDiagnostics.HasLinkInChain(path))
-            {
-                var info = new FileInfo(path);
-                return new FileStamp(path, true, info.CreationTimeUtc, info.LastWriteTimeUtc, info.Length);
-            }
-        }
-        catch { }
-        return new FileStamp(path, false, DateTime.MinValue, DateTime.MinValue, 0);
-    }
-
-    /// <summary>True when the file exists now and wasn't there, or differs from this stamp.</summary>
-    public bool ChangedSince()
-    {
-        var now = Capture(Path);
-        if (!now.Existed) return false;
-        return !Existed ||
-            now.LastWriteTimeUtc != LastWriteTimeUtc ||
-            now.CreationTimeUtc != CreationTimeUtc ||
-            now.Length != Length;
-    }
-}
-
 /// <summary>Pre-launch profile state so current-session native logs can be separated from stale prior runs.</summary>
 public sealed record NativeSessionDiagnosticsBaseline(
     string WriteDirectory,
@@ -399,9 +365,13 @@ public static class PlaytestDiagnostics
             var text = TryReadRedactedTail(path, roots);
             if (string.IsNullOrEmpty(text)) continue;
             var cap = Math.Min(MaxLogBytes, remainingBudget);
-            if (text.Length > cap)
+            if (wireKey == "native_run")
             {
-                text = wireKey == "native_crash" ? text[..cap] : SliceTailOnLineBoundary(text, cap);
+                text = UploadLogCuts.WithLastHealthLines(path, text, cap, roots);
+            }
+            else if (text.Length > cap)
+            {
+                text = UploadLogCuts.CutLog(wireKey, text, cap);
             }
             if (text.Length == 0) continue;
             logs[wireKey] = text;
@@ -424,17 +394,10 @@ public static class PlaytestDiagnostics
     internal static string SessionLogPath(string launchLog, string sessionFolder, string relativePath) =>
         relativePath.Length == 0 ? launchLog : Path.Combine(sessionFolder, relativePath);
 
-    internal static string SliceTailOnLineBoundary(string text, int maxChars)
-    {
-        if (text.Length <= maxChars) return text;
-        var sliced = text[^maxChars..];
-        var newline = sliced.IndexOf('\n');
-        return newline >= 0 && newline + 1 < sliced.Length ? sliced[(newline + 1)..] : sliced;
-    }
-
     private static void TrimLogsToFitRequest(Dictionary<string, string> logs, Func<Dictionary<string, string>, object> buildPayload)
     {
-        var trimOrder = new[] { "native_stdout", "launcher", "native_stderr", "native_run", "native_crash" };
+        // The problems log is cut last; the header is never cut, since ReportHeader's own limits bound its size.
+        var trimOrder = new[] { "native_stdout", "launcher", "native_stderr", "native_run", "native_crash", "native_problems" };
         var webOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         for (var attempt = 0; attempt < 16; attempt++)
         {
@@ -453,9 +416,7 @@ public static class PlaytestDiagnostics
             else
             {
                 var nextLen = Math.Max(0, current.Length - cut);
-                logs[targetKey] = targetKey == "native_crash"
-                    ? current[..nextLen]
-                    : SliceTailOnLineBoundary(current, nextLen);
+                logs[targetKey] = UploadLogCuts.CutLog(targetKey, current, nextLen);
                 if (logs[targetKey].Length == 0) logs.Remove(targetKey);
             }
         }
@@ -466,9 +427,10 @@ public static class PlaytestDiagnostics
         try
         {
             if (!File.Exists(path)) return "";
-            var raw = Path.GetFileName(path).Equals(NativeRunFileName, StringComparison.OrdinalIgnoreCase)
-                ? ReadLogForSession(path)
-                : ReadTail(path);
+            var fileName = Path.GetFileName(path);
+            var keepsStartAndEnd = fileName.Equals(NativeRunFileName, StringComparison.OrdinalIgnoreCase) ||
+                fileName.Equals(NativeProblemsFileName, StringComparison.OrdinalIgnoreCase);
+            var raw = keepsStartAndEnd ? ReadLogForSession(path) : ReadTail(path);
             return string.IsNullOrEmpty(raw) ? "" : Redact(raw, roots);
         }
         catch
