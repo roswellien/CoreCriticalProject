@@ -680,11 +680,11 @@ class Engine : public zgame::AppHooks {
   }
   virtual void hud_update() { unported("0x0040fac0", {}); }
   // Ours (#485, docs/fixed-step.md): with the fixed step, the part of the
-  // HUD's frame that is simulation, the viewed mech's arms aimed at the
-  // reticle's point (0x0041cd40), run once a step instead of in hud_update.
-  // `in_steps` false puts it back in hud_update (one step a drawn frame).
-  virtual void hud_aim_in_steps(bool in_steps) { (void)in_steps; }
-  virtual void hud_aim() {}
+  // HUD's frame that is simulation, the viewed mech's missile lock and its
+  // arms aimed at the reticle's point (0x0041cd40), runs once a step
+  // (hud_step) instead of in hud_update. `in_steps` false puts it back there.
+  virtual void hud_in_steps(bool in_steps) { (void)in_steps; }
+  virtual void hud_step() {}
   virtual void hud_draw() { unported("0x0040e4b0", {}); }
   virtual void shadows_reset() { unported("0x004e6900", {}); }
   virtual void ai_on() { unported("0x004ea740", {}); }  // the AI switch on (ai::ai_switch_on)

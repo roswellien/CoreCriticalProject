@@ -1230,7 +1230,8 @@ text console layer of the interp's debug console (twod.md). The program
 runs it as one call (`GameEngine::hud_update`): the view target's frame,
 the message panel and the pocket commander; the developer pieces are left
 out. With the fixed step (#485, fixed-step.md) the view target's frame leaves
-out its arms' aim (`hud_aim`), which runs once per 1/30 s step instead.
+out its missile lock and its arms' aim (`hud_step`), which run once per
+1/30 s step instead.
 
 **0x5a6790 / 0x5a67c0 are not the HUD's**: both take the object at
 [0x736328], the manager the mission's weather is added to (0x59fbe0;

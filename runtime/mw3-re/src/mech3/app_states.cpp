@@ -475,11 +475,11 @@ void CoreState::run_fixed_steps() {
     world_tick(en);
     en.arena_tick();                      // an arena match's log and end, on the step's time (#287)
     zcls::interp::prepare_cameras();      // the cameras' part of the draw the simulation reads
-    // The viewed mech's arms aimed at the step's reticle point, which the
-    // original's HUD frame did in each frame's draw after its cameras
-    // (0x0041cd40): once a step, so no step of a several-step frame runs with
-    // them on an older point. The rest of the HUD's frame draws, so stays there.
-    en.hud_aim();
+    // The viewed mech's missile lock and its arms aimed at the step's
+    // reticle point, which the original's HUD frame did in each frame's draw
+    // after its cameras (0x0041cd40): once a step, on the step's time. The
+    // rest of the HUD's frame draws as it updates, so stays in the draw.
+    en.hud_step();
     zcls::interp::settle_world_caches();  // the caches the original's draw rebuilt each frame
     // The step's transforms, for drawing between steps (none drawn in a hidden arena run).
     if (!arena::arena_headless()) zcls::interp::record();
@@ -514,7 +514,7 @@ bool CoreState::frame() {
   const bool fixed = fixed_step_enabled() && !replay;
   std::optional<crt::DrawnFrameRandom> drawn_frame_random;
   world_tick_in_draw_ = !fixed;
-  en.hud_aim_in_steps(fixed);
+  en.hud_in_steps(fixed);
   if (fixed) {
     run_fixed_steps();
     drawn_frame_random.emplace();

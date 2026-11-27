@@ -1038,8 +1038,8 @@ void* program_hud_node_object(void* node) { return hud_hooks().node_object(node)
 void program_hud_update(float dt) {
   if (Mech* m = program_view_mech()) hud_handoff(*m, dt);
 }
-void program_hud_aim() {
-  if (Mech* m = program_view_mech()) hud_aim(*m);
+void program_hud_step(float dt) {
+  if (Mech* m = program_view_mech()) hud_step(*m, dt);
 }
 
 void program_hud_force_over(bool on) { g_hooks.force_over = on; }

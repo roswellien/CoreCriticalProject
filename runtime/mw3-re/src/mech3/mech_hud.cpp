@@ -47,29 +47,26 @@ void player_frame(Mech& m) {
     g_calls.zoom_camera(m, 0x14);
 }
 
-namespace {
-// Ours (#485): set while the fixed step runs hud_aim once a step.
-bool g_aim_in_steps = false;
-}  // namespace
-
-void set_hud_aim_in_steps(bool in_steps) { g_aim_in_steps = in_steps; }
-
-// The second half of 0x0041cd40: the weapons aimed at the reticle's point
-// (not while +0x638 is set). The point is the step's (player_frame's pick);
-// aimed from a draw between steps, a frame of two steps would run the second
-// with the arms on the point before (#485's c2m1 runs at 50 and 100 ms).
-void hud_aim(Mech& m) {
-  Hud* h = viewed_hud(m);
-  if (h && m.hud_fall == 0) aim_at_point(m, h->reticle.aim_point, true);
-}
-
 // Mech3.exe 1.2 @ 0x0041cd40: the HUD's frame, then the weapons aimed at the
-// reticle's point (hud_aim; with the fixed step, run by the steps instead).
+// reticle's point (not while +0x638 is set). With the fixed step the aim and
+// the HUD frame's lock run in hud_step instead.
 void hud_handoff(Mech& m, float dt) {
   Hud* h = viewed_hud(m);
   if (!h) return;
   h->update(dt);  // vt+0x00, 0x0043c820
-  if (!g_aim_in_steps) hud_aim(m);
+  if (!hud_in_steps() && m.hud_fall == 0) aim_at_point(m, h->reticle.aim_point, true);
+}
+
+// Ours (#485, docs/fixed-step.md): 0x0041cd40's simulation once a 1/30 s
+// step, in its order: the missile lock, then the weapons aimed at the
+// reticle's point, the step's (player_frame's pick). Left in the drawn frame,
+// a frame of two steps ran the second with the arms on the point before
+// (#485's c2m1 runs at 50 and 100 ms) and the lock's wait counted drawn time.
+void hud_step(Mech& m, float dt) {
+  Hud* h = viewed_hud(m);
+  if (!h) return;
+  h->lock_step(dt);
+  if (m.hud_fall == 0) aim_at_point(m, h->reticle.aim_point, true);
 }
 
 // Mech3.exe 1.2 @ 0x0041d940: the intercept of a shot at the weapon's speed

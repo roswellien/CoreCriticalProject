@@ -16,22 +16,31 @@ zero or more steps, then draws once.
 callbacks it fires; the action lists (`lists_update`: the player, mechs,
 vehicles, turrets, sequences, effect animations, mission objects);
 `world_tick` (sensors, missions, the pilot, the camera, an arena spectator's
-camera); the cameras' part of the draw (below); the viewed mech's arms aimed
-at the reticle's point (`hud_aim`); the clock copies `sync_frame_step` makes
-for the mech, weapon and hit modules; and the step log.
+camera); the cameras' part of the draw (below); the viewed mech's missile
+lock and its arms aimed at the reticle's point (`hud_step`); the clock copies
+`sync_frame_step` makes for the mech, weapon and hit modules; and the step log.
 
-The HUD's frame (`hud_update`, 0x0040fac0) ends by pointing the player's arms
-at the reticle's aim point (`hud_handoff`, 0x0041cd40), which the mech update
-picks each step (`player_frame`). The original ran it in each frame's draw, so
-once a step at its 30 fps. Left in the drawn frame, it matched at 30 fps and up
-(a draw always falls between two steps) but not below: a frame of two steps ran
-the second with the arms still on the point before, and in c2m1 a shot hit
-0.1 mm apart at step 1316 at 50 and 100 ms frames. So with the fixed step the
-aim runs once a step, after `prepare_cameras`, and `hud_handoff` leaves it out
-(`set_hud_aim_in_steps`). The rest of the HUD's frame stays in the drawn frame:
-its 2D parts draw themselves as they update (the radar's blips are blitted in
-`HudRadar::update`). The missile lock's timer there still counts drawn frames'
-time, so a lock can come a step apart between frame rates.
+The HUD's frame (`hud_update`, 0x0040fac0) holds two pieces of simulation.
+It runs the missile lock (`HudReticle::aim_state` and its 0.6 s wait), which
+decides whether the weapons fire locked, and it ends by pointing the player's
+arms at the reticle's aim point (`hud_handoff`, 0x0041cd40), which the mech
+update picks each step (`player_frame`). The original ran it in each frame's
+draw, so once a step at its 30 fps. Left in the drawn frame, the aim matched at
+30 fps and up (a draw always falls between two steps) but not below: a frame
+of two steps ran the second with the arms still on the point before, and in
+c2m1 a shot hit 0.1 mm apart at step 1316 at 50 and 100 ms frames. The lock's
+wait counted drawn frames' time, so a lock could come a step apart between
+frame rates. So with the fixed step both run once a step, after
+`prepare_cameras`, in the original's order (`hud_step`: `Hud::lock_step`, then
+the aim), and the drawn frame's HUD update leaves them out (`hud_in_steps`).
+The zoom window's light, which read the reticle's state between the lists and
+the lock, reads it as the last step left it (`state_seen`). The rest of the
+HUD's frame stays in the drawn frame: its 2D parts draw themselves as they
+update (the radar's blips are blitted in `HudRadar::update`). One input of the
+lock still comes from the drawn frame: whether the reticle is over the target
+reads TARGET's bracket where it was last drawn, which the HUD places as it
+draws, so with the reticle at the bracket's very edge the answer can differ by
+a pixel's worth between frame rates.
 
 A 3D replay (`--replay3d`) runs as before #485, one pass of the lists a drawn
 frame with the replay's hooks around it: it simulates nothing (every mech is

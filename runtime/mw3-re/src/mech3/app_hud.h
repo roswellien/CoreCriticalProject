@@ -14,7 +14,7 @@ void unwire_hud();
 void program_radar_light(void* mech);  // 0x0041ded0, a mech's vt+0xb8: the HUD's passive light
 void* program_hud_node_object(void* node);  // for the tests: the HUD's reticle pick (0x0040e920 through its hooks)
 void program_hud_update(float dt);
-void program_hud_aim();  // ours (#485): the view's mech's arms aimed at its reticle's point (hud_aim)
+void program_hud_step(float dt);  // ours (#485): the view's mech's lock and aim once a step (hud_step)
 void program_hud_weapons_layout(void* hud);  // 0x00446240 on its +0x6520
 void* program_pilot_hud(void* mech_data);        // 0x00430aa0 on a MechData (null: null)
 // For the tests: a mech's cockpit HUD on (its layer's +0x04) and its reticle
