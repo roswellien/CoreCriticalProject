@@ -1382,6 +1382,14 @@ test("rejects a clean-exit report without a problems log", async () => {
     for (const logs of [
         { native_run: "RUN_LOG\n" },
         { native_run: "RUN_LOG\n", native_problems: " \n\t" },
+        // Only the setup header (level I), as a clean run's problems log holds.
+        {
+            native_run: "RUN_LOG\n",
+            native_problems:
+                "[0.512] I mw3: header resolution=1920x1080\n[0.512] I mw3: header hdr=0\n",
+        },
+        // Plain text without the game's stamp.
+        { native_run: "RUN_LOG\n", native_problems: "something went wrong\nW not stamped\n" },
     ]) {
         githubResponder();
         const response = await onRequestPost({

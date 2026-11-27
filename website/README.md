@@ -88,10 +88,13 @@ one-time prompt. The endpoint targets a dedicated private repository such as
 mode, exit code and message, reopens closed matching issues, and adds issues to
 the configured Project V2 board through that board's built-in auto-add
 workflow. The generic unexpected-exit message is never grouped. Reports from a
-clean exit (exit code 0) are accepted only when they carry the game's problems
-log, and are titled "Problems" instead of "Crash"; their failure summary is the
-log's first error line (or first warning), so they group by problem like
-crashes. The launcher
+clean exit (exit code 0) are accepted only when the game's problems log they
+carry holds at least one warning or error line (`[<seconds>] W ...` or
+`[<seconds>] E ...`; its setup header lines alone don't count), and are titled
+"Problems" instead of "Crash"; their failure summary is the log's first error
+line (or first warning), so they group by problem like crashes. They share the
+daily new-issue limit with crash reports; if they start crowding out crashes,
+lower their share or give them a limit of their own. The launcher
 displays a short report ID, not a private GitHub URL.
 
 New crash issues are capped at 20 per UTC day by default. The cap is reserved
