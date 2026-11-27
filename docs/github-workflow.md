@@ -409,7 +409,10 @@ checklist issue. A live feed by itself is not a completed release.
    [Discord release observer](../.github/workflows/discord-release-detect.yml).
    For a preview, use the matching `vX.Y.Z-preview` tag and prerelease flag;
    for a stable build, use `vX.Y.Z`. Check whether the tag or release already
-   exists; do not move existing tags or create duplicates.
+   exists. If a tag exists, resolve it to its commit (peel an annotated tag)
+   and compare the commit SHA with the signed build receipt before publishing.
+   If it differs, stop and report the mismatch; changing the release target
+   does not override an existing tag. Do not move tags or create duplicates.
 2. Describe player-facing launcher and bundled MW3-RE changes in the release
    notes. End the notes with `<!-- corecritical-discord-targets: corecritical=X.Y.Z -->`,
    substituting the numeric signed launcher version, without the tag suffix.
