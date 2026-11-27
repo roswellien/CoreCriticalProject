@@ -41,6 +41,7 @@
 #include "model_scene_vert.h"
 #include "native_geometry_vert.h"
 #include "native_texture_identity.hpp"
+#include "platform/rgb565.hpp"
 #include "platform/vk_loader.hpp"
 #include "platform/wsi_surface.hpp"
 #include "platform/wsi_win32_dxgi.hpp"

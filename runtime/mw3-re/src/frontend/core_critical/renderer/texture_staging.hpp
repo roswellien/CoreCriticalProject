@@ -65,9 +65,9 @@ inline void copy(unsigned char* destination,const std::uint16_t* source,std::siz
 // rounded down (platform/rgb565.hpp, called by frame_renderer.cpp's
 // image_pixels). Dropping each channel's low bits undoes either widening
 // exactly, so such a texture can go to the card at 2 bytes per texel and
-// sample the same 16-bit values it came from. The
-// frontend says which format each texture's texels came from (TextureRef's
-// pack16); nothing reads the texels to work it out.
+// sample the same 16-bit values it came from. The frontend says which format
+// each texture's texels came from (TextureRef's pack16); nothing reads the
+// texels to work it out.
 enum class Pack16 : std::uint8_t { none, r5g6b5, a1r5g5b5, b4g4r4a4 };
 
 // Bit flags for masks of 16-bit formats (which ones a device can use).

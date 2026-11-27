@@ -152,6 +152,17 @@ void check_pack_formats() {
   // The shared widening (platform/rgb565.hpp) that pack replacements, prepared
   // skins and the renderer's RGB565 inputs all use.
   check_round_trip(Pack16::r5g6b5, "R5G6B5 widened by rounding down", r5g6b5_rounded, r5g6b5);
+  // The round trip above also holds for other roundings, so pin the values:
+  // 16 of 31 widens to 131 (bit repetition would give 132) and 32 of 63 to 129;
+  // the HUD's premultiplied form scales by alpha and rounds to nearest.
+  namespace rgb565 = ::platform::rgb565;
+  check(rgb565::to_rgba8(0x0000) == 0xff000000u && rgb565::to_rgba8(0xffff) == 0xffffffffu &&
+            rgb565::to_rgba8(0x8410) == 0xff838183u && rgb565::to_rgba8(0x8410, 7) == 0x07838183u,
+        "The shared RGB565 widening no longer gives c * 255 / max rounded down");
+  check(rgb565::to_premultiplied_rgba8(0xffff, 128) == 0x80808080u &&
+            rgb565::to_premultiplied_rgba8(0x8410, 255) == 0xff838183u &&
+            rgb565::to_premultiplied_rgba8(0x8410, 0) == 0,
+        "The shared premultiplied RGB565 widening changed");
   check_round_trip(Pack16::a1r5g5b5, "A1R5G5B5 widened by bit replication",
                    a1r5g5b5_replicated, a1r5g5b5);
   check_round_trip(Pack16::a1r5g5b5, "A1R5G5B5 widened by rounding down", a1r5g5b5_rounded,
