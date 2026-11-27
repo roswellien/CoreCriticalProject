@@ -505,8 +505,238 @@ static class PlaytestSupportChecks
                         "Active native export ZIP leaked private path or dump content in " + entry.FullName);
                 }
             }
+            ReportContentChecks(root, settings.Current, app, Check);
             Console.WriteLine("Settings migration/recovery, update preservation, bounded/redacted diagnostics and fast-exit checks passed.");
         }
         finally { PackStorage.DeleteOwnedTree(root); }
+    }
+
+    /// <summary>
+    /// Whole-log collection and export, the 19 MB export cap, upload order, the setup header
+    /// and clean-exit problems (issue 521). Authored fixtures only; large logs are written into
+    /// the temporary root when the check runs and deleted with it.
+    /// </summary>
+    private static void ReportContentChecks(string root, LauncherSettings settings, string app,
+        Action<bool, string> Check)
+    {
+        static string NewSession(string root, string name, string launcherLog)
+        {
+            var session = Path.Combine(root, name);
+            Directory.CreateDirectory(Path.Combine(session, "native"));
+            var log = Path.Combine(session, "mw3-re.log");
+            File.WriteAllText(log, launcherLog);
+            return log;
+        }
+        static string ReadEntry(ZipArchive zip, string name)
+        {
+            using var reader = new StreamReader(zip.GetEntry(name)!.Open());
+            return reader.ReadToEnd();
+        }
+        static string Lines(string prefix, int count) =>
+            string.Concat(Enumerable.Range(0, count).Select(index => $"{prefix} line {index:D7}\n"));
+
+        // A clean-exit session copies mw3.log, mw3.old.log and mw3-problems.log whole, and a
+        // problems log left over from an earlier run is skipped.
+        var profile = Path.Combine(root, "profile-521");
+        Directory.CreateDirectory(profile);
+        var gameLog = Path.Combine(profile, PlaytestDiagnostics.NativeRunFileName);
+        var oldGameLog = Path.Combine(profile, PlaytestDiagnostics.NativeOldRunFileName);
+        var problemsLog = Path.Combine(profile, PlaytestDiagnostics.NativeProblemsFileName);
+        File.WriteAllText(problemsLog, "[1.0] E stale problem from an earlier run\n");
+        var staleProblemsBaseline = PlaytestDiagnostics.CaptureNativeBaseline(profile);
+        var wholeGameLog = Lines("mw3: session", 200_000); // About 5 MB, far past the 64 KB upload cut.
+        File.WriteAllText(gameLog, wholeGameLog);
+        File.WriteAllText(oldGameLog, "mw3: previous session\n");
+        var staleProblemsSession = Path.GetDirectoryName(NewSession(root, "session-521-stale-problems", "launcher\n"))!;
+        PlaytestDiagnostics.CollectNativeSessionArtifacts(staleProblemsBaseline, staleProblemsSession);
+        Check(File.ReadAllText(Path.Combine(staleProblemsSession, "native", "mw3.log")) == wholeGameLog &&
+            File.Exists(Path.Combine(staleProblemsSession, "native", "mw3.old.log")) &&
+            !File.Exists(Path.Combine(staleProblemsSession, "native", "mw3-problems.log")),
+            "A session did not copy the whole mw3.log and mw3.old.log, or copied a stale problems log");
+
+        var cleanBaseline = PlaytestDiagnostics.CaptureNativeBaseline(profile);
+        var problemsText = "[0.5] W startup warning\n[3.0] W play warning\n[4.0] E play error\n";
+        File.WriteAllText(problemsLog, problemsText);
+        File.AppendAllText(gameLog, "mw3: this session\n");
+        var cleanLauncherLog = NewSession(root, "session-521-clean", "MW3-RE launcher fixture\n");
+        var cleanSession = Path.GetDirectoryName(cleanLauncherLog)!;
+        PlaytestDiagnostics.CollectNativeSessionArtifacts(cleanBaseline, cleanSession);
+        Check(File.ReadAllText(Path.Combine(cleanSession, "native", "mw3.log")) == wholeGameLog + "mw3: this session\n" &&
+            File.ReadAllText(Path.Combine(cleanSession, "native", "mw3.old.log")) == "mw3: previous session\n" &&
+            File.ReadAllText(Path.Combine(cleanSession, "native", "mw3-problems.log")) == problemsText,
+            "A clean-exit session did not get all three game files whole");
+
+        // Problems after the first frame prompt; startup ones don't. The clean-exit summary
+        // prefers the first E line over earlier W lines, and crashes keep their old summary.
+        Check(GameProblemsLog.PlayProblems(cleanSession, 2000).SequenceEqual(
+                new[] { "[3.0] W play warning", "[4.0] E play error" }) &&
+            GameProblemsLog.PlayProblems(cleanSession, null).Count == 0 &&
+            GameProblemsLog.PlayProblems(cleanSession, 5000).Count == 0 &&
+            GameProblemsLog.PlayProblems(staleProblemsSession, 0).Count == 0,
+            "Play problems included startup lines, or prompted without a first frame or a problems log");
+        Check(PlaytestDiagnostics.FailureSummary(cleanLauncherLog, 0) == "play error" &&
+            PlaytestDiagnostics.FailureSummary(cleanLauncherLog, 7) == PlaytestDiagnostics.GenericFailureSummary,
+            "Clean-exit summary did not take the first E line, or a crash summary used the problems log");
+
+        // Export Report keeps a 5 MB log whole, and the new files get their own zip names.
+        var wholeZip = Path.Combine(root, "report-521-whole.zip");
+        ReportExport.Export(wholeZip, settings, Array.Empty<PackManifest>(), cleanLauncherLog, app, exitCode: 0);
+        using (var zip = ZipFile.OpenRead(wholeZip))
+        {
+            Check(zip.Entries.Select(entry => entry.FullName).Order().SequenceEqual(new[]
+                {
+                    "launcher.log", "native-mw3-problems.log", "native-mw3.log", "native-mw3.old.log", "report.json"
+                }),
+                "Export did not include the problems log and old game log under their zip names");
+            Check(ReadEntry(zip, "native-mw3.log") == wholeGameLog + "mw3: this session\n",
+                "Export cut a 5 MB game log");
+        }
+
+        // Logs that would pass 19 MB are cut so the zip fits, each keeping its first 1 MB and its
+        // end. Random text keeps the zip from compressing the logs away.
+        var bigLauncherLog = NewSession(root, "session-521-big", "launcher\n");
+        var bigNative = Path.Combine(Path.GetDirectoryName(bigLauncherLog)!, "native");
+        var random = new Random(521);
+        string RandomLog(int megabytes)
+        {
+            var bytes = new byte[megabytes * 1024 * 1024 * 3 / 4];
+            random.NextBytes(bytes);
+            return Convert.ToBase64String(bytes, Base64FormattingOptions.InsertLineBreaks).Replace("\r\n", "\n") +
+                "\nlast line of the log\n";
+        }
+        var bigLogs = new Dictionary<string, string>
+        {
+            ["native-mw3.log"] = RandomLog(20),
+            ["native-mw3.old.log"] = RandomLog(6)
+        };
+        File.WriteAllText(Path.Combine(bigNative, "mw3.log"), bigLogs["native-mw3.log"]);
+        File.WriteAllText(Path.Combine(bigNative, "mw3.old.log"), bigLogs["native-mw3.old.log"]);
+        var cutZip = Path.Combine(root, "report-521-cut.zip");
+        ReportExport.Export(cutZip, settings, Array.Empty<PackManifest>(), bigLauncherLog, app);
+        Check(new FileInfo(cutZip).Length <= ReportExport.MaxExportZipBytes, "Export zip passed 19 MB");
+        using (var zip = ZipFile.OpenRead(cutZip))
+        {
+            var cutCount = 0;
+            foreach (var (name, original) in bigLogs)
+            {
+                var exported = ReadEntry(zip, name);
+                if (exported == original) continue;
+                cutCount++;
+                var head = original[..ReportExport.KeptLogHeadChars];
+                head = head[..(head.LastIndexOf('\n') + 1)];
+                Check(exported.StartsWith(head + ReportExport.CutMarker, StringComparison.Ordinal) &&
+                    exported.EndsWith("\nlast line of the log\n", StringComparison.Ordinal),
+                    "A cut export log lost its first 1 MB or its end: " + name);
+            }
+            Check(cutCount > 0, "Export cut no log although the zip would pass 19 MB");
+        }
+
+        // The setup header: every game line parsed; unknown keys, malformed values, later
+        // duplicates and heaps without a budget skipped; strings redacted and cut to 80.
+        var headerLog = Path.Combine(root, "header-mw3.log");
+        File.WriteAllText(headerLog,
+            "[0.10] I mw3: header vulkan_device=Example GPU 9000\n" +
+            "mw3: header vulkan_device=Second device ignored\n" +
+            "mw3: header vulkan_api_version=1.3.280\n" +
+            "mw3: header vulkan_driver_version=560.94.0.0\n" +
+            "mw3: header heap index=0 size_bytes=12884901888 budget_bytes=11811160064 device_local=1\n" +
+            "mw3: header heap index=1 size_bytes=34359738368 device_local=0\n" +
+            "mw3: header heap index=2 size_bytes=268435456 budget_bytes=201326592 device_local=0\n" +
+            "mw3: header resolution=wide\n" +
+            "mw3: header resolution=2560x1080\n" +
+            "mw3: header window_mode=borderless\n" +
+            "mw3: header refresh_hz=144\n" +
+            "mw3: header hdr=1\n" +
+            "mw3: header favorite_color=blue\n");
+        var privateDevice = @"C:\Users\Jane Doe\" + new string('x', 200);
+        var packs = new[]
+        {
+            new PackManifest { Id = "test.textures", IsEnabled = true, Files = new Dictionary<string, PackFile>
+            {
+                ["textures/a.dds"] = new PackFile { Bytes = 1000 },
+                ["textures/b.PNG"] = new PackFile { Bytes = 24 },
+                ["audio/c.wav"] = new PackFile { Bytes = 5000 }
+            } },
+            new PackManifest { Id = "test.disabled", IsEnabled = false, Files = new Dictionary<string, PackFile>
+            {
+                ["textures/a.dds"] = new PackFile { Bytes = 7 }
+            } },
+            new PackManifest { Id = "test.no-files", IsEnabled = true }
+        };
+        var roots = PlaytestDiagnostics.ReportRoots(settings, app);
+        var header = ReportHeader.Build(headerLog, packs, new[] { "Flight Stick", privateDevice }, roots);
+        var webOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        using (var headerDoc = JsonSerializer.SerializeToDocument(header, webOptions))
+        {
+            var h = headerDoc.RootElement;
+            var heaps = h.GetProperty("heaps");
+            var devices = h.GetProperty("input_devices");
+            Check(h.GetProperty("vulkan_device").GetString() == "Example GPU 9000" &&
+                h.GetProperty("vulkan_api_version").GetString() == "1.3.280" &&
+                h.GetProperty("vulkan_driver_version").GetString() == "560.94.0.0" &&
+                heaps.GetArrayLength() == 2 &&
+                heaps[0].GetProperty("index").GetInt32() == 0 &&
+                heaps[0].GetProperty("size_bytes").GetInt64() == 12884901888 &&
+                heaps[0].GetProperty("budget_bytes").GetInt64() == 11811160064 &&
+                heaps[0].GetProperty("device_local").GetBoolean() &&
+                heaps[1].GetProperty("index").GetInt32() == 2 &&
+                h.GetProperty("resolution").GetString() == "2560x1080" &&
+                h.GetProperty("window_mode").GetString() == "borderless" &&
+                h.GetProperty("refresh_hz").GetInt32() == 144 &&
+                h.GetProperty("hdr").GetBoolean() &&
+                !h.TryGetProperty("favorite_color", out _),
+                "Report header did not parse the game's header lines as the contract says: " + h);
+            var packTextures = h.GetProperty("pack_texture_bytes");
+            Check(packTextures.GetArrayLength() == 1 &&
+                packTextures[0].GetProperty("id").GetString() == "test.textures" &&
+                packTextures[0].GetProperty("bytes").GetInt64() == 1024,
+                "Report header pack texture sizes counted non-textures, disabled packs or packs without files");
+            Check(devices.GetArrayLength() == 2 && devices[0].GetString() == "Flight Stick" &&
+                devices[1].GetString()!.Length <= ReportHeader.MaxTextLength &&
+                !devices[1].GetString()!.Contains("Jane Doe", StringComparison.Ordinal),
+                "Report header input device names were not redacted and cut to 80 characters");
+        }
+        var launcherFactsOnly = ReportHeader.Build(Path.Combine(root, "missing-mw3.log"), packs.Take(2),
+            Array.Empty<string>(), roots);
+        Check(launcherFactsOnly.Keys.SequenceEqual(new[] { "pack_texture_bytes" }),
+            "A header without game lines held more than pack texture sizes");
+
+        // The upload stays within 256 KB, keeps the problems log's first E line and last line,
+        // leads with the header, and puts the last health lines first in the game log.
+        var uploadLauncherLog = NewSession(root, "session-521-upload", Lines("launcher", 20_000));
+        var uploadNative = Path.Combine(Path.GetDirectoryName(uploadLauncherLog)!, "native");
+        File.WriteAllText(Path.Combine(uploadNative, "mw3-problems.log"),
+            "[2.0] E first trouble\n" + Lines("[3.0] W repeated warning", 8_000) + "[900.0] W last problem\n");
+        File.WriteAllText(Path.Combine(uploadNative, "mw3.log"),
+            Lines("mw3: early", 5_000) + "mw3: health frame=1 vram=100\n" + Lines("mw3: middle", 20_000) +
+            "mw3: health frame=2 vram=200\n" + Lines("mw3: late", 5_000));
+        File.WriteAllText(Path.Combine(uploadNative, "stderr.txt"), Lines("stderr", 20_000));
+        File.WriteAllText(Path.Combine(uploadNative, "stdout.txt"), Lines("stdout", 20_000));
+        var upload = PlaytestDiagnostics.CreateCrashReport(settings, Array.Empty<PackManifest>(), uploadLauncherLog,
+            app, "1.2.3", 0, new HardwareInventoryData(Array.Empty<ProcessorInventory>(), null,
+                Array.Empty<GraphicsAdapterInventory>()), header);
+        var uploadBytes = JsonSerializer.SerializeToUtf8Bytes(upload, webOptions);
+        Check(uploadBytes.Length <= PlaytestDiagnostics.MaxRequestBytes, "Upload passed 256 KB: " + uploadBytes.Length);
+        using (var uploadDoc = JsonDocument.Parse(uploadBytes))
+        {
+            var u = uploadDoc.RootElement;
+            var fieldNames = u.EnumerateObject().Select(property => property.Name).Take(2).ToArray();
+            var logs = u.GetProperty("logs");
+            var problems = logs.GetProperty("native_problems").GetString()!;
+            var run = logs.GetProperty("native_run").GetString()!;
+            Check(fieldNames.SequenceEqual(new[] { "format_version", "header" }) &&
+                u.GetProperty("header").GetProperty("vulkan_device").GetString() == "Example GPU 9000" &&
+                u.GetProperty("header").GetProperty("heaps").GetArrayLength() == 2,
+                "Upload did not lead with the whole header");
+            Check(logs.EnumerateObject().First().Name == "native_problems" &&
+                problems.StartsWith("[2.0] E first trouble\n", StringComparison.Ordinal) &&
+                problems.EndsWith("[900.0] W last problem\n", StringComparison.Ordinal),
+                "Upload dropped the problems log, its first E line or its last line");
+            Check(run.StartsWith("Last health lines:\nmw3: health frame=1 vram=100\nmw3: health frame=2 vram=200\n",
+                    StringComparison.Ordinal),
+                "Upload game log did not lead with the last health lines");
+            Check(u.GetProperty("failure_summary").GetString() == "first trouble",
+                "Clean-exit upload was not summarized by the problems log's first E line");
+        }
     }
 }
