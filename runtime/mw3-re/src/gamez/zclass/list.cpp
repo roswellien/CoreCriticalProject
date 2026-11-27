@@ -479,14 +479,14 @@ int animates_update() {
   });
 }
 
-// Mech3.exe 1.2 @ 0x004f7f70: after each action list, and where a frame
-// needs the scene current (the mission start, the camera's move).
 namespace {
 bool g_drawing_between_steps = false;
 }  // namespace
 
 void set_drawing_between_steps(bool on) { g_drawing_between_steps = on; }
 
+// Mech3.exe 1.2 @ 0x004f7f70: after each action list, and where a frame
+// needs the scene current (the mission start, the camera's move).
 void frame_update() {
   // Ours (#485, docs/fixed-step.md): a frame drawn between fixed steps (the
   // horizon's move in render_world) brings only the changed nodes current for

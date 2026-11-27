@@ -88,6 +88,32 @@ TEST(interp_apply_blends_restore_gives_back_the_exact_matrix) {
   zcls::interp::clear();
 }
 
+// A node update during the draw builds the local matrix from the angles and
+// clears that flag (1); the stale flag (0x20) may change too. Restore gives
+// back the whole data flags word as the draw found it, with the local.
+TEST(interp_restore_gives_back_the_whole_flags_word) {
+  zcls::interp::clear();
+  zcls::Node* node = zcls::object3d_create();
+  EXPECT(node != nullptr);
+  if (!node) return;
+  auto* data = static_cast<zcls::Object3d*>(node->data);
+  float m[12];
+  yaw_at(0, 0, m);
+  zcls::object3d_set_matrix(node, m);
+  zcls::interp::record();
+  yaw_at(0, 2, m);
+  zcls::object3d_set_matrix(node, m);
+  zcls::interp::record();
+  data->put<uint32_t>(0, data->get<uint32_t>(0) | 1u);
+  const uint32_t before = data->get<uint32_t>(0);
+  zcls::interp::apply(0.5f);
+  data->put<uint32_t>(0, (data->get<uint32_t>(0) & ~1u) ^ 0x20u);  // what a node update in the draw does
+  zcls::interp::restore();
+  EXPECT(data->get<uint32_t>(0) == before);
+  EXPECT(local_of(node)[9] == 2.0f);
+  zcls::interp::clear();
+}
+
 TEST(interp_snaps_a_jump_and_a_new_node) {
   zcls::interp::clear();
   zcls::Node* node = zcls::object3d_create();

@@ -1499,14 +1499,26 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw) {
 // window, clamped at a screen edge for a frame) draws nothing. Drawing it would
 // write a zero focal length into the shared projection before any scene opens.
 // The check runs before the draw changes any state, so nothing needs undoing.
-static bool skip_camera_with_empty_window(Node* camera_node) {
-  // Not a usable camera: leave it to the draw's own handling, as before this check.
-  // Class 1 is the camera class (check_class(node, 1, ...) above), tested here
-  // without check_class's error report.
+namespace {
+enum class CameraWindow { kNotACamera, kNoWindow, kEmpty, kHasArea };
+// Class 1 is the camera class (check_class(node, 1, ...) above) and 3 the
+// window's, tested here without check_class's error report.
+CameraWindow camera_window(Node* camera_node, int32_t* width, int32_t* height) {
+  *width = 0, *height = 0;
   const bool is_camera = camera_node && camera_node->data && camera_node->cls() == 1;
-  if (!is_camera) return false;
+  if (!is_camera) return CameraWindow::kNotACamera;
+  Node* window = cam_of(camera_node)->nodes[1];
+  const bool is_window = window && window->data && window->cls() == 3;
+  if (!is_window) return CameraWindow::kNoWindow;
+  return window_has_area(window, width, height) ? CameraWindow::kHasArea : CameraWindow::kEmpty;
+}
+}  // namespace
+
+static bool skip_camera_with_empty_window(Node* camera_node) {
+  // Not a usable camera or no window: left to the draw's own handling, as
+  // before this check.
   int32_t width = 0, height = 0;
-  if (window_has_area(cam_of(camera_node)->nodes[1], &width, &height)) return false;
+  if (camera_window(camera_node, &width, &height) != CameraWindow::kEmpty) return false;
   log_skipped_empty_window(width, height);
   return true;
 }
@@ -1632,10 +1644,9 @@ void camera_zones(Camera* cam, Node* world) {
 std::vector<Node*>& rendered_cameras() { return g_rendered_cameras; }
 
 bool camera_would_draw(Node* camera_node) {
-  const bool is_camera = camera_node && camera_node->data && camera_node->cls() == 1;
-  if (!is_camera) return false;
   int32_t width = 0, height = 0;
-  return window_has_area(cam_of(camera_node)->nodes[1], &width, &height);
+  if (camera_window(camera_node, &width, &height) != CameraWindow::kHasArea) return false;
+  return camera_world(camera_node) != nullptr;
 }
 
 void camera_prepare(Node* camera_node) {

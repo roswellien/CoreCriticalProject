@@ -502,6 +502,8 @@ void clear() {
   g_followers.clear();
   rendered_cameras().clear();
   g_before_draw.clear();
+  // A draw that threw between apply and restore leaves no frame half drawn here.
+  set_drawing_between_steps(false);
 }
 
 }  // namespace zcls::interp

@@ -161,8 +161,9 @@ void camera_prepare(Node* camera_node);
 // The cameras render_world drew since this was last emptied, in the order
 // first drawn (interp's apply empties it at each draw).
 std::vector<Node*>& rendered_cameras();
-// A camera render_world would draw: a camera whose window has area (the
-// check skip_camera_with_empty_window makes, without its log line).
+// A camera render_world would draw: a camera with a world and a window that
+// has area (skip_camera_with_empty_window's check, quiet, and stricter: a
+// camera without a window or a world, which a draw would fault on, is no).
 bool camera_would_draw(Node* camera_node);
 
 }  // namespace zcls

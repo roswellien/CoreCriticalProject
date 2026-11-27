@@ -74,8 +74,12 @@ each step `prepare_cameras` runs that part of the draw's set-up
 draw drew, from their exact places, as the original's draw after each of its
 frames did. Below 30 fps, when a frame runs two steps, the step between them
 gets it too; before the mission's first draw, when no draw has named its
-cameras yet, it prepares the cameras on the engine's camera list (list 8) whose
-window has area, the ones a draw would draw. One exception: the zoom window's camera is placed by the HUD
+cameras yet (a mission start, a return from the pause menu), it prepares the
+cameras on the engine's camera list (list 8) that have a world and a window
+with area. That stands in for the set a draw would draw; c2m1, c2m3 and c1m1
+match step for step at 100 and 4 ms against 33. It can differ where a camera
+with area is not drawn (the zoom window open across the pause menu), for the
+steps before the first draw after it. One exception: the zoom window's camera is placed by the HUD
 during the draw, from the drawn view, so with the zoom window open its own
 state follows the drawn (blended) view.
 
