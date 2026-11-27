@@ -615,7 +615,6 @@ public:
     si.signalSemaphoreCount = dxgi.active() ? 0 : 1;
     si.pSignalSemaphores = dxgi.active() ? nullptr : &swapRendered[index];
     check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
-    refresh_health_snapshot();
 #if defined(_WIN32)
     if (editor_frame)
       editor_submit(si);
@@ -898,7 +897,6 @@ public:
     si.signalSemaphoreCount = dxgi.active() ? 0 : 1;
     si.pSignalSemaphores = dxgi.active() ? nullptr : &swapRendered[index];
     check(f.vkResetFences(device, 1, &presentFence), "reset present fence");
-    refresh_health_snapshot();
 #if defined(_WIN32)
     if (editor_frame)
       editor_submit(si);
@@ -1684,6 +1682,7 @@ public:
     settle();
     retire_height_images();
     ++render_frame_;
+    refresh_health_snapshot();  // #521: at most once a second; every frame renders here, shown or not
     // Stamp before any part of this frame can free (range backdrop captures
     // render first); its captures and batches reuse this scene's resources.
     mark_used_this_frame(s);
@@ -4090,7 +4089,7 @@ private:
     return fault.deviceFault == VK_TRUE;
   }
 #endif
-  // Called by the render thread before each present: copies the heap figures
+  // Called by the render thread as each frame renders: copies the heap figures
   // and memory trouble counts for the health line, at most once a second.
   void refresh_health_snapshot() {
     hang_gpu_if_due();
