@@ -79,6 +79,25 @@ struct HitchReportGate {
     }
 };
 
+// Lets a periodic report through when resource timing is enabled and at least
+// `interval` has passed on the steady clock since the last one (#518's texture
+// memory line, every 3 seconds).
+struct PeriodicReportGate {
+    bool has_reported{false};
+    std::chrono::steady_clock::time_point last_report{};
+
+    bool should_report(bool enabled, std::chrono::steady_clock::time_point now,
+                       std::chrono::steady_clock::duration interval) {
+        if (!enabled)
+            return false;
+        if (has_reported && now - last_report < interval)
+            return false;
+        has_reported = true;
+        last_report = now;
+        return true;
+    }
+};
+
 // Thread-owned producer counters for world normal page decode and first-use
 // CPU texture copy/staging.
 struct ProducerResourceTiming {

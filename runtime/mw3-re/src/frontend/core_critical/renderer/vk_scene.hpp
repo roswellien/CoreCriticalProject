@@ -1373,6 +1373,7 @@ public:
   const bool profile_cpu;
   const bool profile_gpu;
   mw34::timing::GpuResourceTiming gpu_resource_timing_{};
+  mw34::timing::PeriodicReportGate texture_memory_report_gate_{};
   VkQueryPool profile_queries{};
   bool profile_queries_pending{};
   unsigned profile_timestamp_bits{};
@@ -1746,6 +1747,11 @@ public:
       render_reconstructed_world(s);
     else
       render_scene(s, upload_in, readback_out);
+    // With MW3_CC_RESOURCE_TIMING=1, the texture memory line every 3 s of play (#518).
+    if (texture_memory_report_gate_.should_report(gpu_resource_timing_.enabled,
+                                                  std::chrono::steady_clock::now(),
+                                                  std::chrono::seconds(3)))
+      log_texture_memory("periodic");
   }
 
 private:
@@ -4392,6 +4398,7 @@ private:
   }
 
 public:
+#include "texture_memory.inc"
   void begin_preload() {
     settle();
     if (!device)

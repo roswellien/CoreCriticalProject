@@ -148,6 +148,8 @@ bool has_texture_receipt(VulkanFrameRenderer &renderer, int32_t handle,
                          bool sharp = false);
 bool is_texture_gpu_resident(VulkanFrameRenderer &renderer, int32_t handle,
                              bool sharp = false);
+// Texture memory lines printed after mission preloads so far (#518).
+std::size_t texture_memory_log_count(VulkanFrameRenderer &renderer);
 // The source the renderer recorded for a texture's GPU copy (#518).
 mw34::vkscene::TextureSource texture_source(VulkanFrameRenderer &renderer, int32_t handle,
                                             bool sharp = false);

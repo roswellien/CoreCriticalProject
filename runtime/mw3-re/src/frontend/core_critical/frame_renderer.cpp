@@ -959,6 +959,7 @@ public:
       result.completed_texture_handles.push_back(int32_t((receipt.first - 1) / 2));
     return result;
   }
+  std::size_t texture_memory_log_count_for_test() const { return texture_memory_log_count_; }
   bool texture_receipt_for_test(int32_t handle, bool sharp) {
     drain();
     return submitted_textures_.count(std::uint64_t(handle) * 2 + unsigned(sharp) + 1) != 0;
@@ -1644,6 +1645,7 @@ public:
       if (lighting_.normals)
         surface_normals_.preload_pending = true;
       preload_mission_normal_textures();
+      log_mission_texture_memory();
       first_world_preload_pending_ = false;
     }
     local_lights_begin();
@@ -2911,6 +2913,19 @@ private:
 
   // Warming is optional. Budget/OOM stops the mission's remaining warmup;
   // real draws retain their existing lazy upload path and exact cache keys.
+  // One texture memory line per mission, once its world preload is done (#518).
+  void log_mission_texture_memory() {
+    if (!renderer_)
+      return;
+    // The preload's early returns (nothing pending, stopped, producer failed)
+    // skip its own drain, and the worker may still be using the renderer.
+    if (worker_)
+      worker_->drain();
+    VisualFloatScope float_scope;
+    renderer_->log_texture_memory("mission preload");
+    ++texture_memory_log_count_;
+  }
+
   void preload_mission_normal_textures() {
     VisualFloatScope guard;
     const bool world_normals = surface_normals_.preload_pending &&
@@ -3336,6 +3351,8 @@ private:
   testing::PreloadTestState preload_test_state_;
   bool prepared_preload_pending_{true};
   bool first_world_preload_pending_{false};
+  // Texture memory lines printed after mission preloads; never reset (#518 checks).
+  std::size_t texture_memory_log_count_{};
   bool logged_first_normal_trace_{false};
   // Names survive handle reuse/reloads; unknown names use the upload handle.
   // Stop after four distinct flare textures, with no growing set or log spam.
@@ -3636,6 +3653,9 @@ bool has_texture_receipt(VulkanFrameRenderer &renderer, int32_t handle, bool sha
 }
 bool is_texture_gpu_resident(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
   return preload_impl(renderer).backend_for_test().texture_resident(std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
+}
+std::size_t texture_memory_log_count(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).texture_memory_log_count_for_test();
 }
 vk::TextureSource texture_source(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
   return preload_impl(renderer).backend_for_test().texture_source_for_test(
