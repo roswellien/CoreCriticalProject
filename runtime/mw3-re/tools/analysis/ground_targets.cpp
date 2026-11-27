@@ -87,7 +87,7 @@ std::uint64_t number(const Json &value) {
 void validate(const Request &r) {
     require(r.data_root.is_absolute() && r.bank_root.is_absolute(),
             "input roots must be explicit absolute paths");
-    require(r.region == "t1", "initial export supports unchanged Training only");
+    require(r.region == "t1" || r.region == "c1", "unsupported ground export region");
     require(member_valid(r.member) && r.region.size() <= 32 &&
                 r.region.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") ==
                     std::string::npos &&
@@ -378,8 +378,8 @@ void append_metadata(Json &array, Json item, std::uint64_t &admitted) {
 }
 } // namespace
 
-Request read_request(const std::string &input) {
-    const auto j = parse_json(input);
+namespace {
+Request request_from_json(const Json &j) {
     fields(j, {"schema_version", "data_root", "bank_root", "source", "region", "asset_id",
                "surface_materials", "textures"});
     require(number(j.at("schema_version")) == 1, "unsupported request version");
@@ -411,6 +411,12 @@ Request read_request(const std::string &input) {
     return r;
 }
 
+} // namespace
+
+Request read_request(const std::string &input) {
+    return request_from_json(parse_json(input));
+}
+
 InspectionRequest read_inspection_request(const std::string &input) {
     const auto j = parse_json(input);
     fields(j, {"schema_version", "data_root", "source", "region"});
@@ -423,7 +429,7 @@ InspectionRequest read_inspection_request(const std::string &input) {
 }
 
 std::string inspect_source(const InspectionRequest &r) {
-    require(r.region == "t1", "initial inspection supports unchanged Training only");
+    require(r.region == "t1" || r.region == "c1", "unsupported ground inspection region");
     require(r.data_root.is_absolute() && member_valid(r.member) && digest_valid(r.sha256) &&
                 r.bytes > 0 && r.bytes <= limit && !r.region.empty() && r.region.size() <= 32 &&
                 r.region.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") ==
@@ -455,6 +461,7 @@ std::string inspect_source(const InspectionRequest &r) {
     std::vector<std::uint8_t> visited(std::size_t(proof.node_count), 0);
     std::vector<std::uint32_t> pending;
     std::set<std::uint32_t> node_slots, model_slots;
+    const std::size_t inspection_node_limit = r.region == "c1" ? 32768 : 4096;
     for (const auto &p : proof.partitions) {
         append_metadata(
             output["partitions"],
@@ -471,7 +478,7 @@ std::string inspect_source(const InspectionRequest &r) {
             continue;
         visited[slot] = 1;
         node_slots.insert(slot);
-        require(node_slots.size() <= 4096, "inspection node count exceeds cap");
+        require(node_slots.size() <= inspection_node_limit, "inspection node count exceeds cap");
         const auto *node = zcls::node_at(std::int32_t(slot));
         require(node && node->cls() && (node->link & zcls::kNodeLive) &&
                     std::memchr(node->name(), 0, 0x24),
@@ -514,18 +521,14 @@ std::string inspect_source(const InspectionRequest &r) {
     return result;
 }
 
-Result export_target(const Request &r) {
-    validate(r);
-    const auto source_file = contained(r.data_root, r.member);
-    auto original = open_file(source_file);
-    require(hash_file(original.get(), r.bytes) == r.sha256, "source preflight SHA differs");
-    zcls::ZbdReadContext proof(zcls::ZbdReadMode::StrictExport);
-    prepare_source(proof, r.member, r.sha256, r.bytes);
-    proof.expected.model_slots = {r.model_slot};
-    Isolation isolated(source_mount(r.data_root)); // Dies before proof's owning raw allocations.
-    require(zcls::read_zbd(r.member.c_str(), &proof) == 0 && proof.snapshot_verified &&
-                !proof.failed,
-            "canonical source proof failed");
+namespace {
+using Banks = std::map<std::string, std::unique_ptr<Bank>>;
+using UploadKeys = std::map<std::pair<std::string, std::string>,
+                            std::pair<mw34::materials::SurfaceKey, Json>>;
+
+std::pair<Json, Json> export_model(const Request &r, const fs::path &source_file,
+                                  zcls::ZbdReadContext &proof, Banks &banks,
+                                  UploadKeys &cache, bool include_membership) {
     auto *model = zmod::model_at(std::int32_t(r.model_slot));
     require(model && model->world_source_asset && model->world_source_asset->world &&
                 model->world_source_asset->world->model_slot == r.model_slot,
@@ -561,8 +564,6 @@ Result export_target(const Request &r) {
                   {"format", 1},
                   {"mip", 0}}}};
     std::uint64_t metadata_bytes = detail.dump(2).size() + 128;
-    std::map<std::string, std::unique_ptr<Bank>> banks;
-    std::map<std::string, std::pair<mw34::materials::SurfaceKey, Json>> cache;
     std::set<std::string> used;
     for (std::uint32_t i = 0; i < model->count(0x10); ++i) {
         const auto *material = model->polygons[i].material;
@@ -582,15 +583,16 @@ Result export_target(const Request &r) {
                                           [&](const TexturePin &t) { return t.texture == name; });
             require(pin != r.textures.end(), "no explicit exact bank selection for source texture");
             used.insert(name);
-            if (!cache.count(name)) {
+            const auto cache_key = std::make_pair(pin->member, pin->entry);
+            if (!cache.count(cache_key)) {
                 auto &bank = banks[pin->member];
                 if (!bank)
                     bank = bank_open(r, *pin, proof);
                 require(bank->sha256 == pin->sha256 && bank->bytes == pin->bytes,
                         "conflicting bank pins");
-                cache.emplace(name, texture_key(*bank, *pin, proof));
+                cache.emplace(cache_key, texture_key(*bank, *pin, proof));
             }
-            const auto &value = cache.at(name);
+            const auto &value = cache.at(cache_key);
             const auto &key = value.first;
             target["polygon_materials"].push_back(name);
             target["surface_keys"].push_back({{"width", key.width},
@@ -604,6 +606,8 @@ Result export_target(const Request &r) {
         append_metadata(detail["polygons"], std::move(polygon), metadata_bytes);
     }
     require(used.size() == r.textures.size(), "unused texture selector");
+    if (!include_membership)
+        return {std::move(target), std::move(detail)};
     for (std::int32_t i = 0; i < proof.node_count; ++i) {
         auto *node = zcls::node_at(i);
         if (node && node->source_asset == model->world_source_asset)
@@ -657,9 +661,32 @@ Result export_target(const Request &r) {
                     {{"world_node", p.world_node}, {"x", p.x}, {"z", p.z}, {"root_node", slot}},
                     metadata_bytes);
         }
-    for (auto &bank : banks)
+    return {std::move(target), std::move(detail)};
+}
+
+void recheck_banks(const Banks &banks) {
+    for (const auto &bank : banks)
         require(hash_file(bank.second->file.get(), bank.second->bytes) == bank.second->sha256,
                 "bank changed during export");
+}
+} // namespace
+
+Result export_target(const Request &r) {
+    validate(r);
+    const auto source_file = contained(r.data_root, r.member);
+    auto original = open_file(source_file);
+    require(hash_file(original.get(), r.bytes) == r.sha256, "source preflight SHA differs");
+    zcls::ZbdReadContext proof(zcls::ZbdReadMode::StrictExport);
+    prepare_source(proof, r.member, r.sha256, r.bytes);
+    proof.expected.model_slots = {r.model_slot};
+    Isolation isolated(source_mount(r.data_root)); // Dies before proof's owning raw allocations.
+    require(zcls::read_zbd(r.member.c_str(), &proof) == 0 && proof.snapshot_verified &&
+                !proof.failed,
+            "canonical source proof failed");
+    Banks banks;
+    UploadKeys cache;
+    auto [target, detail] = export_model(r, source_file, proof, banks, cache, true);
+    recheck_banks(banks);
     require(hash_file(original.get(), r.bytes) == r.sha256, "source changed during export");
     detail["admitted_source_and_allocation_bytes"] = proof.allocated_bytes;
     const auto targets =
@@ -668,6 +695,99 @@ Result export_target(const Request &r) {
     require(targets.size() <= metadata_limit && receipt.size() <= metadata_limit,
             "export metadata exceeds cap");
     return {targets, receipt};
+}
+
+Result export_bulk(const std::string &input) {
+    const auto document = parse_json(input);
+    fields(document, {"schema_version", "requests"});
+    require(number(document.at("schema_version")) == 1, "unsupported bulk request version");
+    const auto &entries = document.at("requests");
+    require(entries.is_array() && !entries.empty() && entries.size() <= 4096,
+            "invalid bulk request count");
+    std::vector<Request> requests;
+    std::set<std::uint32_t> slots;
+    std::set<std::string> sidecars;
+    for (const auto &entry : entries) {
+        auto r = request_from_json(entry);
+        require(r.region == "c1", "bulk export requires Campaign 1");
+        if (!requests.empty()) {
+            const auto &first = requests.front();
+            require(r.data_root == first.data_root && r.bank_root == first.bank_root &&
+                        r.member == first.member && r.sha256 == first.sha256 && r.bytes == first.bytes,
+                    "bulk requests must share one canonical source and bank root");
+        }
+        require(slots.insert(r.model_slot).second && sidecars.insert(r.surface_materials).second,
+                "duplicate bulk selector or sidecar");
+        requests.push_back(std::move(r));
+    }
+    const auto &first = requests.front();
+    const auto source_file = contained(first.data_root, first.member);
+    auto original = open_file(source_file);
+    require(hash_file(original.get(), first.bytes) == first.sha256, "source preflight SHA differs");
+    zcls::ZbdReadContext proof(zcls::ZbdReadMode::StrictExport);
+    prepare_source(proof, first.member, first.sha256, first.bytes);
+    proof.expected.model_slots = std::move(slots);
+    Isolation isolated(source_mount(first.data_root));
+    require(zcls::read_zbd(first.member.c_str(), &proof) == 0 && proof.snapshot_verified &&
+                !proof.failed,
+            "canonical source proof failed");
+    Banks banks;
+    for (const auto &r : requests)
+        for (const auto &pin : r.textures) {
+            auto &bank = banks[pin.member];
+            if (!bank)
+                bank = bank_open(r, pin, proof);
+            require(bank->sha256 == pin.sha256 && bank->bytes == pin.bytes,
+                    "conflicting bank pins");
+        }
+    UploadKeys cache;
+    Json targets = Json::array(), receipts = Json::array();
+    std::uint64_t target_bytes = 128, receipt_bytes = 128;
+    for (const auto &r : requests) {
+        const auto *model = zmod::model_at(std::int32_t(r.model_slot));
+        require(model && model->world_source_asset, "source selector was not published");
+        const auto uv = cc_mw3_re::native_mesh_uv_hash(*model);
+        const char *reason = !uv || !*uv ? "unsupported_polygon_uv" : nullptr;
+        std::set<std::string> names;
+        for (std::uint32_t i = 0; !reason && i < model->count(0x10); ++i) {
+            const auto *material = model->polygons[i].material;
+            if (!material)
+                continue;
+            if (material->alpha != 255 || (material->flags & 6)) {
+                reason = "unsupported_material";
+            } else if (material->flags & 1) {
+                const auto *texture = material->texture;
+                require(texture && std::memchr(texture->name, 0, sizeof texture->name),
+                        "source texture is missing/unbounded");
+                names.insert(texture->name);
+                if (std::none_of(r.textures.begin(), r.textures.end(),
+                                 [&](const TexturePin &pin) { return pin.texture == texture->name; }))
+                    reason = "missing_exact_bank_selector";
+            }
+        }
+        if (reason) {
+            append_metadata(receipts, {{"model_slot", r.model_slot}, {"status", reason}},
+                            receipt_bytes);
+            continue;
+        }
+        require(names.size() == r.textures.size(), "unused texture selector");
+        auto [target, detail] = export_model(r, source_file, proof, banks, cache, false);
+        Json keys = Json::array();
+        for (const auto &pin : r.textures) {
+            auto key = cache.at({pin.member, pin.entry}).second;
+            key["texture"] = pin.texture;
+            keys.push_back(std::move(key));
+        }
+        append_metadata(targets, std::move(target), target_bytes);
+        append_metadata(receipts,
+                        {{"model_slot", r.model_slot}, {"status", "bound"},
+                         {"mesh_uv_hash", detail.at("mesh_uv_hash")}, {"selected_sources", keys}},
+                        receipt_bytes);
+    }
+    recheck_banks(banks);
+    require(hash_file(original.get(), first.bytes) == first.sha256, "source changed during export");
+    return {Json{{"schema_version", 1}, {"targets", std::move(targets)}}.dump() + "\n",
+            Json{{"schema_version", 1}, {"models", std::move(receipts)}}.dump() + "\n"};
 }
 
 namespace {

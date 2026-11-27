@@ -32,6 +32,7 @@ InspectionRequest read_inspection_request(const std::string &json);
 std::string inspect_source(const InspectionRequest &request);
 // Isolated canonical CPU decode. Does not create a device or enter a game loop.
 Result export_target(const Request &request);
+Result export_bulk(const std::string &json);
 // Writes only the two metadata documents into a fresh directory, atomically.
 void write_result(const Result &result, const std::filesystem::path &fresh_output);
 void write_inspection(const std::string &inspection, const std::filesystem::path &fresh_output);
