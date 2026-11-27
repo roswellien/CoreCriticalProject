@@ -105,6 +105,113 @@ bool hd_movie_table(const std::string& name, int* frames, int* width, int* heigh
   return false;
 }
 
+namespace {
+
+// MP4 numbers are big-endian.
+uint32_t big32(const uint8_t* bytes) {
+  return (uint32_t(bytes[0]) << 24) | (uint32_t(bytes[1]) << 16) | (uint32_t(bytes[2]) << 8) | bytes[3];
+}
+uint64_t big64(const uint8_t* bytes) { return (uint64_t(big32(bytes)) << 32) | big32(bytes + 4); }
+
+// One box of an MP4: its four-letter type, where its contents start and
+// where it ends.
+struct Mp4Box {
+  char type[5] = {};
+  uint64_t body = 0, end = 0;
+};
+
+// The box at `at`, which must lie inside its parent (ending at `parent_end`).
+bool read_mp4_box(const Mp4ReadAt& read_at, uint64_t at, uint64_t parent_end, Mp4Box* box) {
+  uint8_t header[16];
+  if (parent_end < at || parent_end - at < 8 || !read_at(at, header, 8)) return false;
+  uint64_t size = big32(header);
+  uint64_t header_size = 8;
+  if (size == 1) {  // a 64-bit size follows the type
+    if (parent_end - at < 16 || !read_at(at + 8, header + 8, 8)) return false;
+    size = big64(header + 8);
+    header_size = 16;
+  } else if (size == 0) {  // runs to the end of its parent
+    size = parent_end - at;
+  }
+  if (size < header_size || size > parent_end - at) return false;
+  std::memcpy(box->type, header + 4, 4);
+  box->body = at + header_size;
+  box->end = at + size;
+  return true;
+}
+
+// What one 'trak' says about where its media starts.
+struct Mp4Track {
+  char handler[5] = {};  // 'vide', 'soun', ...
+  uint32_t timescale = 0;  // the media's units a second ('mdhd')
+  int64_t edit_start = 0;  // in those units ('elst'); 0 without one
+};
+
+// The first entry of an 'elst' that isn't an empty edit (media time -1,
+// which delays the track instead of trimming it).
+int64_t read_edit_start(const Mp4ReadAt& read_at, const Mp4Box& elst) {
+  uint8_t head[8];
+  if (elst.end - elst.body < 8 || !read_at(elst.body, head, 8)) return 0;
+  const bool wide = head[0] == 1;  // version 1: 64-bit duration and media time
+  const uint64_t entry_size = wide ? 20 : 12;
+  const uint32_t entries = big32(head + 4);
+  uint64_t at = elst.body + 8;
+  for (uint32_t i = 0; i < entries && i < 16 && elst.end - at >= entry_size; ++i, at += entry_size) {
+    uint8_t entry[20];
+    if (!read_at(at, entry, static_cast<size_t>(entry_size))) return 0;
+    const int64_t media_time =
+        wide ? static_cast<int64_t>(big64(entry + 8)) : static_cast<int64_t>(static_cast<int32_t>(big32(entry + 4)));
+    if (media_time == -1) continue;
+    return media_time > 0 ? media_time : 0;
+  }
+  return 0;
+}
+
+// The children of a 'trak' that tell its handler, timescale and edit:
+// 'edts'/'elst', 'mdia'/'mdhd' and 'mdia'/'hdlr'. `depth` stops a file whose
+// boxes nest without end.
+void read_track_boxes(const Mp4ReadAt& read_at, uint64_t at, uint64_t end, int depth, Mp4Track* track) {
+  Mp4Box box;
+  while (depth < 4 && read_mp4_box(read_at, at, end, &box)) {
+    const std::string type = box.type;
+    if (type == "edts" || type == "mdia") {
+      read_track_boxes(read_at, box.body, box.end, depth + 1, track);
+    } else if (type == "elst") {
+      track->edit_start = read_edit_start(read_at, box);
+    } else if (type == "mdhd") {
+      // version 0: 4 created, 4 modified, then the timescale; version 1: 8 and 8.
+      uint8_t head[24];
+      if (box.end - box.body >= 24 && read_at(box.body, head, 24))
+        track->timescale = big32(head + (head[0] == 1 ? 20 : 12));
+    } else if (type == "hdlr") {
+      uint8_t head[12];  // version and flags, pre_defined, then the handler type
+      if (box.end - box.body >= 12 && read_at(box.body, head, 12)) std::memcpy(track->handler, head + 8, 4);
+    }
+    at = box.end;
+  }
+}
+
+}  // namespace
+
+double mp4_sound_start(const Mp4ReadAt& read_at, uint64_t file_size) {
+  Mp4Box top;
+  for (uint64_t at = 0; read_mp4_box(read_at, at, file_size, &top); at = top.end) {
+    if (std::string(top.type) != "moov") continue;
+    Mp4Box trak;
+    for (uint64_t inner = top.body; read_mp4_box(read_at, inner, top.end, &trak); inner = trak.end) {
+      if (std::string(trak.type) != "trak") continue;
+      Mp4Track track;
+      read_track_boxes(read_at, trak.body, trak.end, 0, &track);
+      const bool sound_track = std::string(track.handler) == "soun";
+      if (!sound_track) continue;
+      if (track.timescale == 0) return 0;
+      return static_cast<double>(track.edit_start) / track.timescale;
+    }
+    break;  // one movie box
+  }
+  return 0;
+}
+
 HdMovieStandIn::HdMovieStandIn(std::string name, std::string path, HdMovieFactory factory, Log log)
     : name_(std::move(name)), path_(std::move(path)), factory_(std::move(factory)), log_(std::move(log)) {}
 

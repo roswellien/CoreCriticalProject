@@ -1,12 +1,16 @@
 // The HD movie stand-in (#559, mech3/hd_movie.h, docs/fmv.md section 9):
 // the AVI streams the movie player is given for a mapped movie, its sound
 // served in order, the frame queue, and one log line for each reason a
-// clip can't stand in. A fake decoder, so no media is needed.
+// clip can't stand in, and the MP4 edit lists read for the decoder. A
+// fake decoder and MP4s built in memory, so no media is needed.
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "check.h"
@@ -227,4 +231,102 @@ TEST(hd_movie_stand_in_closes_its_source_once) {
     EXPECT(destroyed == 0);
   }
   EXPECT(destroyed == 1);
+}
+
+namespace {
+
+// MP4 boxes built in memory: a big-endian size, the type, the contents.
+using Bytes = std::vector<uint8_t>;
+
+void append_big(Bytes& bytes, uint64_t value, int size) {
+  for (int shift = (size - 1) * 8; shift >= 0; shift -= 8) bytes.push_back(static_cast<uint8_t>(value >> shift));
+}
+
+Bytes mp4_box(const char* type, const Bytes& contents) {
+  Bytes box;
+  append_big(box, contents.size() + 8, 4);
+  box.insert(box.end(), type, type + 4);
+  box.insert(box.end(), contents.begin(), contents.end());
+  return box;
+}
+
+Bytes joined(std::initializer_list<Bytes> parts) {
+  Bytes all;
+  for (const Bytes& part : parts) all.insert(all.end(), part.begin(), part.end());
+  return all;
+}
+
+Bytes mdhd(uint32_t timescale) {
+  Bytes contents(4 + 8);  // version 0, flags, created, modified
+  append_big(contents, timescale, 4);
+  append_big(contents, 0, 4 + 4);  // duration, language and pre_defined
+  return mp4_box("mdhd", contents);
+}
+
+Bytes hdlr(const char* handler) {
+  Bytes contents(8);  // version, flags, pre_defined
+  contents.insert(contents.end(), handler, handler + 4);
+  contents.resize(contents.size() + 13);  // reserved and an empty name
+  return mp4_box("hdlr", contents);
+}
+
+// An 'elst' whose entries are (duration, media time) pairs.
+Bytes elst(bool version1, std::initializer_list<std::pair<uint64_t, int64_t>> entries) {
+  Bytes contents{static_cast<uint8_t>(version1 ? 1 : 0), 0, 0, 0};
+  append_big(contents, entries.size(), 4);
+  for (const auto& entry : entries) {
+    append_big(contents, entry.first, version1 ? 8 : 4);
+    append_big(contents, static_cast<uint64_t>(entry.second), version1 ? 8 : 4);
+    append_big(contents, 0x00010000, 4);  // rate 1.0
+  }
+  return mp4_box("elst", contents);
+}
+
+Bytes trak(const char* handler, uint32_t timescale, const Bytes& edits) {
+  const Bytes media = mp4_box("mdia", joined({mdhd(timescale), hdlr(handler)}));
+  if (edits.empty()) return mp4_box("trak", media);
+  return mp4_box("trak", joined({mp4_box("edts", edits), media}));
+}
+
+double sound_start_of(const Bytes& file) {
+  const auto read_at = [&file](uint64_t offset, void* out, size_t bytes) {
+    if (offset > file.size() || file.size() - offset < bytes) return false;
+    std::memcpy(out, file.data() + offset, bytes);
+    return true;
+  };
+  return mech3::mp4_sound_start(read_at, file.size());
+}
+
+}  // namespace
+
+// The pack's own layout (ffmpeg's): the movie box ahead of the media, the
+// video's edit two 24 fps frames in at a 12288 timescale (its B-frame
+// delay, not wanted here), the sound's 1024 priming samples in at 22050.
+TEST(hd_movie_mp4_edit_list_gives_the_sounds_priming) {
+  const Bytes moov = mp4_box("moov", joined({mp4_box("mvhd", Bytes(100)),
+                                             trak("vide", 12288, elst(false, {{182500, 1024}})),
+                                             trak("soun", 22050, elst(false, {{182467, 1024}}))}));
+  const Bytes file = joined({mp4_box("ftyp", Bytes(24)), moov, mp4_box("mdat", Bytes(64))});
+  EXPECT(std::fabs(sound_start_of(file) - 1024.0 / 22050.0) < 1e-9);
+}
+
+// An empty edit (media time -1) delays a track instead of trimming it, so
+// the next entry is the start; version 1 entries are 64-bit; the movie box
+// may come after the media. A sound track with no edit list starts at 0.
+TEST(hd_movie_mp4_edit_list_skips_empty_edits_and_reads_version_1) {
+  const Bytes moov = mp4_box("moov", joined({trak("vide", 90000, elst(false, {{9000, 3003}})),
+                                             trak("soun", 48000, elst(true, {{500, -1}, {9000, 2112}}))}));
+  EXPECT(std::fabs(sound_start_of(joined({mp4_box("mdat", Bytes(32)), moov})) - 2112.0 / 48000.0) < 1e-9);
+  const Bytes no_edit = mp4_box("moov", trak("soun", 48000, Bytes()));
+  EXPECT(sound_start_of(no_edit) == 0.0);
+}
+
+// A box that claims more than the file holds, or nothing like an MP4,
+// gives 0 rather than reading past the end.
+TEST(hd_movie_mp4_edit_list_of_a_broken_file_is_zero) {
+  Bytes moov = mp4_box("moov", trak("soun", 22050, elst(false, {{100, 1024}})));
+  moov[3] = 0xff;  // the movie box's size now runs past the file
+  EXPECT(sound_start_of(moov) == 0.0);
+  EXPECT(sound_start_of(Bytes{'n', 'o', 't', ' ', 'm', 'p', '4', '!', '!'}) == 0.0);
+  EXPECT(sound_start_of(Bytes()) == 0.0);
 }

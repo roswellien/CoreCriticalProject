@@ -545,9 +545,17 @@ stand-in for the AVI (`mech3/hd_movie.h`):
 - **The sound stream:** the MP4's AAC as 22050 Hz 16-bit PCM, read as the
   player refills its two halves of one second each. The frame shown still
   follows this sound's play cursor, `--nosound`'s clocked silent cursor too.
+  The AAC encoder's priming at its front (1024 samples, 46 ms) is dropped:
+  the MP4's edit list says to skip it, and Media Foundation ignores edit
+  lists, so the backend reads the sound track's list itself
+  (`mp4_sound_start`).
 
 The MP4's pictures are decoded on a thread of their own, at most three
-waiting. `zfmv::Stream::sound_seconds()` gives the sound's position between
+waiting. The decoder runs in low-latency mode, which holds about 95 MB less;
+its timestamps are wrong for B-frames there, so each picture is timed by the
+durations of those before it, from 0. Measured against ffmpeg's decode of
+INTRO, the sound matches to the sample at 5, 60, 150 and 180 s and picture
+*n* is ffmpeg's picture *n*, so neither leads the other. `zfmv::Stream::sound_seconds()` gives the sound's position between
 the 15 fps frames. Each pass, and at each of the script's flips, the
 newest picture at or before it is drawn over the whole window
 (`SdlScreen2D::present_frame_rgba`) at its own resolution, not through the
@@ -570,7 +578,8 @@ A decoding failure part way through holds the last picture to the end, with
 one `decoding stopped` line.
 
 Tests: `test_hd_movie.cpp` (the stand-in's streams, its sound in order then
-silence, the picture queue, each refusal's line, the source closed once),
+silence, the picture queue, each refusal's line, the source closed once,
+the sound's edit list read from MP4s built in memory),
 `fmv_sound_seconds_matches_the_sound_frame` (`test_fmv_stream.cpp`),
 `resolution_hd_movie_frame_keeps_the_movies_shape` (`test_resolution.cpp`)
 and `mw3hd_movie_checks` (Windows: a 2 s H.264/AAC clip made by Media

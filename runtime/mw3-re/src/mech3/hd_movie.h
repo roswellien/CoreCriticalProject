@@ -92,6 +92,15 @@ std::string hd_movie_name(const char* avi_path);
 // The shape table's line for `name`: the original's frames and picture size.
 bool hd_movie_table(const std::string& name, int* frames, int* width, int* height);
 
+// Reads `bytes` at `offset` of a file; false past its end or on an error.
+using Mp4ReadAt = std::function<bool(uint64_t offset, void* out, size_t bytes)>;
+// The seconds at the front of an MP4's first sound track that its edit list
+// skips (ISO 14496-12 'elst', the first entry that isn't an empty edit):
+// the AAC encoder's priming, 1024 samples in the pack's clips. Media
+// Foundation ignores edit lists and plays them, so its backend drops them
+// itself. 0 with no edit list, and for anything unreadable.
+double mp4_sound_start(const Mp4ReadAt& read_at, uint64_t file_size);
+
 // One play of a mapped movie: the HD source and the AVI stand-in the movie
 // player reads (spec 3.4). Built at the AVI's open; destroyed with the
 // player's streams.

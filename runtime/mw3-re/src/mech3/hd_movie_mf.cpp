@@ -3,6 +3,8 @@
 // read on the game's thread as the movie player asks for it (an AAC second
 // costs a few milliseconds), and the pictures, decoded and converted to
 // 32-bit RGB on a thread of their own into a queue of at most three frames.
+// Media Foundation ignores the MP4's edit lists, so the sound's is read from
+// the file here and applied (mp4_sound_start).
 // Built on Windows only (CMakeLists.txt sets MW3_HD_MOVIE_MF); nothing here
 // is downloaded or bundled: the decoders are Windows' own, and a Windows N
 // edition without the Media Feature Pack is told so and plays the original.
@@ -20,6 +22,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -67,6 +70,28 @@ std::wstring local_file_path(const std::string& path, std::string* reason) {
   return wide;
 }
 
+// The sound's edit-list start (hd_movie.h), read straight from the file:
+// Media Foundation's timestamps don't carry it. Zero if it can't be read.
+double read_sound_start(const std::wstring& path) {
+  const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return 0;
+  LARGE_INTEGER size{};
+  double start = 0;
+  if (GetFileSizeEx(file, &size)) {
+    const auto read_at = [file](uint64_t offset, void* out, size_t bytes) {
+      OVERLAPPED where{};
+      where.Offset = static_cast<DWORD>(offset);
+      where.OffsetHigh = static_cast<DWORD>(offset >> 32);
+      DWORD got = 0;
+      return ReadFile(file, out, static_cast<DWORD>(bytes), &got, &where) && got == bytes;
+    };
+    start = mp4_sound_start(read_at, static_cast<uint64_t>(size.QuadPart));
+  }
+  CloseHandle(file);
+  return start;
+}
+
 constexpr DWORD kFirstAudio = static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM);
 constexpr DWORD kFirstVideo = static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM);
 
@@ -98,6 +123,9 @@ class MfHdMovieSource : public HdMovieSource {
     if (wide.empty()) return false;
     if (!open_audio(wide, info, reason)) return false;
     if (!open_video(wide, info, reason)) return false;
+    // The pack's AAC starts with 1024 priming samples (46 ms at 22050 Hz);
+    // played, they put the sound behind the picture (#569's review).
+    skip_sound_frames_ = static_cast<size_t>(std::llround(read_sound_start(wide) * info->audio_rate));
     PROPVARIANT duration;
     PropVariantInit(&duration);
     hr = audio_->GetPresentationAttribute(static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE), MF_PD_DURATION,
@@ -190,7 +218,12 @@ class MfHdMovieSource : public HdMovieSource {
     // The reader's own YUV -> RGB32 conversion (software). Measured in the
     // #559 runs; NV12 and a shader are the follow-up if it is too slow.
     attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
-    attributes->SetUINT32(MF_LOW_LATENCY, TRUE);  // fewer frames held in the decoder
+    // Without MF_LOW_LATENCY the H.264 decoder holds about 95 MB more (seen
+    // on INTRO), over #559's budget. With it, the pictures still come in
+    // order with the right durations, but the timestamps are wrong for
+    // B-frames (the second picture is stamped 0, the first 0.083 s), so
+    // decode_pictures times them by their durations instead.
+    attributes->SetUINT32(MF_LOW_LATENCY, TRUE);
     HRESULT hr = MFCreateSourceReaderFromURL(path.c_str(), attributes.Get(), &video_);
     if (FAILED(hr)) return *reason = hresult_text("opening its picture", hr), false;
     video_->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE);
@@ -219,6 +252,10 @@ class MfHdMovieSource : public HdMovieSource {
     if (SUCCEEDED(actual->GetUINT32(MF_MT_DEFAULT_STRIDE, &stride))) default_stride = static_cast<LONG>(stride);
     else if (FAILED(MFGetStrideForBitmapInfoHeader(MFVideoFormat_RGB32.Data1, width, &default_stride))) return false;
     width_ = static_cast<int>(width), height_ = static_cast<int>(height), default_stride_ = default_stride;
+    UINT32 rate_numerator = 0, rate_denominator = 0;
+    if (SUCCEEDED(MFGetAttributeRatio(actual.Get(), MF_MT_FRAME_RATE, &rate_numerator, &rate_denominator)) &&
+        rate_numerator > 0)
+      frame_duration_ = static_cast<LONGLONG>(10000000.0 * rate_denominator / rate_numerator);
     return width_ > 0 && height_ > 0;
   }
 
@@ -246,6 +283,12 @@ class MfHdMovieSource : public HdMovieSource {
     std::memcpy(leftover_.data(), data, leftover_.size() * sizeof(int16_t));
     buffer->Unlock();
     if (halve_rate_) halve(&leftover_);
+    if (skip_sound_frames_ > 0) {  // the encoder's priming, never heard
+      const size_t channels = static_cast<size_t>(channels_ > 0 ? channels_ : 1);
+      const size_t skipped = std::min(skip_sound_frames_, leftover_.size() / channels);
+      leftover_at_ = skipped * channels;
+      skip_sound_frames_ -= skipped;
+    }
     return true;
   }
 
@@ -291,9 +334,17 @@ class MfHdMovieSource : public HdMovieSource {
         }
       }
       if (!sample) continue;
+      // The picture's time: the durations of those before it, from 0 (see
+      // open_video), counted even for a picture that can't be copied.
+      // Media Foundation's own stamps also leave out the MP4 edit list,
+      // which for these clips is the same B-frame delay.
+      LONGLONG duration = 0;
+      if (FAILED(sample->GetSampleDuration(&duration)) || duration <= 0) duration = frame_duration_;
+      const LONGLONG picture_time = picture_clock_;
+      picture_clock_ += duration;
       HdFrame frame;
       if (!copy_picture(sample.Get(), &frame)) continue;
-      frame.pts = static_cast<double>(timestamp) / 1e7;
+      frame.pts = static_cast<double>(picture_time) / 1e7;
       frame.serial = ++serial;
       if (!queue_.push(std::move(frame))) break;  // stopped
     }
@@ -349,6 +400,9 @@ class MfHdMovieSource : public HdMovieSource {
   std::vector<int16_t> halve_carry_;  // a sample frame waiting for its pair
   std::vector<int16_t> leftover_;  // decoded sound not yet handed out
   size_t leftover_at_ = 0;
+  size_t skip_sound_frames_ = 0;  // priming sample frames still to drop
+  LONGLONG picture_clock_ = 0;    // the next picture's time, 100 ns units (worker only)
+  LONGLONG frame_duration_ = 0;   // from the frame rate, for a picture without a duration
   int width_ = 0, height_ = 0;
   LONG default_stride_ = 0;
   HdFrameQueue queue_;
