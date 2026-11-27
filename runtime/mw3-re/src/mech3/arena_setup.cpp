@@ -90,6 +90,13 @@ bool parse_bot(const Json& j, const std::string& field, Bot* out, std::string* e
       return fail(error, field + ".loadout: needs a whole number, 0 to 15");
     out->loadout = static_cast<int32_t>(loadout->get<int64_t>());
   }
+  // Optional: a fixed spawn spot, so an authored setup can spread the fight
+  // over a chosen part of the map.
+  if (const auto spot = j.find("spot"); spot != j.end()) {
+    if (!spot->is_number_integer() || spot->get<int64_t>() < 0 || spot->get<int64_t>() >= kSpawnSpots)
+      return fail(error, field + ".spot: needs a whole number, 0 to 15");
+    out->spot = static_cast<int32_t>(spot->get<int64_t>());
+  }
   return parse_preset(*preset, field + ".preset", &out->preset, error);
 }
 
@@ -218,6 +225,18 @@ bool parse_arena_setup(const std::string& json_text, Setup* out, std::string* er
       out->sides[side].push_back(bot);
     }
   }
+  // Spots are all given or all left to the seed, and each spot holds one bot.
+  int given = 0, total = 0;
+  bool taken[kSpawnSpots] = {};
+  for (const auto& list : out->sides)
+    for (const Bot& bot : list) {
+      ++total;
+      if (bot.spot < 0) continue;
+      ++given;
+      if (taken[bot.spot]) return fail(error, "spot: " + std::to_string(bot.spot) + " is given to two bots");
+      taken[bot.spot] = true;
+    }
+  if (given != 0 && given != total) return fail(error, "spot: give every bot a spot, or none");
   return true;
 }
 

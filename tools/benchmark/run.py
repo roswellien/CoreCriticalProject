@@ -159,6 +159,10 @@ def build_launch(
     matches = [scene for scene in definition["scenes"] if scene["id"] == scene_id]
     if len(matches) != 1:
         raise ValueError(f"Expected one benchmark scene named {scene_id}")
+    if matches[0].get("headlights"):
+        # A night scene shows every mech's headlights, which need dynamic lighting.
+        # Forcing them here keeps that scene the same in both arms.
+        settings = {**settings, "Headlights": True, "DynamicLighting": True}
     installed = read_packs(data_root, settings["ActivePacks"])
     preview = {field: [] for field in PACK_FIELDS.values()}
     for path, kind in installed:
@@ -252,11 +256,21 @@ def run_scene(
     *,
     strict=False,
     strict_capture=None,
+    digest_cache=None,
 ):
     profile.mkdir(parents=True)
     plan = build_launch(
         definition, scene, output, profile, data_root, runtime, executable, settings
     )
+    # The game honours only an absolute folder; an empty value turns the cache off
+    # even if the parent environment names one.
+    environment = plan.setdefault("environment", {})
+    if digest_cache is None:
+        environment["MW3_DIGEST_CACHE_DIR"] = ""
+    else:
+        digest_cache = Path(digest_cache).resolve()
+        digest_cache.mkdir(parents=True, exist_ok=True)
+        environment["MW3_DIGEST_CACHE_DIR"] = str(digest_cache)
     if strict:
         plan["argv"].append("--benchmark-strict")
         if strict_capture is not None:
@@ -264,7 +278,10 @@ def run_scene(
     (profile / "launch-plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     for item in plan.get("skipped_packs", []):
         print(f"Play planner left out {item['root']}: {item['reason']}", file=sys.stderr)
-    print(f"Benchmark scene {scene}\n" + json.dumps(settings, indent=2), flush=True)
+    print(
+        f"Benchmark scene {scene}\n" + json.dumps(plan["launcher_settings"], indent=2),
+        flush=True,
+    )
     argv = plan["argv"]
     toggles = {}
     for flag in (
@@ -282,7 +299,9 @@ def run_scene(
     return launch_scene(plan)
 
 
-def run_suite(definition, output, label, data_root, runtime, executable, settings):
+def run_suite(
+    definition, output, label, data_root, runtime, executable, settings, digest_cache=None
+):
     definition_hash = sha256(definition)
     document = read_json(definition)
     scenes = tuple(scene["id"] for scene in document["scenes"])
@@ -304,7 +323,15 @@ def run_suite(definition, output, label, data_root, runtime, executable, setting
         profile = output / "profiles" / directory
         started = time.time_ns()
         code = run_scene(
-            definition, scene, output / directory, profile, data_root, runtime, executable, settings
+            definition,
+            scene,
+            output / directory,
+            profile,
+            data_root,
+            runtime,
+            executable,
+            settings,
+            digest_cache=digest_cache,
         )
         if code:
             raise ValueError(f"{directory} ({scene}) exited with status {code}")
@@ -312,13 +339,15 @@ def run_suite(definition, output, label, data_root, runtime, executable, setting
         result = read_json(summary)
         if result.get("valid") is not True or result.get("scene_id") != scene:
             raise ValueError(f"Invalid scene result: {summary}")
+        finished = time.time_ns()
+        print(f"Scene {directory} wall time {(finished - started) / 1e9:.1f} s", flush=True)
         return {
             "id": scene,
             "summary": summary.relative_to(output).as_posix(),
             "summary_sha256": sha256(summary),
             "profile": profile.relative_to(output).as_posix(),
             "started_ns": started,
-            "finished_ns": time.time_ns(),
+            "finished_ns": finished,
         }
 
     if label == "A1":
@@ -328,6 +357,8 @@ def run_suite(definition, output, label, data_root, runtime, executable, setting
     if sha256(definition) != definition_hash:
         raise ValueError("Definition changed during the suite")
     manifest["finished_ns"] = time.time_ns()
+    total = (manifest["finished_ns"] - manifest["started_ns"]) / 1e9
+    print(f"Suite {label} wall time {total:.1f} s", flush=True)
     (output / "suite.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return 0
 
@@ -369,6 +400,12 @@ def main():
     )
     parser.add_argument("--run-label", choices=(*BLOCK_ORDER, "smoke"))
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--digest-cache",
+        default=None,
+        help="Folder for remembered pack digests, shared across runs (default "
+        "local/benchmark/digest-cache), or 'off' to hash the packs in every scene",
+    )
     args = parser.parse_args()
     try:
         if args.strict and args.suite:
@@ -407,6 +444,20 @@ def main():
                 raise ValueError(f"Expected a fresh path under local/benchmark: {path}")
             if any(path.is_relative_to(root) for root in (data_root, game, launcher_runtime)):
                 raise ValueError(f"Benchmark write path overlaps a read-only input: {path}")
+        # Remembered pack-member SHA-256s, shared by every scene and arm
+        # (MW3_DIGEST_CACHE_DIR). Without it each scene spent about 94 s rehashing the
+        # environment packs. Only digests are kept; decoded assets still load cold
+        # because the derived disk cache stays off.
+        if args.digest_cache == "off":
+            digest_cache = None
+        else:
+            digest_cache = (
+                Path(args.digest_cache).resolve()
+                if args.digest_cache
+                else BENCHMARK_ROOT.resolve() / "digest-cache"
+            )
+            if any(digest_cache.is_relative_to(root) for root in (data_root, game, launcher_runtime)):
+                raise ValueError(f"Digest cache overlaps a read-only input: {digest_cache}")
         default_name = "suite-benchmark.json" if args.suite else "c1mp1-benchmark.json"
         definition = (args.definition or FIXTURES / default_name).resolve(strict=True)
         if profile is None:
@@ -418,6 +469,7 @@ def main():
                 launcher_runtime,
                 executable,
                 settings,
+                digest_cache=digest_cache,
             )
         return run_scene(
             definition,
@@ -430,6 +482,7 @@ def main():
             settings,
             strict=args.strict,
             strict_capture=args.strict_capture,
+            digest_cache=digest_cache,
         )
     except (OSError, KeyError, ValueError) as error:
         print(f"benchmark: {error}", file=sys.stderr)

@@ -115,6 +115,9 @@ article[id] {
 .section-shell {
     padding-inline: var(--gutter);
 }
+/* Every page shares one header: the full-size brand on the left and a menu button on the right
+   that opens the links as a panel. On the homepage the header floats over the hero art; other
+   pages give it a solid background (.interior .site-header). */
 .site-header {
     position: absolute;
     top: 0;
@@ -122,11 +125,11 @@ article[id] {
     z-index: 5;
     display: flex;
     align-items: center;
-    gap: 4.6vw;
+    justify-content: space-between;
+    gap: 16px;
     width: 100%;
-    height: 3.776vw;
-    min-height: 56px;
-    padding-inline: 3.125vw;
+    height: 68px;
+    padding-inline: var(--gutter);
     border-bottom: 1px solid #ffffff1c;
     background: #10141462;
 }
@@ -146,20 +149,69 @@ article[id] {
     letter-spacing: 1.5px;
     white-space: nowrap;
 }
-.primary-nav {
+.site-header .brand span {
+    font-size: 17px;
+    letter-spacing: 2px;
+}
+.menu-toggle {
     display: flex;
     align-items: center;
-    gap: 2.1vw;
+    gap: 10px;
+    min-height: 44px;
+    padding: 8px 14px;
+    border: 1px solid #ffffff2e;
+    border-radius: 4px;
+    background: #10141499;
     font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+}
+.menu-toggle:hover,
+.menu-toggle[aria-expanded="true"] {
+    border-color: var(--amber);
+    color: var(--amber);
+}
+.menu-toggle svg {
+    width: 20px;
+    height: 20px;
+    stroke-width: 2;
+}
+.primary-nav {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: var(--gutter);
+    flex-direction: column;
+    width: 300px;
+    padding: 8px 0;
+    border: 1px solid var(--rule);
+    background: #111615;
+    box-shadow: 0 18px 40px #0000008c;
+    font-size: 16px;
+}
+.site-header.menu-open .primary-nav {
+    display: flex;
 }
 .primary-nav a {
-    padding: 12px 0;
+    padding: 11px 22px;
+}
+.primary-nav a:hover {
+    background: #ffffff0a;
 }
 .primary-nav a[aria-current="page"] {
     color: var(--amber);
+    box-shadow: inset 3px 0 var(--amber);
 }
-.menu-toggle {
-    display: none;
+/* Links that leave the site sit under a rule so the page links read as one group. */
+.primary-nav .nav-external {
+    margin-top: 8px;
+    padding-top: 15px;
+    border-top: 1px solid var(--rule);
+}
+.primary-nav .nav-external + .nav-external {
+    margin-top: 0;
+    padding-top: 11px;
+    border-top: 0;
 }
 .hero {
     position: relative;
@@ -473,7 +525,6 @@ a.family-project:focus-visible {
 .interior .site-header {
     position: relative;
     background: #111615;
-    height: 74px;
 }
 .page-banner {
     padding: 76px var(--gutter) 54px;
@@ -669,12 +720,6 @@ details p {
     .project-description {
         display: none;
     }
-    .site-header {
-        gap: 6vw;
-    }
-    .primary-nav {
-        gap: 3vw;
-    }
     .track-content {
         gap: 12px;
         left: 12px;
@@ -739,56 +784,25 @@ details p {
     :root {
         --gutter: 24px;
     }
-    .site-header,
-    .interior .site-header {
-        height: 68px;
-        min-height: 68px;
+    .site-header {
         padding-inline: 20px;
-        justify-content: space-between;
+    }
+    .site-header .brand {
         gap: 10px;
     }
-    .brand span {
-        font-size: 12px;
-        letter-spacing: 0.08em;
-    }
-    .brand {
-        gap: 10px;
-    }
-    .brand img {
-        width: 28px;
-        height: 28px;
-    }
-    .menu-toggle {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 0;
-        background: none;
-        border: 0;
+    .site-header .brand span {
         font-size: 14px;
-    }
-    .menu-toggle svg {
-        width: 20px;
+        letter-spacing: 1.5px;
     }
     .primary-nav {
-        display: none;
-        position: absolute;
-        top: 68px;
         left: 0;
         right: 0;
-        padding: 12px 24px 20px;
-        background: #111615;
-        border-bottom: 1px solid var(--rule);
+        width: auto;
+        border-inline: 0;
         font-size: 18px;
     }
-    .site-header.menu-open .primary-nav {
-        display: flex;
-        flex-direction: column;
-        align-items: stretch;
-        gap: 0;
-    }
     .primary-nav a {
-        padding: 12px 0;
+        padding: 13px 24px;
     }
     .hero {
         height: 600px;
@@ -995,17 +1009,6 @@ details p {
     }
 }
 @media (min-width: 761px) {
-    .site-header .brand {
-        width: 225px;
-    }
-    .site-header .brand span {
-        width: 179px;
-        font-size: 17px;
-        letter-spacing: 2px;
-    }
-    .primary-nav {
-        letter-spacing: 0.6px;
-    }
     .hero-copy {
         top: 39.1%;
     }
@@ -1041,15 +1044,6 @@ details p {
     .section-heading > p {
         letter-spacing: 0.35px;
     }
-    /* The links flow as one row from the approved start point. Each link used to have its own
-       fixed position, which broke whenever a link was added (Mod Studio, Discord). */
-    .primary-nav {
-        position: absolute;
-        top: 0;
-        bottom: 0;
-        left: 22.396vw;
-        gap: 2.1vw;
-    }
     .project-edition {
         font-family: RussoOne, sans-serif;
         font-weight: 400;
@@ -1073,33 +1067,6 @@ details p {
 }
 
 /* Project overviews extend the homepage's type, material, and amber controls. */
-.overview .site-header {
-    height: 82px;
-    padding-inline: var(--gutter);
-    gap: 32px;
-}
-.overview .site-header .brand {
-    width: auto;
-}
-.overview .site-header .brand span {
-    width: auto;
-    font-size: 14px;
-    letter-spacing: 1.5px;
-}
-.overview .primary-nav {
-    position: static;
-    inset: auto;
-    pointer-events: auto;
-    margin-left: auto;
-    gap: 24px;
-    letter-spacing: 0;
-    flex-wrap: wrap;
-}
-.overview .primary-nav a {
-    position: static;
-    transform: none;
-    padding: 8px 0;
-}
 .overview-banner {
     position: relative;
     display: grid;
@@ -1311,15 +1278,6 @@ details p {
     color: var(--amber);
 }
 @media (max-width: 1150px) {
-    .overview .site-header {
-        height: auto;
-        min-height: 82px;
-        padding-block: 18px;
-        flex-wrap: wrap;
-    }
-    .overview .primary-nav {
-        gap: 20px;
-    }
     .overview-layout {
         gap: 36px;
         grid-template-columns: 190px minmax(0, 1fr);
@@ -1335,36 +1293,7 @@ details p {
         gap: 20px;
     }
 }
-@media (max-width: 900px) and (min-width: 761px) {
-    .overview .primary-nav {
-        width: 100%;
-        margin-left: 0;
-        justify-content: space-between;
-    }
-    .overview .site-header .brand {
-        margin-bottom: 4px;
-    }
-}
 @media (max-width: 760px) {
-    .overview .site-header {
-        height: 68px;
-        min-height: 68px;
-        padding-block: 0;
-        flex-wrap: nowrap;
-    }
-    .overview .site-header .brand span {
-        font-size: 12px;
-    }
-    .overview .primary-nav {
-        position: absolute;
-        inset: 68px 0 auto;
-        padding: 12px 24px 20px;
-        gap: 0;
-        margin: 0;
-    }
-    .overview .primary-nav a {
-        padding: 12px 0;
-    }
     .overview-banner {
         display: flex;
         flex-direction: column;
@@ -1899,46 +1828,6 @@ details p {
     }
     .youtube-card {
         flex-basis: min(82vw, 320px);
-    }
-}
-@media (min-width: 761px) and (max-width: 1150px) {
-    .site-header,
-    .interior .site-header {
-        height: 68px;
-        min-height: 68px;
-        justify-content: space-between;
-    }
-    .menu-toggle {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 0;
-        background: none;
-        border: 0;
-        font-size: 14px;
-    }
-    .menu-toggle svg {
-        width: 20px;
-    }
-    .primary-nav {
-        display: none;
-        position: absolute;
-        top: 68px;
-        left: 0;
-        right: 0;
-        padding: 12px 3.125vw 20px;
-        background: #111615;
-        border-bottom: 1px solid var(--rule);
-        font-size: 18px;
-    }
-    .site-header.menu-open .primary-nav {
-        display: flex;
-        flex-direction: column;
-        align-items: stretch;
-        gap: 0;
-    }
-    .primary-nav a {
-        padding: 12px 0;
     }
 }
 @media (max-width: 1000px) {
@@ -2520,4 +2409,21 @@ details p {
     background:
         linear-gradient(135deg, rgba(239, 163, 72, 0.08), transparent 55%),
         #111615 url("assets/plates/surface-texture.webp") repeat;
+}
+/* The smallest phones (320px with a scrollbar) can't fit the 14px wordmark beside the button. */
+@media (max-width: 400px) {
+    .site-header {
+        padding-inline: 16px;
+    }
+    .site-header .brand {
+        gap: 8px;
+    }
+    .site-header .brand span {
+        font-size: 12px;
+        letter-spacing: 1px;
+    }
+    .menu-toggle {
+        gap: 8px;
+        padding-inline: 10px;
+    }
 }

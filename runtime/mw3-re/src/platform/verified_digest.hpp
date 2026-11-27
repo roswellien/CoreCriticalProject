@@ -31,7 +31,11 @@ namespace platform::verified_digest {
 // changes its write time and so hashes it again. With the cache off, every start hashes.
 inline std::string sha256_file(const std::filesystem::path &path, std::uint64_t bytes) {
 #if defined(MW3_VERIFIED_DIGEST_CACHE)
-  auto &cache = platform::derived_cache::default_cache();
+  // The derived cache when it is on; otherwise the digest-only cache, which the
+  // benchmark configures (derived_cache.hpp, digest_cache), or nothing.
+  auto &cache = platform::derived_cache::default_cache().is_enabled()
+                    ? platform::derived_cache::default_cache()
+                    : platform::derived_cache::digest_cache();
   std::string cache_key;
   if (cache.is_enabled()) {
     try {

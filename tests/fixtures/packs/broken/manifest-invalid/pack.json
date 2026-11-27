@@ -1,0 +1,30 @@
+{
+  "schema_version": 3,
+  "game_id": "mw3",
+  "id": "example-broken",
+  "name": "Example: visuals only",
+  "version": "one",
+  "author": "Core Critical examples",
+  "description": "One skin for the stock Thor's model.",
+  "provides": {
+    "skins": [
+      "Example Stripe"
+    ]
+  },
+  "visuals": [
+    {
+      "target": "mech-model:thor",
+      "kind": "skin",
+      "name": "Example Stripe",
+      "files": {
+        "textures": "visuals/thor_stripe.bwtex"
+      }
+    }
+  ],
+  "files": {
+    "visuals/thor_stripe.bwtex": {
+      "sha256": "c59deac13af53eca47dfef12c13c343c9c24e66602f2a9854c5cff9c6317b99b",
+      "bytes": 86
+    }
+  }
+}

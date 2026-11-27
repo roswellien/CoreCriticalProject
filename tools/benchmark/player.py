@@ -26,10 +26,10 @@ EVENT_PREFIX = "BENCHMARK-EVENT "
 SEED = 7
 # Each suite scene and the arena recipe whose hidden recording it replays.
 SCENE_RECIPES = {
-    "c1mp1": "c1mp1-4v4-reference.json",
-    "c2mp2": "c2mp2-4v4-reference.json",
-    "c3mp1": "c3mp1-4v4-reference.json",
-    "c4mp2": "c4mp2-8v8-stress.json",
+    "c1mp1": "scene1-c1mp1-2v2.json",
+    "c2mp2": "scene2-c2mp2-4v4.json",
+    "c3mp1": "scene3-c3mp1-6v6.json",
+    "c4mp2": "scene4-c4mp2-8v8.json",
 }
 # Both options must be in the game executable; releases before the benchmark lack them.
 REQUIRED_EXECUTABLE_OPTIONS = (b"--arena-record-every-update", b"--benchmark-scene")
@@ -256,7 +256,14 @@ def run(args):
     emit("progress", stage="play", scene=None, output=str(suite_root))
     try:
         runner.run_suite(
-            definition_path, suite_root, "smoke", data_root, runtime, executable, settings
+            definition_path,
+            suite_root,
+            "smoke",
+            data_root,
+            runtime,
+            executable,
+            settings,
+            digest_cache=work / "digest-cache",
         )
     except ValueError as error:
         scene, reason = failure_reason(suite_root)

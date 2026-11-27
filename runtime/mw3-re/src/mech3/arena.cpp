@@ -459,7 +459,8 @@ void arena_start() {
     const std::vector<Bot>& bots = g_setup->sides[side];
     for (size_t i = 0; i < bots.size(); ++i) {
       const int id = side == 0 ? static_cast<int>(i) : static_cast<int>(side_a.size() + i);
-      const int spot = spots[static_cast<size_t>(id)];
+      // A setup's own spot wins (parse_arena_setup: all bots have one or none).
+      const int spot = bots[i].spot >= 0 ? bots[i].spot : spots[static_cast<size_t>(id)];
       ai::AivRecord record;
       arena_bot_params(bots[i], side, pos[spot], yaw[spot], &record);
       g_names.push_back("arena_" + std::string(side == 0 ? "a" : "b") + "_" + std::to_string(i));
