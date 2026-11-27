@@ -41,6 +41,7 @@
 #include "platform/loading.hpp"
 #include "platform/render3d.h"
 #include "platform/prepared_visuals.h"
+#include "platform/rgb565.hpp"
 #include "platform/sha256.hpp"
 #include "renderer/surface_detail_bindings.hpp"
 #include <filesystem>
@@ -384,7 +385,28 @@ struct Texture {
   mw34::materials::SurfaceKey surface_key{};
   std::optional<mw34::materials::SurfaceKey> fixture_visual_key;
   std::uint64_t group_load_epoch{0};
+  // What the texture holds; set when the slot is allocated and sent with every
+  // upload, so the renderer can count memory by it and pick a storage format (#518).
+  vk::TextureSource source{vk::TextureSource::guest};
+  // The 16-bit format `pixels` was widened from, exactly (#518; content_pack16).
+  mw34::texture_staging::Pack16 pack16{mw34::texture_staging::Pack16::none};
 };
+
+// The 16-bit format a texture's current texels were widened from, exactly
+// (#518), from what made them. The game's own decode names it in the upload
+// key (format 1 RGB565, 2 ARGB1555, 3 ARGB4444). A pack replacement is RGB565
+// widened by image_pixels with the game texture's alpha, so it is exact only
+// where that texture was opaque (key format 1). A generated flare is drawn in
+// 8 bits. No key, or a kind that may not be narrowed, means none.
+mw34::texture_staging::Pack16 content_pack16(const Texture &entry,
+                                             const mw34::materials::SurfaceKey &key) {
+  using mw34::texture_staging::Pack16;
+  if (!mw34::texture_staging::may_pack16(entry.source) || entry.generated_rgba)
+    return Pack16::none;
+  if (entry.replacement)
+    return key.format == 1 ? Pack16::r5g6b5 : Pack16::none;
+  return mw34::texture_staging::pack16_for_upload_format(key.format);
+}
 
 struct LoggedFlareTexture {
   std::string name;
@@ -409,11 +431,10 @@ std::vector<uint32_t> image_pixels(const ::platform::prepared::Image &image,
                                         (uint64_t(image.height) * 2)));
         alpha = source[(std::size_t(sy) * source_width + sx) * 4 + 3];
       }
+      // The shared widening: the renderer stores these texels back at 16 bits
+      // (#518), which only works for the rounding platform/rgb565.hpp defines.
       pixels[std::size_t(y) * image.width + x] =
-          alpha == 0 ? 0
-                     : ((value >> 11) * 255 / 31) |
-                           (((value >> 5) & 63) * 255 / 63) << 8 |
-                           ((value & 31) * 255 / 31) << 16 | alpha << 24;
+          alpha == 0 ? 0 : ::platform::rgb565::to_rgba8(value, alpha);
     }
   return pixels;
 }
@@ -665,7 +686,7 @@ public:
         {"geometry_debug_normals", std::to_string(config.geometry_debug_normals)},
         {"temporal_inputs", std::to_string(config.temporal_inputs)},
         {"environment_packs_explicit", std::to_string(config.environment_packs_explicit)},
-        {"texture_staging", config.texture_staging}, {"sky_debug", config.sky_debug},
+        {"sky_debug", config.sky_debug},
         {"parallax", std::to_string(config.parallax_materials)},
         {"prepared_cache", std::to_string(prepared_cache_enabled_)},
         {"flare_style_modern", std::to_string(modern_flare_style_)}});
@@ -923,8 +944,9 @@ public:
   testing::NamedTextureTestState named_texture_state_for_test(
       int32_t handle) const {
     const auto &entry = textures_.at(std::size_t(handle));
-    return {entry.width, entry.height, entry.source_width, entry.source_height,
-            entry.generated_rgba, entry.pixels};
+    return {entry.width,         entry.height,         entry.source_width,
+            entry.source_height, entry.generated_rgba, entry.pixels,
+            entry.pack16};
   }
   void set_preload_fault_for_test(const vk::PreloadFaultInjection &fault) {
     drain();
@@ -956,6 +978,7 @@ public:
       result.completed_texture_handles.push_back(int32_t((receipt.first - 1) / 2));
     return result;
   }
+  std::size_t texture_memory_log_count_for_test() const { return texture_memory_log_count_; }
   bool texture_receipt_for_test(int32_t handle, bool sharp) {
     drain();
     return submitted_textures_.count(std::uint64_t(handle) * 2 + unsigned(sharp) + 1) != 0;
@@ -976,9 +999,9 @@ public:
     const auto &norm_img = surface_normal_image(normal_index);
     mw34::timing::ScopedDuration upload_timer(
         producer_resource_timing_.page_upload_target());
-    const auto handle = create_texture(
+    const auto handle = create_sourced_texture(
         int(norm_img.width), int(norm_img.height),
-        reinterpret_cast<const uint8_t *>(norm_img.pixels32.data()), 1);
+        reinterpret_cast<const uint8_t *>(norm_img.pixels32.data()), vk::TextureSource::normal);
     surface_normal_textures_.emplace(normal_index, handle);
     return handle;
   }
@@ -1543,14 +1566,18 @@ public:
   void prepare_canvas_textures(const std::vector<int32_t> &handles) override {
       std::vector<vk::TextureRef> references;
       for (const auto handle : handles) {
-          const auto &entry = textures_.at(handle);
+          auto &entry = textures_.at(handle);
+          // The HUD and menus draw into these every frame, so they are counted
+          // apart and never stored at 16 bits (#518).
+          entry.source = vk::TextureSource::canvas;
           references.push_back({std::uint64_t(handle) * 2 + 2,
                                 entry.version,
                                 entry.width,
                                 entry.height,
                                 vk::TexFormat::rgba8888,
                                 {},
-                                {}});
+                                {},
+                                entry.source});
       }
       const auto prepare = [this, &references] {
           // Return the failure as data: letting it escape a worker job permanently
@@ -1569,9 +1596,7 @@ public:
 
   int32_t create_texture(int width, int height, const uint8_t *rgba,
                          uint8_t) override {
-    const auto handle = allocate_texture_slot(width, height);
-    update_texture(handle, width, height, rgba);
-    return handle;
+    return create_sourced_texture(width, height, rgba, vk::TextureSource::guest);
   }
 
   void update_texture(int32_t handle, int width, int height,
@@ -1614,6 +1639,13 @@ public:
     entry.pixels.resize(std::size_t(width) * height);
     std::memcpy(entry.pixels.data(), rgba,
                 entry.pixels.size() * sizeof(std::uint32_t));
+    // The 16-bit storage format comes from the upload key around this call.
+    // Only zvid's create_texture and reload_texture set one, keyed by
+    // zvid::upload_format; the HUD, movies, menu images and the held frame
+    // upload with none and stay RGBA8. Anything that sets a key promises that
+    // the texels are exactly its format widened, since the card keeps only
+    // that format's bits.
+    entry.pack16 = content_pack16(entry, source_key);
     publish_texture_update(handle, source_key);
   }
 
@@ -1638,6 +1670,9 @@ public:
       entry.source_height = unsigned(height);
       entry.surface_key = active_key;
       entry.group_load_epoch = group_load_epoch_;
+      // create_texture's upload read the game's key before this was marked a
+      // flare; the generated texels are 8-bit (#518).
+      entry.pack16 = content_pack16(entry, active_key);
       // Generated and plain named textures are excluded from the prepared
       // replacement upload count.
       return handle;
@@ -1660,6 +1695,9 @@ public:
                        reinterpret_cast<const uint8_t *>(pixels.data()), type);
     auto &entry = textures_[handle];
     entry.replacement = replacement;
+    // create_texture's upload read the game's key before this was marked a
+    // replacement; the texels are image_pixels' RGB565 (#518).
+    entry.pack16 = content_pack16(entry, active_key);
     entry.source_width = unsigned(width);
     entry.source_height = unsigned(height);
     if (name)
@@ -1698,6 +1736,7 @@ public:
       if (lighting_.normals)
         surface_normals_.preload_pending = true;
       preload_mission_normal_textures();
+      log_mission_texture_memory();
       first_world_preload_pending_ = false;
     }
     local_lights_begin();
@@ -1930,9 +1969,9 @@ private:
     const auto found = prepared_normals_.find(&image);
     if (found != prepared_normals_.end())
       return found->second;
-    const auto handle = create_texture(
+    const auto handle = create_sourced_texture(
         int(image.width), int(image.height),
-        reinterpret_cast<const uint8_t *>(image.pixels.data()), 1);
+        reinterpret_cast<const uint8_t *>(image.pixels.data()), vk::TextureSource::normal);
     prepared_normals_.emplace(&image, handle);
     return handle;
   }
@@ -2397,7 +2436,16 @@ private:
 #include "frame_presentation.inc"
 
 private:
-  int32_t allocate_texture_slot(int width, int height) {
+  // Makes a texture slot and uploads its first pixels; create_texture is the
+  // game's entry point, this one also says what the texture holds.
+  int32_t create_sourced_texture(int width, int height, const uint8_t *rgba,
+                                 vk::TextureSource source) {
+    const auto handle = allocate_texture_slot(width, height, source);
+    update_texture(handle, width, height, rgba);
+    return handle;
+  }
+
+  int32_t allocate_texture_slot(int width, int height, vk::TextureSource source) {
     if (width <= 0 || height <= 0 || unsigned(width) > texture_limit_ ||
         unsigned(height) > texture_limit_) {
       throw std::runtime_error("Invalid mw3-re texture size");
@@ -2412,6 +2460,7 @@ private:
     auto &entry = textures_[handle];
     entry.width = unsigned(width);
     entry.height = unsigned(height);
+    entry.source = source;
     mw34::materials::SurfaceKey active_key{};
     if (mw34::materials::get_active_surface_key(&active_key)) {
       entry.surface_key = active_key;
@@ -2437,8 +2486,9 @@ private:
     }
   }
 
-  int32_t create_owned_texture(int width, int height, std::vector<std::uint32_t> pixels) {
-    const auto handle = allocate_texture_slot(width, height);
+  int32_t create_owned_texture(int width, int height, std::vector<std::uint32_t> pixels,
+                               vk::TextureSource source, mw34::texture_staging::Pack16 pack16) {
+    const auto handle = allocate_texture_slot(width, height, source);
     mw34::materials::SurfaceKey source_key{};
     mw34::materials::get_active_surface_key(&source_key);
     if (pixels.size() != std::size_t(width) * height)
@@ -2450,6 +2500,7 @@ private:
     // Prepared albedo conversion already owns this complete RGBA plane. Keep
     // that allocation instead of zeroing and copying a second full image.
     entry.pixels = std::move(pixels);
+    entry.pack16 = pack16;
     publish_texture_update(handle, source_key);
     return handle;
   }
@@ -2502,7 +2553,10 @@ private:
     }
     auto pixels = image_pixels(image);
     const auto handle =
-        create_owned_texture(int(image.width), int(image.height), std::move(pixels));
+        create_owned_texture(int(image.width), int(image.height), std::move(pixels),
+                             vk::TextureSource::prepared_skin,
+                             // image_pixels widened the prepared RGB565 plane, alpha 255 (#518).
+                             mw34::texture_staging::Pack16::r5g6b5);
     // The prepared reader preserves a declared hash without checking it. This
     // immutable slot gets an exact key from its complete visible RGB565 plane.
     textures_.at(handle).surface_key = prepared_fixture_key(image);
@@ -2936,7 +2990,9 @@ private:
                                texture_height,
                                vk::TexFormat::rgba8888,
                                {},
-                               entry.pixels};
+                               entry.pixels,
+                               entry.source,
+                               entry.pack16};
     if (!renderer_->preload_texture(texture_ref)) {
       preload_test_state_.failed_texture_handle = handle;
       return;
@@ -2952,6 +3008,19 @@ private:
 
   // Warming is optional. Budget/OOM stops the mission's remaining warmup;
   // real draws retain their existing lazy upload path and exact cache keys.
+  // One texture memory line per mission, once its world preload is done (#518).
+  void log_mission_texture_memory() {
+    if (!renderer_)
+      return;
+    // The preload's early returns (nothing pending, stopped, producer failed)
+    // skip its own drain, and the worker may still be using the renderer.
+    if (worker_)
+      worker_->drain();
+    VisualFloatScope float_scope;
+    renderer_->log_texture_memory("mission preload");
+    ++texture_memory_log_count_;
+  }
+
   void preload_mission_normal_textures() {
     VisualFloatScope guard;
     const bool world_normals = surface_normals_.preload_pending &&
@@ -3247,7 +3316,7 @@ private:
     const auto w = entry.width;
     const auto h = entry.height;
     vk::TextureRef ref{key, entry.version, w, h, vk::TexFormat::rgba8888, {},
-                       {}};
+                       {}, entry.source, entry.pack16};
     const auto current = submitted_textures_.find(ref.key);
     if (current == submitted_textures_.end() ||
         current->second != std::array<std::uint64_t, 3>{ref.hash, w, h}) {
@@ -3381,6 +3450,8 @@ private:
   testing::PreloadTestState preload_test_state_;
   bool prepared_preload_pending_{true};
   bool first_world_preload_pending_{false};
+  // Texture memory lines printed after mission preloads; never reset (#518 checks).
+  std::size_t texture_memory_log_count_{};
   bool logged_first_normal_trace_{false};
   // Names survive handle reuse/reloads; unknown names use the upload handle.
   // Stop after four distinct flare textures, with no growing set or log spam.
@@ -3681,6 +3752,18 @@ bool has_texture_receipt(VulkanFrameRenderer &renderer, int32_t handle, bool sha
 }
 bool is_texture_gpu_resident(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
   return preload_impl(renderer).backend_for_test().texture_resident(std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
+}
+std::size_t texture_memory_log_count(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).texture_memory_log_count_for_test();
+}
+mw34::texture_staging::Pack16 texture_format(VulkanFrameRenderer &renderer, int32_t handle,
+                                             bool sharp) {
+  return preload_impl(renderer).backend_for_test().texture_format_for_test(
+      std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
+}
+vk::TextureSource texture_source(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
+  return preload_impl(renderer).backend_for_test().texture_source_for_test(
+      std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
 }
 bool has_partial_texture_cache_entry(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
   return preload_impl(renderer).backend_for_test().partial_texture(std::uint64_t(handle) * 2 + unsigned(sharp) + 1);

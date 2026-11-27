@@ -403,6 +403,7 @@ These change how the game talks to the computer, not how it plays.
 
 - On Windows the game can be installed, and keep its data, in a folder whose name has any letters, and it works for a Windows user name with accents (Windows 10 version 1903 or later; before that, it says so and asks for plain English letters). A pilot or file name with accents from an earlier version of the rebuild is put right at the next start.
 - The graphics options no longer offer the software renderer, which the rebuild does not have: the video device list shows your graphics card only, and a setting saved by the original or an older rebuild that chose software starts on the card.
+- On the Core Critical renderer, textures that hold the original's 16-bit colors are kept at 16 bits on the graphics card, as the 1999 game kept them, instead of being padded to 32 bits, so the high-resolution texture packs take much less video memory. The picture looks the same: each color is within one step of 256 of before. The game's log says how much video memory each kind of texture takes after each mission loads.
 - **Gamepads work as they did on Windows.** A modern pad's sticks, triggers
   and buttons arrive in the order the game knew from Windows: the left stick
   steers and walks, the triggers are the throttle, the right stick looks.

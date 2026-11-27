@@ -3,6 +3,8 @@
 #include <span>
 #include <stdexcept>
 
+#include "platform/rgb565.hpp"
+
 namespace mw34::capture {
 enum class ColorFormat { rgb565, rgba8 };
 
@@ -26,9 +28,10 @@ inline void to_bgra(std::span<const std::uint8_t> source, std::span<std::uint8_t
         } else {
             const unsigned pixel =
                 source[pixel_index * 2] | (unsigned(source[pixel_index * 2 + 1]) << 8);
-            destination_pixel[0] = std::uint8_t((pixel & 31) * 255 / 31);
-            destination_pixel[1] = std::uint8_t(((pixel >> 5) & 63) * 255 / 63);
-            destination_pixel[2] = std::uint8_t(((pixel >> 11) & 31) * 255 / 31);
+            const auto color = ::platform::rgb565::widen(std::uint16_t(pixel));
+            destination_pixel[0] = std::uint8_t(color.blue);
+            destination_pixel[1] = std::uint8_t(color.green);
+            destination_pixel[2] = std::uint8_t(color.red);
             destination_pixel[3] = 255;
         }
     }

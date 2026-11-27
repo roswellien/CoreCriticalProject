@@ -16,6 +16,7 @@
 #include "gamez/zmodel/gmod_draw.h"
 #include "gamez/zmodel/gmod_geometry.h"
 #include "gamez/zmodel/gmod_light.h"
+#include "gamez/zimage/zimg_library.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_const.h"
@@ -1952,6 +1953,464 @@ void check_sealed_environment(SDL_Window *window,
   }
 }
 
+// 16-bit TexFormat payloads reach the card widened by texture_staging's table
+// copy, the same way through a mission preload and through a played frame (#518).
+void check_16bit_texture_staging() {
+  using namespace mw34::vkscene;
+  const std::array<TexFormat, 3> formats{TexFormat::rgb565, TexFormat::argb1555,
+                                         TexFormat::argb4444};
+  // Values that set every channel to a different level, so a swapped channel
+  // or format shows up in the read-back pixels.
+  const std::vector<std::uint16_t> values{0x0000, 0xffff, 0x7bef, 0x8421};
+  for (unsigned staging_format = 0; staging_format < formats.size(); ++staging_format) {
+    std::vector<std::uint32_t> expected;
+    for (const auto value : values)
+      expected.push_back(mw34::texture_staging::expand(value, staging_format));
+    const TextureRef texture{200 + staging_format, 1, 2, 2, formats[staging_format], values,
+                             {}};
+
+    Renderer preloaded(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
+    preloaded.begin_preload();
+    require(preloaded.preload_texture(texture), "A 16-bit preload texture was rejected");
+    preloaded.finalize_preload();
+    preloaded.end_preload();
+    require(preloaded.texture_pixels_for_test(texture.key) == expected,
+            "A preloaded 16-bit texture did not reach the card as the table copy widens it");
+
+    Renderer played(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
+    Scene scene{};
+    scene.width = 4;
+    scene.height = 4;
+    scene.color.resize(16);
+    scene.depth.resize(16);
+    scene.textures.push_back(texture);
+    played.render(scene);
+    require(played.texture_pixels_for_test(texture.key) == expected,
+            "A played 16-bit texture did not reach the card as the table copy widens it");
+  }
+}
+
+// The frontend trusts the game's upload key for a texture's 16-bit format
+// (#518), so the game's own decode must produce exactly that format's widened
+// values: every 16-bit value through texture_rgba, in each mode the upload key
+// tells apart, keyed by zvid::upload_format as create_texture and
+// reload_texture key it (1 opaque RGB565, 2 ARGB1555 with or without an alpha
+// plane, 3 ARGB4444 from an alpha plane).
+void check_upload_format_matches_decode() {
+  namespace staging = mw34::texture_staging;
+  using staging::Pack16;
+  const auto widen = [](unsigned value, unsigned bits) {
+    unsigned widened = 0, filled = 0;
+    while (filled < 8) {
+      widened = widened << bits | value;
+      filled += bits;
+    }
+    return (widened >> (filled - 8)) & 0xff;
+  };
+  // The texel the card samples for a packed value, widened back by repetition.
+  const auto unpack = [&](std::uint16_t packed, Pack16 format) {
+    unsigned red = 0, green = 0, blue = 0, alpha = 255;
+    if (format == Pack16::r5g6b5) {
+      red = widen(packed >> 11, 5), green = widen((packed >> 5) & 63, 6);
+      blue = widen(packed & 31, 5);
+    } else if (format == Pack16::a1r5g5b5) {
+      red = widen((packed >> 10) & 31, 5), green = widen((packed >> 5) & 31, 5);
+      blue = widen(packed & 31, 5), alpha = (packed >> 15) ? 255 : 0;
+    } else {
+      blue = widen(packed >> 12, 4), green = widen((packed >> 8) & 15, 4);
+      red = widen((packed >> 4) & 15, 4), alpha = widen(packed & 15, 4);
+    }
+    return std::uint32_t(red | green << 8 | blue << 16 | alpha << 24);
+  };
+  std::vector<std::uint16_t> values(65536);
+  std::vector<std::uint8_t> plane(65536);
+  for (unsigned value = 0; value < 65536; ++value) {
+    values[value] = std::uint16_t(value);
+    plane[value] = std::uint8_t(value * 37 >> 8);
+  }
+  auto &display = zvid::display();
+  const auto saved_alpha_4444 = display.alpha_4444;
+  struct Restore {
+    zvid::Display &display;
+    std::int32_t alpha_4444;
+    ~Restore() { display.alpha_4444 = alpha_4444; }
+  } restore{display, saved_alpha_4444};
+  struct Mode {
+    std::int32_t alpha, alpha_4444;
+    bool with_plane;
+    const char *what;
+  };
+  for (const Mode mode : {Mode{0, 1, false, "opaque RGB565"},
+                          Mode{1, 1, false, "one-bit alpha without a plane"},
+                          Mode{1, 0, true, "an alpha plane without ARGB4444"},
+                          Mode{1, 1, true, "an alpha plane as ARGB4444"}}) {
+    display.alpha_4444 = mode.alpha_4444;
+    zimg::Texture image{};
+    image.width = image.height = 256;
+    image.pixel_count = 65536;
+    image.flags = mode.alpha ? 2 : 0;
+    image.pixels = values.data();
+    image.alpha = mode.with_plane ? plane.data() : nullptr;
+    std::vector<std::uint32_t> rgba(65536);
+    zvid::texture_rgba(image, mode.alpha, reinterpret_cast<std::uint8_t *>(rgba.data()));
+    // The format code create_texture and reload_texture key this upload with.
+    const Pack16 format =
+        staging::pack16_for_upload_format(zvid::upload_format(image, mode.alpha));
+    if (format == Pack16::none)
+      throw std::runtime_error(std::string("The game's upload of ") + mode.what +
+                               " names no 16-bit format");
+    for (const auto texel : rgba)
+      if (unpack(staging::pack16_texel(texel, format), format) != texel)
+        throw std::runtime_error(std::string("The game's decode of ") + mode.what +
+                                 " is not exact in the format its upload key names");
+  }
+}
+
+// A game texture uploaded under the game's upload key reaches the card in the
+// key's 16-bit format; one uploaded with no key stays RGBA8 (#518).
+void check_upload_key_formats(SDL_Window *window, sdlfe::RendererBackend backend) {
+  using cc_mw3_re::testing::is_texture_gpu_resident;
+  using cc_mw3_re::testing::texture_format;
+  using mw34::texture_staging::Pack16;
+  auto renderer = make_check_renderer(window, backend);
+  renderer->set_viewport(0, 0, 64, 64);
+  // Red, green, blue and white; the cutout's first texel is clear.
+  const std::uint8_t opaque[16] = {255, 0, 0, 255, 0, 255, 0, 255,
+                                   0, 0, 255, 255, 255, 255, 255, 255};
+  const std::uint8_t cutout[16] = {0, 0, 0, 0, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255};
+  const auto upload = [&](std::uint32_t key_format, const std::uint8_t *pixels) {
+    if (key_format)
+      mw34::materials::set_active_surface_key({2, 2, key_format, 0x51800000ULL + key_format});
+    const auto handle = renderer->create_texture(2, 2, pixels, 1);
+    mw34::materials::clear_active_surface_key();
+    return handle;
+  };
+  const auto draw = [&](std::int32_t handle) {
+    renderer->clear(true, 0, 0, 0);
+    platform::DrawState state{};
+    state.texture = handle;
+    quad(*renderer, 0, 64, .1f, 0xffffffff, state);
+    std::vector<std::uint32_t> pixels;
+    int width = 0, height = 0;
+    require(renderer->read_back(&pixels, &width, &height), "Upload key fixture did not draw");
+    return pixels;
+  };
+  // Within one step of 256 per channel, for the card's filtering precision.
+  const auto same_picture = [](const std::vector<std::uint32_t> &first,
+                               const std::vector<std::uint32_t> &second) {
+    if (first.size() != second.size())
+      return false;
+    for (std::size_t index = 0; index < first.size(); ++index)
+      for (const unsigned shift : {0u, 8u, 16u, 24u})
+        if (std::abs(int((first[index] >> shift) & 255) - int((second[index] >> shift) & 255)) >
+            1)
+          return false;
+    return true;
+  };
+  const auto format_of = [&](std::int32_t handle) {
+    for (const bool sharp : {false, true})
+      if (is_texture_gpu_resident(*renderer, handle, sharp))
+        return texture_format(*renderer, handle, sharp);
+    throw std::runtime_error("Upload key fixture texture never reached the card");
+  };
+  const auto opaque_handle = upload(1, opaque);
+  const auto cutout_handle = upload(2, cutout);
+  const auto unkeyed_handle = upload(0, opaque);
+  const auto unkeyed_cutout_handle = upload(0, cutout);
+  const auto opaque_picture = draw(opaque_handle);
+  const auto cutout_picture = draw(cutout_handle);
+  require(same_picture(opaque_picture, draw(unkeyed_handle)) &&
+              same_picture(cutout_picture, draw(unkeyed_cutout_handle)),
+          "A texture stored at 16 bits drew differently from its RGBA8 copy");
+  require(format_of(opaque_handle) == Pack16::r5g6b5 &&
+              format_of(cutout_handle) == Pack16::a1r5g5b5 &&
+              format_of(unkeyed_handle) == Pack16::none,
+          "A game texture did not reach the card in its upload key's 16-bit format");
+  // During play an image never changes 16-bit format: new content under
+  // another key makes it RGBA8, and it draws that content.
+  mw34::materials::set_active_surface_key({2, 2, 2, 0x51800012ULL});
+  renderer->update_texture(opaque_handle, 2, 2, cutout);
+  mw34::materials::clear_active_surface_key();
+  require(same_picture(draw(opaque_handle), cutout_picture) &&
+              format_of(opaque_handle) == Pack16::none,
+          "A game texture reloaded under another upload key did not become RGBA8");
+}
+
+// 16-bit storage on the device (#518): which textures are stored at 16 bits,
+// what reaches the card, how the format changes in each path, and what the
+// device mask and the mip chain do.
+void check_16bit_texture_storage() {
+  using namespace mw34::vkscene;
+  namespace staging = mw34::texture_staging;
+  using staging::Pack16;
+  // 2x2 contents: exact in each format, and one no format holds.
+  const std::vector<std::uint32_t> opaque{0xff000000, 0xffffffff, 0xff0000ff, 0xff00ff00};
+  const std::vector<std::uint32_t> cutout{0x00000000, 0xffffffff, 0xff0000ff, 0x00ff0000};
+  const std::vector<std::uint32_t> four_bit{0x11223344, 0x8899aabb, 0xffeeddcc, 0x00112233};
+  const std::vector<std::uint32_t> eight_bit{0xff010203, 0xff040506, 0xff070809, 0xff0a0b0c};
+  // Each content's 16-bit format, as the frontend would name it.
+  const auto content_of = [&](const std::vector<std::uint32_t> &pixels) {
+    if (pixels == opaque)
+      return Pack16::r5g6b5;
+    if (pixels == cutout)
+      return Pack16::a1r5g5b5;
+    if (pixels == four_bit)
+      return Pack16::b4g4r4a4;
+    return Pack16::none;
+  };
+  const auto reference = [&](std::uint64_t key, std::uint64_t hash,
+                             const std::vector<std::uint32_t> &pixels,
+                             TextureSource source = TextureSource::guest) {
+    TextureRef texture{key, hash, 2, 2, TexFormat::rgba8888, {}, pixels};
+    texture.source = source;
+    texture.pack16 = content_of(pixels);
+    return texture;
+  };
+  const auto packed = [](const std::vector<std::uint32_t> &pixels, Pack16 format) {
+    std::vector<std::uint32_t> values;
+    for (const auto texel : pixels)
+      values.push_back(staging::pack16_texel(texel, format));
+    return values;
+  };
+  // B4G4R4A4 is optional for the blits that build mip chains (an RTX 5070
+  // lacks them), so 4-bit content follows what the renderer's device allows.
+  const auto four_bit_format = [](const Renderer &renderer) {
+    return (renderer.pack16_allowed_for_test() & staging::pack16_bit(Pack16::b4g4r4a4))
+               ? Pack16::b4g4r4a4
+               : Pack16::none;
+  };
+  const auto four_bit_texels = [&](const Renderer &renderer) {
+    return four_bit_format(renderer) == Pack16::none ? four_bit
+                                                     : packed(four_bit, Pack16::b4g4r4a4);
+  };
+
+  // Mission preload, with anisotropy so each image has a mip chain. Cut-out
+  // content stays RGBA8 there: blitted A1R5G5B5 mips would round its alpha.
+  Renderer preloaded(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
+  preloaded.begin_preload();
+  require(preloaded.preload_texture(reference(1, 1, opaque)) &&
+              preloaded.preload_texture(reference(2, 1, cutout)) &&
+              preloaded.preload_texture(reference(3, 1, four_bit)) &&
+              preloaded.preload_texture(reference(4, 1, eight_bit)) &&
+              preloaded.preload_texture(reference(5, 1, opaque, TextureSource::normal)) &&
+              preloaded.preload_texture(reference(6, 1, opaque, TextureSource::prepared_skin)),
+          "16-bit preload fixtures were rejected");
+  preloaded.finalize_preload();
+  preloaded.end_preload();
+  require(preloaded.texture_format_for_test(1) == Pack16::r5g6b5 &&
+              preloaded.texture_format_for_test(2) == Pack16::none &&
+              preloaded.texture_format_for_test(3) == four_bit_format(preloaded) &&
+              preloaded.texture_format_for_test(4) == Pack16::none &&
+              preloaded.texture_format_for_test(5) == Pack16::none &&
+              preloaded.texture_format_for_test(6) == Pack16::r5g6b5,
+          "Preload stored a texture in the wrong format for its content or source");
+  require(preloaded.texture_pixels_for_test(1) == packed(opaque, Pack16::r5g6b5) &&
+              preloaded.texture_pixels_for_test(2) == cutout &&
+              preloaded.texture_pixels_for_test(3) == four_bit_texels(preloaded) &&
+              preloaded.texture_pixels_for_test(4) == eight_bit,
+          "Preloaded textures did not reach the card as their texels");
+  require(preloaded.texture_levels_for_test(1) == 2 && preloaded.texture_levels_for_test(6) == 2,
+          "A 16-bit image has no mip chain under anisotropy");
+  // Tiny images can share one allocation size, so compare two 64x64 ones.
+  const auto large = [](std::uint64_t key, std::uint32_t texel, Pack16 content) {
+    TextureRef texture{key, 1, 64, 64, TexFormat::rgba8888, {},
+                       std::vector<std::uint32_t>(64 * 64, texel)};
+    texture.pack16 = content;
+    return texture;
+  };
+  preloaded.begin_preload();
+  require(preloaded.preload_texture(large(7, 0xff0000ff, Pack16::r5g6b5)) &&
+              preloaded.preload_texture(large(8, 0xff010203, Pack16::none)),
+          "64x64 preload fixtures were rejected");
+  preloaded.finalize_preload();
+  preloaded.end_preload();
+  require(preloaded.texture_format_for_test(7) == Pack16::r5g6b5 &&
+              preloaded.texture_memory_for_test(7)[1] < preloaded.texture_memory_for_test(8)[1],
+          "A 16-bit image takes no less memory than an RGBA8 one of the same size");
+
+  // A later preload of new content moves an image to the content's format
+  // where that strands no memory. Key 1 is 16-bit and must widen for 8-bit
+  // content. Key 4 is RGBA8 and shares its memory block with the others, so
+  // narrowing it would keep its old slice allocated beside the new copy: it
+  // stays RGBA8 in place, holding its 16-bit content exactly. Key 8 gets a new
+  // size, so it is remade anyway and narrows.
+  const auto key4_memory = preloaded.texture_memory_for_test(4);
+  TextureRef resized_opaque{8, 2, 32, 32, TexFormat::rgba8888, {},
+                            std::vector<std::uint32_t>(32 * 32, 0xff0000ff)};
+  resized_opaque.pack16 = Pack16::r5g6b5;
+  preloaded.begin_preload();
+  require(preloaded.preload_texture(reference(4, 2, opaque)) &&
+              preloaded.preload_texture(reference(1, 2, eight_bit)) &&
+              preloaded.preload_texture(resized_opaque),
+          "Format-changing preload was rejected");
+  preloaded.finalize_preload();
+  preloaded.end_preload();
+  require(preloaded.texture_format_for_test(1) == Pack16::none &&
+              preloaded.texture_pixels_for_test(1) == eight_bit,
+          "Preload did not widen a 16-bit image for 8-bit content");
+  require(preloaded.texture_format_for_test(4) == Pack16::none &&
+              preloaded.texture_pixels_for_test(4) == opaque &&
+              preloaded.texture_memory_for_test(4) == key4_memory,
+          "Preload remade an image in a shared memory block to narrow it");
+  require(preloaded.texture_format_for_test(8) == Pack16::r5g6b5 &&
+              preloaded.texture_pixels_for_test(8) ==
+                  packed(resized_opaque.pixels32, Pack16::r5g6b5),
+          "Preload did not narrow an image it remade for a new size");
+  require(preloaded.texture_resident(2) && preloaded.texture_resident(3) &&
+              preloaded.texture_pixels_for_test(2) == cutout &&
+              preloaded.texture_pixels_for_test(3) == four_bit_texels(preloaded),
+          "Remaking one preloaded image disturbed the others in its memory block");
+
+  // An image alone in its block gives the whole block back when remade, so a
+  // later preload narrows it, and one block remains.
+  Renderer alone(Renderer::ColorTarget::rgba8, {}, {1, 1, 1, false}, true);
+  alone.begin_preload();
+  require(alone.preload_texture(reference(1, 1, eight_bit)), "Lone preload fixture was rejected");
+  alone.finalize_preload();
+  alone.end_preload();
+  alone.begin_preload();
+  require(alone.preload_texture(reference(1, 2, opaque)),
+          "Lone format-changing preload was rejected");
+  alone.finalize_preload();
+  alone.end_preload();
+  require(alone.texture_format_for_test(1) == Pack16::r5g6b5 &&
+              alone.texture_pixels_for_test(1) == packed(opaque, Pack16::r5g6b5) &&
+              alone.preload_memory_block_count_for_test() == 1,
+          "Preload did not narrow an image alone in its memory block, or kept its old block");
+
+  // Without anisotropy there are no mip blits, so B4G4R4A4 needs only what
+  // Vulkan requires of every device, and cut-out content is stored as A1R5G5B5.
+  Renderer flat(Renderer::ColorTarget::rgba8, {}, {1, 1, 1, false}, true);
+  flat.begin_preload();
+  require(flat.preload_texture(reference(3, 1, four_bit)) &&
+              flat.preload_texture(reference(2, 1, cutout)),
+          "Preload without mip chains was rejected");
+  flat.finalize_preload();
+  flat.end_preload();
+  require(flat.texture_format_for_test(3) == four_bit_format(flat) &&
+              flat.texture_pixels_for_test(3) == four_bit_texels(flat),
+          "4-bit content was not stored as the device allows without mip chains");
+  require(flat.texture_format_for_test(2) == Pack16::a1r5g5b5 &&
+              flat.texture_pixels_for_test(2) == packed(cutout, Pack16::a1r5g5b5),
+          "Cut-out content was not stored as A1R5G5B5 without mip chains");
+
+  // The checks' mask: every format off, then only B4G4R4A4 off.
+  Renderer masked(Renderer::ColorTarget::rgba8, {}, {1, 1, 1, false}, true);
+  masked.set_pack16_disabled_for_test(staging::kAllPack16);
+  masked.begin_preload();
+  require(masked.preload_texture(reference(1, 1, opaque)), "Masked preload was rejected");
+  masked.finalize_preload();
+  masked.end_preload();
+  require(masked.texture_format_for_test(1) == Pack16::none,
+          "A texture was stored at 16 bits with every format switched off");
+  masked.set_pack16_disabled_for_test(staging::pack16_bit(Pack16::b4g4r4a4));
+  masked.begin_preload();
+  require(masked.preload_texture(reference(2, 1, four_bit)) &&
+              masked.preload_texture(reference(3, 1, opaque)),
+          "Masked preload was rejected");
+  masked.finalize_preload();
+  masked.end_preload();
+  require(masked.texture_format_for_test(2) == Pack16::none &&
+              masked.texture_format_for_test(3) == Pack16::r5g6b5,
+          "Switching B4G4R4A4 off did not keep only 4-bit content at RGBA8");
+
+  // Play path: new images follow their content; later content only keeps or widens.
+  Renderer played(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
+  const auto render = [&played](std::vector<TextureRef> textures) {
+    Scene scene{};
+    scene.width = 4;
+    scene.height = 4;
+    scene.color.resize(16);
+    scene.depth.resize(16);
+    scene.textures = std::move(textures);
+    played.render(scene);
+  };
+  render({reference(11, 1, opaque), reference(12, 1, cutout), reference(13, 1, four_bit),
+          reference(14, 1, eight_bit), reference(15, 1, opaque, TextureSource::normal)});
+  require(played.texture_format_for_test(11) == Pack16::r5g6b5 &&
+              played.texture_format_for_test(12) == Pack16::none &&
+              played.texture_pixels_for_test(12) == cutout &&
+              played.texture_format_for_test(13) == four_bit_format(played) &&
+              played.texture_format_for_test(14) == Pack16::none &&
+              played.texture_format_for_test(15) == Pack16::none &&
+              played.texture_pixels_for_test(11) == packed(opaque, Pack16::r5g6b5) &&
+              played.texture_levels_for_test(11) == 2,
+          "Play stored a new texture in the wrong format for its content or source");
+  const auto memory_before = played.texture_memory_for_test(11);
+  // A cached key whose reference carries no pixels changes nothing.
+  render({TextureRef{11, 1, 2, 2, TexFormat::rgba8888, {}, {}}});
+  require(played.texture_format_for_test(11) == Pack16::r5g6b5 &&
+              played.texture_memory_for_test(11) == memory_before,
+          "A reference without pixels changed or remade a cached texture");
+  // New content exact only in another 16-bit format widens to RGBA8; 8-bit
+  // content too; an RGBA8 image given exact content stays RGBA8.
+  render({reference(11, 2, cutout), reference(13, 2, eight_bit), reference(14, 2, opaque)});
+  require(played.texture_format_for_test(11) == Pack16::none &&
+              played.texture_pixels_for_test(11) == cutout &&
+              played.texture_format_for_test(13) == Pack16::none &&
+              played.texture_pixels_for_test(13) == eight_bit &&
+              played.texture_format_for_test(14) == Pack16::none &&
+              played.texture_pixels_for_test(14) == opaque,
+          "Play narrowed an image or kept a 16-bit format its new content does not fit");
+  // A play-time image has its own allocation, so a later preload narrows it.
+  played.begin_preload();
+  require(played.preload_texture(reference(14, 3, opaque)),
+          "Preload over a play-time image was rejected");
+  played.finalize_preload();
+  played.end_preload();
+  require(played.texture_format_for_test(14) == Pack16::r5g6b5 &&
+              played.texture_pixels_for_test(14) == packed(opaque, Pack16::r5g6b5),
+          "Preload did not narrow a play-time image with its own memory");
+  // A size change and a format change in one upload: the new image is RGBA8.
+  // Key 14 is R5G6B5 after the preload above.
+  const TextureRef resized{14, 4, 4, 4, TexFormat::rgba8888, {},
+                           std::vector<std::uint32_t>(16, 0xff010203)};
+  render({resized});
+  require(played.texture_format_for_test(14) == Pack16::none &&
+              played.texture_pixels_for_test(14) == resized.pixels32,
+          "A resized texture with 8-bit content kept its 16-bit format");
+  // A canvas image stays RGBA8 even when given exact content.
+  played.prepare_canvas_textures({reference(16, 1, {}, TextureSource::canvas)});
+  render({reference(16, 1, opaque, TextureSource::canvas)});
+  require(played.texture_format_for_test(16) == Pack16::none,
+          "A canvas texture was stored at 16 bits");
+  // A key first drawn as a 16-bit guest texture is remade as RGBA8 when it
+  // becomes a canvas, at canvas setup rather than in a later frame.
+  render({reference(17, 1, opaque)});
+  require(played.texture_format_for_test(17) == Pack16::r5g6b5,
+          "Canvas fixture did not start as a 16-bit texture");
+  played.prepare_canvas_textures({reference(17, 2, {}, TextureSource::canvas)});
+  require(played.texture_format_for_test(17) == Pack16::none,
+          "Canvas setup kept a 16-bit image for a canvas");
+}
+
+// The texture memory line prints once per mission, after the first world
+// scene's preload; teardown before that scene, and later scenes, print none (#518).
+void check_texture_memory_line(SDL_Window *window, sdlfe::RendererBackend backend) {
+  using cc_mw3_re::testing::texture_memory_log_count;
+  auto renderer = make_check_renderer(window, backend, {}, {});
+  renderer->set_viewport(0, 0, 64, 64);
+  const auto scene = [&] {
+    renderer->begin_scene();
+    renderer->end_scene();
+  };
+  scene();
+  require(texture_memory_log_count(*renderer) == 0,
+          "A scene before any mission printed the texture memory line");
+  renderer->mission_changed({});
+  scene();
+  require(texture_memory_log_count(*renderer) == 1,
+          "A mission's first scene did not print one texture memory line");
+  scene();
+  require(texture_memory_log_count(*renderer) == 1,
+          "A mission's second scene printed the texture memory line again");
+  renderer->mission_changed({});
+  renderer->reset_scene_resources();
+  scene();
+  require(texture_memory_log_count(*renderer) == 1,
+          "A mission torn down before its first scene still printed the texture memory line");
+}
+
 void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                     const sdlfe::CoreCriticalQuality &quality,
                     bool materials = false) {
@@ -1966,6 +2425,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       std::error_code error;
       std::filesystem::remove(folder / "mesh.bin", error);
       std::filesystem::remove(folder / "textures.bin", error);
+      std::filesystem::remove(folder / "replacement_colors.bin", error);
       std::filesystem::remove(folder / "normals.bin", error);
       std::filesystem::remove(folder / "materials.bin", error);
       std::filesystem::remove(folder / "other_textures.bin", error);
@@ -3285,6 +3745,68 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
           "Generated flare was counted as a prepared replacement upload");
   renderer->release_texture(flare);
 
+  // The 16-bit format the frontend tags a named texture's texels with (#518),
+  // on creation and on reload, under each upload key the game sets: a pack
+  // replacement is RGB565 only where the game texture was opaque (key format
+  // 1), and a generated flare is drawn in 8 bits whatever the key says.
+  const auto keyed_tags = [&](const char *name, unsigned size, const uint8_t *source) {
+    std::vector<mw34::texture_staging::Pack16> tags;
+    for (std::uint32_t key_format = 1; key_format <= 3; ++key_format) {
+      mw34::materials::ScopedUploadKey key(
+          mw34::materials::SurfaceKey{size, size, key_format, 0x51800020ULL + key_format});
+      const auto handle = renderer->create_named_texture(name, int(size), int(size), source, 1);
+      tags.push_back(cc_mw3_re::testing::named_texture_state(*renderer, handle).pack16);
+      renderer->update_texture(handle, int(size), int(size), source);
+      tags.push_back(cc_mw3_re::testing::named_texture_state(*renderer, handle).pack16);
+      renderer->release_texture(handle);
+    }
+    return tags;
+  };
+  {
+    using mw34::texture_staging::Pack16;
+    require(keyed_tags("authored", 1, original) ==
+                std::vector<Pack16>{Pack16::r5g6b5, Pack16::r5g6b5, Pack16::none, Pack16::none,
+                                    Pack16::none, Pack16::none},
+            "A pack replacement was tagged with a 16-bit format other than RGB565 under an "
+            "opaque game texture's key");
+    require(keyed_tags("lflare2", flare_size, flare_source.data()) ==
+                std::vector<Pack16>(6, Pack16::none),
+            "A generated flare was tagged with a 16-bit format");
+  }
+  // A pack replacement stored at 16 bits keeps exactly the pack's own RGB565
+  // colors: its RGBA8 copy, staged as the renderer stages it, gives back the
+  // pack's texels. The two colors are mid-range and differ in every channel,
+  // so a change to the replacement's widening that dropping the low bits no
+  // longer undoes (a color adjustment, swapped channels) fails here; the
+  // all-values round trip of the shared widening is in
+  // tests/test_texture_storage.cpp.
+  {
+    using mw34::texture_staging::Pack16;
+    constexpr std::uint16_t first_color = 0xa505;  // red 20, green 40, blue 5
+    constexpr std::uint16_t second_color = 0x1e5b; // red 3, green 50, blue 27
+    auto pack = prepared_fixture::textures();
+    pack.replace(pack.size() - 4, 4,
+                 std::string{char(first_color & 0xff), char(first_color >> 8),
+                             char(second_color & 0xff), char(second_color >> 8)});
+    std::ofstream(folder / "replacement_colors.bin", std::ios::binary) << pack;
+    auto colors_assets = sdlfe::CoreCriticalAssets{};
+    colors_assets.textures = (folder / "replacement_colors.bin").u8string();
+    auto colors_renderer = make_check_renderer(window, backend, {}, colors_assets);
+    const uint8_t opaque[] = {64, 64, 64, 255};
+    mw34::materials::ScopedUploadKey key(mw34::materials::SurfaceKey{1, 1, 1, 0x51800030ULL});
+    const auto handle = colors_renderer->create_named_texture("authored", 1, 1, opaque, 1);
+    const auto state = cc_mw3_re::testing::named_texture_state(*colors_renderer, handle);
+    colors_renderer->release_texture(handle);
+    require(state.pack16 == Pack16::r5g6b5 && state.pixels.size() == 2,
+            "A pack replacement under an opaque game texture's key was not tagged RGB565 at "
+            "its own size");
+    std::vector<std::uint16_t> stored(state.pixels.size());
+    mw34::texture_staging::stage_rgba8(reinterpret_cast<unsigned char *>(stored.data()),
+                                       state.pixels.data(), state.pixels.size(), state.pack16);
+    require(stored == std::vector<std::uint16_t>{first_color, second_color},
+            "A pack replacement stored at 16 bits did not keep the pack's own RGB565 colors");
+  }
+
   auto original_flare_assets = sdlfe::CoreCriticalAssets{};
   original_flare_assets.flare_style = "original";
   auto original_flare_renderer =
@@ -4507,6 +5029,11 @@ int main(int argc, char **argv) {
         check_sealed_environment(window, backend);
         check_lab_preview_lighting(window, backend);
       }
+      check_16bit_texture_staging();
+      check_upload_format_matches_decode();
+      check_upload_key_formats(window, backend);
+      check_16bit_texture_storage();
+      check_texture_memory_line(window, backend);
       check_prepared(window, backend, quality, material_check);
     } else if (quality_check)
       check_quality(window, backend, quality);
