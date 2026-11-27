@@ -1,7 +1,7 @@
 # Current project direction
 
-Follow the Required GitHub PR workflow below and `docs/github-workflow.md`. Read
-before choosing work:
+Follow the Required GitHub PR workflow below and `docs/github-workflow.md`; it is a
+standing project rule, not a one-session plan. Read before choosing work:
 - `docs/renderer-feature-parity.md` — MW3-RE work packages, gates and pickup rules.
 - `docs/roadmap.md` — active tracks and feature plans.
 - `docs/faithful-modernization-plan.md` — fidelity rules and host/service contracts.
@@ -13,13 +13,13 @@ Vulkan and opt-in Core Critical features; do not restart as a remake.
 Follow `docs/project-status-reporting.md` in updates, PRs and releases: report live
 native behavior, fidelity coverage, defects and validation. Probes, saved replay
 and original-binary hooks aren't live gameplay. Guest ABI, floating-point
-contracts, resource lifetimes and required initialization effects apply.
+contracts, resource contracts and required initialization effects apply.
 
 Check running processes before heavy builds, tests or captures; don't duplicate
 long jobs or contend with active builds or captures. Preserve uncommitted work and
-coordinate with graphics or asset writers.
+the work of other graphics or asset writers.
 
-State the execution boundary advanced and run narrow checks. Don't add a new
+State the execution boundary advanced and run narrow, meaningful checks. Don't add a new
 verifier or report tool unless it closes a named missing check or fixes a concrete
 defect. Fail unknown required services visibly; never stub fake API success or
 pre-seed expected output state. No runtime interpreter or original-binary fallback.
