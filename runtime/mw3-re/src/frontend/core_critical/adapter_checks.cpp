@@ -1952,6 +1952,43 @@ void check_sealed_environment(SDL_Window *window,
   }
 }
 
+// 16-bit TexFormat payloads reach the card widened by texture_staging's table
+// copy, the same way through a mission preload and through a played frame (#518).
+void check_16bit_texture_staging() {
+  using namespace mw34::vkscene;
+  const std::array<TexFormat, 3> formats{TexFormat::rgb565, TexFormat::argb1555,
+                                         TexFormat::argb4444};
+  // Values that set every channel to a different level, so a swapped channel
+  // or format shows up in the read-back pixels.
+  const std::vector<std::uint16_t> values{0x0000, 0xffff, 0x7bef, 0x8421};
+  for (unsigned staging_format = 0; staging_format < formats.size(); ++staging_format) {
+    std::vector<std::uint32_t> expected;
+    for (const auto value : values)
+      expected.push_back(mw34::texture_staging::expand(value, staging_format));
+    const TextureRef texture{200 + staging_format, 1, 2, 2, formats[staging_format], values,
+                             {}};
+
+    Renderer preloaded(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
+    preloaded.begin_preload();
+    require(preloaded.preload_texture(texture), "A 16-bit preload texture was rejected");
+    preloaded.finalize_preload();
+    preloaded.end_preload();
+    require(preloaded.texture_pixels_for_test(texture.key) == expected,
+            "A preloaded 16-bit texture did not reach the card as the table copy widens it");
+
+    Renderer played(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
+    Scene scene{};
+    scene.width = 4;
+    scene.height = 4;
+    scene.color.resize(16);
+    scene.depth.resize(16);
+    scene.textures.push_back(texture);
+    played.render(scene);
+    require(played.texture_pixels_for_test(texture.key) == expected,
+            "A played 16-bit texture did not reach the card as the table copy widens it");
+  }
+}
+
 void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                     const sdlfe::CoreCriticalQuality &quality,
                     bool materials = false) {
@@ -4507,6 +4544,7 @@ int main(int argc, char **argv) {
         check_sealed_environment(window, backend);
         check_lab_preview_lighting(window, backend);
       }
+      check_16bit_texture_staging();
       check_prepared(window, backend, quality, material_check);
     } else if (quality_check)
       check_quality(window, backend, quality);

@@ -90,7 +90,6 @@ struct RendererBridgeConfig {
   bool buffer_reserve{true};
   bool buffer_growth_trace{false};
   bool tl_combine{true};
-  std::string texture_staging;
   std::string sky_debug;
   std::string sun_shadow_audit;
 
@@ -191,9 +190,6 @@ struct RendererBridgeConfig {
         cfg.tl_combine = false;
       else if (std::strcmp(v, "1") == 0)
         cfg.tl_combine = true;
-    }
-    if (const char *v = std::getenv("MW34_TEXTURE_STAGING")) {
-      cfg.texture_staging = v;
     }
     if (const char *v = std::getenv("MW34_SKY_DEBUG")) {
       cfg.sky_debug = v;

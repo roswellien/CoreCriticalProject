@@ -1577,41 +1577,7 @@ public:
                     std::memcpy(staging_destination, texture_ref.pixels32.data(),
                                 texture_ref.pixels32.size() * 4);
                 } else {
-                    const bool staged = !bridge_config.texture_staging.empty() &&
-                                        bridge_config.texture_staging != "0";
-                    if (staged) {
-                        const unsigned format =
-                            texture_ref.format == TexFormat::rgb565     ? 0
-                            : texture_ref.format == TexFormat::argb1555 ? 1
-                                                                        : 2;
-                        mw34::texture_staging::copy(staging_destination,
-                                                    texture_ref.pixels.data(),
-                                                    texture_ref.pixels.size(), format);
-                    } else {
-                        for (std::size_t i = 0; i < texture_ref.pixels.size(); ++i) {
-                            const unsigned pixel = texture_ref.pixels[i];
-                            std::uint32_t red, green, blue, alpha;
-                            if (texture_ref.format == TexFormat::rgb565) {
-                                red = ((pixel >> 11) & 31) * 255 / 31;
-                                green = ((pixel >> 5) & 63) * 255 / 63;
-                                blue = (pixel & 31) * 255 / 31;
-                                alpha = 255;
-                            } else if (texture_ref.format == TexFormat::argb1555) {
-                                red = ((pixel >> 10) & 31) * 255 / 31;
-                                green = ((pixel >> 5) & 31) * 255 / 31;
-                                blue = (pixel & 31) * 255 / 31;
-                                alpha = (pixel & 0x8000) ? 255 : 0;
-                            } else {
-                                red = ((pixel >> 8) & 15) * 17;
-                                green = ((pixel >> 4) & 15) * 17;
-                                blue = (pixel & 15) * 17;
-                                alpha = ((pixel >> 12) & 15) * 17;
-                            }
-                            const std::uint32_t converted =
-                                red | green << 8 | blue << 16 | alpha << 24;
-                            std::memcpy(staging_destination + 4 * i, &converted, 4);
-                        }
-                    }
+                    stage_16bit(staging_destination, texture_ref);
                 }
             }
 
@@ -1990,44 +1956,10 @@ private:
              VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
       auto *tp = static_cast<unsigned char *>(texUpload.mapped);
       for (auto &[c, t] : changed) {
-        if (t->format == TexFormat::rgba8888) {
+        if (t->format == TexFormat::rgba8888)
           std::memcpy(tp, t->pixels32.data(), t->pixels32.size() * 4);
-          tp += VkDeviceSize(t->width) * t->height * 4;
-          continue;
-        }
-        const bool staged = !bridge_config.texture_staging.empty() &&
-                            bridge_config.texture_staging != "0";
-        if (staged) {
-          const unsigned format = t->format == TexFormat::rgb565     ? 0
-                                  : t->format == TexFormat::argb1555 ? 1
-                                                                     : 2;
-          mw34::texture_staging::copy(tp, t->pixels.data(), t->pixels.size(),
-                                      format);
-          tp += VkDeviceSize(t->width) * t->height * 4;
-          continue;
-        }
-        for (size_t i = 0; i < t->pixels.size(); ++i) {
-          const unsigned p = t->pixels[i];
-          std::uint32_t r, g, b, a;
-          if (t->format == TexFormat::rgb565) {
-            r = ((p >> 11) & 31) * 255 / 31;
-            g = ((p >> 5) & 63) * 255 / 63;
-            b = (p & 31) * 255 / 31;
-            a = 255;
-          } else if (t->format == TexFormat::argb1555) {
-            r = ((p >> 10) & 31) * 255 / 31;
-            g = ((p >> 5) & 31) * 255 / 31;
-            b = (p & 31) * 255 / 31;
-            a = (p & 0x8000) ? 255 : 0;
-          } else {
-            r = ((p >> 8) & 15) * 17;
-            g = ((p >> 4) & 15) * 17;
-            b = (p & 15) * 17;
-            a = ((p >> 12) & 15) * 17;
-          }
-          const std::uint32_t v = r | g << 8 | b << 16 | a << 24;
-          std::memcpy(tp + 4 * i, &v, 4);
-        }
+        else
+          stage_16bit(tp, *t);
         tp += VkDeviceSize(t->width) * t->height * 4;
       }
     }
@@ -4158,6 +4090,18 @@ private:
     free_unused_model_buffers(kFreeAgeFrames);
     free_unused_textures(kFreeAgeFrames);
   }
+  // Widens a 16-bit TexFormat payload into RGBA8 staging. Preload and play both
+  // stage through this one table copy (texture_staging.hpp), so the two paths
+  // can't disagree about a texel.
+  static void stage_16bit(unsigned char *destination, const TextureRef &texture_ref) {
+    unsigned staging_format = 2; // argb4444
+    if (texture_ref.format == TexFormat::rgb565)
+      staging_format = 0;
+    else if (texture_ref.format == TexFormat::argb1555)
+      staging_format = 1;
+    mw34::texture_staging::copy(destination, texture_ref.pixels.data(),
+                                texture_ref.pixels.size(), staging_format);
+  }
   // Creates a texture's image during play; false when video memory stays full.
   // #496: a player's game ended when a texture did not fit during play. Now the
   // figures are logged, old models and textures are freed and creation is tried
@@ -4557,6 +4501,49 @@ public:
     const auto block = preload_memory_blocks_.find(texture.memory);
     return {texture.memory_offset, texture.memory_size, texture.memory_alignment,
             block == preload_memory_blocks_.end() ? 0 : block->second.capacity};
+  }
+  // Copies a resident RGBA8 texture's base level back to the CPU, so checks can
+  // compare what reached the card with what the staging copy should have written.
+  std::vector<std::uint32_t> texture_pixels_for_test(std::uint64_t key) {
+    settle();
+    const auto &texture = textures.at(key);
+    if (!texture.valid)
+      throw std::runtime_error("Reading back a texture that holds no pixels");
+    const VkDeviceSize bytes = VkDeviceSize(texture.width) * texture.height * 4;
+    ensure(readback, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    check(f.vkResetCommandPool(device, commandPool, 0), "reset command pool");
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    check(f.vkBeginCommandBuffer(cmd, &begin_info), "begin texture readback");
+    barrier(texture.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
+            VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    copyOut(texture.image, readback.buffer, 0, VK_IMAGE_ASPECT_COLOR_BIT, texture.width,
+            texture.height);
+    VkMemoryBarrier host_read{};
+    host_read.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    host_read.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    host_read.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1,
+                           &host_read, 0, nullptr, 0, nullptr);
+    barrier(texture.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,
+            VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    check(f.vkEndCommandBuffer(cmd), "end texture readback");
+    check(f.vkResetFences(device, 1, &fence), "reset fence");
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &cmd;
+    check(f.vkQueueSubmit(queue, 1, &submit_info, fence), "submit texture readback");
+    check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL),
+          "wait texture readback");
+    std::vector<std::uint32_t> pixels(std::size_t(texture.width) * texture.height);
+    std::memcpy(pixels.data(), readback.mapped, bytes);
+    return pixels;
   }
   void discard_texture_for_test(std::uint64_t key) {
     if (preload_active_ || preload_pending_count())

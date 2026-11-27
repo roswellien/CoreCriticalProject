@@ -665,7 +665,7 @@ public:
         {"geometry_debug_normals", std::to_string(config.geometry_debug_normals)},
         {"temporal_inputs", std::to_string(config.temporal_inputs)},
         {"environment_packs_explicit", std::to_string(config.environment_packs_explicit)},
-        {"texture_staging", config.texture_staging}, {"sky_debug", config.sky_debug},
+        {"sky_debug", config.sky_debug},
         {"parallax", std::to_string(config.parallax_materials)},
         {"prepared_cache", std::to_string(prepared_cache_enabled_)},
         {"flare_style_modern", std::to_string(modern_flare_style_)}});
