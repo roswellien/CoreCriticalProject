@@ -218,6 +218,7 @@ class Render3D {
 
   virtual void begin_material_draw(const MaterialDrawContext &) {}
   virtual void end_material_draw() noexcept {}
+  virtual void select_terrain_cell(int32_t, int32_t, int32_t) {}
   virtual void begin_model_draw(const ModelDrawContext&) {}
   virtual void end_model_draw() noexcept {}
   virtual bool replaces_model_geometry() const { return false; }

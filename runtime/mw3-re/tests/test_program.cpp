@@ -14157,7 +14157,7 @@ TEST(mission_c1m1_reticle_picks_out_to_the_weapons_range_headless) {
           k.on_owens = k.node && mech3::program_hud_node_object(k.node) == owens;
           // The sky 300 m over the Owens: a miss. Each group in turn, the ER lasers' last.
           const float sky[3] = {o.pos[0], o.pos[1] + 300.0f, o.pos[2]};
-          for (int g : {1, 2, 4, 5, 3}) {
+          for (int g : {0, 1, 2, 4, 3}) {  // the groups are 0..4 (groups[5])
             if (!mech3::mech_select_group(player, g)) continue;
             Sky y;
             y.group = g;
@@ -20600,7 +20600,7 @@ struct SavedMapHost : zin::Host {  // the SDL host's: the map is the settings' b
 std::vector<uint8_t> w40_run(const std::string& dir, const std::function<void(platform::RegFile&)>& before,
                              const std::function<void()>& at_start,
                              const std::function<bool(mech3::GameEngine&, mech3::Mech3App&)>& frame,
-                             platform::Input* input = nullptr) {
+                             platform::Input* input = nullptr, BoxHost* image_host = nullptr) {
   platform::RegFile settings(dir + "/settings.reg");
   if (before) before(settings);
   mech3::reset_states();
@@ -20619,7 +20619,8 @@ std::vector<uint8_t> w40_run(const std::string& dir, const std::function<void(pl
   {
     mech3::GameEngine engine(p, "mech3.exe -nofmv");
     engine.quiet = true;
-    BoxHost host;
+    BoxHost default_host;
+    BoxHost& host = image_host ? *image_host : default_host;  // a test's own, for its images
     host.e = &engine;
     ztwod::set_host(&host);
     mech3::Mech3App app(&engine);
@@ -26266,21 +26267,127 @@ TEST(mission_c1m1_pause_at_16_9_is_the_same_after_the_options_headless) {
 // 0: Escape, OPTIONS, then GRAPHICS & AUDIO, at modes 5, 13 and 15, each
 // screen's origin and a widget's rect as at mode 5.
 namespace {
+// MW3_MENU_WIDE set (or unset, for null) for a scope: the owner's 4:3 menus
+// decision reads it (Engine::menu_vmode), so a test of either layout pins it.
+struct ScopedMenuWideEnv {
+  std::string saved_value;
+  bool had_saved = false;
+  explicit ScopedMenuWideEnv(const char* value) {
+    if (const char* current = std::getenv("MW3_MENU_WIDE")) {
+      had_saved = true;
+      saved_value = current;
+    }
+    set(value);
+  }
+  void set(const char* value) {
+#if defined(_WIN32)
+    _putenv_s("MW3_MENU_WIDE", value ? value : "");
+#else
+    if (value)
+      setenv("MW3_MENU_WIDE", value, 1);
+    else
+      unsetenv("MW3_MENU_WIDE");
+#endif
+  }
+  ~ScopedMenuWideEnv() { set(had_saved ? saved_value.c_str() : nullptr); }
+};
+
+// One object's place on its screen: its rect, or its point twice when it has none.
+struct ObjectPlace {
+  int32_t left, top, right, bottom;
+  bool operator==(const ObjectPlace&) const = default;
+};
+std::vector<ObjectPlace> object_places(mech3::MenuScreen* s) {
+  std::vector<ObjectPlace> places;
+  for (ztwod::Object2D* o = s->head; o; o = o->next) {
+    if (const ztwod::Rect* r = o->get_rect()) places.push_back({r->left, r->top, r->right, r->bottom});
+    else places.push_back({o->get_x(), o->get_y(), o->get_x(), o->get_y()});
+  }
+  return places;
+}
+// The widest right edge of a screen's objects (its rect or its point).
+int32_t rightmost(const std::vector<ObjectPlace>& places) {
+  int32_t right = 0;
+  for (const ObjectPlace& p : places) right = std::max(right, p.right);
+  return right;
+}
+
+// The shipped images, each fetch its own texture of the image's size: each
+// option page binds its own copy of the same BACKGROUND, and a test of which
+// one is the menu background source tells them apart by pointer.
+struct DistinctImageHost : BoxHost {
+  zimg::Texture* image_get(const char* n) override {
+    zimg::Texture* shipped = n && *n ? zimg::fetch_image(n) : nullptr;
+    return shipped ? image_new(shipped->width, shipped->height) : nullptr;
+  }
+  zimg::Texture* image_release(zimg::Texture*) override { return nullptr; }
+  void image_path(const char*) override {}
+  void texture_free(zimg::Texture*) override {}
+  zimg::Texture* image_new(int32_t w, int32_t h) override {
+    auto* t = static_cast<zimg::Texture*>(std::calloc(1, sizeof(zimg::Texture)));
+    t->flags = 1, t->width = static_cast<int16_t>(w), t->height = static_cast<int16_t>(h), t->width_again = t->width;
+    t->pixel_count = w * h;
+    t->pixels = std::calloc(static_cast<size_t>(w) * h, 2);
+    return t;
+  }
+};
+
+// Each option page's own backdrop and the menu background source while it shows.
+struct PageBackdrop {
+  const zimg::Texture* backdrop = nullptr;
+  const zimg::Texture* source = nullptr;
+  bool baked = false;  // FastMenu baked the page into one still picture, hiding the live source (#552)
+};
+
 struct OptionsPlace {
+  // The walk through every page (walk_all_pages): game options, upgrades,
+  // game options again, graphics and audio, game options, controls, game
+  // options, then RESUME to the mission.
+  PageBackdrop game, upgrades_page, game_after_upgrades, gfx, game_after_gfx, controls, game_after_controls;
+  bool resumed = false;
+  const zimg::Texture* source_after_resume = nullptr;
+  const zimg::Texture* source_after_teardown = nullptr;
   int32_t game_origin = -1, gfx_origin = -1;
   int32_t accept[4] = {}, resolution[4] = {};
   bool sensitivity = false, upgrades = false;  // ours on the game options: bound
   int32_t upgrades_origin = -1;                // the UPGRADES page, reached from them and left by BACK
+  std::vector<ObjectPlace> game_objects, gfx_objects, upgrades_objects;  // every object on each page
 };
-OptionsPlace c1m1_options_place(int32_t mode) {
+// `keep_wide_menus` leaves wide_menus (and any_resolution) on, as players have
+// them by default, with MW3_MENU_WIDE as `menu_wide_env`; otherwise the menus'
+// 4:3 frame is pinned with wide_menus off. `walk_all_pages` loads the shipped
+// images (DistinctImageHost) and walks every page and back to the mission,
+// recording each page's backdrop and the menu background source. With
+// `quit_on_gfx` it stops on Graphics & Audio instead and tears the engine down
+// with that page still on top. `fast_menu` runs with FastMenu (-seasick), which
+// bakes each page unless the screen reports the HD menu background ready
+// (`hd_ready`, #552).
+OptionsPlace c1m1_options_place(int32_t mode, bool keep_wide_menus = false, const char* menu_wide_env = nullptr,
+                                bool walk_all_pages = false, bool quit_on_gfx = false, bool fast_menu = false,
+                                bool hd_ready = false) {
   OptionsPlace out;
-  // The 4:3 menus' frame is what this pins (wide menus, on by default, off).
-  const bool wide = zfix::options().wide_menus;
-  zfix::options().wide_menus = false;
+  ScopedMenuWideEnv wide_env(menu_wide_env);
+  const zfix::Options saved_fix = zfix::options();
+  zfix::options().wide_menus = keep_wide_menus;
+  if (keep_wide_menus) zfix::options().any_resolution = true;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
   zutl::mount(MW3_GAME_DIR);
-  zutl::set_write_dir(temp_dir("options_place_write"));
+  if (walk_all_pages) zutl::mount(std::string(MW3_GAME_DIR) + "/zbd");
+  const std::string dir = temp_dir("options_place_write");
+  zutl::set_write_dir(dir);
+  if (keep_wide_menus) {  // the saved InGameVMode, as regedit writes it (the menus' mode is taken from it at the start)
+    char text[256];
+    std::snprintf(text, sizeof text,
+                  "Windows Registry Editor Version 5.00\r\n\r\n"
+                  "[HKEY_CURRENT_USER\\Software\\MicroProse\\MechWarrior 3\\1.0]\r\n"
+                  "\"InGameVMode\"=dword:%08x\r\n", mode);
+    std::FILE* f = std::fopen((dir + "/settings.reg").c_str(), "wb");
+    std::fputc(0xff, f), std::fputc(0xfe, f);
+    for (const char* c = text; *c; ++c) std::fputc(*c, f), std::fputc(0, f);
+    std::fclose(f);
+  }
+  platform::RegFile settings(dir + "/settings.reg");
   mech3::reset_states();
   reset_process_state();
   mech3::missions() = mech3::Missions{};
@@ -26308,16 +26415,23 @@ OptionsPlace c1m1_options_place(int32_t mode) {
   FakeWindow window;
   FakeAlert alert;
   FakeClock clock;
-  FakeScreen screen;
+  struct HdScreen : FakeScreen {
+    bool hd_ready = false;
+    bool hd_menu_background_ready() const override { return hd_ready; }
+  } screen;
+  screen.hd_ready = hd_ready;
   platform::SilentSoundOutput sound;
   mech3::MountFiles files;
   mech3::Platform p;
   p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
   p.input = &keys;
+  if (keep_wide_menus) p.settings = &settings;
   {
-    mech3::GameEngine engine(p, "mech3.exe -nofmv");
+    mech3::GameEngine engine(p, fast_menu ? "mech3.exe -nofmv -seasick" : "mech3.exe -nofmv");
     engine.quiet = true;
-    BoxHost host;
+    BoxHost plain_host;
+    DistinctImageHost image_host;
+    BoxHost& host = walk_all_pages ? image_host : plain_host;
     host.e = &engine;
     ztwod::set_host(&host);
     mech3::Mech3App app(&engine);
@@ -26333,27 +26447,58 @@ OptionsPlace c1m1_options_place(int32_t mode) {
       const ztwod::Rect* r = c.get_rect();
       o[0] = r->left, o[1] = r->top, o[2] = r->right, o[3] = r->bottom;
     };
+    auto backdrop_of = [](mech3::MenuScreen* s) {
+      const bool baked = !s->background.owner;  // the bake takes the live background off the page
+      return PageBackdrop{s->background.image, zrndr::menu_background_source(), baked};
+    };
     engine.on_present = [&](int) {
       zgame::State* now = app.current();
       ++frames;
+      if (now == &st.core && step == 8) {  // back in the mission after RESUME
+        out.resumed = true;
+        out.source_after_resume = zrndr::menu_background_source();
+        step = 3;
+        return;
+      }
       if (now == &st.core) {
         ++core;
         if (core == 5) keys.key(1, true);  // Escape
         if (core == 6) keys.key(1, false);
         return;
       }
-      if (now == &st.pause && step == 0) {
+      if (now == &st.pause && (step == 0 || step == 7)) {
         auto* ps = dynamic_cast<mech3::PauseScreen*>(engine.screen_of(st.pause.screen_));
-        if (ps) ps->on_button(mech3::PauseScreen::kOptions, 0, 0), step = 1;
+        if (ps && step == 0) ps->on_button(mech3::PauseScreen::kOptions, 0, 0), step = 1;
+        else if (ps) ps->on_button(mech3::PauseScreen::kResume, 0, 0), step = 8;
         return;
       }
       auto* os = dynamic_cast<mech3::OptionsState*>(now);
       if (!os) return;
       mech3::MenuScreen* scr = engine.screen_of(os->screen_);
-      if (os->kind == mech3::OptionsState::kGame && step == 1) {
+      if (walk_all_pages && os->kind == mech3::OptionsState::kGame && step == 4) {
         auto* g = dynamic_cast<mech3::GameOptionsScreen*>(scr);
         if (!g) return;
+        out.game_after_gfx = backdrop_of(g);
+        g->controls.on_left_up();
+        step = 5;
+      } else if (walk_all_pages && os->kind == mech3::OptionsState::kControls && step == 5) {
+        auto* c = dynamic_cast<mech3::ControlsScreen*>(scr);
+        if (!c) return;
+        out.controls = backdrop_of(c);
+        c->accept.on_left_up();
+        step = 6;
+      } else if (walk_all_pages && os->kind == mech3::OptionsState::kGame && step == 6) {
+        auto* g = dynamic_cast<mech3::GameOptionsScreen*>(scr);
+        if (!g) return;
+        out.game_after_controls = backdrop_of(g);
+        g->back.on_left_up();
+        step = 7;
+      } else if (os->kind == mech3::OptionsState::kGame && step == 1) {
+        auto* g = dynamic_cast<mech3::GameOptionsScreen*>(scr);
+        if (!g) return;
+        out.game = backdrop_of(g);
         out.game_origin = g->origin_x;
+        out.game_objects = object_places(g);
         rect(g->accept, out.accept);
         out.sensitivity = g->has_sensitivity, out.upgrades = g->has_upgrades;
         if (g->has_upgrades) g->upgrades.on_left_up(), step = 10;
@@ -26361,24 +26506,30 @@ OptionsPlace c1m1_options_place(int32_t mode) {
       } else if (os->kind == mech3::OptionsState::kUpgrades && step == 10) {
         auto* u = dynamic_cast<mech3::UpgradesScreen*>(scr);
         if (!u) return;
+        out.upgrades_page = backdrop_of(u);
         out.upgrades_origin = u->origin_x;
+        out.upgrades_objects = object_places(u);
         u->back.on_left_up();
         step = 11;
       } else if (os->kind == mech3::OptionsState::kGame && step == 11) {
         auto* g = dynamic_cast<mech3::GameOptionsScreen*>(scr);
         if (!g) return;
+        out.game_after_upgrades = backdrop_of(g);
         g->gfx_audio.on_left_up();
         step = 2;
       } else if (os->kind == mech3::OptionsState::kGfxAudio && step == 2) {
         auto* g = dynamic_cast<mech3::GfxAudioScreen*>(scr);
         if (!g) return;
+        out.gfx = backdrop_of(g);
         out.gfx_origin = g->origin_x;
+        out.gfx_objects = object_places(g);
         rect(g->resolution, out.resolution);
-        step = 3;
+        if (walk_all_pages && !quit_on_gfx) g->back.on_left_up(), step = 4;
+        else step = 3;
       }
     };
     CountingPump pump;
-    pump.limit = 900;
+    pump.limit = walk_all_pages ? 1500 : 900;
     pump.stop = [&] { return step == 3; };
     app.run(pump);
     mech3::missions().cleanup(false);
@@ -26387,11 +26538,12 @@ OptionsPlace c1m1_options_place(int32_t mode) {
     mech3::set_app(nullptr);
     ztwod::set_host(nullptr);
   }
+  out.source_after_teardown = zrndr::menu_background_source();
   zrdr::close_archives(true);
   mech3::reset_states();
   reset_process_state();
   mech3::options() = mech3::Options{};
-  zfix::options().wide_menus = wide;
+  zfix::options() = saved_fix;
   return out;
 }
 }  // namespace
@@ -26400,36 +26552,13 @@ OptionsPlace c1m1_options_place(int32_t mode) {
 // in a mission at 16:9 with the wide menus: each screen's canvas, origin and
 // its ACCEPT's rect, and the controls' DEFAULT buttons.
 namespace {
-struct ScopedMenuWideEnv {
-  std::string saved_value;
-  bool had_saved = false;
-  explicit ScopedMenuWideEnv(const char* value) {
-    if (const char* current = std::getenv("MW3_MENU_WIDE")) {
-      had_saved = true;
-      saved_value = current;
-    }
-    set(value);
-  }
-  void set(const char* value) {
-#if defined(_WIN32)
-    _putenv_s("MW3_MENU_WIDE", value ? value : "");
-#else
-    if (value)
-      setenv("MW3_MENU_WIDE", value, 1);
-    else
-      unsetenv("MW3_MENU_WIDE");
-#endif
-  }
-  ~ScopedMenuWideEnv() { set(had_saved ? saved_value.c_str() : nullptr); }
-};
-
 struct ControlsTrip {
   int32_t game_w = -1, game_origin = -1, ctl_w = -1, ctl_origin = -1;
   int32_t game_accept[4] = {}, ctl_accept[4] = {}, ctl_reset[4] = {};
   int32_t ctl_bg_w = -1, ctl_bg_x = -1, game_bg_w = -1;  // the backgrounds' image widths, the controls' x
 };
-ControlsTrip c1m1_controls_trip(int32_t mode, bool wide) {
-  ScopedMenuWideEnv wide_env("1");
+ControlsTrip c1m1_controls_trip(int32_t mode, bool wide, const char* menu_wide_env = "1") {
+  ScopedMenuWideEnv wide_env(menu_wide_env);
   ControlsTrip out;
   const zfix::Options saved_fix = zfix::options();
   zfix::options().any_resolution = true;
@@ -26583,6 +26712,151 @@ TEST(mission_c1m1_options_from_the_pause_keep_the_menus_frame_headless) {
     EXPECT(std::equal(v.accept, v.accept + 4, v5.accept) && std::equal(v.resolution, v.resolution + 4, v5.resolution));
   }
   EXPECT(v5.accept[2] > 0 || v5.accept[0] > 0);
+}
+
+// Issue 519: with players' default settings (wide_menus on, MW3_MENU_WIDE
+// unset: the owner's 4:3 menus), the option pages a mission builds at its own
+// wide mode are shown on the menus' 640x480 canvas, so they must be laid out
+// for that canvas: every object where it is at mode 5, at 16:9 and 21:9 alike.
+// With MW3_MENU_WIDE=1 the menus' canvas is the mission's, and the pages
+// spread over it as before.
+TEST(mission_c1m1_options_from_the_pause_4x3_by_default_headless) {
+  if (!have_game()) return;
+  const OptionsPlace v5 = c1m1_options_place(5, true);
+  EXPECT(!v5.game_objects.empty() && !v5.gfx_objects.empty());
+  EXPECT(v5.accept[2] > 0 && v5.accept[2] <= 640);
+  for (const int32_t mode : {13, 17}) {
+    const OptionsPlace v = c1m1_options_place(mode, true);
+    std::printf("default options from the pause at mode %d: ACCEPT right %d (mode 5: %d), rightmost %d %d %d\n",
+                mode, v.accept[2], v5.accept[2], rightmost(v.game_objects), rightmost(v.gfx_objects),
+                rightmost(v.upgrades_objects));
+    EXPECT(v.game_objects == v5.game_objects);
+    EXPECT(v.gfx_objects == v5.gfx_objects);
+    EXPECT(v.upgrades_objects == v5.upgrades_objects);
+    // The controls page, reached the same way: its canvas, ACCEPT and DEFAULT as at 640x480.
+    const ControlsTrip c = c1m1_controls_trip(mode, true, nullptr);
+    std::printf("default controls from the pause at mode %d: canvas %d ACCEPT right %d MOUSE DEFAULT right %d\n", mode,
+                c.ctl_w, c.ctl_accept[2], c.ctl_reset[2]);
+    EXPECT(c.game_w == 640 && c.ctl_w == 640 && c.game_accept[2] == 431 && c.ctl_accept[2] == 430 &&
+           c.ctl_reset[2] == 45);
+  }
+  // The legacy wide menus: spread over the 853 canvas, as before.
+  const OptionsPlace wide = c1m1_options_place(13, true, "1");
+  std::printf("MW3_MENU_WIDE=1 options from the pause at mode 13: ACCEPT right %d, rightmost %d %d %d\n",
+              wide.accept[2], rightmost(wide.game_objects), rightmost(wide.gfx_objects),
+              rightmost(wide.upgrades_objects));
+  EXPECT(wide.accept[2] == 644);
+  EXPECT(wide.gfx_objects != v5.gfx_objects && rightmost(wide.gfx_objects) > 640);
+  EXPECT(wide.upgrades_objects.empty() || wide.upgrades_objects != v5.upgrades_objects);
+}
+
+// Issue 519: the option pages reached from the main menu borrow its image, so
+// their show and drop leave the main menu's HD background source alone: once
+// the main menu's option screens are built (main_menu_background registers it),
+// OPTIONS, GRAPHICS & AUDIO, BACK, BACK keep it registered, back at the main
+// menu too.
+TEST(main_menu_options_keep_the_main_menu_background_source_headless) {
+  if (!have_game()) return;
+  W40Setup w("519_main_menu_backdrop");
+  // A texture for every named image (no archive holds them loaded at the main
+  // menu here), so the main menu has an image to lend.
+  struct AnyImageHost : DistinctImageHost {
+    zimg::Texture* image_get(const char* n) override { return n && *n ? image_new(640, 480) : nullptr; }
+  } image_host;
+  int stage = 0;
+  const zimg::Texture* at_main = nullptr;
+  const zimg::Texture* on_game = nullptr;
+  const zimg::Texture* on_gfx = nullptr;
+  const zimg::Texture* game_again = nullptr;
+  const zimg::Texture* back_at_main = nullptr;
+  auto walk = [&](mech3::GameEngine& engine, mech3::Mech3App& app) {
+    auto* os = dynamic_cast<mech3::OptionsState*>(app.current());
+    if (stage == 0 && at_main_menu(app)) {
+      at_main = mech3::main_menu()->background.image;  // what its borrowers register (main_menu_background)
+      const_cast<mech3::MainMenu*>(mech3::main_menu())->buttons[mech3::MainMenuButton::kOptions].on_left_up();
+      stage = 1;
+    } else if (stage == 1 && os && os->kind == mech3::OptionsState::kGame) {
+      auto* g = dynamic_cast<mech3::GameOptionsScreen*>(engine.screen_of(os->screen_));
+      if (!g) return false;
+      on_game = zrndr::menu_background_source();
+      g->gfx_audio.on_left_up();
+      stage = 2;
+    } else if (stage == 2 && os && os->kind == mech3::OptionsState::kGfxAudio) {
+      on_gfx = zrndr::menu_background_source();
+      os->escape();  // back to the game options
+      stage = 3;
+    } else if (stage == 3 && os && os->kind == mech3::OptionsState::kGame) {
+      game_again = zrndr::menu_background_source();
+      os->escape();  // back to the main menu
+      stage = 4;
+    } else if (stage == 4 && at_main_menu(app)) {
+      back_at_main = zrndr::menu_background_source();
+      return true;
+    }
+    return false;
+  };
+  w40_run(w.dir, nullptr, nullptr, walk, nullptr, &image_host);
+  EXPECT(stage == 4);
+  EXPECT(at_main != nullptr);
+  EXPECT(on_game == at_main && on_gfx == at_main && game_again == at_main);
+  EXPECT(back_at_main == at_main);
+}
+
+// Issue 519: in a mission there is no main menu to register the menu
+// background source (Engine::main_menu_background), so the live GPU menu
+// never recognized the option pages' backdrop and drew no HD background. Each
+// page registers its own backdrop while it shows (its own copy: four textures,
+// one picture) and drops it when it leaves, the page below registering its own
+// again; after RESUME, and once the screens are freed, nothing is left registered.
+TEST(mission_c1m1_options_background_source_headless) {
+  if (!have_game()) return;
+  const OptionsPlace v = c1m1_options_place(13, true, nullptr, true);
+  auto shows_own = [](const PageBackdrop& page) { return page.backdrop && page.source == page.backdrop; };
+  std::printf("background source: game %d, upgrades %d, game %d, gfx %d, game %d, controls %d, game %d; resumed %d, after %p, teardown %p\n",
+              shows_own(v.game), v.upgrades_page.backdrop ? shows_own(v.upgrades_page) : -1,
+              v.upgrades_page.backdrop ? shows_own(v.game_after_upgrades) : -1,
+              shows_own(v.gfx), shows_own(v.game_after_gfx), shows_own(v.controls), shows_own(v.game_after_controls), v.resumed,
+              static_cast<const void*>(v.source_after_resume), static_cast<const void*>(v.source_after_teardown));
+  EXPECT(shows_own(v.game) && shows_own(v.gfx) && shows_own(v.controls));
+  EXPECT(shows_own(v.game_after_gfx) && shows_own(v.game_after_controls));
+  if (v.upgrades_page.backdrop) EXPECT(shows_own(v.upgrades_page) && shows_own(v.game_after_upgrades));
+  EXPECT(v.game.backdrop != v.gfx.backdrop && v.game.backdrop != v.controls.backdrop);
+  EXPECT(v.resumed && v.source_after_resume == nullptr && v.source_after_teardown == nullptr);
+}
+
+// Ours (issue 519): quitting with an in-mission options page still on top frees
+// its backdrop with the screens, so the engine clears the menu background
+// source as it deletes them; nothing is left pointing at the freed picture.
+TEST(mission_c1m1_options_quit_on_a_page_clears_the_background_source_headless) {
+  if (!have_game()) return;
+  const OptionsPlace v = c1m1_options_place(13, true, nullptr, true, true);
+  const bool gfx_was_the_source = v.gfx.backdrop && v.gfx.source == v.gfx.backdrop;
+  std::printf("quit on gfx: source was its backdrop %d, after teardown %p\n", gfx_was_the_source,
+              static_cast<const void*>(v.source_after_teardown));
+  EXPECT(gfx_was_the_source);
+  EXPECT(v.source_after_teardown == nullptr);
+}
+
+// Ours (issue 519 with #552): with FastMenu on and the HD menu background
+// ready, the in-mission option pages aren't baked, so each stays live with its
+// own backdrop registered as the source; with HD not ready they keep the
+// original bake.
+TEST(mission_c1m1_options_fast_menu_keep_the_hd_background_headless) {
+  if (!have_game()) return;
+  const OptionsPlace hd = c1m1_options_place(13, true, nullptr, true, false, true, true);
+  const OptionsPlace baked = c1m1_options_place(13, true, nullptr, true, false, true, false);
+  auto live_own = [](const PageBackdrop& page) {
+    return page.backdrop && page.source == page.backdrop && !page.baked;
+  };
+  std::printf("fast menu, hd ready: game %d, gfx %d, game %d, controls %d, game %d; resumed %d; "
+              "hd not ready baked: game %d, gfx %d\n",
+              live_own(hd.game), live_own(hd.gfx), live_own(hd.game_after_gfx), live_own(hd.controls),
+              live_own(hd.game_after_controls), hd.resumed, baked.game.baked, baked.gfx.baked);
+  EXPECT(live_own(hd.game) && live_own(hd.gfx) && live_own(hd.controls));
+  EXPECT(live_own(hd.game_after_gfx) && live_own(hd.game_after_controls));
+  EXPECT(hd.resumed && hd.source_after_resume == nullptr && hd.source_after_teardown == nullptr);
+  // Controls keeps its background in the list when baked (as Mech3.exe does), so only these two show it.
+  EXPECT(baked.game.baked && baked.gfx.baked);
 }
 
 // Ours (16:9 menus, wide_menus with any_resolution; resolution.md): at mode

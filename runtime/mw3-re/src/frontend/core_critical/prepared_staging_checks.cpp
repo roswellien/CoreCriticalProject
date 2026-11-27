@@ -8,6 +8,7 @@
 #include "renderer/normal_codec.hpp"
 #include "renderer/fixture_observation_emission.hpp"
 #include "renderer/surface_materials.hpp"
+#include "renderer/streamed_height_cache.hpp"
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/geometry/resource.hpp"
 
@@ -841,11 +842,11 @@ void check_prepared_models_surface_materials() {
                         retained->mesh_uv_hash == mesh_uv_hash &&
                         retained->material.height_amplitude == -4.f,
                     "Owned draw lost its source/image/chart/epoch metadata");
-            require(mw34::materials::height_binding_bytes({retained, retained}, 16) == 16,
+            require(mw34::materials::height_binding_bytes({retained, retained}, 4) == 4,
                     "Repeated alias owner was charged once per draw instead of once per packet");
             bool rejected = false;
             try {
-                (void)mw34::materials::height_binding_bytes({retained}, 15);
+                (void)mw34::materials::height_binding_bytes({retained}, 3);
             } catch (const std::runtime_error &) {
                 rejected = true;
             }
@@ -854,11 +855,11 @@ void check_prepared_models_surface_materials() {
             replacement->image =
                 std::make_shared<const mw34::materials::SurfaceMaterialImage>(*retained->image);
             require(!mw34::materials::same_height_binding(retained, replacement) &&
-                        mw34::materials::height_binding_bytes({retained, replacement}, 32) == 32,
+                        mw34::materials::height_binding_bytes({retained, replacement}, 8) == 8,
                     "A replacement image inherited an older allocation owner");
             rejected = false;
             try {
-                (void)mw34::materials::height_binding_bytes({retained, replacement}, 31);
+                (void)mw34::materials::height_binding_bytes({retained, replacement}, 7);
             } catch (const std::runtime_error &) {
                 rejected = true;
             }
@@ -882,21 +883,21 @@ void check_prepared_models_surface_materials() {
             try {
                 (void)mw34::materials::read_surface_materials(
                     limited, "authored:close", mesh_uv_hash, {"authored"},
-                    mw34::materials::max_surface_sidecar_bytes, 15);
+                    mw34::materials::max_surface_sidecar_bytes, 3);
             } catch (const std::runtime_error &) {
                 rejected = true;
             }
             require(rejected, "Decoded limit was not enforced before the height image allocation");
         }
         require(retained && retained->image->pixels.size() == 4 &&
-                    retained->material.material_name == "authored" && retained_budget->used() == 16,
+                    retained->material.material_name == "authored" && retained_budget->used() == 4,
                 "Queued height image died with PreparedModels");
         retained.reset();
         require(retained_budget->used() == 0, "Final queued model image did not release its reservation");
         {
             auto selected_environment = std::make_shared<platform::prepared::EnvironmentSelection>();
             selected_environment->surface_budget =
-                std::make_shared<mw34::materials::SurfaceDecodedBudget>(16);
+                std::make_shared<mw34::materials::SurfaceDecodedBudget>(4);
             auto shared_options = owned_options;
             shared_options.environment = selected_environment;
             std::shared_ptr<const mw34::materials::HeightBinding> queued;
@@ -911,14 +912,14 @@ void check_prepared_models_surface_materials() {
             } catch (const std::runtime_error &) {
                 refused = true;
             }
-            require(refused && selected_environment->surface_budget->used() == 16,
+            require(refused && selected_environment->surface_budget->used() == 4,
                     "Model reload allocated without charging its queued old owner");
             queued.reset();
             require(selected_environment->surface_budget->used() == 0,
                     "Model queue retirement did not release the shared selection budget");
             cc_mw3_re::PreparedModels replacement(shared_options,
                                                   mat_binding("authored", "0", mat_path));
-            require(selected_environment->surface_budget->used() == 16,
+            require(selected_environment->surface_budget->used() == 4,
                     "Model reload failed to reuse returned decoded capacity");
         }
 
@@ -1553,6 +1554,32 @@ struct NativeGroundFixture {
 };
 
 void check_native_ground_height_admission() {
+    {
+        NativeGroundFixture fixture;
+        fixture.target.pack.reset();
+        fixture.target.streamed_bindings.resize(2);
+        auto &table = zimg::textures();
+        const auto previous = table;
+        struct RestoreTextureTable {
+            zimg::TextureTable &table;
+            zimg::TextureTable previous;
+            ~RestoreTextureTable() { table = previous; }
+        } restore{table, previous};
+        std::strcpy(table.entries[0].name, "wave01");
+        table.count = 1;
+        auto &animated = fixture.materials[1];
+        zmod::Cycle cycle{};
+        animated.flags |= 4;
+        animated.cycle = &cycle;
+        animated.texture_index = 0;
+        fixture.target.polygon_materials[1] = "wave01";
+        require(!fixture.admit(), "Unbound cycle must keep its canonical source order");
+        animated.texture_index = 1;
+        bool rejected = false;
+        try { (void)fixture.admit(); }
+        catch (const std::runtime_error &) { rejected = true; }
+        require(rejected, "Out-of-range source texture index must reject");
+    }
     using namespace mw34::materials;
     namespace cc = cc_mw3_re;
     cc::NativeGroundFloatScope restore_test_fp;
@@ -1588,8 +1615,8 @@ void check_native_ground_height_admission() {
                     retained->normal_hash == 0x5678 && retained->normal_width == 2 &&
                     retained->normal_height == 2 && retained->material == *fixture.pack->records[0],
                 "Ground snapshot lost source, stamps, normal or full material values");
-        require(retained->image->pixels.size() == 4 && fixture.budget->used() == 16 &&
-                    height_binding_bytes({retained, fixture.admit()}) == 16,
+        require(retained->image->pixels.size() == 4 && fixture.budget->used() == 4 &&
+                    height_binding_bytes({retained, fixture.admit()}) == 4,
                 "Ground image alias was recharged or lost ownership");
         retained_budget = fixture.budget;
         passed("positive_triangle_quad_full_owned_snapshot_fp");
@@ -1600,7 +1627,7 @@ void check_native_ground_height_admission() {
         require(bool(fixture.admit()), "Agreeing immutable model copy was rejected");
         passed("agreeing_model_copy");
     }
-    require(retained && retained->image->pixels.size() == 4 && retained_budget->used() == 16,
+    require(retained && retained->image->pixels.size() == 4 && retained_budget->used() == 4,
             "Ground snapshot borrowed destroyed native source storage");
     passed("snapshot_survives_native_source_destruction");
     const std::vector<std::pair<const char *, std::function<void(NativeGroundFixture &)>>> rejects{
@@ -1836,7 +1863,7 @@ void check_native_ground_height_admission() {
                     admissions[0].height_binding->source_batch == 1 &&
                     admissions[1].height_binding->source_batch == 0 &&
                     height_binding_bytes({admissions[0].height_binding,
-                                          admissions[1].height_binding}) == 16,
+                                          admissions[1].height_binding}) == 4,
                 "Shared GPU/reference admission vector lost original polygon or alias");
         passed("gpu_reference_shared_original_polygon_vector");
         ranges[1].polygon = 2;
@@ -1930,12 +1957,94 @@ void check_native_ground_height_admission() {
 
 } // namespace
 
+void check_streamed_surface_budget() {
+    using namespace mw34::materials;
+    auto budget = std::make_shared<SurfaceDecodedBudget>();
+    {
+        SurfaceDecodedReservation first(budget);
+        first.grow(max_surface_sidecar_bytes - 1);
+        {
+            SurfaceDecodedReservation queued(budget);
+            require(queued.try_grow(1), "Exact decoded limit was rejected");
+            require(!queued.try_grow(1), "Decoded limit was exceeded");
+            require(budget->used() == max_surface_sidecar_bytes &&
+                        budget->peak() == max_surface_sidecar_bytes,
+                    "Incorrect decoded current or peak bytes");
+        }
+        require(budget->used() == max_surface_sidecar_bytes - 1 &&
+                    budget->peak() == max_surface_sidecar_bytes,
+                "Queued reservation did not retire independently of the peak");
+    }
+    require(budget->used() == 0, "Decoded reservations leaked");
+}
+
+void check_streamed_height_cache() {
+    using namespace mw34::materials;
+    const auto root = make_private_staging_dir("streamed-heights");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::error_code error; std::filesystem::remove_all(path, error); }
+    } cleanup{root};
+    const auto pin = [&](const char *name, std::uint32_t width, std::uint32_t height,
+                         char fill) {
+        const std::string pixels(std::size_t(width) * height, fill);
+        const auto path = root / name;
+        std::ofstream output(path, std::ios::binary);
+        output.write(pixels.data(), std::streamsize(pixels.size()));
+        output.close();
+        require(bool(output), "Failed to write streamed height fixture");
+        platform::integrity::Sha256 hash;
+        hash.update(pixels.data(), pixels.size());
+        return StreamedHeightPin{path, hash.hex(), width, height, pixels.size()};
+    };
+    const auto cliff = pin("cliff.r8", 4096, 2048, 127);
+    const auto next = pin("ground.r8", 2048, 4096, 93);
+    auto broken = pin("bad.r8", 2, 2, 15);
+    broken.sha256 = std::string(64, '0');
+    const auto budget = std::make_shared<SurfaceDecodedBudget>();
+    SurfaceDecodedReservation other_owners(budget);
+    const auto baseline = 500ULL * 1024 * 1024;
+    other_owners.grow(baseline);
+    StreamedHeightCache cache(budget, {cliff, cliff, next, broken});
+    cache.select({0, 1});
+    auto frame = cache.acquire(0);
+    require(frame && frame->width == cliff.width && frame->height == cliff.height &&
+                frame->pixels.size() == cliff.bytes && frame->pixels.front() == 127,
+            "Full-resolution streamed height bytes did not survive");
+    require(cache.acquire(1) == frame && budget->used() == baseline + cliff.bytes,
+            "Shared streamed height image charged twice");
+
+    cache.select({2});
+    require(!cache.acquire(2) && budget->used() == baseline + cliff.bytes,
+            "Subset replaced a height image still held by a queued frame");
+    cache.select({1});
+    require(cache.acquire(1) == frame && budget->used() == baseline + cliff.bytes,
+            "Revisiting a queued subset duplicated its image");
+    cache.select({2});
+    frame.reset();
+    require(budget->used() == baseline && cache.acquire(2) &&
+                budget->used() == baseline + next.bytes,
+            "Deferred subset did not load after the queued frame retired");
+
+    cache.select({3});
+    bool rejected = false;
+    try {
+        (void)cache.acquire(3);
+    } catch (const std::runtime_error &) {
+        rejected = true;
+    }
+    require(rejected && budget->used() == baseline && budget->peak() == baseline + cliff.bytes,
+            "Corrupt streamed image was published or leaked its reservation");
+}
+
 int main() {
     try {
         checks();
         check_prepared_models_surface_materials();
         check_prepared_models_donor_toe_admission();
         check_native_ground_height_admission();
+        check_streamed_surface_budget();
+        check_streamed_height_cache();
         std::puts("Prepared staging cache invalidation, bytes, ownership, "
                   "materials and budget checks passed");
         return 0;

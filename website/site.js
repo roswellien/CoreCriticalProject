@@ -149,3 +149,31 @@ document.querySelectorAll(".compare-frame").forEach((frame) => {
     range.addEventListener("input", showSplit);
     showSplit();
 });
+
+// MechLab tag filter on /news: show only the cards carrying the chosen topic.
+document.querySelectorAll(".update-filter").forEach((filter) => {
+    const section = filter.parentElement;
+    const cards = Array.from(section.querySelectorAll(".update-card"));
+    const buttons = Array.from(filter.querySelectorAll("button"));
+    const status = section.querySelector(".update-filter-status");
+    function showTopic(tag) {
+        let shownCount = 0;
+        cards.forEach((card) => {
+            const cardTags = card.dataset.tags.split(" ");
+            const matches = tag === "" || cardTags.includes(tag);
+            card.hidden = !matches;
+            if (matches) shownCount += 1;
+        });
+        buttons.forEach((button) => {
+            button.setAttribute("aria-pressed", String(button.dataset.tag === tag));
+        });
+        if (status) {
+            status.textContent =
+                tag === "" ? "" : `Showing ${shownCount} of ${cards.length} updates`;
+        }
+    }
+    buttons.forEach((button) => {
+        button.addEventListener("click", () => showTopic(button.dataset.tag));
+    });
+    filter.hidden = false;
+});
