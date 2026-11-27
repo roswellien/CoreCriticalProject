@@ -80,6 +80,8 @@ struct NamedTextureTestState {
   unsigned width{}, height{}, source_width{}, source_height{};
   bool generated_rgba{};
   std::vector<std::uint32_t> pixels;
+  // The 16-bit format the frontend tagged the texels with (#518).
+  mw34::texture_staging::Pack16 pack16{};
 };
 NamedTextureTestState named_texture_state(VulkanFrameRenderer &renderer,
                                           int32_t handle);

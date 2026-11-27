@@ -944,8 +944,9 @@ public:
   testing::NamedTextureTestState named_texture_state_for_test(
       int32_t handle) const {
     const auto &entry = textures_.at(std::size_t(handle));
-    return {entry.width, entry.height, entry.source_width, entry.source_height,
-            entry.generated_rgba, entry.pixels};
+    return {entry.width,         entry.height,         entry.source_width,
+            entry.source_height, entry.generated_rgba, entry.pixels,
+            entry.pack16};
   }
   void set_preload_fault_for_test(const vk::PreloadFaultInjection &fault) {
     drain();
@@ -1579,6 +1580,12 @@ public:
     entry.pixels.resize(std::size_t(width) * height);
     std::memcpy(entry.pixels.data(), rgba,
                 entry.pixels.size() * sizeof(std::uint32_t));
+    // The 16-bit storage format comes from the upload key around this call.
+    // Only zvid's create_texture and reload_texture set one, keyed by
+    // zvid::upload_format; the HUD, movies, menu images and the held frame
+    // upload with none and stay RGBA8. Anything that sets a key promises that
+    // the texels are exactly its format widened, since the card keeps only
+    // that format's bits.
     entry.pack16 = content_pack16(entry, source_key);
     publish_texture_update(handle, source_key);
   }

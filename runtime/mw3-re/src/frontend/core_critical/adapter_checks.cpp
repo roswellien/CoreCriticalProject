@@ -1993,8 +1993,9 @@ void check_16bit_texture_staging() {
 // The frontend trusts the game's upload key for a texture's 16-bit format
 // (#518), so the game's own decode must produce exactly that format's widened
 // values: every 16-bit value through texture_rgba, in each mode the upload key
-// tells apart (zvid's create_texture: 1 opaque RGB565, 2 ARGB1555 with or
-// without an alpha plane, 3 ARGB4444 from an alpha plane).
+// tells apart, keyed by zvid::upload_format as create_texture and
+// reload_texture key it (1 opaque RGB565, 2 ARGB1555 with or without an alpha
+// plane, 3 ARGB4444 from an alpha plane).
 void check_upload_format_matches_decode() {
   namespace staging = mw34::texture_staging;
   using staging::Pack16;
@@ -2037,13 +2038,12 @@ void check_upload_format_matches_decode() {
   struct Mode {
     std::int32_t alpha, alpha_4444;
     bool with_plane;
-    std::uint32_t key_format;
     const char *what;
   };
-  for (const Mode mode : {Mode{0, 1, false, 1, "opaque RGB565"},
-                          Mode{1, 1, false, 2, "one-bit alpha without a plane"},
-                          Mode{1, 0, true, 2, "an alpha plane without ARGB4444"},
-                          Mode{1, 1, true, 3, "an alpha plane as ARGB4444"}}) {
+  for (const Mode mode : {Mode{0, 1, false, "opaque RGB565"},
+                          Mode{1, 1, false, "one-bit alpha without a plane"},
+                          Mode{1, 0, true, "an alpha plane without ARGB4444"},
+                          Mode{1, 1, true, "an alpha plane as ARGB4444"}}) {
     display.alpha_4444 = mode.alpha_4444;
     zimg::Texture image{};
     image.width = image.height = 256;
@@ -2053,7 +2053,12 @@ void check_upload_format_matches_decode() {
     image.alpha = mode.with_plane ? plane.data() : nullptr;
     std::vector<std::uint32_t> rgba(65536);
     zvid::texture_rgba(image, mode.alpha, reinterpret_cast<std::uint8_t *>(rgba.data()));
-    const Pack16 format = staging::pack16_for_upload_format(mode.key_format);
+    // The format code create_texture and reload_texture key this upload with.
+    const Pack16 format =
+        staging::pack16_for_upload_format(zvid::upload_format(image, mode.alpha));
+    if (format == Pack16::none)
+      throw std::runtime_error(std::string("The game's upload of ") + mode.what +
+                               " names no 16-bit format");
     for (const auto texel : rgba)
       if (unpack(staging::pack16_texel(texel, format), format) != texel)
         throw std::runtime_error(std::string("The game's decode of ") + mode.what +
@@ -2080,10 +2085,7 @@ void check_upload_key_formats(SDL_Window *window, sdlfe::RendererBackend backend
     mw34::materials::clear_active_surface_key();
     return handle;
   };
-  const auto opaque_handle = upload(1, opaque);
-  const auto cutout_handle = upload(2, cutout);
-  const auto unkeyed_handle = upload(0, opaque);
-  for (const auto handle : {opaque_handle, cutout_handle, unkeyed_handle}) {
+  const auto draw = [&](std::int32_t handle) {
     renderer->clear(true, 0, 0, 0);
     platform::DrawState state{};
     state.texture = handle;
@@ -2091,17 +2093,47 @@ void check_upload_key_formats(SDL_Window *window, sdlfe::RendererBackend backend
     std::vector<std::uint32_t> pixels;
     int width = 0, height = 0;
     require(renderer->read_back(&pixels, &width, &height), "Upload key fixture did not draw");
-  }
+    return pixels;
+  };
+  // Within one step of 256 per channel, for the card's filtering precision.
+  const auto same_picture = [](const std::vector<std::uint32_t> &first,
+                               const std::vector<std::uint32_t> &second) {
+    if (first.size() != second.size())
+      return false;
+    for (std::size_t index = 0; index < first.size(); ++index)
+      for (const unsigned shift : {0u, 8u, 16u, 24u})
+        if (std::abs(int((first[index] >> shift) & 255) - int((second[index] >> shift) & 255)) >
+            1)
+          return false;
+    return true;
+  };
   const auto format_of = [&](std::int32_t handle) {
     for (const bool sharp : {false, true})
       if (is_texture_gpu_resident(*renderer, handle, sharp))
         return texture_format(*renderer, handle, sharp);
     throw std::runtime_error("Upload key fixture texture never reached the card");
   };
+  const auto opaque_handle = upload(1, opaque);
+  const auto cutout_handle = upload(2, cutout);
+  const auto unkeyed_handle = upload(0, opaque);
+  const auto unkeyed_cutout_handle = upload(0, cutout);
+  const auto opaque_picture = draw(opaque_handle);
+  const auto cutout_picture = draw(cutout_handle);
+  require(same_picture(opaque_picture, draw(unkeyed_handle)) &&
+              same_picture(cutout_picture, draw(unkeyed_cutout_handle)),
+          "A texture stored at 16 bits drew differently from its RGBA8 copy");
   require(format_of(opaque_handle) == Pack16::r5g6b5 &&
               format_of(cutout_handle) == Pack16::a1r5g5b5 &&
               format_of(unkeyed_handle) == Pack16::none,
           "A game texture did not reach the card in its upload key's 16-bit format");
+  // During play an image never changes 16-bit format: new content under
+  // another key makes it RGBA8, and it draws that content.
+  mw34::materials::set_active_surface_key({2, 2, 2, 0x51800012ULL});
+  renderer->update_texture(opaque_handle, 2, 2, cutout);
+  mw34::materials::clear_active_surface_key();
+  require(same_picture(draw(opaque_handle), cutout_picture) &&
+              format_of(opaque_handle) == Pack16::none,
+          "A game texture reloaded under another upload key did not become RGBA8");
 }
 
 // 16-bit storage on the device (#518): which textures are stored at 16 bits,
@@ -3662,6 +3694,35 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
               named_uploads_before_flare,
           "Generated flare was counted as a prepared replacement upload");
   renderer->release_texture(flare);
+
+  // The 16-bit format the frontend tags a named texture's texels with (#518),
+  // on creation and on reload, under each upload key the game sets: a pack
+  // replacement is RGB565 only where the game texture was opaque (key format
+  // 1), and a generated flare is drawn in 8 bits whatever the key says.
+  const auto keyed_tags = [&](const char *name, unsigned size, const uint8_t *source) {
+    std::vector<mw34::texture_staging::Pack16> tags;
+    for (std::uint32_t key_format = 1; key_format <= 3; ++key_format) {
+      mw34::materials::ScopedUploadKey key(
+          mw34::materials::SurfaceKey{size, size, key_format, 0x51800020ULL + key_format});
+      const auto handle = renderer->create_named_texture(name, int(size), int(size), source, 1);
+      tags.push_back(cc_mw3_re::testing::named_texture_state(*renderer, handle).pack16);
+      renderer->update_texture(handle, int(size), int(size), source);
+      tags.push_back(cc_mw3_re::testing::named_texture_state(*renderer, handle).pack16);
+      renderer->release_texture(handle);
+    }
+    return tags;
+  };
+  {
+    using mw34::texture_staging::Pack16;
+    require(keyed_tags("authored", 1, original) ==
+                std::vector<Pack16>{Pack16::r5g6b5, Pack16::r5g6b5, Pack16::none, Pack16::none,
+                                    Pack16::none, Pack16::none},
+            "A pack replacement was tagged with a 16-bit format other than RGB565 under an "
+            "opaque game texture's key");
+    require(keyed_tags("lflare2", flare_size, flare_source.data()) ==
+                std::vector<Pack16>(6, Pack16::none),
+            "A generated flare was tagged with a 16-bit format");
+  }
 
   auto original_flare_assets = sdlfe::CoreCriticalAssets{};
   original_flare_assets.flare_style = "original";

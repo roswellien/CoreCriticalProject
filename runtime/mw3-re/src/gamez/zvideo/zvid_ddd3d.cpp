@@ -1299,6 +1299,14 @@ void texture_rgba(const zimg::Texture& image, int32_t alpha, uint8_t* rgba) {
   }
 }
 
+// Follows texture_rgba's branches. Format 1 copies the display format, which
+// is RGB565 (ChannelMasks' default and every caller of its setter); display
+// masks of RGB555 would not be RGB565 data.
+uint32_t upload_format(const zimg::Texture& image, int32_t alpha) {
+  if (alpha == 0) return 1;
+  return image.alpha && g_display.alpha_4444 ? 3 : 2;
+}
+
 // Mech3.exe 1.2 @ 0x0057b130 (ECX name, EDX image, stack alpha, clamp u, v).
 // The device checks stay, with a modern device's caps by default. The type
 // is 4 whenever the image has an alpha plane, also when the surface had to be
@@ -1335,9 +1343,8 @@ D3DTexture* create_texture(const char* name, const zimg::Texture& image, int32_t
   // The bank pixels can still be RGB565 with a separate alpha plane. Key the
   // packed format actually decoded for upload, not a hybrid of source pixels
   // and destination format. This also authenticates alpha-plane changes.
-  const auto format = alpha == 0 ? 1u : image.alpha && d.alpha_4444 ? 3u : 2u;
   mw34::materials::ScopedUploadKey upload_key(
-      mw34::materials::canonical_upload_key(w, h, rgba.data(), format));
+      mw34::materials::canonical_upload_key(w, h, rgba.data(), upload_format(image, alpha)));
   auto* t = new D3DTexture;
   t->handle = g_render ? g_render->create_named_texture(name, w, h, rgba.data(), static_cast<uint8_t>(type)) : -1;
   t->type = type;
@@ -1352,10 +1359,10 @@ void reload_texture(D3DTexture* record, const zimg::Texture* image) {
   if (!record || !image || record->handle < 0) return;
   const int32_t w = image->width, h = image->height;
   std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4);
-  texture_rgba(*image, image->flags & 2, rgba.data());
-  const auto format = (image->flags & 2) == 0 ? 1u : image->alpha && g_display.alpha_4444 ? 3u : 2u;
+  const int32_t alpha = image->flags & 2;
+  texture_rgba(*image, alpha, rgba.data());
   mw34::materials::ScopedUploadKey upload_key(
-      mw34::materials::canonical_upload_key(w, h, rgba.data(), format));
+      mw34::materials::canonical_upload_key(w, h, rgba.data(), upload_format(*image, alpha)));
   if (g_render) g_render->update_texture(record->handle, w, h, rgba.data());
 }
 

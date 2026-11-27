@@ -334,5 +334,10 @@ void release_texture(D3DTexture* record);
 
 // What 0x0057b130 uploads, as RGBA8 (the surface format's precision kept).
 void texture_rgba(const zimg::Texture& image, int32_t alpha, uint8_t* rgba);
+// The 16-bit format texture_rgba decodes this image from for this alpha mode,
+// as an upload key format code (1 RGB565, 2 ARGB1555, 3 ARGB4444). The
+// renderer stores the texture on the card in that format (#518), so it must
+// name exactly the format texture_rgba widened.
+uint32_t upload_format(const zimg::Texture& image, int32_t alpha);
 
 }  // namespace zvid
