@@ -422,6 +422,11 @@ and [Triage](#triage). Captures (`needs-triage`) need no type, area or priority.
 with 1 when it finds something. Run it before a release and whenever the board
 looks out of date.
 
+The Website tests workflow (`.github/workflows/website.yml`) runs `npm test`
+in `website/`, the crash report service tests, on pushes to `develop` and
+`main` and on PRs that change `website/**` or the workflow itself. A failing
+test fails the check.
+
 GitHub currently rejects branch-protection and ruleset access for this private
 repository with HTTP 403 as of October 27, 2026, requesting GitHub Pro or a public
 repository. The repository remains private. Until the owner enables a supporting plan, the PR
