@@ -1,35 +1,32 @@
 # Current project direction
 
-Before changing files, follow the Required GitHub PR workflow below and read
-`docs/github-workflow.md`. It is a standing project rule, not a one-session plan.
+Follow the Required GitHub PR workflow below and `docs/github-workflow.md`. Read
+before choosing work:
+- `docs/renderer-feature-parity.md` — MW3-RE work packages, gates and pickup rules.
+- `docs/roadmap.md` — active tracks and feature plans.
+- `docs/faithful-modernization-plan.md` — fidelity rules and host/service contracts.
 
-Read `docs/faithful-modernization-plan.md`, `docs/roadmap.md` and
-`docs/archive/m4-claude-work-review-2026-10-11.md` before choosing implementation work.
-The execution-first strategy was authorized on 2026-10-11: preserve original
-MW3 gameplay through recompilation, integrate modern platform services/Vulkan,
-and advance native host -> live menu -> live Training. Do not restart as a remake.
+MW3-RE (`runtime/mw3-re/`) is the shipping native runtime; the retired recompiled
+runtime is a reference only. Preserve original MW3 gameplay with modern services,
+Vulkan and opt-in Core Critical features; do not restart as a remake.
 
-Follow `docs/project-status-reporting.md` when reporting progress in updates,
-PRs and release notes. Probes, replay and original-game hooks do not establish
-live native gameplay. Guest ABI/FP, resource contracts and required
-initialization effects still apply.
+Follow `docs/project-status-reporting.md` in updates, PRs and releases: report live
+native behavior, fidelity coverage, defects and validation. Probes, saved replay
+and original-binary hooks aren't live gameplay. Guest ABI, floating-point
+contracts, resource lifetimes and required initialization effects apply.
 
-Inspect current process identities before expensive work. Protect the existing
-controls composer/watcher and never open active SQLite or duplicate a long job.
-The historical post-composer/admission/review chain applies when that audit is
-explicitly resumed, not to routine tasks. Preserve uncommitted work and other
-graphics/asset writers.
+Check running processes before heavy builds, tests or captures; don't duplicate
+long jobs or contend with active builds or captures. Preserve uncommitted work and
+coordinate with graphics or asset writers.
 
-State the execution boundary advanced by each change and run narrow meaningful
-checks. Add no verifier/report layer without an identified missing criterion or
-concrete defect. Fail unknown required services visibly; no AFTER seeding or fake
-API success. No production interpreter/original-code fallback is authorized.
+State the execution boundary advanced and run narrow checks. Don't add a new
+verifier or report tool unless it closes a named missing check or fixes a concrete
+defect. Fail unknown required services visibly; never stub fake API success or
+pre-seed expected output state. No runtime interpreter or original-binary fallback.
 
-Read `CONTRIBUTING.md` and `docs/legal.md`; original media and generated game
-code stay local, and private reports, build outputs, credentials and signing
-material are never committed.
-Follow `CODE_STYLE.md` when writing or changing code. Follow "Tests" and
-"Definition of done" in `CONTRIBUTING.md` when adding tests or opening a PR.
+Follow `CODE_STYLE.md`, `docs/legal.md` and `CONTRIBUTING.md` ("Tests" and
+"Definition of done"). Keep original media and generated code local; never commit
+private reports, build outputs, credentials or signing material.
 
 ## Required GitHub PR workflow
 
@@ -86,7 +83,7 @@ making the repository public.
   matches; `tools/arena-runner/run_batch.py` runs a batch with no window.
 - `docs/archive/claude-m4-continuation-handoff.md`: full continuation instructions.
 
-Agent rules live only in this file. `CLAUDE.md` and
+Agent rules live only in this file. `CLAUDE.md`, `GEMINI.md` and
 `.github/copilot-instructions.md` point here; edit this file instead.
 
 ## Commands and layout
