@@ -87,7 +87,16 @@ one-time prompt. The endpoint targets a dedicated private repository such as
 `roswellien/corecritical-crash-reports`, groups specific failures by engine
 mode, exit code and message, reopens closed matching issues, and adds issues to
 the configured Project V2 board through that board's built-in auto-add
-workflow. The generic unexpected-exit message is never grouped. The launcher
+workflow. The generic unexpected-exit message is never grouped. Reports from a
+clean exit (exit code 0) are accepted only when the game's problems log they
+carry holds at least one warning or error line (`[<seconds>] W ...` or
+`[<seconds>] E ...`; its setup header lines alone don't count), and are titled
+"Problems" instead of "Crash". As for crashes, the launcher sets the failure
+summary: for these, the first error line (or first warning) logged after the
+game's first frame, so they group by problem like crashes. The service only
+requires it to be non-blank; like the logs, it is the client's word. They share the
+daily new-issue limit with crash reports; if they start crowding out crashes,
+lower their share or give them a limit of their own. The launcher
 displays a short report ID, not a private GitHub URL.
 
 New crash issues are capped at 20 per UTC day by default. The cap is reserved

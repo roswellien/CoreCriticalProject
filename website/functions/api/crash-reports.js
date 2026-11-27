@@ -1,3 +1,6 @@
+import { validateHeader } from "../_lib/crash-report-header.js";
+import { LOG_LABELS, LOG_ORDER } from "../_lib/crash-report-logs.js";
+
 const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_ISSUE_BODY_CHARS = 48_000;
 const MAX_ISSUE_REPORT_CHARS = 20_000;
@@ -16,7 +19,6 @@ const GENERIC_FAILURES = [
 
 const MIN_INT32 = -2_147_483_648;
 const MAX_INT32 = 2_147_483_647;
-const LOG_ORDER = ["native_crash", "native_run", "native_stderr", "launcher", "native_stdout"];
 
 // Only the legacy host fault record may retain a module basename and numeric suffix.
 const NATIVE_MODULE_SUFFIX_LINE =
@@ -488,7 +490,6 @@ function validateReport(report) {
         report.mode.trim().length === 0 ||
         report.mode.length > 80 ||
         !Number.isInteger(report.exit_code) ||
-        report.exit_code === 0 ||
         report.exit_code < MIN_INT32 ||
         report.exit_code > MAX_INT32 ||
         !report.logs ||
@@ -530,8 +531,20 @@ function validateReport(report) {
         const value = report.logs[name];
         if (value !== undefined && typeof value !== "string")
             throw new Error("The crash report logs are invalid.");
-        if (value) logs[name] = redactPaths(value.slice(-64 * 1024));
+        if (value)
+            logs[name] = redactPaths(cutLog(name, value, 64 * 1024, "fit the report size limit"));
     }
+    // A clean exit is only worth a report when the game logged problems during play;
+    // without them it would be noise in the crash-report repository. The problems log
+    // also holds the setup header (level I), so it must carry at least one warning or
+    // error line in the game's stamped form, "[<seconds>] W|E <text>". Checked on the log
+    // as sent, since the 64 KB cut above may drop the middle where that line is.
+    const sentProblems = report.logs.native_problems;
+    const hasProblems =
+        typeof sentProblems === "string" &&
+        /^\[[0-9]{1,9}(?:\.[0-9]{1,6})?\] [WE](?: |$)/m.test(sentProblems);
+    if (report.exit_code === 0 && !hasProblems)
+        throw new Error("The crash report format is invalid.");
     const packs = Array.isArray(report.packs)
         ? report.packs.slice(0, 64).map((pack) => {
               const rawId = field(pack, "Id");
@@ -558,6 +571,8 @@ function validateReport(report) {
         typeof rawSourceCommit === "string" && rawSourceCommit.trim().length > 0
             ? redactPaths(rawSourceCommit.trim().slice(0, 40))
             : undefined;
+    const header = validateHeader(report.header, redactPaths);
+    const hasHeader = Object.keys(header).length > 0;
     const validated = {
         format_version: 1,
         report_id: reportId,
@@ -583,6 +598,8 @@ function validateReport(report) {
                 ? redactPaths(report.dotnet_runtime.slice(0, 120))
                 : "",
         hardware: validateHardware(report.hardware),
+        // Left out when empty so reports from older launchers are stored exactly as before.
+        ...(hasHeader ? { header } : {}),
         failure_summary: redactPaths(report.failure_summary.slice(0, 2000)),
         settings,
         packs,
@@ -690,13 +707,6 @@ function issueBody(
             `${header}\n\nLog excerpts were omitted for overflow or repeat-report limits.`,
         );
 
-    const logNames = {
-        native_crash: "Native crash details (crash.txt)",
-        native_run: "Native run log (mw3.log)",
-        native_stderr: "Native standard error",
-        launcher: "Launcher log",
-        native_stdout: "Native standard output",
-    };
     const orderedKeys = [
         ...LOG_ORDER.filter((key) => key in reportLogs),
         ...Object.keys(reportLogs).filter((key) => !LOG_ORDER.includes(key)),
@@ -712,7 +722,7 @@ function issueBody(
     for (let index = 0; index < entries.length; index++) {
         const [name, content] = entries[index];
         const remainingEntries = entries.length - index;
-        const heading = `#### ${logNames[name] ?? name}\n\n`;
+        const heading = `#### ${LOG_LABELS[name] ?? name}\n\n`;
         const maxFenceRun = Math.max(
             0,
             ...Array.from(content.matchAll(/`+/g), (match) => match[0].length),
@@ -735,20 +745,40 @@ function issueBody(
             break;
         }
 
-        const truncationNote =
-            content.length > perLogBudget
-                ? "[Earlier log lines omitted to fit GitHub's issue size limit.]\n"
-                : "";
-        const available = Math.max(0, perLogBudget - truncationNote.length);
-        let excerpt = content;
-        if (excerpt.length > available) {
-            excerpt = excerpt.slice(-available);
-            const firstNewline = excerpt.indexOf("\n");
-            if (firstNewline >= 0) excerpt = excerpt.slice(firstNewline + 1);
-        }
-        body += `${heading}${fence}text\n${truncationNote}${excerpt.trimEnd()}\n${fence}\n\n`;
+        const excerpt = cutLog(name, content, perLogBudget, "fit GitHub's issue size limit");
+        body += `${heading}${fence}text\n${excerpt.trimEnd()}\n${fence}\n\n`;
     }
     return boundIssueBody(body);
+}
+
+// Cuts a log to at most `max` characters at whole lines. The game log and problems log
+// put their most useful lines first (health lines, the first error), so they keep their
+// start and end; other logs keep their end.
+function cutLog(name, content, max, reason) {
+    if (content.length <= max) return content;
+    const keepsStart = name === "native_run" || name === "native_problems";
+    const note = `[${keepsStart ? "Middle" : "Earlier"} log lines omitted to ${reason}.]\n`;
+    const available = Math.max(0, max - note.length);
+    if (!keepsStart) return `${note}${tailLines(content, available)}`;
+    const head = headLines(content, Math.floor(available / 2));
+    return `${head}${note}${tailLines(content, available - head.length)}`;
+}
+
+// Up to `max` characters from the start, ending at a whole line.
+function headLines(text, max) {
+    if (text.length <= max) return text;
+    const head = text.slice(0, max);
+    const lastNewline = head.lastIndexOf("\n");
+    return lastNewline >= 0 ? head.slice(0, lastNewline + 1) : head;
+}
+
+// Up to `max` characters from the end, starting at a whole line.
+function tailLines(text, max) {
+    if (max <= 0) return "";
+    if (text.length <= max) return text;
+    const tail = text.slice(-max);
+    const firstNewline = tail.indexOf("\n");
+    return firstNewline >= 0 ? tail.slice(firstNewline + 1) : tail;
 }
 
 function boundIssueBody(body) {
@@ -957,7 +987,8 @@ export async function onRequestPost({ request, env }) {
         const suffix = crashFingerprint
             ? ` [${crashFingerprint.slice(0, 12)}]`
             : ` [${report.report_id.slice(0, 8)}]`;
-        const title = `Crash (${report.mode}, exit ${report.exit_code}): ${titleReason}${suffix}`;
+        const kind = report.exit_code === 0 ? "Problems" : "Crash";
+        const title = `${kind} (${report.mode}, exit ${report.exit_code}): ${titleReason}${suffix}`;
         await github(
             config.token,
             `mutation($repository:ID!, $title:String!, $body:String!) {

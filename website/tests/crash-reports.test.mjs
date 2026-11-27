@@ -1342,3 +1342,266 @@ test("bounds scanning time on adversarial repeated unclosed single-quoted paths 
     assert.ok(!colonArchived.logs.launcher.includes("nas01"));
     assert.ok(colonArchived.logs.launcher.endsWith("'<network-path>' failed."));
 });
+
+// Records the title and body of the issue the service creates.
+function recordCreatedIssue() {
+    githubResponder();
+    const baseFetch = globalThis.fetch;
+    const created = {};
+    globalThis.fetch = async (url, options) => {
+        const body = JSON.parse(options.body);
+        if (body.query.includes("createIssue")) {
+            created.title = body.variables.title;
+            created.body = body.variables.body;
+        }
+        return baseFetch(url, options);
+    };
+    return created;
+}
+
+const PROBLEMS_LOG = "[12.5] E mw3: video memory full: used 5900 MiB of 5990 MiB budget\n";
+
+test("accepts a clean-exit report that carries a problems log, titled Problems", async () => {
+    const created = recordCreatedIssue();
+    const response = await onRequestPost({
+        request: crashRequest({
+            exit_code: 0,
+            failure_summary: "mw3: video memory full: used 5900 MiB of 5990 MiB budget",
+            logs: { native_run: "RUN_LOG_SENTINEL\n", native_problems: PROBLEMS_LOG },
+        }),
+        env: environment,
+    });
+    assert.equal(response.status, 200);
+    assert.ok(created.title.startsWith("Problems (remaster, exit 0): "));
+    const problemsAt = created.body.indexOf("#### Game problems (mw3-problems.log)");
+    const runAt = created.body.indexOf("#### Native run log (mw3.log)");
+    assert.ok(problemsAt >= 0 && runAt > problemsAt);
+});
+
+test("rejects a clean-exit report without a problems log", async () => {
+    for (const logs of [
+        { native_run: "RUN_LOG\n" },
+        { native_run: "RUN_LOG\n", native_problems: " \n\t" },
+        // Only the setup header (level I), as a clean run's problems log holds.
+        {
+            native_run: "RUN_LOG\n",
+            native_problems:
+                "[0.512] I mw3: header resolution=1920x1080\n[0.512] I mw3: header hdr=0\n",
+        },
+        // Plain text without the game's stamp.
+        { native_run: "RUN_LOG\n", native_problems: "something went wrong\nW not stamped\n" },
+    ]) {
+        githubResponder();
+        const response = await onRequestPost({
+            request: crashRequest({ exit_code: 0, logs }),
+            env: environment,
+        });
+        assert.equal(response.status, 400);
+        assert.equal(archivedReports.length, 0);
+    }
+});
+
+test("accepts a clean-exit problems log whose W line has no text", async () => {
+    recordCreatedIssue();
+    const response = await onRequestPost({
+        request: crashRequest({
+            exit_code: 0,
+            failure_summary: "warning with no text",
+            logs: { native_run: "RUN_LOG\n", native_problems: "[3.000] W \n[4.000] E\n" },
+        }),
+        env: environment,
+    });
+    assert.equal(response.status, 200);
+});
+
+test("accepts a clean exit whose only problem line falls in a cut-out middle", async () => {
+    recordCreatedIssue();
+    const infoLines = (count) => "[1.000] I mw3: health t=60\n".repeat(count);
+    const response = await onRequestPost({
+        request: crashRequest({
+            exit_code: 0,
+            failure_summary: "middle warning",
+            logs: {
+                native_run: "RUN_LOG\n",
+                native_problems: `${infoLines(2000)}[9.000] W middle warning\n${infoLines(2000)}`,
+            },
+        }),
+        env: environment,
+    });
+    assert.equal(response.status, 200);
+});
+
+test("keeps the start and end of the game and problems logs in the issue", async () => {
+    const created = recordCreatedIssue();
+    // Over 64 KB each, so the start must also survive the intake cut.
+    const filler = (tag, lines = 4500) => `${tag} filler line\n`.repeat(lines);
+    const response = await onRequestPost({
+        request: crashRequest({
+            logs: {
+                native_run: `RUN_START\n${filler("run")}RUN_END\n`,
+                native_problems: `[1.000] E PROBLEMS_START\n${filler("[2.000] W")}PROBLEMS_END\n`,
+                launcher: `LAUNCHER_START\n${filler("launcher", 2000)}LAUNCHER_END\n`,
+            },
+        }),
+        env: environment,
+    });
+    assert.equal(response.status, 200);
+    for (const kept of ["RUN_START", "RUN_END", "PROBLEMS_START", "PROBLEMS_END", "LAUNCHER_END"]) {
+        assert.ok(created.body.includes(kept), kept);
+    }
+    assert.ok(!created.body.includes("LAUNCHER_START"));
+    assert.ok(created.body.includes("Middle log lines omitted"));
+    assert.ok(created.body.length <= 48_000);
+});
+
+test("rejects a clean-exit report with a blank failure summary", async () => {
+    // Blank, missing (undefined drops out of the JSON) and not a string.
+    for (const failure_summary of ["", "   \n\t", undefined, 42, null]) {
+        githubResponder();
+        const response = await onRequestPost({
+            request: crashRequest({
+                exit_code: 0,
+                failure_summary,
+                logs: { native_run: "RUN_LOG\n", native_problems: PROBLEMS_LOG },
+            }),
+            env: environment,
+        });
+        assert.equal(response.status, 400);
+        assert.equal(archivedReports.length, 0);
+    }
+});
+
+test("lists the problems log first in a crash issue and on the admin page", async () => {
+    const created = recordCreatedIssue();
+    const response = await onRequestPost({
+        request: crashRequest({
+            logs: { native_crash: "CRASH_SENTINEL\n", native_problems: PROBLEMS_LOG },
+        }),
+        env: environment,
+    });
+    assert.equal(response.status, 200);
+    assert.ok(created.title.startsWith("Crash (remaster, exit 7): "));
+    assert.ok(
+        created.body.indexOf("#### Game problems") <
+            created.body.indexOf("#### Native crash details"),
+    );
+
+    const { token } = await createAdminAccess();
+    const report = JSON.parse(archivedReports[0][7]);
+    const row = {
+        report_id: report.report_id,
+        created_utc: "2026-11-26T13:00:00Z",
+        stored_utc: "2026-11-26T13:01:00Z",
+        mode: report.mode,
+        exit_code: report.exit_code,
+        failure_summary: report.failure_summary,
+        crash_fingerprint: "deadbeef",
+        report_json: JSON.stringify(report),
+    };
+    const adminDb = {
+        prepare: (query) => ({
+            bind: () => ({ first: async () => (query.includes("WHERE report_id") ? row : null) }),
+        }),
+    };
+    const detail = await getAdminCrashReports({
+        request: new Request(
+            `https://corecritical.dev/admin/crash-reports?id=${report.report_id}`,
+            { headers: { "cf-access-jwt-assertion": token } },
+        ),
+        env: { ...adminEnvironment, CRASH_REPORT_DB: adminDb },
+    });
+    const html = await detail.text();
+    assert.equal(detail.status, 200);
+    assert.ok(html.indexOf("Game problems") < html.indexOf("Native crash details"));
+});
+
+test("keeps only the allowed report header fields, bounded and redacted", async () => {
+    const created = recordCreatedIssue();
+    const response = await onRequestPost({
+        request: crashRequest({
+            header: {
+                vulkan_device: "NVIDIA GeForce RTX 3060 Laptop GPU",
+                vulkan_api_version: "1.3.289",
+                vulkan_driver_version: "566.36",
+                heaps: [
+                    {
+                        index: 0,
+                        size_bytes: 6283067392,
+                        budget_bytes: 5990000000,
+                        device_local: true,
+                    },
+                    { index: 1, size_bytes: "big", budget_bytes: -1, extra: "MUST_NOT_BE_STORED" },
+                    { index: 2, size_bytes: 1024 },
+                    ...Array.from({ length: 20 }, (_, index) => ({
+                        index,
+                        size_bytes: 1,
+                        budget_bytes: 1,
+                    })),
+                ],
+                resolution: "2560x1080",
+                window_mode: "Borderless",
+                refresh_hz: 144,
+                hdr: false,
+                pack_texture_bytes: [
+                    { id: "C:\\Users\\Jane Doe\\packs\\hd-mechs", bytes: 3741319168 },
+                    ...Array.from({ length: 70 }, (_, index) => ({ id: `p${index}`, bytes: 1 })),
+                ],
+                input_devices: ["Xbox Controller", 42, "x".repeat(200)],
+                serial_number: "MUST_NOT_BE_STORED",
+            },
+        }),
+        env: environment,
+    });
+    assert.equal(response.status, 200);
+    const header = JSON.parse(archivedReports[0][7]).header;
+    assert.equal(header.vulkan_device, "NVIDIA GeForce RTX 3060 Laptop GPU");
+    assert.equal(header.vulkan_api_version, "1.3.289");
+    assert.equal(header.vulkan_driver_version, "566.36");
+    // Only the first 16 entries are read; the two incomplete ones among them are dropped.
+    assert.equal(header.heaps.length, 14);
+    assert.deepEqual(header.heaps[0], {
+        index: 0,
+        size_bytes: 6283067392,
+        budget_bytes: 5990000000,
+        device_local: true,
+    });
+    // The entries with a bad or missing size or budget are dropped whole.
+    assert.deepEqual(header.heaps[1], { index: 0, size_bytes: 1, budget_bytes: 1 });
+    assert.equal(header.resolution, "2560x1080");
+    assert.equal(header.window_mode, "Borderless");
+    assert.equal(header.refresh_hz, 144);
+    assert.equal(header.hdr, false);
+    assert.equal(header.pack_texture_bytes.length, 64);
+    assert.ok(!header.pack_texture_bytes[0].id.includes("Jane Doe"));
+    assert.ok(header.pack_texture_bytes[0].id.includes("<local-path>"));
+    assert.deepEqual(header.input_devices, ["Xbox Controller", "x".repeat(80)]);
+    assert.ok(!JSON.stringify(header).includes("MUST_NOT_BE_STORED"));
+    assert.ok(created.body.includes('"vulkan_driver_version": "566.36"'));
+});
+
+test("drops header fields of the wrong type", async () => {
+    githubResponder();
+    const response = await onRequestPost({
+        request: crashRequest({
+            header: {
+                refresh_hz: "60",
+                hdr: 1,
+                heaps: [1, 2],
+                // Half-filled packs are dropped like half-filled heap rows.
+                pack_texture_bytes: [null, { id: "hd-mechs" }, { bytes: 1 }],
+                resolution: 2560,
+                input_devices: [7],
+            },
+        }),
+        env: environment,
+    });
+    assert.equal(response.status, 200);
+    assert.ok(!("header" in JSON.parse(archivedReports[0][7])));
+});
+
+test("stores no header key for a report without one", async () => {
+    githubResponder();
+    const response = await onRequestPost({ request: crashRequest(), env: environment });
+    assert.equal(response.status, 200);
+    assert.ok(!("header" in JSON.parse(archivedReports[0][7])));
+});
