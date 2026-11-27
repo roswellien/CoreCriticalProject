@@ -1631,6 +1631,13 @@ void camera_zones(Camera* cam, Node* world) {
 
 std::vector<Node*>& rendered_cameras() { return g_rendered_cameras; }
 
+bool camera_would_draw(Node* camera_node) {
+  const bool is_camera = camera_node && camera_node->data && camera_node->cls() == 1;
+  if (!is_camera) return false;
+  int32_t width = 0, height = 0;
+  return window_has_area(cam_of(camera_node)->nodes[1], &width, &height);
+}
+
 void camera_prepare(Node* camera_node) {
   zmth::Mat34 local;
   zmth::push(&local);

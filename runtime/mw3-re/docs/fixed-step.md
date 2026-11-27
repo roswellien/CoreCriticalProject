@@ -16,8 +16,22 @@ zero or more steps, then draws once.
 callbacks it fires; the action lists (`lists_update`: the player, mechs,
 vehicles, turrets, sequences, effect animations, mission objects);
 `world_tick` (sensors, missions, the pilot, the camera, an arena spectator's
-camera); the clock copies `sync_frame_step` makes for the mech, weapon and hit
-modules; and the step log.
+camera); the cameras' part of the draw (below); the viewed mech's arms aimed
+at the reticle's point (`hud_aim`); the clock copies `sync_frame_step` makes
+for the mech, weapon and hit modules; and the step log.
+
+The HUD's frame (`hud_update`, 0x0040fac0) ends by pointing the player's arms
+at the reticle's aim point (`hud_handoff`, 0x0041cd40), which the mech update
+picks each step (`player_frame`). The original ran it in each frame's draw, so
+once a step at its 30 fps. Left in the drawn frame, it matched at 30 fps and up
+(a draw always falls between two steps) but not below: a frame of two steps ran
+the second with the arms still on the point before, and in c2m1 a shot hit
+0.1 mm apart at step 1316 at 50 and 100 ms frames. So with the fixed step the
+aim runs once a step, after `prepare_cameras`, and `hud_handoff` leaves it out
+(`set_hud_aim_in_steps`). The rest of the HUD's frame stays in the drawn frame:
+its 2D parts draw themselves as they update (the radar's blips are blitted in
+`HudRadar::update`). The missile lock's timer there still counts drawn frames'
+time, so a lock can come a step apart between frame rates.
 
 A 3D replay (`--replay3d`) runs as before #485, one pass of the lists a drawn
 frame with the replay's hooks around it: it simulates nothing (every mech is
@@ -59,13 +73,26 @@ each step `prepare_cameras` runs that part of the draw's set-up
 (`zcls::camera_prepare`, taken out of `render_world`) for the cameras the last
 draw drew, from their exact places, as the original's draw after each of its
 frames did. Below 30 fps, when a frame runs two steps, the step between them
-gets it too. One exception: the zoom window's camera is placed by the HUD
+gets it too; before the mission's first draw, when no draw has named its
+cameras yet, it prepares the cameras on the engine's camera list (list 8) whose
+window has area, the ones a draw would draw. One exception: the zoom window's camera is placed by the HUD
 during the draw, from the drawn view, so with the zoom window open its own
 state follows the drawn (blended) view.
 
+The camera's move in a draw (`horizon_follow`) also runs the class lists'
+frame update (`frame_update`, 0x004f7f70): the sequences and animates by the
+timer's dt, then the changed nodes brought current. Between steps that dt is
+the drawn frame's, and the sequences and animates are simulation, so a frame
+drawn between steps (`set_drawing_between_steps`) runs only the changed nodes;
+the steps advance them once each, in `prepare_cameras`. And the changed nodes
+are brought current at the end of each step (`settle_world_caches` starts with
+`update_changed`), so no draw takes a simulation change off that list and
+builds it from blended parents.
+
 Before
-the draw every node's local transform, world cache and its stale flag are
-kept, and right after it each node gets them back exactly; a node the draw
+the draw every node's local transform, world cache and its data flags word
+(the stale flag, and the "local from the angles" flag a node update clears)
+are kept, and right after it each node gets them back exactly; a node the draw
 moved itself (a camera) keeps its new transform with its cache stale. So the
 draws never reach the simulation. The game reads a cached world matrix
 whether or not it is marked stale (a vehicle's turret turn reads its turret's),
@@ -163,5 +190,6 @@ as `--variable-step` does.
   repeats (scripted inputs such as `--tap DIK@N` still count drawn frames). The step is exactly 1/30 s, so a `--frame-ms 33` run (0.033 s
   frames) runs no step on about one frame in a hundred.
 - `--step-log FILE`: one record per step (a hash of every object's local
-  transform, then each vehicle's position, forward row and supports in the
-  air). Runs that simulate alike write the same file at any frame rate.
+  transform, a mech's limbs under their live nodes included, then each
+  vehicle's position, forward row and supports in the air). Runs that simulate
+  alike write the same file at any frame rate.

@@ -50,7 +50,7 @@ unsigned g_pass = 0;
 // moved); restore puts each back as it was, so the simulation never reads one.
 struct BeforeDraw {
   Node* node;
-  bool world_stale;
+  uint32_t data_flags;  // the object3d data's flags word (+0x00, the stale flag among them) as found
   bool blended = false;  // apply wrote applied_local (and maybe the cache)
   float local[12];
   float world[12];
@@ -360,6 +360,9 @@ void record() {
 }
 
 void settle_world_caches() {
+  // The changed nodes first (0x004f7e50): each draw then starts with none
+  // queued, so no draw brings a simulation change up to date in its place.
+  update_changed();
   for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
     Node* node = item->node;
     if (!is_live_object3d(node) || !(node->flags() & kInWorldTree)) continue;
@@ -375,11 +378,19 @@ void settle_world_caches() {
 }
 
 void prepare_cameras() {
+  // Before the mission's first draw (a frame of two steps at below 30 fps
+  // runs both before it), the cameras on the cameras' list a draw would draw.
+  if (rendered_cameras().empty()) {
+    for (ListItem* item = list_head(kCameras); item; item = item->next)
+      if (is_live_camera(item->node) && camera_would_draw(item->node)) camera_prepare(item->node);
+    return;
+  }
   for (Node* camera : rendered_cameras())
     if (is_live_camera(camera)) camera_prepare(camera);
 }
 
 void apply(float alpha) {
+  set_drawing_between_steps(true);
   g_before_draw.clear();
   g_cameras_before.clear();
   g_followers.clear();
@@ -401,7 +412,7 @@ void apply(float alpha) {
     Record* known = find_record(node, g_before_draw.size());
     BeforeDraw& b = g_before_draw.emplace_back();
     b.node = node;
-    b.world_stale = !now.world_valid;
+    b.data_flags = object_data(node)->get<uint32_t>(kFlagsOffset);
     std::memcpy(b.local, now.local, kMatrixBytes);
     std::memcpy(b.world, now.world, kMatrixBytes);
     if (!known) continue;
@@ -457,10 +468,13 @@ void restore() {
     // stale one the draw rebuilt from the blended chain must not stay either.
     std::memcpy(data->floats(kLocalOffset), b.local, kMatrixBytes);
     std::memcpy(data->floats(kWorldOffset), b.world, kMatrixBytes);
-    data->put<uint32_t>(kFlagsOffset, b.world_stale ? (flags | kWorldStale) : (flags & ~kWorldStale));
+    // The whole word: a node update in the draw also builds the local matrix
+    // from the angles and clears its flag (1), which this local's content undoes.
+    data->put<uint32_t>(kFlagsOffset, b.data_flags);
   }
   g_before_draw.clear();
   restore_cameras();
+  set_drawing_between_steps(false);
 }
 
 void forget(const Node* node) {

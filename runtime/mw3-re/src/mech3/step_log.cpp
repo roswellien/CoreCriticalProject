@@ -24,6 +24,22 @@ uint64_t fnv(uint64_t h, const void* p, std::size_t n) {
   for (std::size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 0x100000001b3ull;
   return h;
 }
+
+bool is_live(const zcls::Node* node) { return (node->link & zcls::kNodeLive) != 0; }
+
+// A node's object3d local transform into the hash, then its children's that
+// the table walk does not reach (not marked live there: a mech's limbs, which
+// the mech's own code poses each step).
+void hash_object(const zcls::Node* node, uint64_t& h, int32_t& count) {
+  if (node->cls() == 5 && node->data) {
+    h = fnv(h, static_cast<zcls::Object3d*>(node->data)->floats(0x30), 0x30);
+    ++count;
+  }
+  for (int32_t c = 0; c < node->child_count(); ++c) {
+    const zcls::Node* child = node->children[c];
+    if (child && !is_live(child)) hash_object(child, h, count);
+  }
+}
 }  // namespace
 
 bool step_log_open(const std::string& path) {
@@ -53,9 +69,7 @@ void step_log_end_step() {
   int32_t count = 0;
   for (int32_t i = 0, n = zcls::node_total(); i < n; ++i) {
     const zcls::Node* node = zcls::node_at(i);
-    if (!node || !(node->link & 0x1000000u) || node->cls() != 5 || !node->data) continue;
-    h = fnv(h, static_cast<zcls::Object3d*>(node->data)->floats(0x30), 0x30);
-    ++count;
+    if (node && is_live(node)) hash_object(node, h, count);
   }
   std::fprintf(g_file, "S %llu objects=%d hash=%016llx\n%s", static_cast<unsigned long long>(g_step), count,
                static_cast<unsigned long long>(h), g_vehicles.c_str());

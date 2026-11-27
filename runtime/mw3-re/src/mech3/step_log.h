@@ -2,7 +2,8 @@
 #include <string>
 
 // Ours (#485): mw3 --step-log <file>. One record per simulation step: a hash
-// of every live object3d's local transform, then a line per vehicle that
+// of every object3d's local transform (the node table's live ones and the
+// children hung under them outside it, a mech's limbs), then a line per vehicle that
 // moved in the step (its world position, its forward row and how many of its
 // supports are in the air). Two runs that simulate alike write the same file
 // whatever their frame rate, so a byte compare shows it (docs/fixed-step.md).

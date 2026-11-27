@@ -31,6 +31,7 @@
 #include "mech3/app_mech.h"
 #include "mech3/pilot.h"
 #include "mech3/app_hud.h"
+#include "mech3/mech_hud.h"
 #include "mech3/controls_cfg.h"
 #include "mech3/options.h"
 #include "mech3/mods_menu.h"
@@ -1090,6 +1091,8 @@ void GameEngine::hud_update() {
   if (MessagePanel* p = message_panel()) p->update(dt);  // [0x00603d7c] vt+0x24: its text
   pocket_draw(dt);                                       // 0x0046a410
 }
+void GameEngine::hud_aim_in_steps(bool in_steps) { set_hud_aim_in_steps(in_steps); }
+void GameEngine::hud_aim() { program_hud_aim(); }
 void GameEngine::hud_draw() {
   mods_edit_frame();  // ours: MODS's EDIT opens the editor on the mission's first frame
   editor_frame();
