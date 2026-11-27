@@ -3,6 +3,7 @@
 // with zfix's any_resolution on and off (off: the original's).
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -285,6 +286,33 @@ TEST(resolution_ultrawide_bounds_preserve_valid_aspects) {
     int32_t width = 0, height = 0;
     EXPECT(mech3::vmode_size(mech3::kCustomVMode, &width, &height));
     EXPECT(width == size[2] && height == size[3]);
+  }
+}
+
+// #559: an HD movie's frame in the window, as fmv_stretch frames the 16-bit
+// movies. INTRO is letterboxed in rows 79-400 of 480, so 158-801 of its
+// 1280x960 HD clip.
+TEST(resolution_hd_movie_frame_keeps_the_movies_shape) {
+  struct Case {
+    float window_w, window_h;
+    int src_top, src_bottom;
+    float x, y, w, h;
+  };
+  const Case cases[] = {
+      {3440, 1440, 158, 801, 288.9f, 0, 2862.1f, 1440},   // height-capped, centred
+      {1920, 1080, 158, 801, 0, 57.0f, 1920, 966.0f},     // fills the width
+      {2560, 1080, 158, 801, 206.7f, 0, 2146.6f, 1080},   // height-capped
+      {1280, 960, 158, 801, 0, 0, 1280, 960},             // 4:3: the whole frame
+      {3440, 1440, -1, -1, 760, 0, 1920, 1440},           // no shape: the whole frame 4:3
+  };
+  for (const Case& c : cases) {
+    const sdlfe::FitRect r = sdlfe::movie_frame_fit(c.window_w, c.window_h, 1280, 960, c.src_top, c.src_bottom);
+    const bool matches = std::fabs(r.x - c.x) < 0.5f && std::fabs(r.y - c.y) < 0.5f &&
+                         std::fabs(r.w - c.w) < 0.5f && std::fabs(r.h - c.h) < 0.5f;
+    if (!matches)
+      std::printf("  %gx%g rows %d-%d: %.1f,%.1f %.1fx%.1f\n", c.window_w, c.window_h, c.src_top, c.src_bottom, r.x,
+                  r.y, r.w, r.h);
+    EXPECT(matches);
   }
 }
 

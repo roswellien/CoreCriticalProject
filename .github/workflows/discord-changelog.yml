@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       bullets:
-        description: JSON array of public changelog bullets
+        description: JSON sections (updates and known_issues) or a flat array
         required: true
         type: string
       live:

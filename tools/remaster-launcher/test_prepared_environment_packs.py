@@ -305,6 +305,63 @@ class EnvironmentPackTests(unittest.TestCase):
         return root
     def host(self):
         return dict(content_capabilities={'environment-resources':[1]},executable_sha256='a'*64,runtime_environment={'MW34_WORLD_NORMALS':'stale','MW34_REMASTER_BANKS':'stale','MW34_EFFECT_LIGHTS':'0','MW34_BUSHWACKER_TEST':'selected-mech','MW34_FIXTURE_LIGHT_RETAIN_DISTANCE':'160'})
+    def test_streamed_c1_pack_admits_exact_r8_and_requires_capability(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = self.fixture(Path(t) / "c1", "operation1")
+            manifest_path = root / "pack.json"
+            manifest = json.loads(manifest_path.read_text())
+            registry = json.loads((root / REGISTRY).read_text())
+            index = "environment/height-index.json"
+            image = "environment/height.r8"
+            stream_format = prepared_environment_packs.STREAM_INDEX_FORMAT
+            image_format = prepared_environment_packs.STREAM_IMAGE_FORMAT
+            def write(member, value, fmt=None):
+                (root / member).write_bytes(value)
+                pin = dict(bytes=len(value), sha256=sha(root / member))
+                if fmt:
+                    pin["format"] = fmt
+                manifest["files"][member] = pin
+
+            registry["streamed_height_materials"] = index
+            write(REGISTRY, json.dumps(registry).encode())
+            write(image, bytes([127]), image_format)
+            manifest["native_payload"]["required_formats"].extend([stream_format, image_format])
+            manifest["native_payload"]["required_capabilities"] = {"surface-materials": 1}
+            document = {
+                "schema_version": 1,
+                "images": [{"member": image, "width": 1, "height": 1}],
+                "subsets": [{"world": 0, "x": 0, "z": 0, "images": [0]}],
+                "targets": [{
+                    "asset_id": "c1:ground",
+                    "source": {"kind": "gamez-zbd-v27", "member": "zbd/c1/gamez.zbd",
+                               "sha256": "a" * 64, "bytes": 1, "model_slot": 7},
+                    "mesh_uv_hash": "0000000000000001",
+                    "polygon_materials": ["txwall01"],
+                    "surface_keys": [{"width": 1, "height": 1, "format": 1, "hash": "0000000000000001"}],
+                    "height_bindings": [{"image": 0, "amplitude": 0.8}],
+                }],
+            }
+            def save_index():
+                write(index, json.dumps(document).encode(), stream_format)
+                manifest_path.write_text(json.dumps(manifest))
+
+            save_index()
+            host = self.host()
+            host["content_capabilities"]["surface-materials"] = [1]
+            with self.assertRaisesRegex(ValueError, "c1-height-stream"):
+                select([str(root)], host)
+            host["content_capabilities"][prepared_environment_packs.STREAM_CAPABILITY] = [1]
+            selected = select([str(root)], host)
+            self.assertEqual(selected["operation1"]["paths"][image], str(root / image))
+            (root / image).write_bytes(bytes([128]))
+            with self.assertRaisesRegex(ValueError, "integrity failure"):
+                select([str(root)], host)
+            (root / image).write_bytes(bytes([127]))
+            document["targets"][0]["height_bindings"][0]["amplitude"] = 0.75
+            save_index()
+            with self.assertRaisesRegex(ValueError, "streamed polygon height identity"):
+                select([str(root)], host)
+
     def test_relocation_selection_and_disable(self):
         with tempfile.TemporaryDirectory() as t:
             root=Path(t);one=self.fixture(root/'one');two=self.fixture(root/'two','operation4');moved=root/'relocated with spaces';one.rename(moved)

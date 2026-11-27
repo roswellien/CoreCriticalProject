@@ -48,21 +48,29 @@ class SurfaceDecodedBudget {
     }
     std::uint64_t used() const { return used_.load(std::memory_order_acquire); }
     std::uint64_t limit() const { return limit_; }
+    std::uint64_t peak() const { return peak_.load(std::memory_order_acquire); }
 
   private:
     friend class SurfaceDecodedReservation;
-    void acquire(std::uint64_t bytes) {
+    bool try_acquire(std::uint64_t bytes) {
         auto current = used_.load(std::memory_order_acquire);
         do {
             if (bytes > limit_ || current > limit_ - bytes)
-                throw std::runtime_error("Retained surface image owners exceed decoded budget");
+                return false;
         } while (!used_.compare_exchange_weak(current, current + bytes,
                                               std::memory_order_acq_rel,
                                               std::memory_order_acquire));
+        const auto admitted = current + bytes;
+        auto peak = peak_.load(std::memory_order_relaxed);
+        while (peak < admitted &&
+               !peak_.compare_exchange_weak(peak, admitted, std::memory_order_release,
+                                            std::memory_order_relaxed)) {
+        }
+        return true;
     }
     void release(std::uint64_t bytes) { used_.fetch_sub(bytes, std::memory_order_acq_rel); }
     const std::uint64_t limit_;
-    std::atomic<std::uint64_t> used_{};
+    std::atomic<std::uint64_t> used_{}, peak_{};
 };
 class SurfaceDecodedReservation {
   public:
@@ -75,8 +83,14 @@ class SurfaceDecodedReservation {
     SurfaceDecodedReservation &operator=(const SurfaceDecodedReservation &) = delete;
     ~SurfaceDecodedReservation() { budget_->release(bytes_); }
     void grow(std::uint64_t bytes) {
-        budget_->acquire(bytes);
+        if (!try_grow(bytes))
+            throw std::runtime_error("Retained surface image owners exceed decoded budget");
+    }
+    bool try_grow(std::uint64_t bytes) {
+        if (!budget_->try_acquire(bytes))
+            return false;
         bytes_ += bytes;
+        return true;
     }
     const std::shared_ptr<SurfaceDecodedBudget> &budget() const { return budget_; }
 
@@ -182,6 +196,7 @@ struct HeightBinding {
     std::uint64_t normal_hash{};
     std::uint64_t retained_decoded_bytes{};
     std::uint32_t source_batch{};
+    bool streamed_image{};
 
     bool operator==(const HeightBinding &other) const {
         return material == other.material && image == other.image &&
@@ -192,7 +207,7 @@ struct HeightBinding {
                texture_version == other.texture_version && !(albedo < other.albedo) &&
                !(other.albedo < albedo) && normal_width == other.normal_width &&
                normal_height == other.normal_height && normal_hash == other.normal_hash &&
-               source_batch == other.source_batch &&
+               source_batch == other.source_batch && streamed_image == other.streamed_image &&
                retained_decoded_bytes == other.retained_decoded_bytes;
     }
 };
