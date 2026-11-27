@@ -534,6 +534,13 @@ now; only INTRO has been checked, and only on Windows, whose own Media
 Foundation decodes it (`mech3/hd_movie_mf.cpp`). Other builds have no
 decoder and play the original.
 
+The launcher passes it from its Graphics setting "Upscaled cutscenes" (#625,
+on by default): for each movie in `NativeGameRunner.CheckedHdMovies` (only
+`intro` so far) that an enabled cinematics pack has an HD library clip for,
+and only to a runtime whose descriptor advertises the `hd-movie` v1
+capability (`stage_mw3_re_runtime.py` adds it when the source has the option
+and the Windows decoder).
+
 The ported player (section 5) still owns the movie: the script, its skip
 keys, the CD pause (section 3) and its end. `GameFmvHost` hands it a
 stand-in for the AVI (`mech3/hd_movie.h`):

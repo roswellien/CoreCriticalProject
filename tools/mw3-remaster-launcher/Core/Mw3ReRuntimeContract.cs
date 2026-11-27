@@ -32,6 +32,9 @@ public sealed class Mw3ReRuntimeContract
         versions.Contains(1);
     public bool SupportsVsync => Capabilities.TryGetValue("vsync", out var versions) &&
         versions.Contains(1);
+    /// <summary>The runtime takes <c>--hd-movie NAME PATH</c> (#559).</summary>
+    public bool SupportsHdMovies => Capabilities.TryGetValue("hd-movie", out var versions) &&
+        versions.Contains(1);
 
     private Mw3ReRuntimeContract(string root, Dictionary<string, string> roles,
         List<string> dependencies, Dictionary<string, IReadOnlyList<int>> capabilities,

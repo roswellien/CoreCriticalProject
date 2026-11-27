@@ -149,11 +149,11 @@ static class ArtworkCinematicChecks
                 var strf=new byte[40];BitConverter.GetBytes(40).CopyTo(strf,0);BitConverter.GetBytes(640).CopyTo(strf,4);BitConverter.GetBytes(480).CopyTo(strf,8);BitConverter.GetBytes((short)1).CopyTo(strf,12);BitConverter.GetBytes((short)24).CopyTo(strf,14);Encoding.ASCII.GetBytes(handler).CopyTo(strf,16);
                 return Chunk("RIFF",Join("AVI ",Chunk("LIST",Join("hdrl",Chunk("LIST",Join("strl",Chunk("strh",strh),Chunk("strf",strf)))))));
             }
-            string Cinema(string id,string? target,byte[] content)
+            string Cinema(string id,string? target,byte[] content,string clip="scene")
             {
-                var name="cinematics/media/scene"+(target==null?".mp4":".avi");
+                var name="cinematics/media/"+clip+(target==null?".mp4":".avi");
                 var registry=JsonSerializer.SerializeToUtf8Bytes(new {schema_version=2,payload_profile=CinematicPack.Profile,
-                    clips=new[] {new {id="scene",title="Authored fixture",source=name,replaces=target}}});
+                    clips=new[] {new {id=clip,title="Authored fixture",source=name,replaces=target}}});
                 return Archive(id,CinematicPack.Profile,CinematicPack.Registry,new() {[CinematicPack.Registry]=registry,[name]=content},new() {[name]=target==null?"MP4-library-v1":"AVI-IV50-original-v1"});
             }
             var original=Path.Combine(root,"game","Video");Directory.CreateDirectory(original);File.WriteAllBytes(Path.Combine(original,"INTRO.AVI"),Avi());
@@ -176,10 +176,36 @@ static class ArtworkCinematicChecks
             var mp4=new byte[24];mp4[3]=24;Encoding.ASCII.GetBytes("ftypisom").CopyTo(mp4,4);
             var bonus=manager.InstallPack(Cinema("test.bonus",null,mp4));
             if(CinematicPack.Library(new[]{bonus.DirectoryPath,movie.DirectoryPath}).Single().Id!="scene") throw new Exception("Cinematic library selection failed.");
+            CheckUpscaledCutscenes(manager, bonus.DirectoryPath, movie.DirectoryPath, (id, content) => Cinema(id, null, content, "intro"), mp4);
             File.AppendAllText(Path.Combine(movie.DirectoryPath,"cinematics/media/scene.avi"),"tampered");
             Reject(()=>CinematicPack.Apply(Profile(),new[]{movie.DirectoryPath},session,Path.GetDirectoryName(original)!));
             Console.WriteLine("Artwork/cinematic install, priority, disable, corruption, identity collision, runtime, trigger and format checks passed.");
         }
         finally { Directory.Delete(root,true); }
+    }
+
+    // The "Upscaled cutscenes" setting (#625): only checked movies with an HD library clip are passed,
+    // only to runtimes that take --hd-movie, and a damaged clip is refused.
+    static void CheckUpscaledCutscenes(PackManager manager, string unrelatedLibrary, string replacementPack,
+        Func<string, byte[], string> introPack, byte[] mp4)
+    {
+        var lines = new List<string>();
+        if (NativeGameRunner.HdMovieArguments(new[] { unrelatedLibrary, replacementPack }, true, lines.Add).Count != 0 || lines.Count != 0)
+            throw new Exception("A pack without an HD intro produced HD movie arguments.");
+        var intro = manager.InstallPack(introPack("test.hd-intro", mp4));
+        var clipPath = Path.GetFullPath(Path.Combine(intro.DirectoryPath, "cinematics/media/intro.mp4"));
+        var arguments = NativeGameRunner.HdMovieArguments(new[] { unrelatedLibrary, intro.DirectoryPath }, true, lines.Add);
+        if (!arguments.SequenceEqual(new[] { "--hd-movie", "intro", clipPath }) || lines.Count != 0)
+            throw new Exception("The HD intro clip was not passed as --hd-movie intro PATH.");
+        if (NativeGameRunner.HdMovieArguments(new[] { intro.DirectoryPath }, false, lines.Add).Count != 0 ||
+            !lines.Single().Contains("does not support HD movies"))
+            throw new Exception("A runtime without the hd-movie capability was given HD movie arguments.");
+        File.AppendAllText(clipPath, "tampered");
+        try
+        {
+            NativeGameRunner.HdMovieArguments(new[] { intro.DirectoryPath }, true, lines.Add);
+            throw new Exception("A damaged HD intro clip was passed to the runtime.");
+        }
+        catch (InvalidDataException) { }
     }
 }
