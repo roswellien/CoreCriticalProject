@@ -394,6 +394,12 @@ def main():
     )
     parser.add_argument("--run-label", choices=(*BLOCK_ORDER, "smoke"))
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--digest-cache",
+        default=None,
+        help="Folder for remembered pack digests, shared across runs (default "
+        "local/benchmark/digest-cache), or 'off' to hash the packs in every scene",
+    )
     args = parser.parse_args()
     try:
         if args.strict and args.suite:
@@ -436,7 +442,16 @@ def main():
         # (MW3_DIGEST_CACHE_DIR). Without it each scene spent about 94 s rehashing the
         # environment packs. Only digests are kept; decoded assets still load cold
         # because the derived disk cache stays off.
-        digest_cache = BENCHMARK_ROOT.resolve() / "digest-cache"
+        if args.digest_cache == "off":
+            digest_cache = None
+        else:
+            digest_cache = (
+                Path(args.digest_cache).resolve()
+                if args.digest_cache
+                else BENCHMARK_ROOT.resolve() / "digest-cache"
+            )
+            if any(digest_cache.is_relative_to(root) for root in (data_root, game, launcher_runtime)):
+                raise ValueError(f"Digest cache overlaps a read-only input: {digest_cache}")
         default_name = "suite-benchmark.json" if args.suite else "c1mp1-benchmark.json"
         definition = (args.definition or FIXTURES / default_name).resolve(strict=True)
         if profile is None:

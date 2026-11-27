@@ -59,7 +59,9 @@ before starting the next. The runner reads the saved Play settings and packs und
 `MW3_DIGEST_CACHE_DIR` to `local/benchmark/digest-cache`, which only remembers the
 SHA-256 of each environment pack file by its file identity, size and times. The first
 scene of a new cache hashes about 29 GB of packs (about 100 s); every later scene and
-arm reuses the digests (about 4 s). A rewritten pack file is hashed again. A1 first runs a separate c1mp1 replay to condition the GPU. Its
+arm reuses the digests (about 4 s). A rewritten pack file is hashed again.
+The cache is shared on purpose so both arms of a block reuse it; use
+`--digest-cache PATH` for another folder or `--digest-cache off` to hash in every scene. A1 first runs a separate c1mp1 replay to condition the GPU. Its
 results are stored under `A1/conditioning` and excluded from the comparison.
 
 ```powershell
