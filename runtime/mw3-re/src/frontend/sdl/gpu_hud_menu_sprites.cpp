@@ -17,6 +17,7 @@
 #include "frontend/sdl/menu_sprites.h"
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/ztwod/twod_host.h"
+#include "platform/rgb565.hpp"
 
 namespace sdlfe {
 namespace {
@@ -33,15 +34,6 @@ class MenuFloatScope {
  private:
   std::fenv_t saved_{};
 };
-// Premultiplied RGBA from RGB565, identical to gpu_hud.cpp's rgba() so a menu
-// image and a HUD image of the same pixels share one cached texture.
-uint32_t premultiplied_rgba(uint16_t colour, unsigned alpha) {
-  const unsigned red = (colour >> 11) * 255 / 31;
-  const unsigned green = ((colour >> 5) & 63) * 255 / 63;
-  const unsigned blue = (colour & 31) * 255 / 31;
-  return (red * alpha + 127) / 255 | ((green * alpha + 127) / 255) << 8 |
-         ((blue * alpha + 127) / 255) << 16 | alpha << 24;
-}
 // FNV-1a over 32-bit values, as gpu_hud.cpp folds the sources_ cache hash.
 void fold_word(uint64_t& hash, uint32_t value) {
   for (int i = 0; i < 4; ++i) {
@@ -299,7 +291,10 @@ bool GpuHud::draw_menu_sprite(const zimg::Texture* source, uint16_t key, int64_t
           const uint16_t compared = source->palette ? uint16_t(index) : pixel;
           const uint8_t plane = has_alpha_plane ? source->alpha[at] : 255;
           const unsigned alpha = menu_sprite_alpha(has_alpha_plane, plane, keyed, compared, key);
-          native->pixels[size_t(row) * width + column] = premultiplied_rgba(pixel, alpha);
+          // The HUD widens with the same function, so a menu image and a HUD
+          // image of the same pixels share one cached texture.
+          native->pixels[size_t(row) * width + column] =
+              ::platform::rgb565::to_premultiplied_rgba8(pixel, alpha);
         }
       selected = native;
       sources_[source] = {content_hash, selected};

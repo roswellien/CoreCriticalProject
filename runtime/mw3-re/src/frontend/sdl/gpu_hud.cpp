@@ -11,9 +11,11 @@
 #include "frontend/sdl/sdl_render3d.h"
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/ztwod/twod_host.h"
+#include "platform/rgb565.hpp"
 
 namespace sdlfe {
 namespace {
+namespace rgb565 = ::platform::rgb565;
 class FloatScope {
  public:
   FloatScope() {
@@ -25,11 +27,6 @@ class FloatScope {
  private:
   std::fenv_t saved_{};
 };
-uint32_t rgba(uint16_t colour, unsigned alpha = 255) {
-  return (((colour >> 11) * 255 / 31) * alpha + 127) / 255 |
-         (((((colour >> 5) & 63) * 255 / 63) * alpha + 127) / 255) << 8 |
-         ((((colour & 31) * 255 / 31) * alpha + 127) / 255) << 16 | alpha << 24;
-}
 void fold(uint64_t& hash, uint32_t value) {
   for (int i = 0; i < 4; ++i) {
     hash ^= uint8_t(value >> (8 * i));
@@ -591,7 +588,7 @@ void GpuHud::resolved_region(const uint16_t* destination, uint32_t width, uint32
               reinterpret_cast<const uint16_t*>(base_bytes + size_t(row) * pitch_bytes);
           const uint32_t* dst_row = candidate->pixels.data() + size_t(row) * width;
           for (uint32_t col = 0; col < width; ++col) {
-            if (dst_row[col] != rgba(src_row[col], 255)) {
+            if (dst_row[col] != rgb565::to_rgba8(src_row[col])) {
               match = false;
               break;
             }
@@ -616,7 +613,7 @@ void GpuHud::resolved_region(const uint16_t* destination, uint32_t width, uint32
             reinterpret_cast<const uint16_t*>(base_bytes + size_t(row) * pitch_bytes);
         uint32_t* dst_row = created->pixels.data() + size_t(row) * width;
         for (uint32_t col = 0; col < width; ++col) {
-          dst_row[col] = rgba(src_row[col], 255);
+          dst_row[col] = rgb565::to_rgba8(src_row[col]);
         }
       }
       resolved = std::move(created);
@@ -691,7 +688,7 @@ void GpuHud::pixel(const uint16_t* destination, uint16_t colour) {
   ++observed_draws_;
   if (observation_only_) return;
   FloatScope scope;
-  const uint32_t packed = rgba(colour);
+  const uint32_t packed = rgb565::to_rgba8(colour);
   const uint32_t argb = (packed & 0xff00ff00) | (packed & 255) << 16 | (packed >> 16 & 255);
   // Each native pixel covers one logical pixel, including after noninteger
   // scaling. Hardware points cover one physical pixel and leave dotted lines.
@@ -733,7 +730,7 @@ void GpuHud::span(const uint16_t* destination, uint32_t count, uint16_t colour) 
   ++observed_draws_;
   if (observation_only_) return;
   FloatScope scope;
-  const uint32_t packed = rgba(colour);
+  const uint32_t packed = rgb565::to_rgba8(colour);
   const uint32_t argb = (packed & 0xff00ff00) | (packed & 255) << 16 | (packed >> 16 & 255);
   rectangle(float(x), float(y), float(x) + count, float(y + 1), argb);
   ++spans_;
@@ -878,7 +875,7 @@ void GpuHud::image(const zimg::Texture* source, int32_t x, int32_t y, uint16_t k
         framebuffer_write(target_, "unkeyed layer erase");
         return;
       }
-      const uint32_t converted = rgba(pixel, alpha);
+      const uint32_t converted = rgb565::to_premultiplied_rgba8(pixel, alpha);
       if (cached_pixels_match) {
         if (cached_img->pixels[into] != converted) {
           cached_pixels_match = false;

@@ -11,6 +11,7 @@
 #include "frontend/core_critical/renderer/resource_timing.hpp"
 #include "frontend/core_critical/renderer/texture_memory_report.hpp"
 #include "frontend/core_critical/renderer/texture_staging.hpp"
+#include "platform/rgb565.hpp"
 
 namespace {
 
@@ -131,7 +132,7 @@ void check_pack_formats() {
     r5g6b5.push_back(std::uint16_t(value));
     r5g6b5_replicated.push_back(
         texel(replicate(red5, 5), replicate(green6, 6), replicate(blue5, 5), 255));
-    r5g6b5_rounded.push_back(staging::expand(std::uint16_t(value), 0));
+    r5g6b5_rounded.push_back(::platform::rgb565::to_rgba8(std::uint16_t(value)));
 
     const unsigned alpha1 = value >> 15, red = (value >> 10) & 31, green = (value >> 5) & 31,
                    blue = value & 31;
@@ -148,6 +149,8 @@ void check_pack_formats() {
   }
   check_round_trip(Pack16::r5g6b5, "R5G6B5 widened by bit replication", r5g6b5_replicated,
                    r5g6b5);
+  // The shared widening (platform/rgb565.hpp) that pack replacements, prepared
+  // skins and the renderer's RGB565 inputs all use.
   check_round_trip(Pack16::r5g6b5, "R5G6B5 widened by rounding down", r5g6b5_rounded, r5g6b5);
   check_round_trip(Pack16::a1r5g5b5, "A1R5G5B5 widened by bit replication",
                    a1r5g5b5_replicated, a1r5g5b5);
@@ -195,10 +198,13 @@ void check_sources_and_rule() {
         "A normal map, canvas or height image may be stored at 16 bits");
 
   // `content` is the 16-bit format the texels came from; none means 8-bit data,
-  // an unknown origin, or a source that may not narrow.
+  // an unknown origin, or a source that may not narrow. `narrowing_is_free`
+  // says remaking the image strands no memory (a preload's question).
   const auto choose = [](staging::Pack16Rule rule, bool has_image, Pack16 current,
-                         Pack16 content, unsigned allowed = staging::kAllPack16) {
-    return staging::choose_pack16(rule, has_image, current, content, allowed);
+                         Pack16 content, unsigned allowed = staging::kAllPack16,
+                         bool narrowing_is_free = true) {
+    return staging::choose_pack16(rule, has_image, current, content, allowed,
+                                  narrowing_is_free);
   };
   const auto is = [](staging::Pack16Choice choice, Pack16 pack, bool recreate) {
     return choice.pack == pack && choice.recreate == recreate;
@@ -227,6 +233,21 @@ void check_sources_and_rule() {
   check(is(choose(Pack16Rule::from_content, true, Pack16::a1r5g5b5, Pack16::none), Pack16::none,
            true),
         "Preload kept a 16-bit image for 8-bit content");
+  // Where remaking would strand the old image's memory, a preload leaves an
+  // RGBA8 image as it is, but still remakes a 16-bit one its content no longer fits.
+  constexpr bool strands_memory = false;
+  check(is(choose(Pack16Rule::from_content, true, Pack16::none, Pack16::r5g6b5,
+                  staging::kAllPack16, strands_memory),
+           Pack16::none, false),
+        "Preload narrowed an image whose old memory stays allocated");
+  check(is(choose(Pack16Rule::from_content, true, Pack16::r5g6b5, Pack16::none,
+                  staging::kAllPack16, strands_memory),
+           Pack16::none, true),
+        "Preload kept a 16-bit image for 8-bit content because its memory stays allocated");
+  check(is(choose(Pack16Rule::from_content, true, Pack16::r5g6b5, Pack16::a1r5g5b5,
+                  staging::kAllPack16, strands_memory),
+           Pack16::a1r5g5b5, true),
+        "Preload kept a 16-bit image for content in another 16-bit format");
   // During play an image never narrows and never changes 16-bit format.
   check(is(choose(Pack16Rule::keep_or_widen, true, Pack16::none, Pack16::r5g6b5), Pack16::none,
            false),

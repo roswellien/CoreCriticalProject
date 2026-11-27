@@ -6,18 +6,32 @@
 #include <cstring>
 #include <memory>
 
+#include "platform/rgb565.hpp"
 #include "texture_source.hpp"
 
 namespace mw34::texture_staging {
-// Preserve the renderer's exact integer expansion, including floor division.
+// One texel of the renderer's 16-bit inputs (format 0 RGB565, 1 ARGB1555,
+// 2 ARGB4444) widened to RGBA8 with the shared rounding in platform/rgb565.hpp.
 // Convert in CPU-cached memory, then copy contiguous blocks to write-combined
 // Vulkan staging memory. No reads of mapped upload memory are required.
-inline std::uint32_t expand(std::uint16_t p,unsigned format) {
-    unsigned r,g,b,a;
-    if(format==0){r=((p>>11)&31)*255/31;g=((p>>5)&63)*255/63;b=(p&31)*255/31;a=255;}
-    else if(format==1){r=((p>>10)&31)*255/31;g=((p>>5)&31)*255/31;b=(p&31)*255/31;a=(p&0x8000)?255:0;}
-    else {r=((p>>8)&15)*17;g=((p>>4)&15)*17;b=(p&15)*17;a=((p>>12)&15)*17;}
-    return r|(g<<8)|(b<<16)|(a<<24);
+inline std::uint32_t expand(std::uint16_t p, unsigned format) {
+  namespace rgb565 = ::platform::rgb565;
+  if (format == 0)
+    return rgb565::to_rgba8(p);
+  const unsigned value = p;
+  unsigned red, green, blue, alpha;
+  if (format == 1) {
+    red = rgb565::widen_channel((value >> 10) & 31, 31);
+    green = rgb565::widen_channel((value >> 5) & 31, 31);
+    blue = rgb565::widen_channel(value & 31, 31);
+    alpha = (value & 0x8000) ? 255 : 0;
+  } else {
+    red = rgb565::widen_channel((value >> 8) & 15, 15);
+    green = rgb565::widen_channel((value >> 4) & 15, 15);
+    blue = rgb565::widen_channel(value & 15, 15);
+    alpha = rgb565::widen_channel(value >> 12, 15);
+  }
+  return red | green << 8 | blue << 16 | alpha << 24;
 }
 // The three tables take 768 KB, so they are built once on the heap: a copy of
 // that size on the stack could overflow the render worker's thread.
@@ -48,9 +62,10 @@ inline void copy(unsigned char* destination,const std::uint16_t* source,std::siz
 // RGB565, ARGB1555 or ARGB4444 by repeating each channel's bits
 // (gamez/zvideo/zvid_ddd3d.cpp, texture_rgba), and the frontend widens pack
 // replacement images and prepared skins from RGB565 as `c * 255 / max`
-// rounded down (frame_renderer.cpp, image_pixels). Dropping each channel's low
-// bits undoes either widening exactly, so such a texture can go to the card at
-// 2 bytes per texel and sample the same 16-bit values it came from. The
+// rounded down (platform/rgb565.hpp, called by frame_renderer.cpp's
+// image_pixels). Dropping each channel's low bits undoes either widening
+// exactly, so such a texture can go to the card at 2 bytes per texel and
+// sample the same 16-bit values it came from. The
 // frontend says which format each texture's texels came from (TextureRef's
 // pack16); nothing reads the texels to work it out.
 enum class Pack16 : std::uint8_t { none, r5g6b5, a1r5g5b5, b4g4r4a4 };
@@ -132,10 +147,11 @@ inline bool may_pack16(mw34::vkscene::TextureSource source) {
 }
 
 // How an upload picks its storage. At a mission preload the content is new,
-// so the format follows it and the image is remade when that differs. During
-// play, content can change every frame, so an image never narrows: it keeps
-// its format while new content arrives in that same format, and otherwise
-// becomes RGBA8.
+// so the format follows it and the image is remade when that differs, except
+// that an RGBA8 image is narrowed only when that strands no memory (below).
+// During play, content can change every frame, so an image never narrows: it
+// keeps its format while new content arrives in that same format, and
+// otherwise becomes RGBA8.
 enum class Pack16Rule : std::uint8_t { from_content, keep_or_widen };
 struct Pack16Choice {
   Pack16 pack{Pack16::none};
@@ -144,15 +160,28 @@ struct Pack16Choice {
 // Called only for an upload that needs pixels and has them. `content` is the
 // 16-bit format the texels hold exactly (none when unknown, or when the source
 // may not be narrowed); `allowed` is the formats the device can use now.
+// `narrowing_is_free` matters only at a preload: whether remaking the current
+// image strands no memory, because it is remade anyway (a new size) or
+// destroying it gives its memory back to the card. Preload images share
+// memory blocks that go back only with their last image, so narrowing one
+// that shares a block would keep its old slice allocated beside the new
+// 16-bit copy; it stays RGBA8 instead, which holds any content exactly.
 inline Pack16Choice choose_pack16(Pack16Rule rule, bool has_image, Pack16 current,
-                                  Pack16 content, unsigned allowed) {
+                                  Pack16 content, unsigned allowed, bool narrowing_is_free) {
   const bool usable = content != Pack16::none && (allowed & pack16_bit(content)) != 0;
   const Pack16 wanted = usable ? content : Pack16::none;
   if (!has_image)
     return {wanted, false};
-  if (rule == Pack16Rule::from_content)
-    return {wanted, wanted != current};
-  if (current == Pack16::none || wanted == current)
+  if (wanted == current)
+    return {current, false};
+  const bool narrowing = current == Pack16::none;
+  if (rule == Pack16Rule::from_content) {
+    if (narrowing && !narrowing_is_free)
+      return {current, false};
+    return {wanted, true};
+  }
+  // During play an RGBA8 image stays RGBA8, and a 16-bit one widens.
+  if (narrowing)
     return {current, false};
   return {Pack16::none, true};
 }

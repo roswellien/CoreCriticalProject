@@ -2184,7 +2184,8 @@ void check_16bit_texture_storage() {
                                                      : packed(four_bit, Pack16::b4g4r4a4);
   };
 
-  // Mission preload, with anisotropy so each image has a mip chain.
+  // Mission preload, with anisotropy so each image has a mip chain. Cut-out
+  // content stays RGBA8 there: blitted A1R5G5B5 mips would round its alpha.
   Renderer preloaded(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
   preloaded.begin_preload();
   require(preloaded.preload_texture(reference(1, 1, opaque)) &&
@@ -2197,18 +2198,18 @@ void check_16bit_texture_storage() {
   preloaded.finalize_preload();
   preloaded.end_preload();
   require(preloaded.texture_format_for_test(1) == Pack16::r5g6b5 &&
-              preloaded.texture_format_for_test(2) == Pack16::a1r5g5b5 &&
+              preloaded.texture_format_for_test(2) == Pack16::none &&
               preloaded.texture_format_for_test(3) == four_bit_format(preloaded) &&
               preloaded.texture_format_for_test(4) == Pack16::none &&
               preloaded.texture_format_for_test(5) == Pack16::none &&
               preloaded.texture_format_for_test(6) == Pack16::r5g6b5,
           "Preload stored a texture in the wrong format for its content or source");
   require(preloaded.texture_pixels_for_test(1) == packed(opaque, Pack16::r5g6b5) &&
-              preloaded.texture_pixels_for_test(2) == packed(cutout, Pack16::a1r5g5b5) &&
+              preloaded.texture_pixels_for_test(2) == cutout &&
               preloaded.texture_pixels_for_test(3) == four_bit_texels(preloaded) &&
               preloaded.texture_pixels_for_test(4) == eight_bit,
           "Preloaded textures did not reach the card as their texels");
-  require(preloaded.texture_levels_for_test(1) == 2 && preloaded.texture_levels_for_test(2) == 2,
+  require(preloaded.texture_levels_for_test(1) == 2 && preloaded.texture_levels_for_test(6) == 2,
           "A 16-bit image has no mip chain under anisotropy");
   // Tiny images can share one allocation size, so compare two 64x64 ones.
   const auto large = [](std::uint64_t key, std::uint32_t texel, Pack16 content) {
@@ -2227,34 +2228,71 @@ void check_16bit_texture_storage() {
               preloaded.texture_memory_for_test(7)[1] < preloaded.texture_memory_for_test(8)[1],
           "A 16-bit image takes no less memory than an RGBA8 one of the same size");
 
-  // A later preload of new content moves the image to the content's format,
-  // and leaves the other images in its shared memory block as they were.
+  // A later preload of new content moves an image to the content's format
+  // where that strands no memory. Key 1 is 16-bit and must widen for 8-bit
+  // content. Key 4 is RGBA8 and shares its memory block with the others, so
+  // narrowing it would keep its old slice allocated beside the new copy: it
+  // stays RGBA8 in place, holding its 16-bit content exactly. Key 8 gets a new
+  // size, so it is remade anyway and narrows.
+  const auto key4_memory = preloaded.texture_memory_for_test(4);
+  TextureRef resized_opaque{8, 2, 32, 32, TexFormat::rgba8888, {},
+                            std::vector<std::uint32_t>(32 * 32, 0xff0000ff)};
+  resized_opaque.pack16 = Pack16::r5g6b5;
   preloaded.begin_preload();
   require(preloaded.preload_texture(reference(4, 2, opaque)) &&
-              preloaded.preload_texture(reference(1, 2, eight_bit)),
+              preloaded.preload_texture(reference(1, 2, eight_bit)) &&
+              preloaded.preload_texture(resized_opaque),
           "Format-changing preload was rejected");
   preloaded.finalize_preload();
   preloaded.end_preload();
-  require(preloaded.texture_format_for_test(4) == Pack16::r5g6b5 &&
-              preloaded.texture_pixels_for_test(4) == packed(opaque, Pack16::r5g6b5) &&
-              preloaded.texture_format_for_test(1) == Pack16::none &&
+  require(preloaded.texture_format_for_test(1) == Pack16::none &&
               preloaded.texture_pixels_for_test(1) == eight_bit,
-          "Preload did not move an image to its new content's format");
+          "Preload did not widen a 16-bit image for 8-bit content");
+  require(preloaded.texture_format_for_test(4) == Pack16::none &&
+              preloaded.texture_pixels_for_test(4) == opaque &&
+              preloaded.texture_memory_for_test(4) == key4_memory,
+          "Preload remade an image in a shared memory block to narrow it");
+  require(preloaded.texture_format_for_test(8) == Pack16::r5g6b5 &&
+              preloaded.texture_pixels_for_test(8) ==
+                  packed(resized_opaque.pixels32, Pack16::r5g6b5),
+          "Preload did not narrow an image it remade for a new size");
   require(preloaded.texture_resident(2) && preloaded.texture_resident(3) &&
-              preloaded.texture_pixels_for_test(2) == packed(cutout, Pack16::a1r5g5b5) &&
+              preloaded.texture_pixels_for_test(2) == cutout &&
               preloaded.texture_pixels_for_test(3) == four_bit_texels(preloaded),
           "Remaking one preloaded image disturbed the others in its memory block");
 
+  // An image alone in its block gives the whole block back when remade, so a
+  // later preload narrows it, and one block remains.
+  Renderer alone(Renderer::ColorTarget::rgba8, {}, {1, 1, 1, false}, true);
+  alone.begin_preload();
+  require(alone.preload_texture(reference(1, 1, eight_bit)), "Lone preload fixture was rejected");
+  alone.finalize_preload();
+  alone.end_preload();
+  alone.begin_preload();
+  require(alone.preload_texture(reference(1, 2, opaque)),
+          "Lone format-changing preload was rejected");
+  alone.finalize_preload();
+  alone.end_preload();
+  require(alone.texture_format_for_test(1) == Pack16::r5g6b5 &&
+              alone.texture_pixels_for_test(1) == packed(opaque, Pack16::r5g6b5) &&
+              alone.preload_memory_block_count_for_test() == 1,
+          "Preload did not narrow an image alone in its memory block, or kept its old block");
+
   // Without anisotropy there are no mip blits, so B4G4R4A4 needs only what
-  // Vulkan requires of every device.
+  // Vulkan requires of every device, and cut-out content is stored as A1R5G5B5.
   Renderer flat(Renderer::ColorTarget::rgba8, {}, {1, 1, 1, false}, true);
   flat.begin_preload();
-  require(flat.preload_texture(reference(3, 1, four_bit)), "4-bit preload was rejected");
+  require(flat.preload_texture(reference(3, 1, four_bit)) &&
+              flat.preload_texture(reference(2, 1, cutout)),
+          "Preload without mip chains was rejected");
   flat.finalize_preload();
   flat.end_preload();
   require(flat.texture_format_for_test(3) == four_bit_format(flat) &&
               flat.texture_pixels_for_test(3) == four_bit_texels(flat),
           "4-bit content was not stored as the device allows without mip chains");
+  require(flat.texture_format_for_test(2) == Pack16::a1r5g5b5 &&
+              flat.texture_pixels_for_test(2) == packed(cutout, Pack16::a1r5g5b5),
+          "Cut-out content was not stored as A1R5G5B5 without mip chains");
 
   // The checks' mask: every format off, then only B4G4R4A4 off.
   Renderer masked(Renderer::ColorTarget::rgba8, {}, {1, 1, 1, false}, true);
@@ -2290,7 +2328,8 @@ void check_16bit_texture_storage() {
   render({reference(11, 1, opaque), reference(12, 1, cutout), reference(13, 1, four_bit),
           reference(14, 1, eight_bit), reference(15, 1, opaque, TextureSource::normal)});
   require(played.texture_format_for_test(11) == Pack16::r5g6b5 &&
-              played.texture_format_for_test(12) == Pack16::a1r5g5b5 &&
+              played.texture_format_for_test(12) == Pack16::none &&
+              played.texture_pixels_for_test(12) == cutout &&
               played.texture_format_for_test(13) == four_bit_format(played) &&
               played.texture_format_for_test(14) == Pack16::none &&
               played.texture_format_for_test(15) == Pack16::none &&
@@ -2313,12 +2352,22 @@ void check_16bit_texture_storage() {
               played.texture_format_for_test(14) == Pack16::none &&
               played.texture_pixels_for_test(14) == opaque,
           "Play narrowed an image or kept a 16-bit format its new content does not fit");
+  // A play-time image has its own allocation, so a later preload narrows it.
+  played.begin_preload();
+  require(played.preload_texture(reference(14, 3, opaque)),
+          "Preload over a play-time image was rejected");
+  played.finalize_preload();
+  played.end_preload();
+  require(played.texture_format_for_test(14) == Pack16::r5g6b5 &&
+              played.texture_pixels_for_test(14) == packed(opaque, Pack16::r5g6b5),
+          "Preload did not narrow a play-time image with its own memory");
   // A size change and a format change in one upload: the new image is RGBA8.
-  const TextureRef resized{12, 2, 4, 4, TexFormat::rgba8888, {},
+  // Key 14 is R5G6B5 after the preload above.
+  const TextureRef resized{14, 4, 4, 4, TexFormat::rgba8888, {},
                            std::vector<std::uint32_t>(16, 0xff010203)};
   render({resized});
-  require(played.texture_format_for_test(12) == Pack16::none &&
-              played.texture_pixels_for_test(12) == resized.pixels32,
+  require(played.texture_format_for_test(14) == Pack16::none &&
+              played.texture_pixels_for_test(14) == resized.pixels32,
           "A resized texture with 8-bit content kept its 16-bit format");
   // A canvas image stays RGBA8 even when given exact content.
   played.prepare_canvas_textures({reference(16, 1, {}, TextureSource::canvas)});
@@ -2376,6 +2425,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       std::error_code error;
       std::filesystem::remove(folder / "mesh.bin", error);
       std::filesystem::remove(folder / "textures.bin", error);
+      std::filesystem::remove(folder / "replacement_colors.bin", error);
       std::filesystem::remove(folder / "normals.bin", error);
       std::filesystem::remove(folder / "materials.bin", error);
       std::filesystem::remove(folder / "other_textures.bin", error);
@@ -3722,6 +3772,39 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     require(keyed_tags("lflare2", flare_size, flare_source.data()) ==
                 std::vector<Pack16>(6, Pack16::none),
             "A generated flare was tagged with a 16-bit format");
+  }
+  // A pack replacement stored at 16 bits keeps exactly the pack's own RGB565
+  // colors: its RGBA8 copy, staged as the renderer stages it, gives back the
+  // pack's texels. The two colors are mid-range and differ in every channel,
+  // so a change to the replacement's widening that dropping the low bits no
+  // longer undoes (a color adjustment, swapped channels) fails here; the
+  // all-values round trip of the shared widening is in
+  // tests/test_texture_storage.cpp.
+  {
+    using mw34::texture_staging::Pack16;
+    constexpr std::uint16_t first_color = 0xa505;  // red 20, green 40, blue 5
+    constexpr std::uint16_t second_color = 0x1e5b; // red 3, green 50, blue 27
+    auto pack = prepared_fixture::textures();
+    pack.replace(pack.size() - 4, 4,
+                 std::string{char(first_color & 0xff), char(first_color >> 8),
+                             char(second_color & 0xff), char(second_color >> 8)});
+    std::ofstream(folder / "replacement_colors.bin", std::ios::binary) << pack;
+    auto colors_assets = sdlfe::CoreCriticalAssets{};
+    colors_assets.textures = (folder / "replacement_colors.bin").u8string();
+    auto colors_renderer = make_check_renderer(window, backend, {}, colors_assets);
+    const uint8_t opaque[] = {64, 64, 64, 255};
+    mw34::materials::ScopedUploadKey key(mw34::materials::SurfaceKey{1, 1, 1, 0x51800030ULL});
+    const auto handle = colors_renderer->create_named_texture("authored", 1, 1, opaque, 1);
+    const auto state = cc_mw3_re::testing::named_texture_state(*colors_renderer, handle);
+    colors_renderer->release_texture(handle);
+    require(state.pack16 == Pack16::r5g6b5 && state.pixels.size() == 2,
+            "A pack replacement under an opaque game texture's key was not tagged RGB565 at "
+            "its own size");
+    std::vector<std::uint16_t> stored(state.pixels.size());
+    mw34::texture_staging::stage_rgba8(reinterpret_cast<unsigned char *>(stored.data()),
+                                       state.pixels.data(), state.pixels.size(), state.pack16);
+    require(stored == std::vector<std::uint16_t>{first_color, second_color},
+            "A pack replacement stored at 16 bits did not keep the pack's own RGB565 colors");
   }
 
   auto original_flare_assets = sdlfe::CoreCriticalAssets{};

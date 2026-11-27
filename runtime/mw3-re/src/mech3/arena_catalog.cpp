@@ -22,6 +22,7 @@
 #include "mech3/mech_reader.h"
 #include "mech3/replay_terrain.h"
 #include "mech3/zrdraiv.h"
+#include "platform/rgb565.hpp"
 
 namespace mech3 {
 // From mission.h, which can't be included beside mech_data.h: the two define
@@ -211,10 +212,12 @@ bool write_mech_picture(const std::string& mech, const std::filesystem::path& di
   for (int i = 0; i < w * h; ++i) {
     const uint16_t p = t->palette_count ? t->palette[static_cast<const uint8_t*>(t->pixels)[i]]
                                         : static_cast<const uint16_t*>(t->pixels)[i];
-    const int r = (p >> 11) * 255 / 31, g = ((p >> 5) & 63) * 255 / 63, b = (p & 31) * 255 / 31;
+    const auto color = ::platform::rgb565::widen(p);
     const int a = t->alpha ? t->alpha[i] : 255;
     const auto mix = [a](int c) { return static_cast<uint8_t>((c * a + kBackdrop * (255 - a)) / 255); };
-    rgb[i * 3] = mix(r), rgb[i * 3 + 1] = mix(g), rgb[i * 3 + 2] = mix(b);
+    rgb[i * 3] = mix(int(color.red));
+    rgb[i * 3 + 1] = mix(int(color.green));
+    rgb[i * 3 + 2] = mix(int(color.blue));
   }
   zimg::free_texture(t);
   return write_ppm(dir / (mech + ".ppm"), w, h, rgb);

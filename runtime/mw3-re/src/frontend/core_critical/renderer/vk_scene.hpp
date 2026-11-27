@@ -1059,9 +1059,10 @@ public:
         } else {
           const unsigned p = src[(size_t(y) * rw + x) * 2] |
                              src[(size_t(y) * rw + x) * 2 + 1] << 8;
-          o[0] = ((p >> 11) & 31) * 255 / 31;
-          o[1] = ((p >> 5) & 63) * 255 / 63;
-          o[2] = (p & 31) * 255 / 31;
+          const auto color = ::platform::rgb565::widen(std::uint16_t(p));
+          o[0] = std::uint8_t(color.red);
+          o[1] = std::uint8_t(color.green);
+          o[2] = std::uint8_t(color.blue);
         }
       }
       std::fwrite(row.data(), row.size(), 1, out);
@@ -1140,9 +1141,10 @@ public:
         } else {
           const unsigned p = src[(size_t(y) * rw + x) * 2] |
                              (src[(size_t(y) * rw + x) * 2 + 1] << 8);
-          o[0] = ((p >> 11) & 31) * 255 / 31;
-          o[1] = ((p >> 5) & 63) * 255 / 63;
-          o[2] = (p & 31) * 255 / 31;
+          const auto color = ::platform::rgb565::widen(std::uint16_t(p));
+          o[0] = std::uint8_t(color.red);
+          o[1] = std::uint8_t(color.green);
+          o[2] = std::uint8_t(color.blue);
         }
       }
     }
@@ -1834,14 +1836,9 @@ private:
       ++target_uploads;
     if (!upload_in) {
     } else if (rgba) {
-      for (VkDeviceSize i = 0; i < pixels; ++i) {
-        const unsigned p = s.color[i];
-        const std::uint32_t r = ((p >> 11) & 31) * 255 / 31,
-                            g = ((p >> 5) & 63) * 255 / 63,
-                            b = (p & 31) * 255 / 31;
-        const std::uint32_t v = r | g << 8 | b << 16 | 0xff000000u;
-        std::memcpy(up + 4 * i, &v, 4);
-      }
+      // The guest frame is RGB565: widen it into the RGBA8 target through the
+      // same table copy as 16-bit texture inputs (format 0, RGB565).
+      mw34::texture_staging::copy(up, s.color.data(), std::size_t(pixels), 0);
     } else
       std::memcpy(up, s.color.data(), colorBytes);
     if (upload_in)
@@ -4555,6 +4552,9 @@ public:
     const auto block = preload_memory_blocks_.find(buffer.memory);
     return {buffer.memory_offset, buffer.memory_size, buffer.memory_alignment,
             block == preload_memory_blocks_.end() ? 0 : block->second.capacity};
+  }
+  std::size_t preload_memory_block_count_for_test() const {
+    return preload_memory_blocks_.size();
   }
   std::array<VkDeviceSize, 4> texture_memory_for_test(std::uint64_t key) const {
     const auto &texture = textures.at(key);

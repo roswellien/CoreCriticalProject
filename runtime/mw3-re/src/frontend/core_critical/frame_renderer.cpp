@@ -41,6 +41,7 @@
 #include "platform/loading.hpp"
 #include "platform/render3d.h"
 #include "platform/prepared_visuals.h"
+#include "platform/rgb565.hpp"
 #include "platform/sha256.hpp"
 #include "renderer/surface_detail_bindings.hpp"
 #include <filesystem>
@@ -430,11 +431,10 @@ std::vector<uint32_t> image_pixels(const ::platform::prepared::Image &image,
                                         (uint64_t(image.height) * 2)));
         alpha = source[(std::size_t(sy) * source_width + sx) * 4 + 3];
       }
+      // The shared widening: the renderer stores these texels back at 16 bits
+      // (#518), which only works for the rounding platform/rgb565.hpp defines.
       pixels[std::size_t(y) * image.width + x] =
-          alpha == 0 ? 0
-                     : ((value >> 11) * 255 / 31) |
-                           (((value >> 5) & 63) * 255 / 63) << 8 |
-                           ((value & 31) * 255 / 31) << 16 | alpha << 24;
+          alpha == 0 ? 0 : ::platform::rgb565::to_rgba8(value, alpha);
     }
   return pixels;
 }
