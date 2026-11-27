@@ -1438,7 +1438,8 @@ test("keeps the start and end of the game and problems logs in the issue", async
 });
 
 test("rejects a clean-exit report with a blank failure summary", async () => {
-    for (const failure_summary of ["", "   \n\t"]) {
+    // Blank, missing (undefined drops out of the JSON) and not a string.
+    for (const failure_summary of ["", "   \n\t", undefined, 42, null]) {
         githubResponder();
         const response = await onRequestPost({
             request: crashRequest({
