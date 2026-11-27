@@ -1401,6 +1401,22 @@ test("rejects a clean-exit report without a problems log", async () => {
     }
 });
 
+test("rejects a clean-exit report with a blank failure summary", async () => {
+    for (const failure_summary of ["", "   \n\t"]) {
+        githubResponder();
+        const response = await onRequestPost({
+            request: crashRequest({
+                exit_code: 0,
+                failure_summary,
+                logs: { native_run: "RUN_LOG\n", native_problems: PROBLEMS_LOG },
+            }),
+            env: environment,
+        });
+        assert.equal(response.status, 400);
+        assert.equal(archivedReports.length, 0);
+    }
+});
+
 test("lists the problems log first in a crash issue and on the admin page", async () => {
     const created = recordCreatedIssue();
     const response = await onRequestPost({
