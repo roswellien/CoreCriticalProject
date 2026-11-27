@@ -42,6 +42,10 @@ ARTWORK_SMALLER_WIDTHS = {
     # The before/after pair keeps identical sizes so the two frames line up.
     "compare-stock": [1280],
     "compare-core-critical": [1280],
+    # Real captures: the native MW3 runtime in a replayed c1mp1 match, and the Pirate's
+    # Moon main menu from the native PM host (640x480, so no smaller copy is needed).
+    "native-c1mp1-beach": [1280],
+    "pirates-moon-menu": [],
 }
 
 # Only the current Mod Studio tour screenshots; the older numbered copies are unused.
