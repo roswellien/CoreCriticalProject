@@ -47,45 +47,64 @@ public static class GameProblemsLog
         return new Problem(seconds, match.Groups["level"].Value[0], text, trimmed);
     }
 
+    private const string FirstFrameMarker = "mw3: first frame shown ";
+    private static readonly Regex StampedLine = new(
+        @"\A\[(?<seconds>[0-9]{1,9}(?:\.[0-9]{1,6})?)\] [IWE] (?<text>.*)\z", RegexOptions.CultureInvariant);
+
     /// <summary>
     /// The W and E lines of the session's problems log stamped at or after the first frame.
-    /// None without a first frame, a file or such a line, so startup noise never prompts.
+    /// The first frame is the game's own "first frame shown" line in that log, on the same clock as
+    /// the problems; a game too old to write it falls back to <paramref name="launcherFirstFrameMilliseconds"/>,
+    /// when the launcher noticed the ready file. None without a first frame, a file or such a line,
+    /// so startup noise never prompts.
     /// </summary>
-    public static IReadOnlyList<string> PlayProblems(string sessionDirectory, long? firstFrameMilliseconds)
+    public static IReadOnlyList<string> PlayProblems(string sessionDirectory, long? launcherFirstFrameMilliseconds)
     {
-        if (firstFrameMilliseconds is not { } firstFrame) return Array.Empty<string>();
-        var firstFrameSeconds = firstFrame / 1000.0;
-        return ReadProblems(sessionDirectory)
+        var log = ReadProblems(sessionDirectory);
+        var cutoff = log.FirstFrameSeconds ?? launcherFirstFrameMilliseconds / 1000.0;
+        if (cutoff is not { } firstFrameSeconds) return Array.Empty<string>();
+        return log.Problems
             .Where(problem => problem.SecondsSinceLaunch >= firstFrameSeconds)
             .Select(problem => problem.Line)
             .ToList();
     }
 
     /// <summary>
-    /// The text of the problems log's first E line, else its first W line, without the stamp
-    /// and level; null when there is none. Reports after a clean exit are grouped by it.
+    /// The text of the first E line, else the first W line, from play (after the game's first frame,
+    /// as the prompt counts them), without the stamp and level; with none from play, the same from
+    /// the whole log; null when there is none. Reports after a clean exit are titled and grouped by it.
     /// </summary>
     public static string? FirstProblemSummary(string sessionDirectory)
     {
-        var problems = ReadProblems(sessionDirectory);
+        var log = ReadProblems(sessionDirectory);
+        var fromPlay = log.FirstFrameSeconds is { } firstFrame
+            ? log.Problems.Where(problem => problem.SecondsSinceLaunch >= firstFrame).ToList()
+            : log.Problems;
+        var problems = fromPlay.Count > 0 ? fromPlay : log.Problems;
         var first = problems.FirstOrDefault(problem => problem.Level == 'E') ??
             problems.FirstOrDefault(problem => problem.Level == 'W');
         return first?.Text;
     }
 
-    private static List<Problem> ReadProblems(string sessionDirectory)
+    private sealed record ProblemsLog(List<Problem> Problems, double? FirstFrameSeconds);
+
+    private static ProblemsLog ReadProblems(string sessionDirectory)
     {
         var path = Path.Combine(sessionDirectory, "native", PlaytestDiagnostics.NativeProblemsFileName);
         string text;
         try { text = PlaytestDiagnostics.ReadWholeLog(path); }
-        catch { return new List<Problem>(); }
+        catch { return new ProblemsLog(new List<Problem>(), null); }
         var problems = new List<Problem>();
+        double? firstFrame = null;
         foreach (var line in text.Split('\n'))
         {
             var problem = Parse(line);
             if (problem != null) problems.Add(problem);
+            if (firstFrame == null && StampedLine.Match(line.Trim()) is { Success: true } stamped &&
+                stamped.Groups["text"].Value.StartsWith(FirstFrameMarker, StringComparison.Ordinal))
+                firstFrame = double.Parse(stamped.Groups["seconds"].Value, CultureInfo.InvariantCulture);
         }
-        return problems;
+        return new ProblemsLog(problems, firstFrame);
     }
 
     /// <summary>

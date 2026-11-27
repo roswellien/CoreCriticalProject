@@ -29,8 +29,9 @@ class RunLog {
 };
 
 // log::drain's work (log.h) while a log is open: waits up to `max_ms` for
-// the open log to take in what is in its pipes. Takes no lock and allocates
-// nothing. Nothing happens without an open log.
-void run_log_drain(unsigned max_ms);
+// the open log to take in what is in its pipes, taking no lock and allocating
+// nothing; with `flush_partial`, then also writes out a line still missing its
+// newline (that part allocates). Nothing happens without an open log.
+void run_log_drain(unsigned max_ms, bool flush_partial);
 
 }  // namespace sdlfe

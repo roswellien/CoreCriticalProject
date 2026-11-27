@@ -1041,7 +1041,7 @@ namespace MW3RemasterLauncher
             else
             {
                 var choice = MessageBox.Show(this,
-                    prompt.Summary + "\n\nSend the redacted recent launcher and native logs, hardware inventory (CPU, installed memory, graphics adapters and drivers), launcher/runtime details, selected graphics settings and pack metadata to Core Critical for review? The inventory does not request serial numbers or device identifiers. Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. Saves, original media or memory dumps are not included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
+                    prompt.Summary + "\n\nSend the redacted launcher and game logs (file paths, multiplayer chat and other players' names removed), hardware inventory (CPU, installed memory, graphics adapters and drivers), display mode and resolution, controller and input device names, launcher/runtime details, selected graphics settings, and pack names and texture sizes to Core Critical for review? The inventory does not request serial numbers or device identifiers. Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. Saves, original media or memory dumps are not included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
                     prompt.Title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
                 if (choice != MessageBoxResult.Yes) return;
             }
@@ -1051,8 +1051,9 @@ namespace MW3RemasterLauncher
                 var hardwareInventory = await Task.Run(HardwareInventory.Capture);
                 var basePath = _basePath;
                 var header = await Task.Run(() => BuildReportHeader(settingsSnapshot, packsSnapshot, launchLog, basePath));
-                var report = PlaytestDiagnostics.CreateCrashReport(settingsSnapshot, packsSnapshot,
-                    launchLog, _basePath, runtimeVersion, exitCode, hardwareInventory, header);
+                // Off the window's thread: it reads and redacts the whole game log.
+                var report = await Task.Run(() => PlaytestDiagnostics.CreateCrashReport(settingsSnapshot,
+                    packsSnapshot, launchLog, basePath, runtimeVersion, exitCode, hardwareInventory, header));
                 var result = await new CrashReportService().SubmitAsync(report);
                 var detail = result.ArchivedOnly
                     ? "The report was saved to the private admin archive. GitHub issue delivery was unavailable."

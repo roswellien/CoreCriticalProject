@@ -57,13 +57,20 @@ inline const char* base_name(const char* path) {
 // Set by RunLog while its log is open (run_log.cpp): waits up to `max_ms` for
 // the lines already printed to reach the files. Here, as a pointer, so code in
 // libraries without RunLog (the game core, the renderer) can call drain().
-inline std::atomic<void (*)(unsigned)> g_drain{nullptr};
+inline std::atomic<void (*)(unsigned, bool)> g_drain{nullptr};
 
-// Before a process ends without unwinding (_Exit, std::exit, the crash
-// handler): the last lines printed reach mw3.log. Takes no lock and allocates
-// nothing, so a crashed thread can't block it. Nothing to do without a log.
+// Before a process ends without unwinding (_Exit, std::exit): the last lines
+// printed reach mw3.log, a line missing its newline included. Nothing to do
+// without a log.
 inline void drain(unsigned max_ms = 500) {
-  if (void (*fn)(unsigned) = g_drain.load()) fn(max_ms);
+  if (void (*fn)(unsigned, bool) = g_drain.load()) fn(max_ms, true);
+}
+
+// The crash handler's drain: the same wait, but no lock and no allocation, so
+// a crashed thread holding either can't block it (a line missing its newline
+// stays out).
+inline void drain_after_crash(unsigned max_ms) {
+  if (void (*fn)(unsigned, bool) = g_drain.load()) fn(max_ms, false);
 }
 
 // `text` with level `level`'s marker in front when a log is open to take it off.
@@ -81,7 +88,20 @@ inline void vprint(Level level, const char* fmt, va_list args) {
   int n = std::vsnprintf(buf + start, sizeof buf - start - 1, fmt, args);
   if (n < 0) n = 0;
   const size_t room = sizeof buf - start - 2;
-  size_t len = start + (static_cast<size_t>(n) < room ? static_cast<size_t>(n) : room);
+  const bool cut = static_cast<size_t>(n) >= room;
+  size_t len = start + (cut ? room : static_cast<size_t>(n));
+  // A cut that lands inside a UTF-8 character drops that character whole.
+  if (cut) {
+    size_t continuation = 0;
+    while (continuation < 3 && len - continuation > start &&
+           (static_cast<unsigned char>(buf[len - 1 - continuation]) & 0xC0) == 0x80)
+      ++continuation;
+    if (len - continuation > start) {
+      const unsigned char lead = static_cast<unsigned char>(buf[len - 1 - continuation]);
+      const size_t length = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+      if (continuation + 1 < length) len -= continuation + 1;
+    }
+  }
   if (len == 0 || buf[len - 1] != '\n') buf[len++] = '\n';
   std::FILE* out = level == Level::info ? stdout : stderr;
   std::fwrite(buf, 1, len, out);

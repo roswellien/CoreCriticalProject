@@ -186,24 +186,41 @@ struct RunLog::Impl {
     take(t, nullptr, 0, true);
   }
 
-  // The crash handler's and the fast exits' wait (log::drain): until both readers have been quiet for 20 ms,
-  // or `max_ms`. Bytes already in a pipe end a reader's read at once, so 20 ms of quiet means they are written.
-  // It only reads two atomics and sleeps: no lock, no allocation, no call on the pipes (a peek on a handle
-  // whose read is blocked waits behind that read), so a crashed thread holding any of those can't block it.
-  // A line printed without its newline stays in the reader until more comes.
-  void drain(unsigned max_ms) {
-    const long long until = platform::loading::since_process_start_ms() + max_ms;
+  // The crash handler's and the fast exits' wait (log::drain): until both readers have been quiet for 20 ms
+  // counted from the drain's start, or `max_ms`. Bytes already in a pipe end a blocked read at once, so a
+  // reader that stays quiet for 20 ms after the call has nothing left to take; counting from the reader's
+  // own last activity instead would let a line printed just before the call go unread. The wait only reads
+  // atomics and sleeps: no lock, no allocation, no call on the pipes (a peek on a handle whose read is
+  // blocked waits behind that read), so a crashed thread holding any of those can't block it.
+  // `flush_partial` (the fast exits, not the crash handler, since it allocates and takes the lock) then also
+  // writes out a line still missing its newline.
+  void drain(unsigned max_ms, bool flush_partial) {
+    const long long start = platform::loading::since_process_start_ms();
+    const long long until = start + max_ms;
     for (;;) {
       const long long now = platform::loading::since_process_start_ms();
       bool quiet = true;
-      for (Tee& t : tees)
-        if (t.read >= 0 && (t.busy || now - t.last_active_ms < 20)) quiet = false;
-      if (quiet || now >= until) return;
+      for (Tee& t : tees) {
+        const long long active = t.last_active_ms > start ? t.last_active_ms.load() : start;
+        if (t.read >= 0 && (t.busy || now - active < 20)) quiet = false;
+      }
+      if (quiet || now >= until) break;
 #if defined(_WIN32)
       Sleep(5);
 #else
       usleep(5000);
 #endif
+    }
+    if (!flush_partial) return;
+    std::unique_lock<std::mutex> g(lock, std::try_to_lock);
+    if (!g.owns_lock()) return;
+    try {
+      for (Tee& t : tees) {
+        LogOutput out;
+        t.stamper.flush(seconds_since_launch(), out);
+        write_files(out);
+      }
+    } catch (...) {
     }
   }
 };
@@ -273,10 +290,10 @@ bool RunLog::open(const std::string& dir, const std::string& name, bool problems
   return true;
 }
 
-void run_log_drain(unsigned max_ms) {
+void run_log_drain(unsigned max_ms, bool flush_partial) {
   // No fflush: a thread that crashed inside printf may hold the stream's lock, and stdout and stderr are
   // unbuffered while the log is open (open), so nothing waits in them.
-  if (RunLog::Impl* open = g_open_log.load()) open->drain(max_ms);
+  if (RunLog::Impl* open = g_open_log.load()) open->drain(max_ms, flush_partial);
 }
 
 RunLog::RunLog() = default;

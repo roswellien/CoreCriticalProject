@@ -668,7 +668,31 @@ public static class PlaytestDiagnostics
             text = text.Replace(root, "<local-path>", StringComparison.OrdinalIgnoreCase);
             text = text.Replace(root.Replace('\\', '/'), "<local-path>", StringComparison.OrdinalIgnoreCase);
         }
-        return text;
+        return RedactMultiplayer(text);
+    }
+
+    // Multiplayer lines the game logs (mw3_main.cpp's network messages): chat text, player names and
+    // the address joined belong to other people, so reports and exports keep only that they happened.
+    private static readonly Regex ChatLine = new(
+        @"(mw3: network: player ).*? says "".*$", RegexOptions.Multiline | RegexOptions.CultureInvariant);
+    private static readonly Regex PlayerEventLine = new(
+        @"(mw3: network: player ).*?( joined| left| is the host)\r?$",
+        RegexOptions.Multiline | RegexOptions.CultureInvariant);
+    private static readonly Regex SessionLine = new(
+        @"(mw3: network: (?:hosting|joined) ?)\S*( on port \d+ as player \d+ )\(.*\)(, the host \d+)",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex JoinFailedLine = new(
+        @"(mw3: network: joining ).*( failed)", RegexOptions.CultureInvariant);
+
+    internal static string RedactMultiplayer(string text)
+    {
+        text = ChatLine.Replace(text, "${1}<player> says <chat removed>");
+        text = PlayerEventLine.Replace(text, "${1}<player>${2}");
+        text = SessionLine.Replace(text, m =>
+            m.Groups[1].Value.StartsWith("mw3: network: joined", StringComparison.Ordinal)
+                ? $"mw3: network: joined <address>{m.Groups[2].Value}(<player>){m.Groups[3].Value}"
+                : $"mw3: network: hosting{m.Groups[2].Value}(<player>){m.Groups[3].Value}");
+        return JoinFailedLine.Replace(text, "${1}<address>${2}");
     }
 
     private static string ScrubSingleQuotedPaths(string text, string[] orderedRoots)

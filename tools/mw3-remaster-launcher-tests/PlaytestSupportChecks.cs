@@ -369,6 +369,22 @@ static class PlaytestSupportChecks
             }
             Check(SummaryFor("Startup: Checking game files...\n" + gameLoopLine + "\n") == gameLoopLine,
                 "Game loop exception line was not the failure summary");
+            // Other players' chat, names and the address joined never reach a report or export.
+            var multiplayer = PlaytestDiagnostics.Redact(
+                "[10.0] I mw3: network: joined 203.0.113.7:7777 on port 7777 as player 3 (Alice Smith), the host 1\n" +
+                "[11.0] I mw3: network: player Bob joined\n" +
+                "[12.0] I mw3: network: player Bob says \"mail me at bob@example.com\"\n" +
+                "[13.0] I mw3: network: player Bob left\n" +
+                "[14.0] I mw3: network: hosting on port 7777 as player 1 (Alice Smith), the host 1\n" +
+                "[15.0] I mw3: network: joining 203.0.113.7 failed\n");
+            Check(!multiplayer.Contains("Bob", StringComparison.Ordinal) &&
+                !multiplayer.Contains("Alice", StringComparison.Ordinal) &&
+                !multiplayer.Contains("example.com", StringComparison.Ordinal) &&
+                !multiplayer.Contains("203.0.113.7", StringComparison.Ordinal) &&
+                multiplayer.Contains("mw3: network: player <player> says <chat removed>", StringComparison.Ordinal) &&
+                multiplayer.Contains("mw3: network: player <player> left", StringComparison.Ordinal) &&
+                multiplayer.Contains("on port 7777 as player 3 (<player>), the host 1", StringComparison.Ordinal),
+                "Multiplayer chat, names or addresses survived redaction: " + multiplayer);
             // The game stamps each mw3.log line with its time and level; the summary is the text.
             Check(SummaryFor("[0.250] I mw3: timing log-open\n[12.500] E " + gameLoopLine + "\n") == gameLoopLine,
                 "A stamped game loop exception line was not the failure summary");
@@ -592,6 +608,18 @@ static class PlaytestSupportChecks
         Check(PlaytestDiagnostics.FailureSummary(cleanLauncherLog, 0) == "startup error" &&
             PlaytestDiagnostics.FailureSummary(cleanLauncherLog, 7) == PlaytestDiagnostics.GenericFailureSummary,
             "Clean-exit summary did not take the first E line, or a crash summary used the problems log");
+
+        // A game that writes its own first-frame line: the cutoff is that line's stamp, on the game's clock
+        // (no launcher time needed), and the summary names a problem from play over an earlier startup error.
+        var gameClockSession = Path.Combine(root, "session-521-game-clock");
+        Directory.CreateDirectory(Path.Combine(gameClockSession, "native"));
+        File.WriteAllText(Path.Combine(gameClockSession, "native", "mw3-problems.log"),
+            "[0.500] I mw3: header resolution=1920x1080\n[1.000] E startup error\n" +
+            "[2.500] I mw3: first frame shown at 2500 ms since process start\n[2.600] W play warning\n");
+        Check(GameProblemsLog.PlayProblems(gameClockSession, null).SequenceEqual(new[] { "[2.600] W play warning" }) &&
+            GameProblemsLog.PlayProblems(gameClockSession, 99000).Count == 1 &&
+            GameProblemsLog.FirstProblemSummary(gameClockSession) == "play warning",
+            "The game's own first-frame line did not set the cutoff, or the summary named a startup problem");
 
         // Export Report keeps a 5 MB log whole, and the new files get their own zip names.
         var wholeZip = Path.Combine(root, "report-521-whole.zip");

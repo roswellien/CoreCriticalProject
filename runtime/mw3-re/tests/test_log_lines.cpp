@@ -62,6 +62,14 @@ void markers() {
   const std::string progress(LineStamper::kMaxLine + 10, 'x');
   endless.feed(progress.data(), progress.size(), 6, parts);
   require(parts.console.size() == LineStamper::kMaxLine + 1, "the capped part goes out at once");
+  // A UTF-8 character (here e-acute, 2 bytes) across the part's end goes on whole to the next part.
+  LineStamper utf8('I');
+  LogOutput cut;
+  std::string long_line(LineStamper::kMaxLine - 1, 'y');
+  long_line += "\xC3\xA9z\n";
+  utf8.feed(long_line.data(), long_line.size(), 7, cut);
+  require(cut.console == std::string(LineStamper::kMaxLine - 1, 'y') + "\n\xC3\xA9z\n",
+          "a character cut by the part's end stays whole");
 }
 
 void header_and_events_are_problems() {
@@ -85,13 +93,19 @@ void flush_ends_a_partial_line() {
 }
 
 void problems_cap() {
-  ProblemsCap cap(40);
-  const std::string line = "[1.000] W mw3: twenty-four\n";  // 27 bytes
-  require(cap.take(line, 1) == line, "under the cap: kept");
-  const std::string over = cap.take(line, 2);
-  require(over.find("problems log full at 40 bytes") != std::string::npos && over.find("twenty") == std::string::npos,
+  const std::size_t limit = 200;
+  ProblemsCap cap(limit);
+  const std::string line = "[1.000] W mw3: twenty-four\n";  // 27 bytes; 2 fit beside the note's room
+  std::string file = cap.take(line, 1);
+  require(file == line, "under the cap: kept");
+  file += cap.take(line, 2);
+  require(file == line + line, "still room beside the note: kept");
+  const std::string over = cap.take(line, 3);
+  file += over;
+  require(over.find("problems log full at 200 bytes") != std::string::npos && over.find("twenty") == std::string::npos,
           "over the cap: one line saying so: " + over);
-  require(cap.take(line, 3).empty(), "after that, nothing");
+  require(file.size() <= limit, "the file never passes the cap: " + std::to_string(file.size()));
+  require(cap.take(line, 4).empty(), "after that, nothing");
 }
 
 void repeat_counts() {

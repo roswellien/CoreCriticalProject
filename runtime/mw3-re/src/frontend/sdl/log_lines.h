@@ -52,8 +52,17 @@ class LineStamper {
         continue;
       }
       line_.push_back(c);
-      // A line that never ends (a progress line redrawn with \r) is written in parts, not held forever.
-      if (line_.size() >= kMaxLine) finish(seconds, out);
+      // A line that never ends (a progress line redrawn with \r) is written in parts, not held forever;
+      // a UTF-8 character cut by the part's end goes on to the next part whole.
+      if (line_.size() >= kMaxLine) {
+        const std::size_t keep = incomplete_utf8_tail(line_);
+        const std::string carried = line_.substr(line_.size() - keep);
+        line_.resize(line_.size() - keep);
+        const char level = level_;
+        finish(seconds, out);
+        line_ = carried;
+        level_ = level;
+      }
     }
   }
 
@@ -63,6 +72,18 @@ class LineStamper {
   }
 
   static constexpr std::size_t kMaxLine = 8192;
+
+  // How many bytes at the end of `text` are the start of a UTF-8 character still missing its last bytes.
+  static std::size_t incomplete_utf8_tail(const std::string& text) {
+    std::size_t continuation = 0;
+    while (continuation < 3 && continuation < text.size() &&
+           (static_cast<unsigned char>(text[text.size() - 1 - continuation]) & 0xC0) == 0x80)
+      ++continuation;
+    if (continuation == text.size()) return 0;
+    const unsigned char lead = static_cast<unsigned char>(text[text.size() - 1 - continuation]);
+    const std::size_t length = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+    return continuation + 1 < length ? continuation + 1 : 0;
+  }
 
  private:
   void finish(double seconds, LogOutput& out) {
@@ -80,8 +101,10 @@ class LineStamper {
   }
 
   static bool is_problem(char level, const std::string& text) {
+    // The first-frame line too: the launcher counts only problems stamped after it (GameProblemsLog.cs).
     return level == 'W' || level == 'E' || text.find("mw3: header ") != std::string::npos ||
-           text.find("mw3: health event ") != std::string::npos;
+           text.find("mw3: health event ") != std::string::npos ||
+           text.find("mw3: first frame shown ") != std::string::npos;
   }
 
   char default_level_;
@@ -103,7 +126,8 @@ class ProblemsCap {
       std::size_t end = lines.find('\n', start);
       end = end == std::string::npos ? lines.size() : end + 1;
       const std::size_t len = end - start;
-      if (written_ + len > cap_) {
+      // Room is kept for the closing note, so the file never passes the cap.
+      if (written_ + len + kNoteRoom > cap_) {
         char note[96];
         std::snprintf(note, sizeof note, "[%.3f] W mw3: problems log full at %zu bytes; later problems are only in mw3.log\n",
                       seconds, cap_);
@@ -117,6 +141,8 @@ class ProblemsCap {
     }
     return out;
   }
+
+  static constexpr std::size_t kNoteRoom = 128;  // the "problems log full" line is under 128 bytes
 
  private:
   std::size_t cap_;

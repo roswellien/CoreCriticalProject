@@ -78,12 +78,15 @@ void mark_menu_ready() {
   }
 }
 void mark_ready() {
-  if (g_ready || g_ready_file.empty()) return;
+  if (g_ready) return;
   g_ready = true;
+  // Every run, with or without a ready file: this line also goes to mw3-problems.log (log_lines.h), and the
+  // launcher counts only problems stamped after it, on the game's own clock (GameProblemsLog.cs).
+  std::printf("mw3: first frame shown at %lld ms since process start%s\n",
+              platform::loading::since_process_start_ms(), g_ready_file.empty() ? "" : " (the launcher told)");
+  if (g_ready_file.empty()) return;
   set_ready_status("");
   if (std::FILE* f = std::fopen(g_ready_file.c_str(), "wb")) std::fclose(f);
-  std::printf("mw3: first frame shown %llu ms after the start (the launcher told)\n",
-              static_cast<unsigned long long>(SDL_GetTicks()));
 }
 
 size_t resident_kb() {
