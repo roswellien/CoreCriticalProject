@@ -1989,6 +1989,33 @@ void check_16bit_texture_staging() {
   }
 }
 
+// The texture memory line prints once per mission, after the first world
+// scene's preload; teardown before that scene, and later scenes, print none (#518).
+void check_texture_memory_line(SDL_Window *window, sdlfe::RendererBackend backend) {
+  using cc_mw3_re::testing::texture_memory_log_count;
+  auto renderer = make_check_renderer(window, backend, {}, {});
+  renderer->set_viewport(0, 0, 64, 64);
+  const auto scene = [&] {
+    renderer->begin_scene();
+    renderer->end_scene();
+  };
+  scene();
+  require(texture_memory_log_count(*renderer) == 0,
+          "A scene before any mission printed the texture memory line");
+  renderer->mission_changed({});
+  scene();
+  require(texture_memory_log_count(*renderer) == 1,
+          "A mission's first scene did not print one texture memory line");
+  scene();
+  require(texture_memory_log_count(*renderer) == 1,
+          "A mission's second scene printed the texture memory line again");
+  renderer->mission_changed({});
+  renderer->reset_scene_resources();
+  scene();
+  require(texture_memory_log_count(*renderer) == 1,
+          "A mission torn down before its first scene still printed the texture memory line");
+}
+
 void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                     const sdlfe::CoreCriticalQuality &quality,
                     bool materials = false) {
@@ -4545,6 +4572,7 @@ int main(int argc, char **argv) {
         check_lab_preview_lighting(window, backend);
       }
       check_16bit_texture_staging();
+      check_texture_memory_line(window, backend);
       check_prepared(window, backend, quality, material_check);
     } else if (quality_check)
       check_quality(window, backend, quality);
