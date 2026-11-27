@@ -7,9 +7,9 @@ namespace MW3RemasterLauncher.Core;
 public sealed record OnlineUpdateConfiguration(int SchemaVersion, string CatalogUrl, string Channel,
     string DeliveryPolicy, string[] ApprovedHosts, string? BrokerUrl = null)
 {
-    public static OnlineUpdateConfiguration Read(string application)
+    public static OnlineUpdateConfiguration Read(string application, string filename = "online-updates.json")
     {
-        var path = Path.Combine(application, "online-updates.json");
+        var path = Path.Combine(application, PackStorage.ValidateId(filename));
         if (!File.Exists(path))
             throw new InvalidDataException("Online updates are not configured. You can still import a signed update file.");
         PackStorage.EnsureNoLinks(path);

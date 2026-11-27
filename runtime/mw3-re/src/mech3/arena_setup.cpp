@@ -157,6 +157,13 @@ bool map_reader_ships(const std::string& dir, int32_t number) {
   return map.read(reader_path(dir, "mp" + std::to_string(number)));
 }
 
+// Ours (#507)
+const char* time_of_day_lighting(const std::string& name) {
+  for (const TimeOfDay& t : kTimesOfDay)
+    if (name == t.name) return t.lighting_mission;
+  return nullptr;
+}
+
 // Ours (#287): the setup file's fields, each refused by name.
 bool parse_arena_setup(const std::string& json_text, Setup* out, std::string* error) {
   *out = Setup{};
@@ -179,6 +186,21 @@ bool parse_arena_setup(const std::string& json_text, Setup* out, std::string* er
   if (folder == j.end() || !folder->is_string() || folder->get<std::string>().empty())
     return fail(error, "out: needs the match log's folder");
   out->out = folder->get<std::string>();
+
+  // Optional (#507); absent or null is the map's own lighting.
+  if (const auto time = j.find("time_of_day"); time != j.end() && !time->is_null()) {
+    std::string names;
+    for (const TimeOfDay& t : kTimesOfDay) names += std::string(names.empty() ? "" : ", ") + t.name;
+    if (!time->is_string() || !time_of_day_lighting(time->get<std::string>()))
+      return fail(error, "time_of_day: needs one of " + names + " (or null for the map's own lighting)");
+    out->time_of_day = time->get<std::string>();
+  }
+
+  const auto recording = j.find("record_every_update");
+  if (recording != j.end()) {
+    if (!recording->is_boolean()) return fail(error, "record_every_update: needs a boolean");
+    out->record_every_update = recording->get<bool>();
+  }
 
   const auto sides = j.find("sides");
   if (sides == j.end() || !sides->is_array() || sides->size() != kSides)

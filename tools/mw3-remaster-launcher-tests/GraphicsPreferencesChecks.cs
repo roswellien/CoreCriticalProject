@@ -13,13 +13,13 @@ static class GraphicsPreferencesChecks
             var settings=new SettingsManager(root,root);
             if(settings.Current.InitialSetupCompleted || settings.Current.DynamicLighting || settings.Current.Shadows || settings.Current.Headlights ||
                !settings.Current.WaterDetail || !settings.Current.CloudDetail || settings.Current.DrawDistance != 800 ||
-               settings.Current.FlareStyle != "modern")
+               settings.Current.FlareStyle != "modern" || settings.Current.Vsync)
                 throw new Exception("Fresh setup must start with stock lighting and remain incomplete");
             settings.Current.ActivePacks.Add("test.keep-pack");
             settings.Save();
             if(new SettingsManager(root,root).Current.InitialSetupCompleted)
                 throw new Exception("Saving/cancelling defaults completed first-run setup");
-            var choice=new GraphicsPreferences(2560,1440,"windowed","4",8,1600,true,true,true,false,true,"original");
+            var choice=new GraphicsPreferences(2560,1440,"windowed","4",8,1600,true,true,true,false,true,"original", Vsync: true);
             choice.ApplyTo(settings.Current);
             settings.Current.InitialSetupCompleted=true;
             settings.Save();
@@ -27,6 +27,10 @@ static class GraphicsPreferencesChecks
             if(GraphicsPreferences.From(loaded)!=choice || !loaded.InitialSetupCompleted || loaded.Fullscreen ||
                !loaded.ActivePacks.SequenceEqual(new[]{"test.keep-pack"}))
                 throw new Exception("Setup graphics did not persist independently of pack selection");
+            (choice with { Vsync = false }).ApplyTo(settings.Current);
+            settings.Save();
+            if (new SettingsManager(root, root).Current.Vsync)
+                throw new Exception("Turning VSync off did not persist.");
             var headlightStore=new HeadlightBindings(root);
             if(headlightStore.Load()!=new HeadlightBinding())throw new Exception("Fresh headlight settings must default to L");
             var nativeSession=Path.Combine(root,"headlight-native");

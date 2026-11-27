@@ -27,6 +27,7 @@ namespace {
 std::FILE* g_file = nullptr;
 int32_t g_frame_ms = 0;
 bool g_detail = true;
+bool g_record_every_update = false;
 
 // The match being logged: its mechs (the hooks look an object up in them),
 // the time of the last state lines, and each mech's standing last frame.
@@ -475,6 +476,7 @@ void log_match_start(const Setup& setup, const std::vector<ArenaMech>& mechs) {
   g_mechs = &mechs;
   g_now = 0;
   g_next_state = 0;
+  g_record_every_update = setup.record_every_update;
   g_was_standing.assign(mechs.size(), true);
   g_routes.assign(mechs.size(), RouteSeen{});
   g_decisions.assign(mechs.size(), DecisionBook{});
@@ -497,14 +499,16 @@ void log_match_start(const Setup& setup, const std::vector<ArenaMech>& mechs) {
     if (g_detail && brain && brain->params.sound_tag) mech["voice"] = brain->params.sound_tag;
     ids.push_back(mech);
   }
-  write_line({{"type", "start"},
-              {"version", kLogVersion},
-              {"map", setup.map},
-              {"minutes", setup.minutes},
-              {"seed", arena_seed()},
-              {"frame_ms", g_frame_ms},
-              {"sides", sides},
-              {"mechs", ids}});
+  nlohmann::json start = {{"type", "start"},
+                          {"version", kLogVersion},
+                          {"map", setup.map},
+                          {"minutes", setup.minutes},
+                          {"seed", arena_seed()},
+                          {"frame_ms", g_frame_ms},
+                          {"sides", sides},
+                          {"mechs", ids}};
+  if (g_record_every_update) start["record_every_update"] = true;
+  write_line(start);
   // Ours may still be installed from the last match (something that wrapped
   // it put it back after we left): then what it passes on stays as it was,
   // never ours, which would call itself.
@@ -678,12 +682,14 @@ void log_match_frame(float now, const std::vector<ArenaMech>& mechs) {
     log_routes(now, mechs);
     log_decisions(now, mechs);
   }
-  if (now < g_next_state) return;
-  // Each due time once, on the first frame at or past it: the same seed and
-  // frame time give the same frames, so the same lines.
-  while (g_next_state <= now) g_next_state += kLogStatePeriod;
+  if (!g_record_every_update && now < g_next_state) return;
+  // Keep the default scheduler unchanged. Benchmark recording observes the
+  // update directly, including its float clock precision, without resampling.
+  if (!g_record_every_update)
+    while (g_next_state <= now) g_next_state += kLogStatePeriod;
   if (!g_file) return;
-  nlohmann::json state = {{"type", "state"}, {"t", rounded(now)}, {"mechs", nlohmann::json::array()}};
+  const double state_time = g_record_every_update ? static_cast<double>(now) : rounded(now);
+  nlohmann::json state = {{"type", "state"}, {"t", state_time}, {"mechs", nlohmann::json::array()}};
   for (const ArenaMech& entry : mechs) state["mechs"].push_back(mech_state_record(entry, mechs));
   if (g_detail) {
     state["rounds"] = rounds_in_flight(now);

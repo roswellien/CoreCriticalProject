@@ -208,6 +208,7 @@ public sealed class NativeGameRunner
             AnisotropicFiltering = settings.AnisotropicFiltering,
             WindowMode = WindowModeForSettings(settings.WindowMode),
             RenderThread = settings.RenderThread,
+            Vsync = settings.Vsync,
             Lighting = Mw3ReLighting.Normal,
             FlareStyle = settings.FlareStyle switch
             {
@@ -243,7 +244,8 @@ public sealed class NativeGameRunner
     }
 
     /// <summary>Plan and start one MW3-RE session; the caller owns the returned process.</summary>
-    public Process Launch(LauncherSettings settings, IEnumerable<string> activeModDirs, Action<string>? log = null)
+    public Process Launch(LauncherSettings settings, IEnumerable<string> activeModDirs, Action<string>? log = null,
+        IReadOnlyList<string>? extraArguments = null)
     {
         var session = Path.Combine(_dataRoot, "sessions", Guid.NewGuid().ToString("N"));
         // Guards the pending-log buffer shared by process reader threads and the launch thread.
@@ -292,7 +294,7 @@ public sealed class NativeGameRunner
             Log("Startup: Checking game files...");
             var process = Start(settings, activeModDirs, line =>
                 Log($"{line} [launcher elapsed {launchClock.ElapsedMilliseconds} ms]"), session,
-                capturedBaseline => baseline = capturedBaseline);
+                capturedBaseline => baseline = capturedBaseline, extraArguments);
             PublishLog();
             async Task<int> ObserveSessionExitAsync()
             {
@@ -324,12 +326,19 @@ public sealed class NativeGameRunner
     }
 
     private Process Start(LauncherSettings settings, IEnumerable<string> activeModDirs, Action<string> log, string session,
-        Action<NativeSessionDiagnosticsBaseline>? onBaseline)
+        Action<NativeSessionDiagnosticsBaseline>? onBaseline, IReadOnlyList<string>? extraArguments)
     {
         var validation = GameValidator.Validate(settings.GamePath);
         if (!validation.IsValid) throw new InvalidOperationException("Cannot launch game: " + validation.StatusMessage);
         if (!string.IsNullOrWhiteSpace(settings.ModularContentProfile))
         {
+            // Modular content profiles launch through ModProfiles.Launch, which builds its own
+            // fixed argument list and cannot accept arena or replay flags.
+            if (extraArguments is { Count: > 0 })
+            {
+                throw new InvalidOperationException(
+                    "Turn off the MW3-RE modular content profile before running an AI Arena match or replay.");
+            }
             LastRuntimeVersion = DescribeExternalRuntimeVersion(settings.ModularRuntimeExecutable);
             var profileProcess = ModProfiles.Launch(settings, validation.GameDirectory, _dataRoot, log,
                 writeDir => onBaseline?.Invoke(PlaytestDiagnostics.CaptureNativeBaseline(writeDir)));
@@ -421,6 +430,15 @@ public sealed class NativeGameRunner
         ApplyCacheEnvironment(start, plan.RootElement);
         // The launcher can show the captured crash and offer a report after the process exits.
         start.Environment["MW3_LAUNCHER_WATCHES"] = "1";
+        if (extraArguments is { Count: > 0 })
+        {
+            foreach (var extraArgument in extraArguments)
+            {
+                if (extraArgument == null)
+                    throw new ArgumentException("Extra launch arguments cannot contain null entries.", nameof(extraArguments));
+                argv.Add(extraArgument);
+            }
+        }
         var readyFile = Path.Combine(session, "native-ready");
         argv.AddRange(new[] { "--ready-file", readyFile });
         foreach (var argument in argv.Skip(1)) start.ArgumentList.Add(argument);

@@ -77,6 +77,7 @@
 #include "mech3/player.h"
 #include "mech3/quit_box.h"
 #include "mech3/replay_hooks.h"
+#include "mech3/spectator_camera_hooks.h"
 #include "platform/platform.h"
 #include "platform/render3d.h"
 #include "platform/sound_output.h"
@@ -690,6 +691,11 @@ void GameEngine::replay_camera() {
   if (!replay || !camera_) return;
   replay->place_camera(static_cast<zcls::Node*>(object_of(camera_)));
   program_view_follow_ground();
+}
+void GameEngine::spectator_camera() {
+  SpectatorCameraHooks* spectator = spectator_camera_hooks();
+  if (!spectator || !camera_) return;
+  spectator->place_camera(static_cast<zcls::Node*>(object_of(camera_)));
 }
 void GameEngine::replay_draw() {
   if (ReplayHooks* replay = replay_hooks()) replay->draw_overlay();

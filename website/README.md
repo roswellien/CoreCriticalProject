@@ -33,6 +33,22 @@ Wrangler serves the static build and discovers the Function in `website/function
 For a static-only preview, use `python -m http.server 4173 --directory dist`
 from `website/`.
 
+## Web-sized images and fonts
+
+Pages load WebP images and WOFF2 fonts generated from the original PNG plates and
+TTF fonts, which stay in the repository as the source. After replacing or adding an
+original, regenerate the web files from the repository root and commit them:
+
+```powershell
+pip install pillow fonttools brotli
+python website/tools/optimize_assets.py
+```
+
+New artwork must be listed in the script and referenced as `.webp` with a
+`srcset`. Fonts are converted without subsetting, so the Orbitron and Russo One
+Reserved Font Names remain valid. The Mod Studio tour links each screenshot to its
+full-quality PNG.
+
 ## Publish
 
 The existing `core-critical` Pages project is connected to this repository with
@@ -71,7 +87,11 @@ one-time prompt. The endpoint targets a dedicated private repository such as
 `roswellien/corecritical-crash-reports`, groups specific failures by engine
 mode, exit code and message, reopens closed matching issues, and adds issues to
 the configured Project V2 board through that board's built-in auto-add
-workflow. The generic unexpected-exit message is never grouped. The launcher
+workflow. The generic unexpected-exit message is never grouped. Reports from a
+clean exit (exit code 0) are accepted only when they carry the game's problems
+log, and are titled "Problems" instead of "Crash"; their failure summary is the
+log's first error line (or first warning), so they group by problem like
+crashes. The launcher
 displays a short report ID, not a private GitHub URL.
 
 New crash issues are capped at 20 per UTC day by default. The cap is reserved

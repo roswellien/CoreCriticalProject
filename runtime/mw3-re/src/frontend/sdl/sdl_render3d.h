@@ -76,6 +76,9 @@ struct CoreCriticalAssets {
   bool cloud_detail_explicit = false, cloud_detail = false;
   bool effect_lights = false, fixture_lights = false, mech_headlights = false;
   std::string effect_light_catalog, stock_headlights, headlight_bindings;
+  bool vsync_explicit = false, vsync = true;
+  // vsync and vsync_explicit are intentionally excluded from empty() because plain SDL
+  // supports vertical synchronization without requiring a Core Critical Vulkan backend.
   bool empty() const {
     return environment_packs.empty() && !environment_packs_explicit &&
            !environment && !sun_explicit &&

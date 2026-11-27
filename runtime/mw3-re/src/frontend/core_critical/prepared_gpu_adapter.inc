@@ -6,7 +6,7 @@ submit_prepared_geometry(const ::platform::ModelDrawContext &context,
   if (geometry_mode_ == cc::geometry::Mode::legacy ||
       !prepared_.has_binding(context))
     return cc::geometry::Submission::unsupported;
-  const auto selected = prepared_.draw(context, true);
+  const auto selected = prepared_.draw(context, true, lab_preview_lighting_);
   if (!selected.replace)
     return cc::geometry::Submission::unsupported;
   ensure_geometry_scene();

@@ -1,3 +1,6 @@
+import { validateHeader } from "../_lib/crash-report-header.js";
+import { LOG_LABELS, LOG_ORDER } from "../_lib/crash-report-logs.js";
+
 const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_ISSUE_BODY_CHARS = 48_000;
 const MAX_ISSUE_REPORT_CHARS = 20_000;
@@ -16,7 +19,6 @@ const GENERIC_FAILURES = [
 
 const MIN_INT32 = -2_147_483_648;
 const MAX_INT32 = 2_147_483_647;
-const LOG_ORDER = ["native_crash", "native_run", "native_stderr", "launcher", "native_stdout"];
 
 // Only the legacy host fault record may retain a module basename and numeric suffix.
 const NATIVE_MODULE_SUFFIX_LINE =
@@ -488,7 +490,6 @@ function validateReport(report) {
         report.mode.trim().length === 0 ||
         report.mode.length > 80 ||
         !Number.isInteger(report.exit_code) ||
-        report.exit_code === 0 ||
         report.exit_code < MIN_INT32 ||
         report.exit_code > MAX_INT32 ||
         !report.logs ||
@@ -532,6 +533,12 @@ function validateReport(report) {
             throw new Error("The crash report logs are invalid.");
         if (value) logs[name] = redactPaths(value.slice(-64 * 1024));
     }
+    // A clean exit is only worth a report when the game logged problems during play;
+    // without them it would be noise in the crash-report repository.
+    const hasProblems =
+        typeof logs.native_problems === "string" && logs.native_problems.trim().length > 0;
+    if (report.exit_code === 0 && !hasProblems)
+        throw new Error("The crash report format is invalid.");
     const packs = Array.isArray(report.packs)
         ? report.packs.slice(0, 64).map((pack) => {
               const rawId = field(pack, "Id");
@@ -558,6 +565,8 @@ function validateReport(report) {
         typeof rawSourceCommit === "string" && rawSourceCommit.trim().length > 0
             ? redactPaths(rawSourceCommit.trim().slice(0, 40))
             : undefined;
+    const header = validateHeader(report.header, redactPaths);
+    const hasHeader = Object.keys(header).length > 0;
     const validated = {
         format_version: 1,
         report_id: reportId,
@@ -583,6 +592,8 @@ function validateReport(report) {
                 ? redactPaths(report.dotnet_runtime.slice(0, 120))
                 : "",
         hardware: validateHardware(report.hardware),
+        // Left out when empty so reports from older launchers are stored exactly as before.
+        ...(hasHeader ? { header } : {}),
         failure_summary: redactPaths(report.failure_summary.slice(0, 2000)),
         settings,
         packs,
@@ -690,13 +701,6 @@ function issueBody(
             `${header}\n\nLog excerpts were omitted for overflow or repeat-report limits.`,
         );
 
-    const logNames = {
-        native_crash: "Native crash details (crash.txt)",
-        native_run: "Native run log (mw3.log)",
-        native_stderr: "Native standard error",
-        launcher: "Launcher log",
-        native_stdout: "Native standard output",
-    };
     const orderedKeys = [
         ...LOG_ORDER.filter((key) => key in reportLogs),
         ...Object.keys(reportLogs).filter((key) => !LOG_ORDER.includes(key)),
@@ -712,7 +716,7 @@ function issueBody(
     for (let index = 0; index < entries.length; index++) {
         const [name, content] = entries[index];
         const remainingEntries = entries.length - index;
-        const heading = `#### ${logNames[name] ?? name}\n\n`;
+        const heading = `#### ${LOG_LABELS[name] ?? name}\n\n`;
         const maxFenceRun = Math.max(
             0,
             ...Array.from(content.matchAll(/`+/g), (match) => match[0].length),
@@ -957,7 +961,8 @@ export async function onRequestPost({ request, env }) {
         const suffix = crashFingerprint
             ? ` [${crashFingerprint.slice(0, 12)}]`
             : ` [${report.report_id.slice(0, 8)}]`;
-        const title = `Crash (${report.mode}, exit ${report.exit_code}): ${titleReason}${suffix}`;
+        const kind = report.exit_code === 0 ? "Problems" : "Crash";
+        const title = `${kind} (${report.mode}, exit ${report.exit_code}): ${titleReason}${suffix}`;
         await github(
             config.token,
             `mutation($repository:ID!, $title:String!, $body:String!) {

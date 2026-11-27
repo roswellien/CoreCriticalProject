@@ -37,6 +37,22 @@ static class UpdateNotificationUiChecks
                     var automatic = (CheckBox)window.FindName("ChkAutomaticUpdateChecks");
                     if (banner.Visibility != Visibility.Collapsed) throw new Exception("Unverified startup notification is visible");
                     if (automatic.IsChecked == true) throw new Exception("Existing user was silently opted in");
+                    var assetOptIn = (CheckBox)window.FindName("ChkAutomaticAssetPackChecks");
+                    if (assetOptIn.IsChecked == true) throw new Exception("Asset update checks must default off");
+                    if (AssetPackUpdateService.IsConfigured(AppDomain.CurrentDomain.BaseDirectory))
+                    {
+                        var controls = (StackPanel)window.FindName("AssetPackUpdateControls");
+                        if (controls.Visibility != Visibility.Visible)
+                            throw new Exception("Configured asset update controls are not exposed in the game library");
+                        typeof(MainWindow).GetField("_assetUpdateWindowOpen", flags)!.SetValue(window, true);
+                        assetOptIn.IsChecked = true;
+                        if (!new SettingsManager(root, root).Current.AutomaticAssetPackChecks)
+                            throw new Exception("Asset pack update opt-in was not persisted");
+                        assetOptIn.IsChecked = false;
+                        var assetTimer = typeof(MainWindow).GetField("_assetUpdateTimer", flags)!.GetValue(window) as DispatcherTimer;
+                        if (new SettingsManager(root, root).Current.AutomaticAssetPackChecks || assetTimer?.IsEnabled == true)
+                            throw new Exception("Asset pack update opt-out was not persisted or left active polling");
+                    }
                     var refresh = typeof(MainWindow).GetMethod("RefreshUpdateNotificationAsync", flags)!;
                     var check = typeof(MainWindow).GetField("_updateNotificationCheck", flags)!;
                     manual.SetValue(window, false);
