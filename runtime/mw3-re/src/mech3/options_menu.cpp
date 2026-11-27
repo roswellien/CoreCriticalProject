@@ -68,7 +68,8 @@ GameOptionsScreen::GameOptionsScreen(Engine& e, Handle s)
       controls(e, 0x609870), upgrades(e) {
   target_buffers(e);
   const bool moving = !e.fast_menu();
-  if (load("dlgOptions.zrd", "GAME_OPTION_DIALOG", moving)) {
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
+  if (load("dlgOptions.zrd", "GAME_OPTION_DIALOG", moving || !bake_menu)) {
     borrow_background(true);
     bind_primitive(&lines, "LINES");
     bind_primitive(&lines1, "LINES1");
@@ -77,7 +78,7 @@ GameOptionsScreen::GameOptionsScreen(Engine& e, Handle s)
     bind_button(&gfx_audio, "GFX_AUDIO_OPTIONS");
     bind_button(&controls, "CONTROLS_CFG");
     if (options_upgrades_page()) has_upgrades = bind_button(&upgrades, "UPGRADES");  // ours
-    if (!moving) {
+    if (bake_menu) {
       bake();
       remove(&background);
       remove(&lines);
@@ -191,7 +192,8 @@ UpgradesScreen::UpgradesScreen(Engine& e, Handle s)
       wide_menus(e), small_list(e) {
   target_buffers(e);
   const bool moving = !e.fast_menu();
-  if (load("dlgOptions.zrd", "UPGRADES_DIALOG", moving)) {
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
+  if (load("dlgOptions.zrd", "UPGRADES_DIALOG", moving || !bake_menu)) {
     borrow_background(true);
     bind_primitive(&lines, "LINES");
     bind_primitive(&lines1, "LINES1");
@@ -199,7 +201,7 @@ UpgradesScreen::UpgradesScreen(Engine& e, Handle s)
     for (int k = 0; k < 6; ++k) std::snprintf(name, sizeof(name), "BOX%d", k + 1), bind_primitive(&box[k], name);
     bind_button(&accept, "ACCEPT");
     bind_button(&back, "BACK");
-    if (!moving) {
+    if (bake_menu) {
       bake();
       remove(&background);
       remove(&lines);
@@ -405,13 +407,14 @@ GfxAudioScreen::GfxAudioScreen(Engine& e, Handle s)
       device(e), textures(e), sound(e), detail(e), effects(e), accept(e), back(e) {
   target_buffers(e);
   const bool moving = !e.fast_menu();
-  if (load("dlgOptions.zrd", "GFX_AUDIO_OPTIONDIALOG", moving)) {
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
+  if (load("dlgOptions.zrd", "GFX_AUDIO_OPTIONDIALOG", moving || !bake_menu)) {
     borrow_background(true);
     bind_primitive(&lines, "LINES");
     bind_primitive(&lines1, "LINES1");
     bind_button(&accept, "ACCEPT");
     bind_button(&back, "BACK");
-    if (!moving) {
+    if (bake_menu) {
       bake();
       remove(&background);
       remove(&lines);

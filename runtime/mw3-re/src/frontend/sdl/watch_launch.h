@@ -2,8 +2,10 @@
 #include <SDL3/SDL.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
+#include "frontend/sdl/arena_benchmark.h"
 #include "frontend/sdl/gpu_hud.h"
 #include "mech3/app_engine.h"
 #include "mech3/arena.h"
@@ -42,6 +44,12 @@ struct WatchArgs {
   // --arena-catalog DIR: the arena runner's lists and pictures written there
   // (arena_catalog.h), then the run ends.
   std::string catalog_dir;
+  std::string benchmark_path, benchmark_scene, benchmark_output;
+  std::string benchmark_resolution, benchmark_window_mode;
+  bool benchmark_strict = false;
+  std::optional<size_t> benchmark_strict_capture;
+  std::vector<std::string> benchmark_packs;
+  std::shared_ptr<benchmark::Run> benchmark_run;
   // Either watched run: the host's seat is a spectator's.
   bool watched_match() const { return !arena_path.empty() || !replay3d_path.empty(); }
 };

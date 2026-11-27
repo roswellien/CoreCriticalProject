@@ -5,6 +5,8 @@ Add one file named YYYY-MM-DD.md for each development day that should appear on 
 Format:
 
     # A clear title for the day's progress
+    Tags: Renderer, Fix
+    Image: vulkan-c1m1-beach-1280.webp
 
     A short opening paragraph describing the update (600 characters maximum).
 
@@ -16,6 +18,13 @@ Format:
     ## What comes next
 
     Remaining work and important limits.
+
+The website shows each note as a card. The optional lines directly under the title fill in the card:
+
+- `Tags:` up to three topics, separated by commas, from this list: Renderer, Native, Launcher, Playtest, Tools, Content, Website, Fix. They label the card, drive the topic filter on /news, appear on the update page and become RSS categories. To add a topic, add it to `CARD_TAGS` in `website/tools/sync_mechlab.py`.
+- `Image:` a thumbnail, given as the path of an existing `.webp` file under `website/assets/plates/` (for example `studio/mod-studio-editor-v2.webp`). Use a real in-game or tool capture. Without one, the card shows the Core Critical mark instead.
+
+The build stops with an error for an unknown tag, more than three tags, or a missing image, so a mistake cannot reach the live site.
 
 Supported formatting: a single # title, plain paragraphs, ## and ### headings, and - bullet lists. Raw HTML is displayed as text. Inline Markdown links, emphasis, images, and tables are not interpreted; use plain prose and bullets.
 

@@ -21,6 +21,10 @@ def inputs(*bullets, version="1.0.58 Preview", day=DAY):
     return {"date": day, "version": version, "bullets": json.dumps(bullets)}
 
 
+def grouped(**sections):
+    return {**inputs(), "bullets": json.dumps(sections)}
+
+
 def listing(*ids):
     return {
         "total_count": len(ids),
@@ -35,6 +39,62 @@ class ChangelogTests(unittest.TestCase):
         self.assertTrue(result["flags"] & 4096)
         for expected in ("What Changed Today", dc.WEBSITE, dc.YOUTUBE, "1.0.58 Preview"):
             self.assertIn(expected, result["content"])
+
+    def test_section_order_and_footer(self):
+        _, result = dc.format_payload(
+            grouped(known_issues=["Crash still open"], updates=["Fixed a physics issue"]), DAY
+        )
+        self.assertIn(
+            "**Updates & Changes**\n- Fixed a physics issue\n\n"
+            "**Known Issues and Bugs**\n- Crash still open",
+            result["content"],
+        )
+        self.assertTrue(result["flags"] & 4096)
+        for item in ("1.0.58 Preview", dc.WEBSITE, dc.YOUTUBE):
+            self.assertIn(item, result["content"])
+
+    def test_single_sections_and_legacy(self):
+        for value, shown, hidden in (
+            (inputs("Fixed an issue"), "Updates & Changes", "Known Issues and Bugs"),
+            (grouped(updates=["Fixed an issue"]), "Updates & Changes", "Known Issues and Bugs"),
+            (
+                grouped(updates=[], known_issues=["Open issue"]),
+                "Known Issues and Bugs",
+                "Updates & Changes",
+            ),
+        ):
+            with self.subTest(value=value):
+                _, result = dc.format_payload(value, DAY)
+                self.assertIn(f"**{shown}**", result["content"])
+                self.assertNotIn(hidden, result["content"])
+
+    def test_grouped_shape_and_limits(self):
+        for value in (
+            grouped(updates=[], known_issues=[]),
+            grouped(known_issues=None),
+            grouped(known_issue=["typo"]),
+            grouped(updates=["x"], known_issues="not a list"),
+            grouped(updates=["x"], known_issues=["bad\nline"]),
+            grouped(updates=["x"] * 30, known_issues=["y"] * 31),
+            {**inputs(), "bullets": '{"updates":[],"updates":["duplicate"]}'},
+        ):
+            with self.subTest(value=value), self.assertRaises(dc.ChangelogError):
+                dc.format_payload(value, DAY)
+        dc.format_payload(grouped(updates=["x"] * 30, known_issues=["y"] * 30), DAY)
+
+    def test_grouped_embed_lengths_include_headings(self):
+        _, result = dc.format_payload(grouped(updates=["a" * 2050], known_issues=["Open"]), DAY)
+        body = result["embeds"][0]["description"]
+        self.assertIn("**Updates & Changes**", body)
+        self.assertIn("**Known Issues and Bugs**\n- Open", body)
+        self.assertTrue(result["flags"] & 4096)
+        _, edge = dc.format_payload(grouped(updates=["a" * 2050], known_issues=["b"]), DAY)
+        remaining = 4096 - dc.units(edge["embeds"][0]["description"])
+        dc.format_payload(grouped(updates=["a" * 2050], known_issues=["b" * (remaining + 1)]), DAY)
+        with self.assertRaises(dc.ChangelogError):
+            dc.format_payload(
+                grouped(updates=["a" * 2050], known_issues=["b" * (remaining + 2)]), DAY
+            )
 
     def test_oversized_not_truncated(self):
         _, result = dc.format_payload(inputs("a" * 2050, "last item"), DAY)
@@ -143,7 +203,10 @@ class ChangelogTests(unittest.TestCase):
     def test_dry_entry_point_never_requests_or_reserves(self):
         with tempfile.TemporaryDirectory() as directory:
             event_file = Path(directory) / "event.json"
-            event_file.write_text(json.dumps({"inputs": inputs("Fixed a bug")}), encoding="utf-8")
+            event_file.write_text(
+                json.dumps({"inputs": grouped(updates=["Fixed a bug"], known_issues=["Open bug"])}),
+                encoding="utf-8",
+            )
             with (
                 patch.dict(dc.os.environ, {"GITHUB_EVENT_PATH": str(event_file)}, clear=True),
                 patch.object(dc, "today_mountain", return_value=DAY),

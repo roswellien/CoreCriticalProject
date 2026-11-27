@@ -15,6 +15,8 @@ struct RendererBridgeConfig {
   bool dxgi_present{true};
   std::string window_mode{"windowed"};
   bool vsync{true};
+  bool require_immediate_present{false};
+  bool strict_swapchain_readback{false};
   std::string present_mode;
 
   // Output / Resolution
@@ -37,8 +39,9 @@ struct RendererBridgeConfig {
   bool geometry_debug_normals{false};
   bool gpu_models{false};
   bool normal_maps_enabled{false};
-  // Transport is opt-in for internal qualification; no CLI/capability claim.
+  // Opt-in parallax occlusion mapping: 0 = off, 1 = low, 2 = high.
   bool parallax_materials{false};
+  unsigned parallax_quality{0};
   bool prepared_cache{true};
 
   // Lighting / Sun

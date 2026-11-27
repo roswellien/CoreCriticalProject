@@ -144,6 +144,27 @@ class Mw3ReLaunchPlanTests(unittest.TestCase):
         index = without_pom.index("--cc-pom")
         del without_pom[index:index + 2]
         self.assertEqual(without_pom, baseline["argv"])
+
+        for quality in ("low", "high"):
+            q_req = dict(self.request(), schema_version=3,
+                         visuals={"pom": True, "pom_quality": quality})
+            q_plan = plan(q_req)
+            self.assertTrue(q_plan["ok"])
+            q_args = q_plan["argv"]
+            self.assertEqual(q_args.count("--cc-pom"), 1)
+            self.assertEqual(q_args[q_args.index("--cc-pom") + 1], quality)
+        off_plan = plan(dict(self.request(), schema_version=3,
+                             visuals={"pom": False, "pom_quality": "off"}))
+        self.assertEqual(off_plan["argv"], baseline["argv"])
+        for bad_visuals in (
+            {"pom": True, "pom_quality": "off"},
+            {"pom": False, "pom_quality": "high"},
+            {"pom": False, "pom_quality": "low"},
+            {"pom_quality": "ultra"},
+            {"pom_quality": 2},
+        ):
+            with self.subTest(bad_visuals=bad_visuals), self.assertRaises(ValueError):
+                plan(dict(self.request(), schema_version=3, visuals=bad_visuals))
         self.assertEqual(request, before)
         for lighting in ("off", "flat"):
             with self.subTest(lighting=lighting), self.assertRaises(ValueError):
@@ -1065,6 +1086,54 @@ class NativePreviewPlanTests(unittest.TestCase):
                     path.write_bytes(payload)
                     parsed = module.read_surface_materials_file(path)
                     self.assertEqual(parsed["version"], version)
+
+    @staticmethod
+    def image_only_surface_sidecar(version, image_sizes):
+        """Build a minimal BWSFM1 sidecar holding only unreferenced images of the given sizes."""
+        no_material = 0xFFFFFFFF
+        stored_bytes_per_texel = 4 if version == 1 else 1
+        sidecar = bytearray(b"BWSFM1\0\0")
+        sidecar += struct.pack("<IIIIQ", version, 1, 0, len(image_sizes), 0)
+        sidecar += struct.pack("<I", no_material)
+        for image_index, (width, height) in enumerate(image_sizes):
+            name = f"image_{image_index:03d}".encode("ascii")
+            pixels = bytes(width * height * stored_bytes_per_texel)
+            pixel_hash = 0xCBF29CE484222325
+            for byte in pixels:
+                pixel_hash = ((pixel_hash ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+            sidecar += struct.pack("<I", len(name)) + name
+            sidecar += struct.pack("<IIIQ", 1, width, height, pixel_hash)
+            sidecar += pixels
+        return bytes(sidecar)
+
+    def test_surface_material_decoded_budget_counts_one_byte_per_texel_for_v1_and_v2(self):
+        # The shared 512 MiB file cap hides the per-texel accounting: any v1 file whose RGBA
+        # bytes exceed the budget already fails the size gate. Lowering only the decoded
+        # budget exposes it while the file-size gate stays at its default.
+        module = importlib.import_module("mw3_re_launch")
+        decoded_budget = 64
+        within_budget = {
+            "one image filling the budget": [(8, 8)],
+            "two images summing to the budget": [(8, 4), (4, 8)],
+        }
+        over_budget = {
+            "one image over the budget": [(13, 5)],
+            "cumulative total over the budget": [(8, 4), (4, 8), (1, 1)],
+        }
+        budget_patch = patch.object(module, "_MAX_SURFACE_DECODED_BYTES", decoded_budget)
+        with tempfile.TemporaryDirectory() as temporary, budget_patch:
+            path = Path(temporary) / "height.bwsfm1"
+            for version in (1, 2):
+                for label, sizes in within_budget.items():
+                    with self.subTest(version=version, case=label):
+                        path.write_bytes(self.image_only_surface_sidecar(version, sizes))
+                        parsed = module.read_surface_materials_file(path)
+                        self.assertEqual(parsed["version"], version)
+                for label, sizes in over_budget.items():
+                    with self.subTest(version=version, case=label):
+                        path.write_bytes(self.image_only_surface_sidecar(version, sizes))
+                        with self.assertRaisesRegex(ValueError, "decoded images exceed budget"):
+                            module.read_surface_materials_file(path)
 
     def test_invalid_choices_are_refused(self):
         for preview in ({"draw_distance": 1000}, {"draw_distance": "1200"}, {"hud": "neon"},

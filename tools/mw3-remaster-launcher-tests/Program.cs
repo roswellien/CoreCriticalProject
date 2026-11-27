@@ -15,6 +15,7 @@ if (args.Length == 2 && args[0] == "--modular-content-only") { await ModProfiles
 
 if(args.Length==3 && args[0]=="--check-update-notification") { UpdateNotificationUiChecks.Run(args[1],args[2]); return; }
 
+if(args.Length==1 && args[0]=="--benchmark-only") { BenchmarkRunnerChecks.Run(); return; }
 if(args.Length==1 && args[0]=="--steam-only") { SteamShortcutChecks.Run(); return; }
 if(args.Length==4 && args[0]=="--add-steam-shortcut")
 {
@@ -454,6 +455,7 @@ finally { tempUi.Delete(recursive: true); }
 ControllerChecks.Run();
 JoystickSelectionChecks.Run();
 SaveBackupChecks.Run();
+BenchmarkRunnerChecks.Run();
 ArenaSetupChecks.Run();
 NativeRuntimeLayoutChecks.Run();
 NativePreviewSigningChecks.Run();

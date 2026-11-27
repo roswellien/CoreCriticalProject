@@ -1,5 +1,6 @@
 #pragma once
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -159,6 +160,11 @@ class ReplayLog {
   const MechInfo* info_of(int id) const;
   // The end line's time, else the last state line's (a log stopped early).
   float duration() const { return duration_; }
+  bool complete() const { return terminal_end_; }
+  std::optional<float> first_state_time() const;
+  bool covers(double start, double end) const;
+  std::vector<float> state_times(double start, double end) const;
+  bool mech_alive_during(int id, double start, double end) const;
   Frame frame_at(float t) const;
   // A mech's positions from its state lines in [t - seconds, t], oldest first.
   std::vector<Vec3> trail(int id, float t, float seconds) const;
@@ -204,6 +210,7 @@ class ReplayLog {
   std::string map_;
   std::vector<MechInfo> mechs_;
   float duration_ = 0;
+  bool terminal_end_ = false, ordered_states_ = true;
   bool has_end_ = false;  // the log has its end line (duration_ is its time)
   std::vector<State> states_;
   std::vector<Event> fire_;  // shots and hits, by time

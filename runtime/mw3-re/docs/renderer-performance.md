@@ -110,3 +110,70 @@ outside Git, record executable/settings/component hashes, and defer runs while
 another graphics/build job is active. The issue/PR records the final timing and
 capture comparisons. These are development previews; native campaign fidelity,
 live Linux/macOS and Android acceptance remain separate work.
+
+## Arena replay benchmark score
+
+The arena benchmark times visible native Vulkan WSI playback with one render
+worker and IMMEDIATE presentation. After scene load, fade and an initial
+unscored presentation, it starts a monotonic epoch. Replay time is
+`start_seconds` plus elapsed time, or the first recorded state timestamp
+plus elapsed time when the start is omitted. Explicit cuts start effects at
+the boundary and restore in-flight shots from recorded state. Later frames
+dispatch events after the previous replay time through the current one.
+Camera sequence shots and scoring windows use elapsed time since the epoch.
+The renderer's water and cloud phase uses replay time. Frame cadence can
+change particle ages and emission counts.
+
+The definition pins the replay, camera, seed and scoring times. The runner
+plans the graphics settings and active packs from Play's saved profile and
+applies per-run overrides. Native checks the actual window, drawable and
+internal resolution and requires all planned model bindings to load.
+The summary fingerprints the effective renderer settings in addition to the
+ordered packs. Pack fingerprints include the manifest bytes, relative file
+names and sizes, and hashes of small non-payload files. The normal renderer
+admission checks still verify the assets they load.
+
+The default camera is an epoch-driven sequence. Shots run consecutively for
+5 to 20 seconds, start with chase, and use an orbit followed by different
+angles. Each shot may set its subject, distance, height and orbit speed.
+The log must show the subject alive throughout its shot. Authored camera
+tracks remain available as a hash-pinned alternative.
+
+Scored-frame diagnostics report maximum and mean weapon-effect light slots,
+live beam models, and running impact animations. The light count uses the
+highest weapon-slot count in any world packet presented for the frame and
+excludes fixture lights. Multiplayer scenes admit local lights without
+borrowing a campaign lighting profile. Impacts use default soil and an
+upward normal when the log has no material or normal information.
+
+Warm-up and measurement are half-open windows in elapsed seconds. Each
+successful worker return from vkQueuePresentKHR inside the measured window
+counts toward average FPS. Both consecutive completions must be in the
+measured window to contribute a frame interval. A present can count even if
+its frame started in warm-up. The final submitted job is drained and checked,
+and a completion at or beyond the measured end is excluded.
+
+The summary reports the mean and nearest-rank p50, p95 and p99 of the intervals.
+Average FPS is measured presents divided by the configured measured duration.
+The 1% low is 1000 divided by the mean in milliseconds of the slowest 1% of
+intervals, rounding the tail size up. These metrics describe application
+present throughput. Desktop composition can affect the results.
+
+The output directory must start empty. The CSV holds measured presents with
+absolute log timestamps, epoch-relative completion times and an empty interval
+for the first row. The versioned summary appears after the
+CSV is closed and includes its SHA-256, the effective settings fingerprint,
+and the validity result. Windows process creation to epoch and scene-load
+entry to epoch are separate from the score. A failed present, swapchain
+change, window disruption, or video memory pressure during the scene
+invalidates the score. Keep invalid or partial results for diagnostics.
+
+See the [arena benchmark fixture](../../../tools/benchmark/fixtures/README.md)
+for the launch command and frozen workload.
+
+The first visible run with the `c1mp1` camera sequence opened at 3440 × 1440
+in 2.11 seconds. It stopped before the scoring epoch because the startup fade
+entered the multiplayer light path without a world projection. Its summary is
+invalid and contains zero measured presents. The lighting gate now requires
+a world camera pass on maps without a campaign profile. The sequence has no
+verified performance score yet.

@@ -27,6 +27,7 @@ constexpr std::uint64_t env_world_limit = 4096ULL * 1024 * 1024;
 constexpr std::uint64_t env_page_limit = 16ULL * 1024 * 1024;
 constexpr std::size_t env_world_page_limit = 512;
 constexpr std::uint64_t env_target_limit = 4ULL * 1024 * 1024;
+constexpr std::uint64_t env_stream_limit = 32ULL * 1024 * 1024;
 [[noreturn]] void env_fail(const std::string &message) {
   throw std::runtime_error("Environment pack: " + message);
 }
@@ -68,14 +69,23 @@ std::string env_read_text(const efs::path &path, std::uint64_t limit = env_json_
   text.resize(static_cast<std::size_t>(count));
   return text;
 }
-EJson env_json(const efs::path &path, std::uint64_t limit = env_json_limit) {
+EJson env_json(const efs::path &path, std::uint64_t limit = env_json_limit,
+               const std::string &digest = {}) {
   const auto text = env_read_text(path, limit);
+  if (!digest.empty()) {
+    integrity::Sha256 actual;
+    actual.update(text.data(), text.size());
+    if (actual.hex() != digest)
+      env_fail("JSON integrity failure");
+  }
+  const std::size_t event_limit =
+      limit == env_stream_limit ? 8000000U : limit == env_target_limit ? 1000000U : 100000U;
   std::vector<std::set<std::string>> keys;
   std::size_t events = 0;
   try {
     return EJson::parse(
         text, [&](int depth, EJson::parse_event_t event, EJson &value) {
-          if (depth > 32 || ++events > (limit == env_target_limit ? 1000000U : 100000U))
+          if (depth > 32 || ++events > event_limit)
             env_fail("JSON complexity limit");
           if (event == EJson::parse_event_t::object_start)
             keys.emplace_back();
@@ -181,6 +191,7 @@ struct EnvPack {
   EJson registry;
   std::map<std::string, EnvPin> pins;
   bool material_targets_declared{};
+  bool streamed_heights_declared{}, raw_heights_declared{};
   bool surface_materials_declared{};
 };
 float env_float(const EJson &j, double min_val, double max_val) {
@@ -305,6 +316,12 @@ void env_header(const EnvPin &pin) {
     detail::validate_environment_bank(efs::u8path(pin.path), pin.bytes);
   } else if (pin.format == "MW34-lighting-v1") {
     env_lighting(efs::u8path(pin.path), {});
+  } else if (pin.format == "MW34-c1-height-stream-v1") {
+    if (!pin.bytes || pin.bytes > env_stream_limit)
+      env_fail("streamed height metadata byte limit");
+  } else if (pin.format == "MW34-height-r8-v1") {
+    if (!pin.bytes || pin.bytes > 4096ULL * 4096)
+      env_fail("streamed height image byte limit");
   } else if (pin.format == "MW34-surface-targets-v1") {
     if (pin.bytes > env_target_limit)
       env_fail("material target metadata byte limit");
@@ -336,6 +353,57 @@ std::uint64_t env_hex(const EJson &value, std::size_t digits) {
 }
 using EnvSurfaceCache = std::map<std::pair<std::string, std::string>,
                                  std::weak_ptr<const mw34::materials::SurfaceMaterialPack>>;
+MaterialTarget env_material_target_identity(
+    const EJson &entry, const std::set<std::string> &owned_members,
+    std::set<std::pair<std::string, std::uint32_t>> &sources) {
+  MaterialTarget target;
+  target.asset_id = env_text(entry.at("asset_id"));
+  if (!mw34::materials::valid_surface_identifier(
+          target.asset_id, mw34::materials::max_surface_identifier_bytes, true))
+    env_fail("invalid material target asset ID");
+  const auto &source = entry.at("source");
+  env_fields(source, {"kind", "member", "sha256", "bytes", "model_slot"});
+  target.source.kind = env_text(source.at("kind"));
+  target.source.member = env_text(source.at("member"));
+  target.source.sha256 = env_text(source.at("sha256"));
+  target.source.bytes = env_uint(source.at("bytes"));
+  const auto slot = env_uint(source.at("model_slot"));
+  if (target.source.kind != "gamez-zbd-v27" || !owned_members.count(target.source.member) ||
+      target.source.sha256.size() != 64 ||
+      target.source.sha256.find_first_not_of("0123456789abcdef") != std::string::npos ||
+      !target.source.bytes || target.source.bytes > env_total_limit || slot >= 1048576)
+    env_fail("invalid/cross-region material source");
+  target.source.model_slot = std::uint32_t(slot);
+  if (!sources.emplace(target.source.member, target.source.model_slot).second)
+    env_fail("duplicate material source target");
+  target.mesh_uv_hash = env_hex(entry.at("mesh_uv_hash"), 16);
+  const auto &materials = entry.at("polygon_materials");
+  const auto &keys = entry.at("surface_keys");
+  if (!target.mesh_uv_hash || !materials.is_array() || materials.empty() ||
+      materials.size() > 4096 || !keys.is_array() || keys.size() != materials.size())
+    env_fail("invalid target polygon/material list");
+  for (std::size_t polygon = 0; polygon < materials.size(); ++polygon) {
+    const auto name = env_text(materials[polygon]);
+    if (!mw34::materials::valid_surface_identifier(name, 31, false))
+      env_fail("invalid target material name");
+    target.polygon_materials.push_back(name);
+    if (keys[polygon].is_null()) {
+      if (name != "untextured")
+        env_fail("missing target source image identity");
+      target.surface_keys.emplace_back();
+      continue;
+    }
+    const auto &image = keys[polygon];
+    env_fields(image, {"width", "height", "format", "hash"});
+    const auto width = env_uint(image.at("width")), height = env_uint(image.at("height")),
+               format = env_uint(image.at("format")), hash = env_hex(image.at("hash"), 16);
+    if (!width || width > 4096 || !height || height > 4096 || format < 1 || format > 3 || !hash)
+      env_fail("invalid target source image identity");
+    target.surface_keys.push_back(mw34::materials::SurfaceKey{
+        std::uint32_t(width), std::uint32_t(height), std::uint32_t(format), hash});
+  }
+  return target;
+}
 std::vector<MaterialTarget> env_material_targets(
     const EnvPack &pack, std::set<std::string> &references,
     std::uint64_t &encoded_bytes,
@@ -361,52 +429,7 @@ std::vector<MaterialTarget> env_material_targets(
   for (const auto &entry : document["targets"]) {
     env_fields(entry, {"surface_materials", "asset_id", "source", "mesh_uv_hash",
                        "polygon_materials", "surface_keys"});
-    MaterialTarget target;
-    target.asset_id = env_text(entry.at("asset_id"));
-    if (!mw34::materials::valid_surface_identifier(
-            target.asset_id, mw34::materials::max_surface_identifier_bytes, true))
-      env_fail("invalid material target asset ID");
-    const auto &source = entry.at("source");
-    env_fields(source, {"kind", "member", "sha256", "bytes", "model_slot"});
-    target.source.kind = env_text(source.at("kind"));
-    target.source.member = env_text(source.at("member"));
-    target.source.sha256 = env_text(source.at("sha256"));
-    target.source.bytes = env_uint(source.at("bytes"));
-    const auto slot = env_uint(source.at("model_slot"));
-    if (target.source.kind != "gamez-zbd-v27" || !owned_members.count(target.source.member) ||
-        target.source.sha256.size() != 64 ||
-        target.source.sha256.find_first_not_of("0123456789abcdef") != std::string::npos ||
-        !target.source.bytes || target.source.bytes > env_total_limit || slot >= 1048576)
-      env_fail("invalid/cross-region material source");
-    target.source.model_slot = std::uint32_t(slot);
-    if (!sources.emplace(target.source.member, target.source.model_slot).second)
-      env_fail("duplicate material source target");
-    target.mesh_uv_hash = env_hex(entry.at("mesh_uv_hash"), 16);
-    const auto &materials = entry.at("polygon_materials");
-    const auto &keys = entry.at("surface_keys");
-    if (!target.mesh_uv_hash || !materials.is_array() || materials.empty() ||
-        materials.size() > 4096 || !keys.is_array() || keys.size() != materials.size())
-      env_fail("invalid target polygon/material list");
-    for (std::size_t polygon = 0; polygon < materials.size(); ++polygon) {
-      const auto name = env_text(materials[polygon]);
-      if (!mw34::materials::valid_surface_identifier(name, 31, false))
-        env_fail("invalid target material name");
-      target.polygon_materials.push_back(name);
-      if (keys[polygon].is_null()) {
-        if (name != "untextured")
-          env_fail("missing target source image identity");
-        target.surface_keys.emplace_back();
-        continue;
-      }
-      const auto &image = keys[polygon];
-      env_fields(image, {"width", "height", "format", "hash"});
-      const auto width = env_uint(image.at("width")), height = env_uint(image.at("height")),
-                 format = env_uint(image.at("format")), hash = env_hex(image.at("hash"), 16);
-      if (!width || width > 4096 || !height || height > 4096 || format < 1 || format > 3 || !hash)
-        env_fail("invalid target source image identity");
-      target.surface_keys.push_back(mw34::materials::SurfaceKey{
-          std::uint32_t(width), std::uint32_t(height), std::uint32_t(format), hash});
-    }
+    auto target = env_material_target_identity(entry, owned_members, sources);
     const auto sidecar = env_text(entry.at("surface_materials"));
     const auto image_pin = pack.pins.find(sidecar);
     if (image_pin == pack.pins.end() || image_pin->second.format != "BWSFM1")
@@ -459,6 +482,97 @@ std::vector<MaterialTarget> env_material_targets(
     }
     result.push_back(std::move(target));
   }
+  return result;
+}
+std::vector<MaterialTarget> env_streamed_heights(
+    const EnvPack &pack, std::set<std::string> &references, StreamedHeightIndex &index) {
+  const auto member = env_text(pack.registry.at("streamed_height_materials"));
+  const auto pin = pack.pins.find(member);
+  if (pack.region != "operation1" || !pack.streamed_heights_declared ||
+      !pack.raw_heights_declared || pin == pack.pins.end() ||
+      pin->second.format != "MW34-c1-height-stream-v1")
+    env_fail("undeclared or out-of-region streamed height index");
+  references.insert(member);
+  const auto document = env_json(efs::u8path(pin->second.path), env_stream_limit, pin->second.digest);
+  env_fields(document, {"schema_version", "images", "subsets", "targets"});
+  const auto &images = document.at("images");
+  const auto &subsets = document.at("subsets");
+  const auto &targets = document.at("targets");
+  if (env_uint(document.at("schema_version")) != 1 ||
+      !images.is_array() || images.empty() || images.size() > 512 ||
+      !subsets.is_array() || subsets.empty() || subsets.size() > 65536 ||
+      !targets.is_array() || targets.empty() || targets.size() > 4096)
+    env_fail("invalid streamed height index");
+  std::set<std::tuple<std::string, std::uint64_t, std::uint64_t>> identities;
+  for (const auto &image : images) {
+    env_fields(image, {"member", "width", "height"});
+    const auto name = env_text(image.at("member"));
+    const auto file = pack.pins.find(name);
+    const auto width = env_uint(image.at("width"));
+    const auto height = env_uint(image.at("height"));
+    if (!width || width > 4096 || !height || height > 4096 ||
+        file == pack.pins.end() || file->second.format != "MW34-height-r8-v1" ||
+        file->second.bytes != width * height || !references.insert(name).second ||
+        !identities.emplace(file->second.digest, width, height).second)
+      env_fail("invalid streamed height image pin");
+    index.images.push_back({efs::u8path(file->second.path), file->second.digest,
+                            std::uint32_t(width), std::uint32_t(height), file->second.bytes});
+  }
+  std::set<std::uint32_t> scheduled;
+  for (const auto &subset : subsets) {
+    env_fields(subset, {"world", "x", "z", "images"});
+    const auto world = env_uint(subset.at("world"));
+    const auto x = env_uint(subset.at("x")), z = env_uint(subset.at("z"));
+    const auto &ids = subset.at("images");
+    if (world > INT32_MAX || x > INT32_MAX || z > INT32_MAX ||
+        !ids.is_array() || ids.empty() || ids.size() > index.images.size())
+      env_fail("invalid streamed height subset");
+    std::set<std::uint32_t> sorted;
+    for (const auto &entry : ids) {
+      const auto id = env_uint(entry);
+      if (id >= index.images.size() || !sorted.insert(std::uint32_t(id)).second)
+        env_fail("invalid streamed subset image");
+    }
+    scheduled.insert(sorted.begin(), sorted.end());
+    if (!index.subsets.emplace(
+            std::make_tuple(std::uint32_t(world), std::int32_t(x), std::int32_t(z)),
+            std::vector<std::uint32_t>(sorted.begin(), sorted.end())).second)
+      env_fail("duplicate streamed height subset");
+  }
+  std::set<std::pair<std::string, std::uint32_t>> sources;
+  std::set<std::uint32_t> bound;
+  std::vector<MaterialTarget> result;
+  for (const auto &entry : targets) {
+    env_fields(entry, {"asset_id", "source", "mesh_uv_hash", "polygon_materials",
+                       "surface_keys", "height_bindings"});
+    auto target = env_material_target_identity(entry, {"zbd/c1/gamez.zbd"}, sources);
+    target.sidecar_sha256 = pin->second.digest;
+    const auto &bindings = entry.at("height_bindings");
+    if (!bindings.is_array() || bindings.size() != target.surface_keys.size())
+      env_fail("invalid streamed height binding list");
+    for (std::size_t polygon = 0; polygon < bindings.size(); ++polygon) {
+      const auto &binding = bindings[polygon];
+      if (binding.is_null()) {
+        target.streamed_bindings.emplace_back();
+        continue;
+      }
+      env_fields(binding, {"image", "amplitude"});
+      const auto id = env_uint(binding.at("image"));
+      const auto &key = target.surface_keys[polygon];
+      const auto &value = binding.at("amplitude");
+      const auto amplitude = value.is_number() ? value.get<double>() : -1.0;
+      const auto name = env_lower(target.polygon_materials[polygon]);
+      if (id >= index.images.size() || !key || !(amplitude >= 0.0 && amplitude <= 1.0) ||
+          ((name == "txwall01" || name == "txwall06") && amplitude != 0.8) ||
+          key->format != 1 || key->width != index.images[id].width || key->height != index.images[id].height)
+        env_fail("invalid streamed polygon height identity");
+      bound.insert(std::uint32_t(id));
+      target.streamed_bindings.push_back(StreamedHeightBinding{std::uint32_t(id), float(amplitude)});
+    }
+    result.push_back(std::move(target));
+  }
+  if (bound != scheduled || bound.size() != index.images.size())
+    env_fail("streamed height inventory contains unbound or unscheduled images");
   return result;
 }
 void env_catalog(const EnvPack &pack, const char *role, const char *magic,
@@ -590,7 +704,7 @@ static EnvironmentSelection load_environment_packs_impl(
       const std::set<std::string> formats = {
           "ZBD-texture-v1", "BWSNR2",   "BWSNR3",   "BWSFM1",
           "MWFX1",          "MW34SNA1", "MW34SNP1", "MW34-lighting-v1",
-          "MW34-surface-targets-v1"};
+          "MW34-surface-targets-v1", "MW34-c1-height-stream-v1", "MW34-height-r8-v1"};
       if (!payload.at("required_formats").is_array())
         env_fail("required formats must be an array");
       for (const auto &format : payload["required_formats"]) {
@@ -598,6 +712,10 @@ static EnvironmentSelection load_environment_packs_impl(
           env_fail("unsupported required format");
         if (format == "MW34-surface-targets-v1")
           pack.material_targets_declared = true;
+        if (format == "MW34-c1-height-stream-v1")
+          pack.streamed_heights_declared = true;
+        if (format == "MW34-height-r8-v1")
+          pack.raw_heights_declared = true;
         if (format == "BWSFM1")
           pack.surface_materials_declared = true;
       }
@@ -628,7 +746,7 @@ static EnvironmentSelection load_environment_packs_impl(
           pin.format = env_text(item.value()["format"]);
           if (pin.format == "BWSNR3" && pin.bytes > env_page_limit)
             env_fail("world page byte limit");
-          if (pin.format == "BWSFM1" &&
+          if ((pin.format == "BWSFM1" || pin.format == "MW34-c1-height-stream-v1") &&
               (!payload.contains("required_capabilities") ||
                !payload["required_capabilities"].contains(
                    "surface-materials") ||
@@ -736,27 +854,41 @@ static EnvironmentSelection load_environment_packs_impl(
           if (std::string(role) == "lighting")
             env_lighting(efs::u8path(pack.pins.at(name).path), pack.region,
                          &selected);
-          selected.resources[pack.region]
-                            [std::string(role) == "lighting"
-                                 ? EnvironmentRole::lighting
-                             : std::string(role) == "ground_surface_materials"
-                                 ? EnvironmentRole::ground_materials
-                                 : EnvironmentRole::surface_materials] =
-              pack.pins.at(name).path;
+          const auto role_enum = std::string(role) == "lighting"
+                                     ? EnvironmentRole::lighting
+                                 : std::string(role) == "ground_surface_materials"
+                                     ? EnvironmentRole::ground_materials
+                                     : EnvironmentRole::surface_materials;
+          selected.resources[pack.region][role_enum] = pack.pins.at(name).path;
+          if (role_enum == EnvironmentRole::surface_materials ||
+              (role_enum == EnvironmentRole::ground_materials &&
+               !selected.resources.at(pack.region).count(EnvironmentRole::surface_materials)))
+            selected.surface_material_digests[pack.region] = pack.pins.at(name).digest;
         }
-      if (pack.registry.contains("material_targets")) {
+      const bool streamed = pack.registry.contains("streamed_height_materials");
+      const bool legacy_targets = pack.registry.contains("material_targets");
+      if (streamed && legacy_targets)
+        env_fail("streamed and legacy target registries cannot coexist in one region");
+      if (streamed || legacy_targets) {
         const std::set<std::string> allowed = {
             "schema_version", "payload_profile", "operation", "banks", "detail",
             "authored", "authored_manifest", "world", "world_manifest", "effects",
-            "lighting", "ground_surface_materials", "surface_materials", "material_targets"};
+            "lighting", "ground_surface_materials", "surface_materials", "material_targets",
+            "streamed_height_materials"};
         for (const auto &field : pack.registry.items())
           if (!allowed.count(field.key()))
             env_fail("unknown material-target environment registry field");
-        if (!pack.material_targets_declared || !pack.surface_materials_declared)
-          env_fail("material target format is not declared");
-        selected.material_targets.emplace(
-            pack.region, env_material_targets(pack, refs, target_encoded_bytes, target_cache,
-                                               reusable, budget));
+        if (streamed) {
+          auto index = std::make_shared<StreamedHeightIndex>();
+          selected.material_targets.emplace(pack.region, env_streamed_heights(pack, refs, *index));
+          selected.streamed_heights = std::move(index);
+        } else {
+          if (!pack.material_targets_declared || !pack.surface_materials_declared)
+            env_fail("material target format is not declared");
+          selected.material_targets.emplace(
+              pack.region, env_material_targets(pack, refs, target_encoded_bytes, target_cache,
+                                                 reusable, budget));
+        }
       }
       if (refs.size() != pack.pins.size())
         env_fail("unused environment member");
