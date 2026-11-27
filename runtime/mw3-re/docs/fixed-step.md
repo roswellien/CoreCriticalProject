@@ -43,8 +43,14 @@ reticle is over the target reads TARGET's bracket and lead circle, which
 `world_tick` runs (`GameEngine::camera_update`), so once a step, from the exact
 view, on the step's time and the simulation's random numbers, just before the
 step's aim state, as in the exe's frame. With the zoom window open it projects
-through the zoom window's camera, which the steps place (below), as the exe's
-frame did through the one its previous frame's zoom pass had placed.
+through the zoom window's camera as the previous step's `prepare_cameras`
+placed it (below): the same player camera pose the exe's zoom pass used, but a
+reticle point one step older, since the exe's software and hardware paths ran
+the zoom pass after the frame's lists and before `world_tick`. So through the
+zoom window, at the window's very edge, the lock can differ from the exe's by
+one step of reticle motion (alike at every frame rate). The bracket and lead
+circle stay where the last step placed them while the world is drawn blended,
+so at high frame rates they move in 30 Hz steps.
 
 The pocket commander's pick request (`PocketControls` +0x184) is set by the
 panel's buttons and read by `pocket_frame` in the step; the original cleared it
