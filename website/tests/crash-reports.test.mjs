@@ -1401,6 +1401,42 @@ test("rejects a clean-exit report without a problems log", async () => {
     }
 });
 
+test("accepts a clean-exit problems log whose W line has no text", async () => {
+    recordCreatedIssue();
+    const response = await onRequestPost({
+        request: crashRequest({
+            exit_code: 0,
+            failure_summary: "warning with no text",
+            logs: { native_run: "RUN_LOG\n", native_problems: "[3.000] W \n[4.000] E\n" },
+        }),
+        env: environment,
+    });
+    assert.equal(response.status, 200);
+});
+
+test("keeps the start and end of the game and problems logs in the issue", async () => {
+    const created = recordCreatedIssue();
+    // Over 64 KB each, so the start must also survive the intake cut.
+    const filler = (tag, lines = 4500) => `${tag} filler line\n`.repeat(lines);
+    const response = await onRequestPost({
+        request: crashRequest({
+            logs: {
+                native_run: `RUN_START\n${filler("run")}RUN_END\n`,
+                native_problems: `[1.000] E PROBLEMS_START\n${filler("[2.000] W")}PROBLEMS_END\n`,
+                launcher: `LAUNCHER_START\n${filler("launcher", 2000)}LAUNCHER_END\n`,
+            },
+        }),
+        env: environment,
+    });
+    assert.equal(response.status, 200);
+    for (const kept of ["RUN_START", "RUN_END", "PROBLEMS_START", "PROBLEMS_END", "LAUNCHER_END"]) {
+        assert.ok(created.body.includes(kept), kept);
+    }
+    assert.ok(!created.body.includes("LAUNCHER_START"));
+    assert.ok(created.body.includes("Middle log lines omitted"));
+    assert.ok(created.body.length <= 48_000);
+});
+
 test("rejects a clean-exit report with a blank failure summary", async () => {
     for (const failure_summary of ["", "   \n\t"]) {
         githubResponder();
@@ -1533,7 +1569,8 @@ test("drops header fields of the wrong type", async () => {
                 refresh_hz: "60",
                 hdr: 1,
                 heaps: [1, 2],
-                pack_texture_bytes: [null],
+                // Half-filled packs are dropped like half-filled heap rows.
+                pack_texture_bytes: [null, { id: "hd-mechs" }, { bytes: 1 }],
                 resolution: 2560,
                 input_devices: [7],
             },

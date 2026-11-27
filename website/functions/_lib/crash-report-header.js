@@ -31,11 +31,11 @@ function validateHeap(heap) {
 }
 
 function validatePackTextures(pack, redactText) {
-    if (!isPlainObject(pack)) return null;
-    const kept = {};
+    // Like a heap row, a pack is only useful with both its name and its size.
+    if (!isPlainObject(pack) || typeof pack.id !== "string" || !isCount(pack.bytes)) return null;
+    const kept = { bytes: pack.bytes };
     keepText(kept, "id", pack.id, 120, redactText);
-    if (isCount(pack.bytes)) kept.bytes = pack.bytes;
-    return Object.keys(kept).length > 0 ? kept : null;
+    return kept;
 }
 
 // Returns only the fields that passed their checks; an empty object when none did.
