@@ -1,5 +1,4 @@
 using System.IO;
-using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -361,13 +360,20 @@ public static class PlaytestDiagnostics
         return BuildPayload(logs);
     }
 
-    private static readonly (string WireKey, string ZipName, string RelativePath)[] SessionLogMappings =
+    /// <summary>
+    /// Every session log a report carries, in upload priority order. An empty relative path
+    /// means the launcher's own session log. Rows with Upload false go only into Export
+    /// Report's zip, because the crash-report service accepts only its own log keys.
+    /// </summary>
+    internal static readonly (string WireKey, string ZipName, string RelativePath, bool Upload)[] SessionLogMappings =
     {
-        ("native_crash", "native-crash.txt", Path.Combine("native", NativeCrashFileName)),
-        ("native_run", "native-mw3.log", Path.Combine("native", NativeRunFileName)),
-        ("native_stderr", "native-stderr.txt", Path.Combine("native", "stderr.txt")),
-        ("launcher", "launcher.log", ""),
-        ("native_stdout", "native-stdout.txt", Path.Combine("native", "stdout.txt"))
+        ("native_problems", "native-mw3-problems.log", Path.Combine("native", NativeProblemsFileName), true),
+        ("native_crash", "native-crash.txt", Path.Combine("native", NativeCrashFileName), true),
+        ("native_run", "native-mw3.log", Path.Combine("native", NativeRunFileName), true),
+        ("native_old_run", "native-mw3.old.log", Path.Combine("native", NativeOldRunFileName), false),
+        ("native_stderr", "native-stderr.txt", Path.Combine("native", "stderr.txt"), true),
+        ("launcher", "launcher.log", "", true),
+        ("native_stdout", "native-stdout.txt", Path.Combine("native", "stdout.txt"), true)
     };
 
     private static Dictionary<string, string> ReadSessionLogs(string? launchLog, string[] roots)
@@ -380,10 +386,11 @@ public static class PlaytestDiagnostics
         if (string.IsNullOrEmpty(folder)) return logs;
 
         var remainingBudget = MaxAggregateLogBytes;
-        foreach (var (wireKey, _, relativePath) in SessionLogMappings)
+        foreach (var (wireKey, _, relativePath, upload) in SessionLogMappings)
         {
             if (remainingBudget <= 0) break;
-            var path = relativePath.Length == 0 ? launchLog : Path.Combine(folder, relativePath);
+            if (!upload) continue;
+            var path = SessionLogPath(launchLog, folder, relativePath);
             var text = TryReadRedactedTail(path, roots);
             if (string.IsNullOrEmpty(text)) continue;
             var cap = Math.Min(MaxLogBytes, remainingBudget);
@@ -398,7 +405,10 @@ public static class PlaytestDiagnostics
         return logs;
     }
 
-    private static string SliceTailOnLineBoundary(string text, int maxChars)
+    internal static string SessionLogPath(string launchLog, string sessionFolder, string relativePath) =>
+        relativePath.Length == 0 ? launchLog : Path.Combine(sessionFolder, relativePath);
+
+    internal static string SliceTailOnLineBoundary(string text, int maxChars)
     {
         if (text.Length <= maxChars) return text;
         var sliced = text[^maxChars..];
@@ -548,7 +558,7 @@ public static class PlaytestDiagnostics
         line.Trim().StartsWith("mw3: rendering failed:", StringComparison.Ordinal);
 
     /// <summary>The graphics settings that apply to the session's engine.</summary>
-    private static object ReportSettings(LauncherSettings settings) => settings.EngineMode == "d7vk"
+    internal static object ReportSettings(LauncherSettings settings) => settings.EngineMode == "d7vk"
         ? new { settings.D7VkResolution, settings.D7VkAntiAliasing,
             settings.D7VkAnisotropicFiltering, settings.D7VkAiTextures }
         : new { settings.Width, settings.Height, settings.WindowMode, settings.AntiAliasing,
@@ -980,52 +990,4 @@ public static class PlaytestDiagnostics
         return -1;
     }
 
-    public static void Export(string destination, LauncherSettings settings, IEnumerable<PackManifest> packs,
-        string? launchLog, string applicationRoot, HardwareInventoryData? hardwareInventory = null,
-        string? runtimeVersion = null, int? exitCode = null)
-    {
-        // No profiles, settings files, saves, archives, media, dumps or recursive directory walks.
-        var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
-        var failureSummary = Redact(FailureSummary(launchLog, exitCode), roots);
-        if (failureSummary.Length > 2000) failureSummary = failureSummary[..2000];
-        var report = new
-        {
-            format_version = 1,
-            created_utc = DateTimeOffset.UtcNow,
-            launcher_version = LauncherVersionString(),
-            runtime_version = runtimeVersion ?? "unknown",
-            mode = settings.EngineMode,
-            exit_code = exitCode,
-            os = OperatingSystemDescription(),
-            architecture = RuntimeInformation.ProcessArchitecture.ToString(),
-            dotnet_runtime = RuntimeInformation.FrameworkDescription,
-            hardware = hardwareInventory ?? HardwareInventory.Capture(),
-            failure_summary = failureSummary,
-            settings = ReportSettings(settings),
-            packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
-            note = "Review this local report before sharing. It includes selected settings, pack metadata, a limited hardware inventory and redacted log tails."
-        };
-        var sessionLogs = ReadSessionLogs(launchLog, roots);
-        var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            using (var zip = ZipFile.Open(temporary, ZipArchiveMode.Create))
-            {
-                void AddRaw(string name, string redactedContent)
-                {
-                    using var writer = new StreamWriter(zip.CreateEntry(name, CompressionLevel.Optimal).Open(), Encoding.UTF8);
-                    writer.Write(redactedContent);
-                }
-                AddRaw("report.json", Redact(JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), roots));
-                foreach (var (wireKey, zipName, _) in SessionLogMappings)
-                {
-                    if (sessionLogs.TryGetValue(wireKey, out var content) && !string.IsNullOrEmpty(content))
-                        AddRaw(zipName, content);
-                }
-            }
-            File.Move(temporary, destination, overwrite: true);
-        }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
-    }
 }

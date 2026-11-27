@@ -243,7 +243,7 @@ static class PlaytestSupportChecks
             Check(PlaytestDiagnostics.FailureSummary(runner.LastLogPath, PlaytestDiagnostics.ApplicationHangExitCode)
                 .Contains("authored fixture failure"), "Hang text replaced a native error line");
             var report = Path.Combine(root, "report.zip");
-            PlaytestDiagnostics.Export(report, settings.Current,
+            ReportExport.Export(report, settings.Current,
                 new[] { new PackManifest { Id = "test.mech", Version = "1.2.3", DirectoryPath = root } }, runner.LastLogPath, app);
             using (var zip = ZipFile.OpenRead(report))
             {
@@ -403,10 +403,10 @@ static class PlaytestSupportChecks
                     "Sent crash report did not explain the hang exit code");
             }
             var hangExport = Path.Combine(root, "hang-report.zip");
-            PlaytestDiagnostics.Export(hangExport, settings.Current, Array.Empty<PackManifest>(), staleLauncherLog, app,
+            ReportExport.Export(hangExport, settings.Current, Array.Empty<PackManifest>(), staleLauncherLog, app,
                 exitCode: hang);
             var d7vkExport = Path.Combine(root, "d7vk-report.zip");
-            PlaytestDiagnostics.Export(d7vkExport,
+            ReportExport.Export(d7vkExport,
                 new LauncherSettings { EngineMode = "d7vk", Width = 3840, D7VkResolution = "1920x1080" },
                 Array.Empty<PackManifest>(), staleLauncherLog, app);
             JsonDocument ReadExportedReport(string zipPath)
@@ -488,7 +488,7 @@ static class PlaytestSupportChecks
             }
 
             var activeZip = Path.Combine(root, "active-report.zip");
-            PlaytestDiagnostics.Export(activeZip, settings.Current,
+            ReportExport.Export(activeZip, settings.Current,
                 new[] { new PackManifest { Id = "test.mech", Version = "1.2.3", DirectoryPath = root } },
                 activeLauncherLog, app, runtimeVersion: "mw3-re-2026.11 (abcdef123456)", exitCode: unchecked((int)0xC0000005));
             using (var zip = ZipFile.OpenRead(activeZip))

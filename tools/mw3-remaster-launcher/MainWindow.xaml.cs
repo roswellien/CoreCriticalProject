@@ -1140,11 +1140,18 @@ namespace MW3RemasterLauncher
             if (dialog.ShowDialog() != true) return;
             try
             {
-                var hardwareInventory = await System.Threading.Tasks.Task.Run(HardwareInventory.Capture);
-                PlaytestDiagnostics.Export(dialog.FileName, settingsSnapshot, packsSnapshot,
-                    launchLog, _basePath, hardwareInventory, runtimeVersion,
-                    exitCode: matchingSession?.ExitCode);
-                MessageBox.Show("Report saved. It contains build/system details, selected settings, pack metadata and redacted recent log tails. Review it before sharing.",
+                var destination = dialog.FileName;
+                var basePath = _basePath;
+                var exitCode = matchingSession?.ExitCode;
+                // Whole logs can run to many megabytes, so redacting and compressing them
+                // stays off the UI thread.
+                await System.Threading.Tasks.Task.Run(() =>
+                {
+                    var hardwareInventory = HardwareInventory.Capture();
+                    ReportExport.Export(destination, settingsSnapshot, packsSnapshot,
+                        launchLog, basePath, hardwareInventory, runtimeVersion, exitCode);
+                });
+                MessageBox.Show("Report saved. It contains build/system details, selected settings, pack metadata and redacted game and launcher logs. Review it before sharing.",
                     "Playtest report saved", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex) { MessageBox.Show(ex.Message, "Cannot export report", MessageBoxButton.OK, MessageBoxImage.Error); }

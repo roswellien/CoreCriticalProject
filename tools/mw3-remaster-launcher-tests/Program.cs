@@ -405,7 +405,7 @@ if (args.Length == 3 && args[0] == "--export-current-report")
     var currentSettings = new SettingsManager(args[1]);
     var currentPacks = new PackManager(LauncherPaths.DataRoot);
     currentPacks.RefreshPacks(currentSettings.Current.ActivePacks);
-    PlaytestDiagnostics.Export(args[2], currentSettings.Current, currentPacks.Packs,
+    ReportExport.Export(args[2], currentSettings.Current, currentPacks.Packs,
         LauncherPaths.LatestLaunchLog(), args[1]);
     Console.WriteLine("Local support export passed: " + args[2]);
     return;
