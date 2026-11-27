@@ -28,15 +28,20 @@ MAX_BYTES = 16 * 1024**3
 AUTHORED_CATALOG_BYTES = 1536 * 1024**2
 WORLD_CATALOG_BYTES = 4096 * 1024**2
 WORLD_PAGE_BYTES = 16 * 1024**2
+WORLD_PAGE_COUNT = 512
 MERGED_NORMAL_DECODED_BYTES = 240 * 1024**2
 REGION_PRIORITY = {'operation1': 0, 'operation2': 1, 'operation3': 2,
                    'operation4': 3, 'training': 4, 'shared-mechs': 5}
 MATERIAL_TARGET_FORMAT = 'MW34-surface-targets-v1'
 MATERIAL_TARGET_BYTES = 4 * 1024**2
 MATERIAL_TARGET_COUNT = 4096
+STREAM_INDEX_FORMAT = 'MW34-c1-height-stream-v1'
+STREAM_IMAGE_FORMAT = 'MW34-height-r8-v1'
+STREAM_CAPABILITY = 'c1-height-stream'
+STREAM_INDEX_BYTES = 32 * 1024**2
 
 
-def read_material_targets(path, region, files, paths, budget=None):
+def read_material_targets(path, region, files, paths, budget=None, *, streamed=False):
     """Read independent source expectations; renderer observations are never inputs.
 
     The source container remains in the user's game installation. Its logical
@@ -50,9 +55,10 @@ def read_material_targets(path, region, files, paths, budget=None):
         _validate_material_name,
     )
 
+    limit = STREAM_INDEX_BYTES if streamed else MATERIAL_TARGET_BYTES
     with Path(path).open("rb") as stream:
-        raw = stream.read(MATERIAL_TARGET_BYTES + 1)
-    if len(raw) > MATERIAL_TARGET_BYTES:
+        raw = stream.read(limit + 1)
+    if len(raw) > limit:
         raise ValueError("Material target metadata exceeds byte budget")
 
     def unique(pairs):
@@ -67,9 +73,12 @@ def read_material_targets(path, region, files, paths, budget=None):
         document = json.loads(raw, object_pairs_hook=unique)
     except (RecursionError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("Invalid material target JSON") from error
+    fields = {"schema_version", "targets"}
+    if streamed:
+        fields.update(("images", "subsets"))
     if (
         not isinstance(document, dict)
-        or set(document) != {"schema_version", "targets"}
+        or set(document) != fields
         or type(document["schema_version"]) is not int
         or document["schema_version"] != 1
         or not isinstance(document["targets"], list)
@@ -77,8 +86,11 @@ def read_material_targets(path, region, files, paths, budget=None):
         or region == "shared-mechs"
     ):
         raise ValueError("Invalid material target document")
+    images, scheduled, bound = [], set(), set()
+    if streamed:
+        images, scheduled = _validate_stream_inventory(document, files, paths, region)
     expected_fields = {
-        "surface_materials",
+        "height_bindings" if streamed else "surface_materials",
         "asset_id",
         "source",
         "mesh_uv_hash",
@@ -147,6 +159,25 @@ def read_material_targets(path, region, files, paths, budget=None):
                 or int(key["hash"], 16) == 0
             ):
                 raise ValueError("Invalid target source image identity")
+        if streamed:
+            bindings = entry["height_bindings"]
+            if not isinstance(bindings, list) or len(bindings) != len(keys):
+                raise ValueError("Invalid streamed height binding list")
+            for name, key, binding in zip(materials, keys, bindings):
+                if binding is None:
+                    continue
+                if not isinstance(binding, dict) or set(binding) != {"image", "amplitude"}:
+                    raise ValueError("Invalid streamed height binding")
+                image, amplitude = binding["image"], binding["amplitude"]
+                if (type(image) is not int or not 0 <= image < len(images)
+                        or type(amplitude) not in (float, int) or not 0 <= amplitude <= 1
+                        or (name.casefold() in ("txwall01", "txwall06") and amplitude != 0.8)
+                        or key is None or key["format"] != 1
+                        or (key["width"], key["height"]) != images[image][1:]):
+                    raise ValueError("Invalid streamed polygon height identity")
+                bound.add(image)
+            result.append(entry)
+            continue
         member = entry["surface_materials"]
         if (
             not isinstance(member, str)
@@ -182,7 +213,48 @@ def read_material_targets(path, region, files, paths, budget=None):
             raise ValueError("Target sidecar changed during admission")
         result.append(dict(entry, path=paths[member], sidecar_sha256=files[member]["sha256"]))
         del parsed
+    if streamed:
+        if bound != scheduled or len(bound) != len(images):
+            raise ValueError("Streamed height inventory contains unbound or unscheduled images")
+        return result, [image[0] for image in images]
     return result
+
+
+def _validate_stream_inventory(document, files, paths, region):
+    images, subsets = document["images"], document["subsets"]
+    if (region != "operation1" or not isinstance(images, list) or not 0 < len(images) <= 512
+            or not isinstance(subsets, list) or not 0 < len(subsets) <= 65536):
+        raise ValueError("Invalid streamed height inventory")
+    result, members, identities = [], set(), set()
+    for entry in images:
+        if not isinstance(entry, dict) or set(entry) != {"member", "width", "height"}:
+            raise ValueError("Invalid streamed height image")
+        member, width, height = entry["member"], entry["width"], entry["height"]
+        if (not isinstance(member, str) or member not in paths or member in members
+                or any(type(n) is not int or not 0 < n <= 4096 for n in (width, height))
+                or files[member].get("format") != STREAM_IMAGE_FORMAT
+                or files[member]["bytes"] != width * height):
+            raise ValueError("Invalid streamed height image pin")
+        identity = (files[member]["sha256"], width, height)
+        if identity in identities:
+            raise ValueError("Duplicate streamed height image identity")
+        identities.add(identity)
+        members.add(member)
+        result.append((member, width, height))
+    cells, scheduled = set(), set()
+    for entry in subsets:
+        if not isinstance(entry, dict) or set(entry) != {"world", "x", "z", "images"}:
+            raise ValueError("Invalid streamed height subset")
+        coord = (entry["world"], entry["x"], entry["z"])
+        ids = entry["images"]
+        if (any(type(n) is not int or not 0 <= n <= 0x7fffffff for n in coord)
+                or coord in cells or not isinstance(ids, list) or not 0 < len(ids) <= len(images)
+                or any(type(n) is not int or not 0 <= n < len(images) for n in ids)
+                or len(set(ids)) != len(ids)):
+            raise ValueError("Invalid streamed height subset")
+        cells.add(coord)
+        scheduled.update(ids)
+    return result, scheduled
 
 
 def sha(path):
@@ -219,7 +291,7 @@ def encode_normal_pages(entries, *, world=False):
             batch.append((key,value));images.add(value);size+=extra
     if batch:
         yield from emit(batch)
-    if count>(256 if world else 16) or total>(WORLD_CATALOG_BYTES if world else AUTHORED_CATALOG_BYTES):
+    if count>(WORLD_PAGE_COUNT if world else 16) or total>(WORLD_CATALOG_BYTES if world else AUTHORED_CATALOG_BYTES):
         raise ValueError('Normal catalog exceeds native count/byte budget')
 
 
@@ -257,7 +329,7 @@ def write_merged_normal_catalog(selected, role, output):
         nonlocal total
         for data,expected in page_bytes(entries):
             total+=len(data)
-            if total>catalog_limit or len(names)>=(256 if world else 16):
+            if total>catalog_limit or len(names)>=(WORLD_PAGE_COUNT if world else 16):
                 raise ValueError('Normal catalog exceeds native count/byte budget')
             name=f'{role}-{len(names)}.bin'
             (output/name).write_bytes(data); names.append(name)
@@ -371,11 +443,17 @@ def select(roots, host, verification=None):
             raise ValueError('Unsupported environment pack contract')
         if manifest.get('dependencies') or manifest.get('conflicts'):
             raise ValueError('Environment pack dependencies/conflicts are unsupported')
-        from content_capabilities import require
+        from content_capabilities import advertised, require
         require(host, payload, ident)
-        formats = {'ZBD-texture-v1','BWSNR2','BWSNR3','BWSFM1','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1', MATERIAL_TARGET_FORMAT}
-        if not set(payload.get('required_formats',[])).issubset(formats):
+        formats = {'ZBD-texture-v1','BWSNR2','BWSNR3','BWSFM1','MWFX1','MW34SNA1','MW34SNP1','MW34-lighting-v1', MATERIAL_TARGET_FORMAT, STREAM_INDEX_FORMAT, STREAM_IMAGE_FORMAT}
+        required_formats = set(payload.get('required_formats', []))
+        if not required_formats.issubset(formats):
             raise ValueError('Unsupported environment resource format')
+        if required_formats & {STREAM_INDEX_FORMAT, STREAM_IMAGE_FORMAT}:
+            if 1 not in advertised(host).get(STREAM_CAPABILITY, []):
+                raise ValueError(f"Pack '{ident}' requires {STREAM_CAPABILITY} version 1")
+            if not {STREAM_INDEX_FORMAT, STREAM_IMAGE_FORMAT}.issubset(required_formats):
+                raise ValueError('Incomplete streamed height formats')
         files = manifest.get('files',{}); total = 0; seen = {'pack.json'}
         if not files or len(files)>10000: raise ValueError('Invalid environment file table')
         paths = {}
@@ -395,12 +473,17 @@ def select(roots, host, verification=None):
                 expected={'BWSNR2':b'BWSNR2\0\0','BWSNR3':b'BWSNR3\0\0','BWSFM1':b'BWSFM1\0\0','MWFX1':b'MWFX1\0\0\0','MW34SNA1':b'MW34SNA1','MW34SNP1':b'MW34SNP1'}
                 if fmt=='ZBD-texture-v1':
                     if len(magic)!=24 or struct.unpack('<3I',magic[:12])!=(0,1,0): raise ValueError('Invalid texture bank')
-                elif fmt not in ('MW34-lighting-v1', MATERIAL_TARGET_FORMAT) and (fmt not in expected or not magic.startswith(expected[fmt])): raise ValueError('Mislabeled environment payload')
+                elif fmt not in ('MW34-lighting-v1', MATERIAL_TARGET_FORMAT, STREAM_INDEX_FORMAT, STREAM_IMAGE_FORMAT) and (fmt not in expected or not magic.startswith(expected[fmt])): raise ValueError('Mislabeled environment payload')
                 if fmt == 'BWSFM1' and (size > 512 * 1024**2 or
                         payload.get('required_capabilities', {}).get('surface-materials') != 1):
                     raise ValueError('Surface-materials capability/byte budget required')
                 if fmt == MATERIAL_TARGET_FORMAT and size > MATERIAL_TARGET_BYTES:
                     raise ValueError('Material target metadata exceeds byte budget')
+                if fmt == STREAM_INDEX_FORMAT and (not 0 < size <= STREAM_INDEX_BYTES
+                        or payload.get('required_capabilities', {}).get('surface-materials') != 1):
+                    raise ValueError('Streamed height index capability/byte budget required')
+                if fmt == STREAM_IMAGE_FORMAT and not 0 < size <= 4096**2:
+                    raise ValueError('Streamed height payload exceeds byte budget')
             paths[name]=str(path)
         if REGISTRY not in paths: raise ValueError('Undeclared environment registry')
         registry = read_json(Path(paths[REGISTRY])); region = registry.get('operation')
@@ -440,7 +523,7 @@ def select(roots, host, verification=None):
             references.add(name)
         for role in ['authored','world']:
             pages=registry.get(role,[])
-            if not isinstance(pages,list) or not 0<len(pages)<=(16 if role=='authored' else 256): raise ValueError('Invalid normal page list')
+            if not isinstance(pages,list) or not 0<len(pages)<=(16 if role=='authored' else WORLD_PAGE_COUNT): raise ValueError('Invalid normal page list')
             page_bytes=sum(files[p]['bytes'] for p in pages if p in files)
             if page_bytes>(AUTHORED_CATALOG_BYTES if role=='authored' else WORLD_CATALOG_BYTES):
                 raise ValueError('Normal catalog exceeds native byte budget')
@@ -459,24 +542,35 @@ def select(roots, host, verification=None):
                     raise ValueError('Invalid optional surface-material role')
                 references.add(member)
         targets = []
-        if 'material_targets' in registry:
+        streamed = 'streamed_height_materials' in registry
+        if streamed and 'material_targets' in registry:
+            raise ValueError('Streamed and legacy targets cannot coexist in one region')
+        if streamed or 'material_targets' in registry:
             allowed_registry = {'schema_version', 'payload_profile', 'operation', 'banks',
                                 'detail', 'authored', 'authored_manifest', 'world',
                                 'world_manifest', 'effects', 'lighting', 'ground_surface_materials',
-                                'surface_materials', 'material_targets'}
+                                'surface_materials', 'material_targets', 'streamed_height_materials'}
             if set(registry) - allowed_registry:
                 raise ValueError('Unknown material-target environment registry field')
-            member = registry['material_targets']
+            role = 'streamed_height_materials' if streamed else 'material_targets'
+            index_format, image_format = ((STREAM_INDEX_FORMAT, STREAM_IMAGE_FORMAT)
+                                          if streamed else (MATERIAL_TARGET_FORMAT, 'BWSFM1'))
+            member = registry[role]
             if (not isinstance(member, str) or member not in paths
-                    or files[member].get('format') != MATERIAL_TARGET_FORMAT
-                    or MATERIAL_TARGET_FORMAT not in payload.get('required_formats', [])
-                    or 'BWSFM1' not in payload.get('required_formats', [])):
+                    or files[member].get('format') != index_format
+                    or not {index_format, image_format}.issubset(required_formats)):
                 raise ValueError('Undeclared material target registry')
-            targets = read_material_targets(paths[member], region, files, paths, target_budget)
+            if streamed:
+                _, image_members = read_material_targets(paths[member], region, files, paths, streamed=True)
+                if references.intersection(image_members):
+                    raise ValueError('Duplicate streamed height resource role')
+                references.update(image_members)
+            else:
+                targets = read_material_targets(paths[member], region, files, paths, target_budget)
+                references.update(target['surface_materials'] for target in targets)
             if sha(paths[member]) != files[member]['sha256']:
                 raise ValueError('Material target metadata changed during admission')
             references.add(member)
-            references.update(target['surface_materials'] for target in targets)
         if references!=set(paths): raise ValueError('Undeclared or unused environment resources')
         expected_formats={**{p:'ZBD-texture-v1' for p in banks.values()},
                           **{p:'BWSNR2' for p in detail.values()},

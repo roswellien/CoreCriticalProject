@@ -29,6 +29,7 @@ struct HeightImage {
 struct HeightUpload {
   HeightImage *cached{};
   const mw34::materials::SurfaceMaterialImage *source{};
+  bool streamed{};
 };
 struct MaterialDescriptorKey {
   std::uint64_t normal_key{}, normal_version{}, normal_source_hash{};
@@ -127,6 +128,9 @@ void validate_height(const Scene &scene, const Draw &draw,
 }
 HeightImageKey height_key(const mw34::materials::HeightBinding &binding) const {
   const auto &image = *binding.image;
+  if (binding.streamed_image)
+    return {binding.image, &image, {}, {}, image.name, 0, binding.image_version,
+            image.hash, image.width, image.height, image.role};
   return {binding.image, &image, binding.source_sha256, binding.sidecar_sha256, image.name,
           binding.mesh_uv_hash, binding.image_version, image.hash, image.width, image.height,
           image.role};
@@ -143,10 +147,11 @@ void retire_height_images() {
     ++height_retired_images;
   }
 }
-void height_uniform(const Scene &scene, const Draw &draw, mw34::sun::Uniform &uniform) const {
+void height_uniform(const Scene &scene, const Draw &draw, const HeightImage *height,
+                     mw34::sun::Uniform &uniform) const {
   // A freshly constructed uniform clears every field for Off/excluded draws.
   uniform.pom_params[3] = float(scene.pom_diagnostic_mode);
-  if (!height_enabled(scene, draw)) return;
+  if (!height || !height_enabled(scene, draw)) return;
   const auto &material = draw.height_binding->material;
   uniform.pom_params = {1, material.height_reference, material.height_amplitude,
                         float(scene.pom_diagnostic_mode)};
@@ -169,6 +174,7 @@ std::vector<HeightImage *> prepare_height_images(const Scene &scene,
                                                 std::vector<HeightUpload> &pending) {
   std::vector<HeightImage *> result(scene.draws.size());
   VkDeviceSize bytes{};
+  std::set<HeightImageKey> deferred;
   // Validate every active binding before allocating any height image. Off has
   // no height allocation/upload; A==0 also skips payloads, including UV capture.
   for (const auto &draw : scene.draws)
@@ -178,13 +184,21 @@ std::vector<HeightImage *> prepare_height_images(const Scene &scene,
     if (!height_enabled(scene, draw) || draw.height_binding->material.height_amplitude == 0)
       continue;
     const auto key = height_key(*draw.height_binding);
+    if (deferred.count(key))
+      continue;
     auto found = height_images.find(key);
     if (found == height_images.end()) {
       const auto &source = *draw.height_binding->image;
       const auto size = std::uint64_t(source.width) * source.height;
       if (size > mw34::materials::max_surface_sidecar_bytes ||
-          height_resident_bytes > mw34::materials::max_surface_sidecar_bytes - size)
-        throw std::runtime_error("POM resident GPU height cache exceeds its byte bound");
+          height_resident_bytes > mw34::materials::max_surface_sidecar_bytes - size) {
+        if (!draw.height_binding->streamed_image)
+          throw std::runtime_error("POM resident GPU height cache exceeds its byte bound");
+        deferred.insert(key);
+        std::fprintf(stderr, "[C1_HEIGHT_GPU] deferred=resident_budget width=%u height=%u\n",
+                     source.width, source.height);
+        continue;
+      }
       if (mw34::materials::normal_hash(source.pixels.data(), source.pixels.size()) != source.hash)
         throw std::runtime_error("POM immutable height image hash mismatch");
       found = height_images.emplace(key, HeightImage{}).first;
@@ -197,8 +211,15 @@ std::vector<HeightImage *> prepare_height_images(const Scene &scene,
               source.width, source.height, VK_FORMAT_R8_UNORM,
               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
               VK_IMAGE_ASPECT_COLOR_BIT);
+      } catch (const PreloadAllocationFailure &) {
+        height_images.erase(found);
+        if (!draw.height_binding->streamed_image)
+          throw;
+        deferred.insert(key);
+        std::fprintf(stderr, "[C1_HEIGHT_GPU] deferred=allocation width=%u height=%u\n",
+                     source.width, source.height);
+        continue;
       } catch (...) {
-        destroy(cached.texture);
         height_images.erase(found);
         throw;
       }
@@ -206,21 +227,62 @@ std::vector<HeightImage *> prepare_height_images(const Scene &scene,
       cached.texture.height = source.height;
       cached.texture.hash = source.hash;
       height_resident_bytes += size;
+      if (draw.height_binding->streamed_image)
+        std::fprintf(stderr, "[C1_HEIGHT_GPU] admitted width=%u height=%u "
+                             "image_bytes=%llu resident_image_bytes=%llu\n",
+                     source.width, source.height, static_cast<unsigned long long>(size),
+                     static_cast<unsigned long long>(height_resident_bytes));
     }
     auto &cached = found->second;
     result[at] = &cached;
-    ++height_draws;
     if (!cached.texture.valid &&
         std::none_of(pending.begin(), pending.end(),
                       [&](const HeightUpload &upload) { return upload.cached == &cached; })) {
-      pending.push_back({&cached, draw.height_binding->image.get()});
+      pending.push_back({&cached, draw.height_binding->image.get(),
+                         draw.height_binding->streamed_image});
       bytes += cached.bytes;
     } else if (cached.texture.valid) {
       ++height_cache_hits;
     }
   }
   if (!pending.empty()) {
-    ensure(height_upload, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    try {
+      if (take_play_fault(preload_fault_.fail_next_height_staging_allocations))
+        throw PreloadAllocationFailure(VK_ERROR_OUT_OF_DEVICE_MEMORY, "height staging");
+      ensure(height_upload, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
+    } catch (const PreloadAllocationFailure &) {
+      std::set<const HeightImage *> discarded;
+      VkDeviceSize required_bytes{};
+      for (const auto &upload : pending) {
+        if (upload.streamed)
+          discarded.insert(upload.cached);
+        else
+          required_bytes += upload.cached->bytes;
+      }
+      if (discarded.empty())
+        throw;
+      for (auto &image : result)
+        if (discarded.count(image))
+          image = nullptr;
+      pending.erase(std::remove_if(pending.begin(), pending.end(),
+                                   [](const auto &upload) { return upload.streamed; }),
+                    pending.end());
+      for (auto it = height_images.begin(); it != height_images.end();) {
+        if (!discarded.count(&it->second)) {
+          ++it;
+          continue;
+        }
+        height_resident_bytes -= it->second.bytes;
+        destroy(it->second.texture);
+        it = height_images.erase(it);
+      }
+      std::fprintf(stderr, "[C1_HEIGHT_GPU] deferred=staging images=%zu\n", discarded.size());
+      if (required_bytes)
+        ensure(height_upload, required_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
+    }
+  }
+  height_draws += std::count_if(result.begin(), result.end(), [](const auto *image) { return image != nullptr; });
+  if (!pending.empty()) {
     auto *destination = static_cast<unsigned char *>(height_upload.mapped);
     for (const auto &upload : pending) {
       std::memcpy(destination, upload.source->pixels.data(), std::size_t(upload.cached->bytes));

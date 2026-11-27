@@ -170,9 +170,12 @@ inline const ::platform::prepared::MaterialTarget *select_native_ground_target(
       (!model || unknown_origin(model->world_source_asset.get()))) {
     // A raw original slot can only trigger visible rejection. It cannot supply
     // the missing immutable member/container identity required by the guard.
+    // Streamed targets use normal-only shading for these unproven nodes. Raw
+    // slot collisions across ordinary scene nodes cannot authorize a binding.
     const auto raw_slot = node->get<std::int32_t>(0x3c);
     for (const auto &target : targets)
-      if (raw_slot >= 0 && std::uint32_t(raw_slot) == target.source.model_slot)
+      if (target.streamed_bindings.empty() && raw_slot >= 0 &&
+          std::uint32_t(raw_slot) == target.source.model_slot)
         throw std::runtime_error("Possible selected native ground has no source owner");
   }
   return selected;
@@ -180,7 +183,8 @@ inline const ::platform::prepared::MaterialTarget *select_native_ground_target(
 
 inline std::shared_ptr<const mw34::materials::HeightBinding> admit_native_ground_height(
     const ::platform::prepared::MaterialTarget &target, const NativeGroundHeightInput &input,
-    const std::shared_ptr<mw34::materials::SurfaceDecodedBudget> &budget) {
+    const std::shared_ptr<mw34::materials::SurfaceDecodedBudget> &budget,
+    const mw34::materials::StreamedHeightCache *cache = nullptr) {
   NativeGroundFloatScope preserve;
   if (!input.enabled || !input.eligible)
     return {};
@@ -220,31 +224,49 @@ inline std::shared_ptr<const mw34::materials::HeightBinding> admit_native_ground
   if (!fingerprint || *fingerprint != target.mesh_uv_hash)
     reject("Native ground whole original mesh/UV mismatch");
   const auto &pack = target.pack;
+  const bool streamed = !target.streamed_bindings.empty();
+  if (streamed && (target.streamed_bindings.size() != polygon_count || pack))
+    reject("Native ground streamed polygon cardinality mismatch");
   // EnvironmentPackCache performs canonical path and before/after file SHA
   // authentication before publishing this immutable owner. This helper does no
   // file IO; a manually constructed target is only a synthetic guard fixture.
-  if (target.sidecar_path.empty() || target.sidecar_sha256.size() != 64 ||
+  if (!streamed && (target.sidecar_path.empty() || target.sidecar_sha256.size() != 64 ||
       target.sidecar_sha256.find_first_not_of("0123456789abcdef") != std::string::npos ||
       !pack || !pack->decoded_reservation || pack->decoded_reservation->budget() != budget ||
       !budget || (pack->version != 1 && pack->version != 2) ||
       pack->mesh_uv_hash != target.mesh_uv_hash ||
-      pack->bindings.size() != polygon_count)
+      pack->bindings.size() != polygon_count))
     reject("Native ground cached sidecar identity/budget mismatch");
-  for (const auto &record : pack->records)
-    if (!record || record->asset_id != target.asset_id)
-      reject("Native ground cached pack asset mismatch");
+  if (!streamed)
+    for (const auto &record : pack->records)
+      if (!record || record->asset_id != target.asset_id)
+        reject("Native ground cached pack asset mismatch");
   for (std::uint32_t index = 0; index < polygon_count; ++index) {
     const auto *ordered = input.model->polygons[index].material;
     if (!ordered)
       reject("Native ground ordered material is missing");
     std::string name = "untextured";
     if (ordered->flags & 1) {
-      if (!ordered->texture || !std::memchr(ordered->texture->name, 0, 20))
+      const auto *texture = ordered->texture;
+      if (streamed && (ordered->flags & 4)) {
+        if (target.streamed_bindings[index])
+          reject("Native ground animated material has a streamed height binding");
+        // The cycle mutates the live frame pointer. Check the original GameZ
+        // texture slot for ordered provenance on this unbound polygon.
+        const auto &directory = zimg::textures();
+        if (!ordered->cycle || directory.count <= 0 || directory.count > zimg::kMaxTextures ||
+            ordered->texture_index >= std::uint32_t(directory.count))
+          reject("Native ground animated material has an invalid original texture index");
+        texture = &directory.entries[ordered->texture_index];
+      }
+      if (!texture || !std::memchr(texture->name, 0, 20))
         reject("Native ground ordered material name is invalid");
-      name = ordered->texture->name;
+      name = texture->name;
     }
     if (name != target.polygon_materials[index])
       reject("Native ground ordered material name mismatch");
+    if (streamed)
+      continue;
     const auto record_index = pack->bindings[index];
     if (record_index != mw34::materials::no_surface_material &&
         (record_index >= pack->records.size() || !pack->records[record_index] ||
@@ -254,10 +276,17 @@ inline std::shared_ptr<const mw34::materials::HeightBinding> admit_native_ground
           (!target.surface_keys[index] || !(ordered->flags & 1)))))
       reject("Native ground cached record identity mismatch");
   }
-  const auto record_index = pack->bindings[polygon_index];
-  if (record_index == mw34::materials::no_surface_material ||
-      pack->records[record_index]->height_image == mw34::materials::no_surface_image)
-    return {};
+  mw34::materials::StreamedHeightCache::Image image;
+  if (streamed) {
+    const auto &binding = target.streamed_bindings[polygon_index];
+    if (!binding || !cache || !(image = cache->find(binding->image)))
+      return {};
+  } else {
+    const auto record_index = pack->bindings[polygon_index];
+    if (record_index == mw34::materials::no_surface_material ||
+        pack->records[record_index]->height_image == mw34::materials::no_surface_image)
+      return {};
+  }
   if (!(material->flags & 1) || !material->texture || !material->texture->surface ||
       !target.surface_keys[polygon_index] ||
       !(input.key == *target.surface_keys[polygon_index]) || !(input.key == input.slot_key) ||
@@ -269,12 +298,40 @@ inline std::shared_ptr<const mw34::materials::HeightBinding> admit_native_ground
     reject("Native ground current texture/normal admission mismatch");
   if (!input.key.width || !input.key.height || input.key.format != 1)
     reject("Native ground height requires opaque complete albedo identity");
-  auto resolved = mw34::materials::resolve_height_binding(
-      pack, polygon_index, source.sha256, target.sidecar_sha256, input.key,
-      input.normal_width, input.normal_height, input.normal_hash);
-  if (!resolved)
-    reject("Native ground selected height record is missing");
-  auto snapshot = std::make_shared<mw34::materials::HeightBinding>(*resolved);
+  std::shared_ptr<mw34::materials::HeightBinding> snapshot;
+  if (streamed) {
+    if (!input.key.hash || !input.normal_hash ||
+        input.key.width != image->width || input.key.height != image->height ||
+        input.normal_width != image->width || input.normal_height != image->height)
+      reject("Native ground streamed map resolution/identity mismatch");
+    const auto &binding = *target.streamed_bindings[polygon_index];
+    snapshot = std::make_shared<mw34::materials::HeightBinding>();
+    snapshot->material.asset_id = target.asset_id;
+    snapshot->material.material_name = target.polygon_materials[polygon_index];
+    snapshot->material.height_image = binding.image;
+    snapshot->material.height_reference = 0.5f;
+    snapshot->material.height_amplitude = binding.amplitude;
+    snapshot->material.max_displacement = binding.amplitude;
+    snapshot->retained_decoded_bytes = image->pixels.size();
+    snapshot->image = std::move(image);
+    snapshot->source_sha256 = source.sha256;
+    snapshot->sidecar_sha256 = target.sidecar_sha256;
+    snapshot->mesh_uv_hash = target.mesh_uv_hash;
+    snapshot->image_version = 2;
+    snapshot->streamed_image = true;
+    snapshot->source_batch = polygon_index;
+    snapshot->albedo = input.key;
+    snapshot->normal_width = input.normal_width;
+    snapshot->normal_height = input.normal_height;
+    snapshot->normal_hash = input.normal_hash;
+  } else {
+    auto resolved = mw34::materials::resolve_height_binding(
+        pack, polygon_index, source.sha256, target.sidecar_sha256, input.key,
+        input.normal_width, input.normal_height, input.normal_hash);
+    if (!resolved)
+      reject("Native ground selected height record is missing");
+    snapshot = std::make_shared<mw34::materials::HeightBinding>(*resolved);
+  }
   snapshot->world_source = mw34::materials::HeightWorldSource{
       source.kind, source.member, source.bytes, source.load_epoch, source.model_slot};
   snapshot->sidecar_path = target.sidecar_path;

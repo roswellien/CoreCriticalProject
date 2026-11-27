@@ -1068,6 +1068,63 @@ public:
     native_context_ = {};
     if(fixture_trace_run().open()) fixture_trace_pose_ = {};
   }
+  void select_terrain_cell(int32_t world, int32_t x, int32_t z) override {
+    VisualFloatScope float_scope;
+    if (!bridge_config_.parallax_materials || !lighting_.normals || !environment_ ||
+        !environment_->streamed_heights || world < 0 || x < 0 || z < 0 ||
+        current_mission_id_.empty() ||
+        ::platform::prepared::environment_region(current_mission_id_) != "operation1") {
+      streamed_height_cache_.reset();
+      streamed_height_cell_.reset();
+      return;
+    }
+    const auto &index = *environment_->streamed_heights;
+    const auto &budget = prepared_.surface_budget();
+    if (!streamed_height_cache_) {
+      streamed_height_cache_ =
+          std::make_unique<mw34::materials::StreamedHeightCache>(budget, index.images);
+      streamed_height_cell_.reset();
+    }
+    const auto cell = std::make_tuple(zcls::world_source_epoch(), std::uint32_t(world), x, z);
+    const bool changed = streamed_height_cell_ != cell;
+    if (!changed && (streamed_height_deferred_.empty() || budget->used() >= streamed_height_sample_))
+      return;
+    if (changed) {
+      std::vector<std::size_t> desired;
+      std::set<std::size_t> seen;
+      for (int distance = 0; distance <= 2; ++distance)
+        for (int dx = -1; dx <= 1; ++dx)
+          for (int dz = -1; dz <= 1; ++dz) {
+            if (std::abs(dx) + std::abs(dz) != distance)
+              continue;
+            const auto subset = index.subsets.find({std::uint32_t(world), x + dx, z + dz});
+            if (subset != index.subsets.end())
+              for (auto id : subset->second)
+                if (seen.insert(id).second)
+                  desired.push_back(id);
+          }
+      streamed_height_cache_->select(desired);
+      streamed_height_deferred_ = std::move(desired);
+      streamed_height_cell_ = cell;
+    }
+    std::size_t admitted = 0;
+    std::vector<std::size_t> deferred;
+    for (auto id : streamed_height_deferred_) {
+      if (streamed_height_cache_->acquire(id))
+        ++admitted;
+      else
+        deferred.push_back(id);
+    }
+    streamed_height_deferred_.swap(deferred);
+    streamed_height_sample_ = budget->used();
+    std::fprintf(stderr,
+                 "[C1_HEIGHT_STREAM] world=%d cell=%d,%d available=%zu deferred=%zu "
+                 "decoded_bytes=%llu peak_decoded_bytes=%llu\n",
+                 world, x, z, admitted, streamed_height_deferred_.size(),
+                 static_cast<unsigned long long>(streamed_height_sample_),
+                 static_cast<unsigned long long>(budget->peak()));
+  }
+
   void begin_model_draw(const ::platform::ModelDrawContext &context) override {
     // Visual retargeting/fog must not leak exception flags or rounding state
     // into the native polygon producer that resumes after this callback.
@@ -1155,6 +1212,8 @@ public:
         identity.number != current_mission_identity_.number;
     current_mission_identity_ = identity;
     if (id != current_mission_id_ || identity_changed) {
+      streamed_height_cache_.reset();
+      streamed_height_cell_.reset();
       current_mission_id_ = id;
       current_mission_lighting_ = resolved;
       if (lighting_.enabled && identity.world_index >= 0 &&
@@ -3250,6 +3309,10 @@ private:
   bool lab_preview_lighting_{};
   std::shared_ptr<const ::platform::prepared::EnvironmentSelection>
       environment_;
+  std::unique_ptr<mw34::materials::StreamedHeightCache> streamed_height_cache_;
+  std::optional<std::tuple<std::uint64_t, std::uint32_t, int32_t, int32_t>> streamed_height_cell_;
+  std::vector<std::size_t> streamed_height_deferred_;
+  std::uint64_t streamed_height_sample_{};
   std::shared_ptr<const zcls::ZbdObservationSession> observation_session_;
   // Owned current-mission state: canonical mission ID plus resolved campaign
   // lighting/policy. The profile pointer refers only to the static campaign
