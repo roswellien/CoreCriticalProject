@@ -80,15 +80,11 @@ public static class GameProblemsLog
     }
 
     /// <summary>
-    /// The last <paramref name="count"/> lines of the whole log that contain "mw3: health",
-    /// oldest first; none when the file is missing or unreadable.
+    /// The last <paramref name="count"/> lines of the log text that contain "mw3: health",
+    /// oldest first.
     /// </summary>
-    public static IReadOnlyList<string> LastHealthLines(string path, int count)
+    public static IReadOnlyList<string> LastHealthLines(string text, int count)
     {
-        string text;
-        try { text = PlaytestDiagnostics.ReadWholeLog(path); }
-        catch { return Array.Empty<string>(); }
-
         var lastLines = new Queue<string>();
         foreach (var line in text.Split('\n'))
         {

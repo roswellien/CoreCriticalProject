@@ -55,11 +55,8 @@ public static class ReportExport
     private static List<(string ZipName, string Text)> ReadWholeSessionLogs(string? launchLog, string[] roots)
     {
         var logs = new List<(string ZipName, string Text)>();
-        if (launchLog == null) return logs;
-        string? folder;
-        try { folder = Path.GetDirectoryName(launchLog); }
-        catch { return logs; }
-        if (string.IsNullOrEmpty(folder)) return logs;
+        var folder = PlaytestDiagnostics.SessionFolder(launchLog);
+        if (launchLog == null || folder == null) return logs;
 
         foreach (var (_, zipName, relativePath, _) in PlaytestDiagnostics.SessionLogMappings)
         {
@@ -76,9 +73,11 @@ public static class ReportExport
     }
 
     /// <summary>
-    /// Writes the zip, and while it is over the limit cuts the largest log to its first 1 MB,
-    /// the cut marker and a shorter end each time, then writes it again. The end starts at the
-    /// log's remaining length and halves on each try, so a log is never dropped whole.
+    /// Writes the zip; while it is over the limit, cuts logs to their first 1 MB, the cut marker
+    /// and a shorter end, then writes it again. The first zip's compression ratio estimates how
+    /// far to cut, so each rewrite is usually the last. The largest log's end halves until the
+    /// estimate fits; a log is never dropped whole. If the attempts run out, every log over
+    /// 1 MB keeps only a short end, which always fits (seven logs of about 1 MB each).
     /// </summary>
     private static void WriteZipWithinLimit(string destination, string reportJson, List<(string ZipName, string Text)> logs)
     {
@@ -90,23 +89,59 @@ public static class ReportExport
             for (var attempt = 0; ; attempt++)
             {
                 WriteZip(temporary, reportJson, logs);
-                var fits = new FileInfo(temporary).Length <= MaxExportZipBytes;
-                if (fits || attempt >= MaxCutAttempts || logs.Count == 0) break;
+                var zipBytes = new FileInfo(temporary).Length;
+                if (zipBytes <= MaxExportZipBytes || logs.Count == 0) break;
+                if (attempt >= MaxCutAttempts)
+                {
+                    CutEveryLargeLog(logs, originals);
+                    WriteZip(temporary, reportJson, logs);
+                    break;
+                }
 
-                var largest = logs
-                    .Select((log, index) => (log.ZipName, log.Text.Length, Index: index))
-                    .OrderByDescending(log => log.Length)
-                    .First();
-                var original = originals[largest.ZipName];
-                var remaining = Math.Max(0, original.Length - KeptLogHeadChars);
-                if (remaining == 0) break; // Every log is already down to its first 1 MB.
-                var previousTail = tailChars.TryGetValue(largest.ZipName, out var tail) ? tail : remaining;
-                tailChars[largest.ZipName] = previousTail / 2;
-                logs[largest.Index] = (largest.ZipName, CutLog(original, previousTail / 2));
+                // Aim 10% under the limit, at this zip's bytes per character.
+                var bytesPerChar = (double)zipBytes / Math.Max(1, TotalChars(reportJson, logs));
+                var targetChars = (long)(MaxExportZipBytes * 0.9 / bytesPerChar);
+                while (TotalChars(reportJson, logs) > targetChars && HalveLargestTail(logs, originals, tailChars)) { }
             }
             File.Move(temporary, destination, overwrite: true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    private static long TotalChars(string reportJson, List<(string ZipName, string Text)> logs) =>
+        reportJson.Length + logs.Sum(log => (long)log.Text.Length);
+
+    /// <summary>Halves the kept end of the largest log that can still be cut; false when none can.</summary>
+    private static bool HalveLargestTail(List<(string ZipName, string Text)> logs,
+        Dictionary<string, string> originals, Dictionary<string, int> tailChars)
+    {
+        var candidates = logs
+            .Select((log, index) => (log.ZipName, log.Text.Length, Index: index))
+            .Where(log => originals[log.ZipName].Length > KeptLogHeadChars &&
+                (!tailChars.TryGetValue(log.ZipName, out var kept) || kept > 0))
+            .OrderByDescending(log => log.Length)
+            .ToList();
+        if (candidates.Count == 0) return false;
+        var largest = candidates[0];
+        var original = originals[largest.ZipName];
+        var remaining = original.Length - KeptLogHeadChars;
+        var previousTail = tailChars.TryGetValue(largest.ZipName, out var tail) ? tail : remaining;
+        var nextTail = previousTail / 2;
+        tailChars[largest.ZipName] = nextTail;
+        logs[largest.Index] = (largest.ZipName, CutLog(original, nextTail));
+        return true;
+    }
+
+    private const int LastResortTailChars = 64 * 1024;
+
+    private static void CutEveryLargeLog(List<(string ZipName, string Text)> logs, Dictionary<string, string> originals)
+    {
+        for (var index = 0; index < logs.Count; index++)
+        {
+            var original = originals[logs[index].ZipName];
+            if (original.Length > KeptLogHeadChars)
+                logs[index] = (logs[index].ZipName, CutLog(original, LastResortTailChars));
+        }
     }
 
     /// <summary>The log's first 1 MB and its last <paramref name="tailChars"/>, each on a line boundary.</summary>

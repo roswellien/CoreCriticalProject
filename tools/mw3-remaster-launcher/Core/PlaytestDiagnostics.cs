@@ -209,11 +209,14 @@ public static class PlaytestDiagnostics
 
     private static void CopyWholeLog(string source, string destination)
     {
+        // Copied as bytes: the copy is the game's file exactly, with nothing decoded.
         try
         {
-            var text = ReadWholeLog(source);
-            if (!string.IsNullOrWhiteSpace(text))
-                File.WriteAllText(destination, text, new UTF8Encoding(false));
+            if (!File.Exists(source) || HasLinkInChain(source)) return;
+            using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (input.Length == 0) return;
+            using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None);
+            input.CopyTo(output);
         }
         catch { }
     }
@@ -350,11 +353,8 @@ public static class PlaytestDiagnostics
     private static Dictionary<string, string> ReadSessionLogs(string? launchLog, string[] roots)
     {
         var logs = new Dictionary<string, string>();
-        if (launchLog == null) return logs;
-        string? folder;
-        try { folder = Path.GetDirectoryName(launchLog); }
-        catch { return logs; }
-        if (string.IsNullOrEmpty(folder)) return logs;
+        var folder = SessionFolder(launchLog);
+        if (launchLog == null || folder == null) return logs;
 
         var remainingBudget = MaxAggregateLogBytes;
         foreach (var (wireKey, _, relativePath, upload) in SessionLogMappings)
@@ -362,12 +362,13 @@ public static class PlaytestDiagnostics
             if (remainingBudget <= 0) break;
             if (!upload) continue;
             var path = SessionLogPath(launchLog, folder, relativePath);
-            var text = TryReadRedactedTail(path, roots);
-            if (string.IsNullOrEmpty(text)) continue;
             var cap = Math.Min(MaxLogBytes, remainingBudget);
-            if (wireKey == "native_run")
+            var isRunLog = wireKey == "native_run";
+            var text = isRunLog ? TryReadRedactedWhole(path, roots) : TryReadRedactedTail(path, roots);
+            if (string.IsNullOrEmpty(text)) continue;
+            if (isRunLog)
             {
-                text = UploadLogCuts.WithLastHealthLines(path, text, cap, roots);
+                text = UploadLogCuts.WithLastHealthLines(text, cap);
             }
             else if (text.Length > cap)
             {
@@ -420,6 +421,12 @@ public static class PlaytestDiagnostics
                 if (logs[targetKey].Length == 0) logs.Remove(targetKey);
             }
         }
+    }
+
+    private static string TryReadRedactedWhole(string path, string[] roots)
+    {
+        try { return Redact(ReadWholeLog(path), roots); }
+        catch { return ""; }
     }
 
     private static string TryReadRedactedTail(string path, string[] roots)
@@ -475,7 +482,8 @@ public static class PlaytestDiagnostics
         return windowsClosedHungGame ? ApplicationHangSummary : GenericFailureSummary;
     }
 
-    private static string? SessionFolder(string? launchLog)
+    /// <summary>The session folder that holds a launcher session log, or null.</summary>
+    internal static string? SessionFolder(string? launchLog)
     {
         if (launchLog == null) return null;
         try

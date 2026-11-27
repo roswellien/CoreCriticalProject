@@ -555,7 +555,7 @@ static class PlaytestSupportChecks
             "A session did not copy the whole mw3.log and mw3.old.log, or copied a stale problems log");
 
         var cleanBaseline = PlaytestDiagnostics.CaptureNativeBaseline(profile);
-        var problemsText = "[0.5] W startup warning\n[3.0] W play warning\n[4.0] E play error\n";
+        var problemsText = "[0.2] W startup warning\n[0.5] E startup error\n[3.0] W play warning\n[4.0] E play error\n";
         File.WriteAllText(problemsLog, problemsText);
         File.AppendAllText(gameLog, "mw3: this session\n");
         var cleanLauncherLog = NewSession(root, "session-521-clean", "MW3-RE launcher fixture\n");
@@ -566,15 +566,25 @@ static class PlaytestSupportChecks
             File.ReadAllText(Path.Combine(cleanSession, "native", "mw3-problems.log")) == problemsText,
             "A clean-exit session did not get all three game files whole");
 
-        // Problems after the first frame prompt; startup ones don't. The clean-exit summary
-        // prefers the first E line over earlier W lines, and crashes keep their old summary.
-        Check(GameProblemsLog.PlayProblems(cleanSession, 2000).SequenceEqual(
-                new[] { "[3.0] W play warning", "[4.0] E play error" }) &&
+        // Problems after the first frame prompt; startup ones don't, and the prompt names the
+        // first counted problem, cut for the dialog. The report's clean-exit summary prefers the
+        // first E line over earlier W lines, and crashes keep their old summary.
+        var playProblems = GameProblemsLog.PlayProblems(cleanSession, 2000);
+        var problemsPrompt = MW3RemasterLauncher.ReportPrompt.ForProblems(playProblems);
+        Check(problemsPrompt.Summary ==
+                "The game closed normally but logged 2 problems during play, the first: play warning" &&
+            problemsPrompt.AlwaysAsk,
+            "Clean-exit prompt named a startup problem or would send without asking: " + problemsPrompt.Summary);
+        var longPrompt = MW3RemasterLauncher.ReportPrompt.ForProblems(new[] { "[3.0] E " + new string('x', 500) });
+        Check(longPrompt.Summary.Contains(new string('x', MW3RemasterLauncher.ReportPrompt.MaxShownProblemChars) + "...") &&
+            !longPrompt.Summary.Contains(new string('x', MW3RemasterLauncher.ReportPrompt.MaxShownProblemChars + 1)),
+            "Clean-exit prompt did not cut a long problem line for the dialog");
+        Check(playProblems.SequenceEqual(new[] { "[3.0] W play warning", "[4.0] E play error" }) &&
             GameProblemsLog.PlayProblems(cleanSession, null).Count == 0 &&
             GameProblemsLog.PlayProblems(cleanSession, 5000).Count == 0 &&
             GameProblemsLog.PlayProblems(staleProblemsSession, 0).Count == 0,
             "Play problems included startup lines, or prompted without a first frame or a problems log");
-        Check(PlaytestDiagnostics.FailureSummary(cleanLauncherLog, 0) == "play error" &&
+        Check(PlaytestDiagnostics.FailureSummary(cleanLauncherLog, 0) == "startup error" &&
             PlaytestDiagnostics.FailureSummary(cleanLauncherLog, 7) == PlaytestDiagnostics.GenericFailureSummary,
             "Clean-exit summary did not take the first E line, or a crash summary used the problems log");
 
@@ -661,7 +671,11 @@ static class PlaytestSupportChecks
             {
                 ["textures/a.dds"] = new PackFile { Bytes = 7 }
             } },
-            new PackManifest { Id = "test.no-files", IsEnabled = true }
+            new PackManifest { Id = "test.no-files", IsEnabled = true },
+            new PackManifest { Id = "test.audio-only", IsEnabled = true, Files = new Dictionary<string, PackFile>
+            {
+                ["audio/d.wav"] = new PackFile { Bytes = 900 }
+            } }
         };
         var roots = PlaytestDiagnostics.ReportRoots(settings, app);
         var header = ReportHeader.Build(headerLog, packs, new[] { "Flight Stick", privateDevice }, roots);
@@ -690,7 +704,7 @@ static class PlaytestSupportChecks
             Check(packTextures.GetArrayLength() == 1 &&
                 packTextures[0].GetProperty("id").GetString() == "test.textures" &&
                 packTextures[0].GetProperty("bytes").GetInt64() == 1024,
-                "Report header pack texture sizes counted non-textures, disabled packs or packs without files");
+                "Report header pack texture sizes counted non-textures, disabled packs or packs without textures");
             Check(devices.GetArrayLength() == 2 && devices[0].GetString() == "Flight Stick" &&
                 devices[1].GetString()!.Length <= ReportHeader.MaxTextLength &&
                 !devices[1].GetString()!.Contains("Jane Doe", StringComparison.Ordinal),

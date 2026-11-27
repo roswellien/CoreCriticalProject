@@ -34,7 +34,10 @@ public static class ReportHeader
     public const int MaxTextLength = 80;
 
     private const string HeaderMarker = "mw3: header ";
+    // The crash-report service keeps no more than these.
     private const int MaxHeaps = 16;
+    private const int MaxPacks = 64;
+    private const int MaxInputDevices = 16;
     private const int MaxRefreshHz = 1000;
 
     private static readonly string[] TextureExtensions = { ".dds", ".png", ".tga", ".bmp", ".ktx2" };
@@ -42,7 +45,21 @@ public static class ReportHeader
     private static readonly Regex Resolution = new(@"\A[0-9]{1,5}x[0-9]{1,5}\z", RegexOptions.CultureInvariant);
 
     /// <summary>
-    /// The header fields found. <paramref name="sessionGameLog"/> is the session's copy of
+    /// The header for a launcher session log: the game lines come from the session's copy of
+    /// mw3.log, and the strings are redacted with the report's usual roots.
+    /// </summary>
+    public static Dictionary<string, object> ForSession(LauncherSettings settings, IEnumerable<PackManifest> packs,
+        string? launchLog, string applicationRoot, IReadOnlyList<string> inputDevices)
+    {
+        var sessionFolder = PlaytestDiagnostics.SessionFolder(launchLog);
+        var sessionGameLog = sessionFolder == null
+            ? null
+            : Path.Combine(sessionFolder, "native", PlaytestDiagnostics.NativeRunFileName);
+        return Build(sessionGameLog, packs, inputDevices, PlaytestDiagnostics.ReportRoots(settings, applicationRoot));
+    }
+
+    /// <summary>
+    /// The header fields found.<paramref name="sessionGameLog"/> is the session's copy of
     /// mw3.log (or null); <paramref name="packs"/> are the session's packs, of which only the
     /// enabled ones with a file list count; <paramref name="inputDevices"/> are the product
     /// names of attached DirectInput devices.
@@ -59,6 +76,7 @@ public static class ReportHeader
 
         var devices = inputDevices
             .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Take(MaxInputDevices)
             .Select(name => CleanText(name, roots))
             .ToList();
         if (devices.Count > 0) header["input_devices"] = devices;
@@ -162,6 +180,8 @@ public static class ReportHeader
                 var isTexture = TextureExtensions.Any(extension => name.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
                 if (isTexture && file.Bytes > 0) textureBytes += file.Bytes;
             }
+            if (textureBytes == 0) continue; // A pack without textures says nothing about video memory.
+            if (result.Count >= MaxPacks) break;
             result.Add(new Dictionary<string, object> { ["id"] = CleanText(pack.Id, roots), ["bytes"] = textureBytes });
         }
         return result;

@@ -971,8 +971,9 @@ namespace MW3RemasterLauncher
                     : await GameRunner.WaitForCompletionAsync(process);
                 RecordSessionExit(context, exit);
                 // Read before ResetNativeLaunchControls allows a new launch, which resets it.
-                var playProblems = exit == 0
-                    ? CleanExitPlayProblems(context, _nativeGameRunner.LastFirstFrameMilliseconds)
+                var sessionFolder = PlaytestDiagnostics.SessionFolder(context.LaunchLog);
+                var playProblems = exit == 0 && sessionFolder != null
+                    ? GameProblemsLog.PlayProblems(sessionFolder, _nativeGameRunner.LastFirstFrameMilliseconds)
                     : Array.Empty<string>();
                 ResetNativeLaunchControls();
                 TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "\u26A0 MW3-RE ENDED WITH AN ERROR";
@@ -981,7 +982,7 @@ namespace MW3RemasterLauncher
                         ReportPrompt.ForCrash(context.Settings, exit, context.LaunchLog));
                 else if (playProblems.Count > 0)
                     await HandleCrashReportAsync(exit, context,
-                        ReportPrompt.ForProblems(playProblems.Count, context.LaunchLog));
+                        ReportPrompt.ForProblems(playProblems));
             }
             catch (Exception error)
             {
@@ -990,15 +991,6 @@ namespace MW3RemasterLauncher
                 MessageBox.Show(error.Message, "Game session details", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally { process.Dispose(); }
-        }
-
-        /// <summary>Problems the game logged after its first frame in this session's folder.</summary>
-        private static IReadOnlyList<string> CleanExitPlayProblems(CrashReportSessionContext context,
-            long? firstFrameMilliseconds)
-        {
-            var sessionFolder = context.LaunchLog == null ? null : Path.GetDirectoryName(context.LaunchLog);
-            if (string.IsNullOrEmpty(sessionFolder)) return Array.Empty<string>();
-            return GameProblemsLog.PlayProblems(sessionFolder, firstFrameMilliseconds);
         }
 
         private void ResetNativeLaunchControls()
@@ -1073,7 +1065,7 @@ namespace MW3RemasterLauncher
             catch (Exception error)
             {
                 MessageBox.Show(this,
-                    "The crash report could not be sent. Your logs remain on this PC. " + error.Message +
+                    prompt.NotSentMessage + " Your logs remain on this PC. " + error.Message +
                     "\n\nUse Export Report under Settings & Steam to save a local copy.",
                     prompt.NotSentTitle, MessageBoxButton.OK, MessageBoxImage.Warning);
             }
@@ -1221,10 +1213,6 @@ namespace MW3RemasterLauncher
         private static Dictionary<string, object> BuildReportHeader(LauncherSettings settings,
             IEnumerable<PackManifest> packs, string? launchLog, string basePath)
         {
-            var sessionFolder = launchLog == null ? null : Path.GetDirectoryName(launchLog);
-            var sessionGameLog = string.IsNullOrEmpty(sessionFolder)
-                ? null
-                : Path.Combine(sessionFolder, "native", PlaytestDiagnostics.NativeRunFileName);
             List<string> inputDevices;
             try
             {
@@ -1233,8 +1221,7 @@ namespace MW3RemasterLauncher
                     .ToList();
             }
             catch { inputDevices = new List<string>(); }
-            return ReportHeader.Build(sessionGameLog, packs, inputDevices,
-                PlaytestDiagnostics.ReportRoots(settings, basePath));
+            return ReportHeader.ForSession(settings, packs, launchLog, basePath, inputDevices);
         }
 
         private void BtnOpenScreenshots_Click(object sender, RoutedEventArgs e)

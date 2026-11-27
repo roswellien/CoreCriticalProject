@@ -10,19 +10,22 @@ internal static class UploadLogCuts
     private const string HealthLinesHeading = "Last health lines:\n";
 
     /// <summary>
-    /// The game log for the upload, led by the last health lines from the whole session log,
-    /// since the head-and-tail cut can drop the ones from the middle of a long session.
+    /// The game log for the upload: its start and end, led by the last health lines of the
+    /// whole session log that the cut dropped (a long session's middle). Both come from one
+    /// read of the redacted whole log.
     /// </summary>
-    public static string WithLastHealthLines(string runLogPath, string runLogText, int maxChars, string[] roots)
+    public static string WithLastHealthLines(string redactedRunLog, int maxChars)
     {
-        var healthLines = GameProblemsLog.LastHealthLines(runLogPath, HealthLinesInUpload);
-        var healthBlock = healthLines.Count == 0
-            ? ""
-            : PlaytestDiagnostics.Redact(HealthLinesHeading + string.Join("\n", healthLines) + "\n", roots);
-        if (healthBlock.Length >= maxChars / 2) healthBlock = "";
-        var room = maxChars - healthBlock.Length;
-        var log = runLogText.Length > room ? CutHeadAndTail(runLogText, room) : runLogText;
-        return healthBlock + log;
+        var healthLines = GameProblemsLog.LastHealthLines(redactedRunLog, HealthLinesInUpload);
+        var fullBlockLength = HealthLinesHeading.Length + healthLines.Sum(line => line.Length + 1);
+        var blockFits = healthLines.Count > 0 && fullBlockLength < maxChars / 2;
+        var room = blockFits ? maxChars - fullBlockLength : maxChars;
+        var kept = CutHeadAndTail(redactedRunLog, room);
+        if (!blockFits) return kept;
+
+        var droppedLines = healthLines.Where(line => !kept.Contains(line, StringComparison.Ordinal)).ToList();
+        if (droppedLines.Count == 0) return kept;
+        return HealthLinesHeading + string.Join("\n", droppedLines) + "\n" + kept;
     }
 
     /// <summary>
