@@ -186,13 +186,24 @@ void check_clip(const std::string& path) {
   expect(again->open(path, &info, &reason), "it opens again after the first is closed");
 }
 
+// The temp folder can hold non-ASCII characters (an accented user name), so
+// the path is converted properly rather than one character at a time.
+std::string utf8_of(const std::wstring& wide) {
+  const int length = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, nullptr, 0, nullptr, nullptr);
+  if (length <= 1) return std::string();
+  std::string narrow(static_cast<size_t>(length), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, &narrow[0], length, nullptr, nullptr);
+  narrow.resize(static_cast<size_t>(length - 1));  // drop the terminator the call counts
+  return narrow;
+}
+
 }  // namespace
 
 int main() {
   wchar_t temp[MAX_PATH];
   GetTempPathW(MAX_PATH, temp);
   const std::wstring wide = std::wstring(temp) + L"mw3hd-" + std::to_wstring(GetCurrentProcessId()) + L".mp4";
-  const std::string path(wide.begin(), wide.end());  // the temp folder's path, ASCII on test machines
+  const std::string path = utf8_of(wide);  // the decoder takes UTF-8 paths
   CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   MFStartup(MF_VERSION, MFSTARTUP_LITE);
   std::string why;
