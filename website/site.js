@@ -168,7 +168,8 @@ document.querySelectorAll(".update-filter").forEach((filter) => {
             button.setAttribute("aria-pressed", String(button.dataset.tag === tag));
         });
         if (status) {
-            status.textContent = tag === "" ? "" : `Showing ${shownCount} of ${cards.length} updates`;
+            status.textContent =
+                tag === "" ? "" : `Showing ${shownCount} of ${cards.length} updates`;
         }
     }
     buttons.forEach((button) => {
