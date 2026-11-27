@@ -218,7 +218,9 @@ public sealed class NativeGameRunner
                 return new List<string>();
             }
             var path = Path.GetFullPath(clip.Source);
-            // The runtime reads its command line in the system code page, so only ASCII survives intact.
+            // The runtime gets its command line in the system code page and its decoder then reads the
+            // path as UTF-8 (hd_movie_mf.cpp, local_file_path), so only ASCII reaches it unchanged; an
+            // accented code-page character would arrive as invalid UTF-8 and be refused there.
             var pathIsAscii = path.All(character => character < 128);
             if (!pathIsAscii)
             {
@@ -459,7 +461,9 @@ public sealed class NativeGameRunner
                 argv.AddRange(hdMovies);
                 if (hdMovies.Count > 0) log("Upscaled cutscenes: " + hdMovies.Count / 3 + " HD movie(s) for this launch.");
             }
-            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or JsonException)
+            // InvalidOperationException: a registry value of the wrong JSON type (JsonNode.GetValue).
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or
+                JsonException or InvalidOperationException)
             {
                 log("Upscaled cutscenes not used for this launch: " + error.Message);
             }
