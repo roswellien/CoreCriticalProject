@@ -8,7 +8,8 @@ void present() override {
     reject("presentation outside the benchmark resident worker path");
     return;
   }
-  if (benchmark && (benchmark->failed() || benchmark->elapsed() >= benchmark->scene.end()))
+  if (benchmark && (benchmark->failed() ||
+                    (!benchmark->strict() && benchmark->elapsed() >= benchmark->scene.end())))
     return;
   mw34::timing::PresentBoundaryScope<mw34::timing::ProducerResourceTiming>
       producer_timing_scope(producer_resource_timing_);
@@ -119,9 +120,11 @@ void present() override {
                                                               nullptr, &status);
           const bool same_swapchain = renderer_->swapchain_generation == benchmark_swapchain_ &&
                                       renderer_->immediate_swapchain();
-          benchmark->record_present(tag, {presented, same_swapchain, status.acquire,
-                                          status.present, renderer_->presents - before,
-                                          status.completion});
+          const sdlfe::benchmark::PresentReceipt receipt{
+              presented, same_swapchain, status.acquire, status.present,
+              renderer_->presents - before, status.completion};
+          if (benchmark->strict()) record_strict_present(tag, receipt, status);
+          else benchmark->record_present(tag, receipt);
         } catch (const std::exception& error) {
           benchmark->invalidate(tag, error.what());
           throw;
@@ -154,7 +157,8 @@ void present() override {
       // for the previous present before queueing this one, so rendering still overlaps the next
       // game frame but the screen is never more than one frame behind the simulation.
       if (last_present_job_ != 0) worker_->wait_for_job(last_present_job_);
-      if (benchmark && (benchmark->failed() || benchmark->elapsed() >= benchmark->scene.end()))
+      if (benchmark && (benchmark->failed() ||
+                        (!benchmark->strict() && benchmark->elapsed() >= benchmark->scene.end())))
         return;
       const auto tag = benchmark ? benchmark->submit(*playback_time, benchmark_effects_)
                                  : sdlfe::benchmark::FrameTag{};

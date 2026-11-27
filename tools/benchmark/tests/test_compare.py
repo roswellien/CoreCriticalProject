@@ -168,6 +168,38 @@ class ComparisonTest(unittest.TestCase):
                     all(row["verdict"] == expected for row in result["scenes"].values())
                 )
 
+    def test_scored_suite_rejects_strict_launch_plan_and_renamed_result(self):
+        for strict_location in ("launch plan", "summary"):
+            with self.subTest(strict_location=strict_location):
+                paths = self.make_block()
+                scene = SUITE_SCENES[0]
+                if strict_location == "launch plan":
+                    plan = self.root / "A1" / "profiles" / scene / "launch-plan.json"
+                    document = read_json(plan)
+                    document["argv"].append("--benchmark-strict")
+                    write_json(plan, document)
+                else:
+                    summary = self.root / "A1" / scene / "summary.json"
+                    write_json(
+                        summary,
+                        {
+                            "version": 1,
+                            "mode": "strict",
+                            "valid": True,
+                            "scene_id": scene,
+                            "expected_ticks": 1,
+                            "frames": [{"tick": 0, "time_seconds": 10, "pixel_hash": "a" * 16}],
+                        },
+                    )
+                    self.edit_manifest(
+                        "A1",
+                        lambda manifest: manifest["scenes"][0].update(
+                            summary_sha256=sha256(summary)
+                        ),
+                    )
+                with self.assertRaisesRegex(ValueError, "strict diagnostics are unscored"):
+                    compare(paths)
+
     def test_unequal_counts_weight_runs_and_scenes_equally(self):
         paths = self.make_block((9.8, 10, 10.4, 10.2))
         for label in ("B1", "B2"):

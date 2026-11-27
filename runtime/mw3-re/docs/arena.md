@@ -83,6 +83,12 @@ recording uses more disk space and replay memory. The authored reference setup
 and reproduction instructions live in `tools/benchmark/fixtures/`; generated
 logs stay local under ignored `local/benchmark/`.
 
+For developer graphics diagnostics, `--benchmark-strict` plays one recorded
+state tick per successful resident Vulkan worker present and records a pixel hash
+for each tick. Playback uses recorded time and waits for the last present.
+See [developer strict playback](../../../tools/benchmark/README.md#developer-strict-playback)
+for optional PNG capture and unscored frame-by-frame comparison.
+
 A match log grows by every mech's state ten times a second: a few minutes of
 4v4 is tens of megabytes, and the viewers read a whole log into memory.
 

@@ -206,6 +206,20 @@ void numbered_wait() {
     worker.wait_for_job(first); // an already-finished job returns at once
 }
 
+void timed_present_wait() {
+    using Clock = std::chrono::steady_clock;
+    RenderWorker worker;
+    std::promise<void> release;
+    const auto gate = release.get_future().share();
+    const auto job = worker.post_numbered([gate] { gate.wait(); });
+    const bool completed_while_blocked =
+        worker.wait_for_job_until(job, Clock::now() + std::chrono::milliseconds(10));
+    release.set_value();
+    require(!completed_while_blocked, "Timed worker wait accepted a missing completion");
+    require(worker.wait_for_job_until(job, Clock::now() + std::chrono::seconds(2)),
+            "Timed worker wait missed a released job");
+}
+
 int main() {
     try {
         native_staging_bounds();
@@ -215,6 +229,7 @@ int main() {
         floating_point();
         failure_cancels_barrier();
         numbered_wait();
+        timed_present_wait();
         std::puts("Render worker ownership, bounds, FP and failure checks passed");
         return 0;
     } catch (const std::exception &error) {

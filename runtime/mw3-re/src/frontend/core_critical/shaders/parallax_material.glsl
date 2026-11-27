@@ -37,6 +37,27 @@ vec2 pomTrace(vec2 baseUV, vec3 normal, vec3 dp1, vec3 dp2,
     vec3 view = toEye / eyeLength;
     float incidence = dot(normal, view);
     if (!(incidence > 0.08)) return baseUV;
+    // Unpack step bounds and world-unit distance LOD fade range from pomPolicy.zw.
+    uint minSteps = clamp(sun.pomPolicy.z & 255u, 4u, 32u);
+    uint maxSteps = clamp(sun.pomPolicy.w & 255u, minSteps, 32u);
+    float fadeStart = float((sun.pomPolicy.z >> 8u) & 65535u);
+    float fadeEnd = float((sun.pomPolicy.w >> 8u) & 65535u);
+    // Scale effective distance by vertical zoom magnification (aspect-independent
+    // on ultrawide viewports) so zoomed views keep surface relief crisp.
+    float distanceFade = 1.0;
+    if (fadeEnd > fadeStart && fadeEnd > 0.0) {
+        float halfHeight = max(draw.target.y * 0.5, 1.0);
+        float cotHalfFovY = abs(sun.projection.y * sun.extra.x) / halfHeight;
+        float zoomScale = clamp(cotHalfFovY / 1.7320508, 1.0, 6.0);
+        float effectiveDistance = eyeLength / zoomScale;
+        if (effectiveDistance >= fadeEnd) return baseUV;
+        distanceFade = 1.0 - smoothstep(fadeStart, fadeEnd, effectiveDistance);
+    }
+    // Taper relief smoothly near the grazing cutoff (0.08..0.14) to prevent a
+    // hard seam on curved surfaces while preserving exact oracle hits at >=0.15.
+    float grazingFade = smoothstep(0.08, 0.14, incidence);
+    float effectiveAmplitude = amplitude * distanceFade * grazingFade;
+    if (effectiveAmplitude == 0.0) return baseUV;
     float area = duv1.x * duv2.y - duv1.y * duv2.x;
     float footprint = dot(duv1, duv1) * dot(duv2, duv2);
     if (!(footprint > 0.0) || !(area * area > 1e-12 * footprint)) return baseUV;
@@ -56,15 +77,15 @@ vec2 pomTrace(vec2 baseUV, vec3 normal, vec3 dp1, vec3 dp2,
     vec2 dx = duv1 * sun.pomUV.xy, dy = duv2 * sun.pomUV.xy;
     if (!pomFinite(q) || !pomFinite(chart) || !pomFinite(dx) || !pomFinite(dy)) return baseUV;
     float reference = sun.pomParams.y;
-    float endpoint0 = amplitude * -reference;
-    float endpoint1 = amplitude * (1.0 - reference);
+    float endpoint0 = effectiveAmplitude * -reference;
+    float endpoint1 = effectiveAmplitude * (1.0 - reference);
     // Search from the eye towards the surface. Signed amplitudes change the
     // sorted interval, not the reference or the interpretation of the image.
     float high = max(endpoint0, endpoint1), low = min(endpoint0, endpoint1);
-    int steps = int(mix(float(sun.pomPolicy.w), float(sun.pomPolicy.z), incidence));
-    steps = clamp(steps, 8, 32);
+    int steps = int(mix(float(maxSteps), float(minSteps), incidence));
+    steps = clamp(steps, int(minSteps), int(maxSteps));
     float upper = high;
-    float upperF = upper - amplitude * (pomHeight(chart + q * upper, dx, dy) - reference);
+    float upperF = upper - effectiveAmplitude * (pomHeight(chart + q * upper, dx, dy) - reference);
     float lower = low;
     bool found = upperF == 0.0;
     if (found) lower = upper;
@@ -74,14 +95,16 @@ vec2 pomTrace(vec2 baseUV, vec3 normal, vec3 dp1, vec3 dp2,
         // that final value through division/interpolation: a positive rounding
         // residual would miss an exact zero/one-height endpoint intersection.
         lower = stepIndex == steps ? low : mix(high, low, float(stepIndex) / float(steps));
-        float lowerF = lower - amplitude * (pomHeight(chart + q * lower, dx, dy) - reference);
-        if (lowerF <= 0.0) found = true;
+        float lowerF = lower - effectiveAmplitude * (pomHeight(chart + q * lower, dx, dy) - reference);
+        if (lowerF <= 0.0 || (stepIndex == steps && lowerF <= 1e-5 * abs(effectiveAmplitude))) found = true;
         else { upper = lower; upperF = lowerF; }
     }
     if (!found) return baseUV;
+    int refineSteps = minSteps <= 4u ? 6 : 10;
     for (int refine = 0; refine < 10; ++refine) {
+        if (refine >= refineSteps) break;
         float middle = 0.5 * (upper + lower);
-        float value = middle - amplitude * (pomHeight(chart + q * middle, dx, dy) - reference);
+        float value = middle - effectiveAmplitude * (pomHeight(chart + q * middle, dx, dy) - reference);
         if (value > 0.0) upper = middle;
         else lower = middle;
     }

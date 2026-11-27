@@ -1,8 +1,11 @@
 #include "frontend/sdl/watch_launch.h"
 
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <stdexcept>
+#include <string_view>
 
 #include "frontend/sdl/arena_camera_view.h"
 #include "frontend/sdl/replay3d_view.h"
@@ -20,6 +23,21 @@ namespace sdlfe {
 bool parse_watch_option(WatchArgs& w, int argc, char** argv, int* i) {
   const std::string s = argv[*i];
   const bool has_value = *i + 1 < argc;
+  if (s == "--benchmark-strict") {
+    w.benchmark_strict = true;
+    return true;
+  }
+  if (s == "--benchmark-strict-capture") {
+    if (!has_value || w.benchmark_strict_capture)
+      throw std::runtime_error("--benchmark-strict-capture requires one tick index");
+    const std::string_view value = argv[++*i];
+    size_t tick{};
+    const auto result = std::from_chars(value.data(), value.data() + value.size(), tick);
+    if (result.ec != std::errc{} || result.ptr != value.data() + value.size())
+      throw std::runtime_error("--benchmark-strict-capture needs a nonnegative tick index");
+    w.benchmark_strict_capture = tick;
+    return true;
+  }
   if (!has_value) return false;
   if (s == "--arena") w.arena_path = argv[++*i];
   else if (s == "--replay") w.replay_path = argv[++*i];

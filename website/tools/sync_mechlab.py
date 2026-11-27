@@ -39,7 +39,47 @@ def source_commit(repository_root: Path, note_path: Path) -> str:
     return commit
 
 
-def parse_note(path: Path, repository_root: Path) -> dict[str, str]:
+# Topic tags shown on MechLab cards and used by the /news filter. A fixed list keeps
+# the filter short and stops near-duplicates ("Renderer" vs "Rendering") creeping in.
+CARD_TAGS = ("Renderer", "Native", "Launcher", "Playtest", "Tools", "Content", "Website", "Fix")
+MAX_TAGS = 3
+
+# Card thumbnails must be existing WebP files under website/assets/plates, given as a
+# plain relative path, so a note can never point the page at another site or folder.
+IMAGE_PATTERN = re.compile(r"[a-z0-9_-]+(/[a-z0-9_-]+)*\.webp")
+
+
+def read_card_details(note_name: str, lines: list[str]) -> tuple[list[str], str, int]:
+    """Read the optional "Tags:" and "Image:" lines directly under the title.
+
+    Returns the tags, the image path ("" when there is none) and the index of the
+    first line of the summary itself.
+    """
+    tags: list[str] = []
+    image = ""
+    line_index = 1
+    while line_index < len(lines):
+        line = lines[line_index].strip()
+        if line.startswith("Tags:"):
+            tags = [tag.strip() for tag in line[len("Tags:") :].split(",") if tag.strip()]
+        elif line.startswith("Image:"):
+            image = line[len("Image:") :].strip()
+        else:
+            break
+        line_index += 1
+
+    unknown_tags = [tag for tag in tags if tag not in CARD_TAGS]
+    if unknown_tags:
+        allowed = ", ".join(CARD_TAGS)
+        raise ValueError(f"{note_name} has unknown tags {unknown_tags}; use: {allowed}")
+    if len(tags) > MAX_TAGS or len(set(tags)) != len(tags):
+        raise ValueError(f"{note_name} needs at most {MAX_TAGS} distinct tags")
+    if image and not IMAGE_PATTERN.fullmatch(image):
+        raise ValueError(f"{note_name} image must be a .webp path under assets/plates")
+    return tags, image, line_index
+
+
+def parse_note(path: Path, repository_root: Path) -> dict:
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}\.md", path.name):
         raise ValueError("Daily notes must be named YYYY-MM-DD.md")
     day = date.fromisoformat(path.stem).isoformat()
@@ -47,12 +87,13 @@ def parse_note(path: Path, repository_root: Path) -> dict[str, str]:
     if not lines or not lines[0].startswith("# "):
         raise ValueError(f"{path.name} needs a # title")
     title = lines[0][2:].strip()
-    body = "\n".join(lines[1:]).strip()
+    tags, image, content_start = read_card_details(path.name, lines)
+    body = "\n".join(lines[content_start:]).strip()
     if not title or len(title) > 180 or not body:
         raise ValueError(f"{path.name} needs a title and public summary text")
 
     opening_lines = []
-    for line in lines[1:]:
+    for line in lines[content_start:]:
         if not line.strip():
             if opening_lines:
                 break
@@ -67,11 +108,13 @@ def parse_note(path: Path, repository_root: Path) -> dict[str, str]:
         "title": title,
         "excerpt": excerpt,
         "body": body,
+        "tags": tags,
+        "image": image,
         "commit": source_commit(repository_root, path),
     }
 
 
-def read_notes(source: Path, repository_root: Path) -> list[dict[str, str]]:
+def read_notes(source: Path, repository_root: Path) -> list[dict]:
     if not source.is_dir():
         raise FileNotFoundError(f"MechLab note directory not found: {source}")
     notes = [parse_note(path, repository_root) for path in source.glob("????-??-??.md")]

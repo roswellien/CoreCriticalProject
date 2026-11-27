@@ -402,7 +402,8 @@ ControlsScreen::ControlsScreen(Engine& e, Handle s, Handle self)
   mode = 0;
   e.input_reset();
   const bool moving = !e.fast_menu();
-  if (load("dlgOptions.zrd", "CTL_CFG_DIALOG", moving)) {
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
+  if (load("dlgOptions.zrd", "CTL_CFG_DIALOG", moving || !bake_menu)) {
     borrow_background(true);
     bind_primitive(&lines, "LINES");
     static const char* const kTitles[] = {"TITLE_TEXT1", "TITLE_TEXT2", "TITLE_TEXT3",
@@ -413,7 +414,7 @@ ControlsScreen::ControlsScreen(Engine& e, Handle s, Handle self)
     bind_button(&reset_mouse, "CMD_RESET_TO_MOUSE_BTN");
     bind_button(&reset_joy, "CMD_RESET_TO_JSTICK_BTN");
     bind_button(&assign_axis, "CMD_ASSIGN_AXIS_BTN");
-    if (!moving) {  // FastMenu: drawn once (the background stays in the list, unlike the option screens')
+    if (bake_menu) {  // FastMenu: drawn once (the background stays in the list, unlike the option screens')
       bake();
       remove(&lines);
       for (ztwod::Text& t : titles) remove(&t);

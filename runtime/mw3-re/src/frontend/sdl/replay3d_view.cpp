@@ -2,20 +2,22 @@
 
 #include "frontend/sdl/arena_benchmark.h"
 
-#include <limits>
-
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <map>
+#include <optional>
 #include <set>
+#include <string_view>
 #include <vector>
 
 #include "frontend/sdl/replay_ui.h"
 #include "frontend/sdl/sdl_render3d.h"
 #include "gamez/zclass/camera.h"
+#include "gamez/zeffect/zeff_anim_init.h"
 #include "gamez/zeffect/zeff_anim_run.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_draw.h"
@@ -263,8 +265,21 @@ struct Replay3dView::State {
   Overlays overlays;
   uint64_t last_ns = 0;
   float real_dt = 0, real_elapsed = 0;
+  std::optional<ztimer::State> saved_timer;
+  float saved_game_time = 0;
   float posed_t = -1;  // the replay time the puppets show, -1 before the first
   bool started = false, quit_box_open = false, seek_pending = false;
+
+  void set_strict_time(double time, double delta) {
+    auto& timer = ztimer::state();
+    saved_timer = timer;
+    saved_game_time = mech3::mech_game_time();
+    timer.dt = timer.raw_dt = float(delta);
+    timer.total_scaled = timer.total_raw = timer.now_s = float(time);
+    mech3::sync_frame_step(timer.dt, timer.total_scaled);
+    mech3::mech_set_game_time(float(time));
+    render->set_benchmark_time(time);
+  }
 
   std::map<int, std::unique_ptr<Puppet>> puppets;  // by mech id
   Frame frame;
@@ -307,6 +322,7 @@ struct Replay3dView::State {
   bool make_round(zwep::WeaponDef* def, LiveRound* made);
   void free_round(LiveRound& r);
   void start_effects(const Event& e);
+  void start_missile_explosion(const zwep::Vec3f3& at);
   void fly(float dt);
   void seek_at(float window_x);
   void pick(float window_x, float window_y);
@@ -391,6 +407,14 @@ void Replay3dView::start() {
   std::printf("mw3: replay3d: %zu puppets, %.1f s of match\n", s.puppets.size(), s.clock.duration);
 }
 
+bool Replay3dView::strict() const {
+  return s_->benchmark_run && s_->benchmark_run->strict();
+}
+
+bool Replay3dView::advance_lists() const {
+  return !strict() || s_->benchmark_run->armed();
+}
+
 bool Replay3dView::before_lists(bool quit_box_open) {
   State& s = *s_;
   if (auto* run = s.benchmark_run) {
@@ -398,6 +422,7 @@ bool Replay3dView::before_lists(bool quit_box_open) {
       // Present the initial pose and camera once outside the scoring epoch.
       s.startup_frame = false;
       s.real_dt = ztimer::state().dt;
+      if (run->strict()) s.set_strict_time(run->log_start_time, 0);
       return true;
     }
     if (!run->armed() && !run->failed()) {
@@ -409,8 +434,12 @@ bool Replay3dView::before_lists(bool quit_box_open) {
         const float previous = run->scene.start_seconds
             ? std::nextafter(s.event_cursor, -std::numeric_limits<float>::infinity())
             : -std::numeric_limits<float>::infinity();
-        for (const Event& event : s.log->fire_between(previous, s.event_cursor))
-          s.start_effects(event);
+        if (run->strict()) {
+          s.event_cursor = previous;
+        } else {
+          for (const Event& event : s.log->fire_between(previous, s.event_cursor))
+            s.start_effects(event);
+        }
       } else {
         run->invalidate({}, "benchmark presenter was not ready after startup");
       }
@@ -418,6 +447,21 @@ bool Replay3dView::before_lists(bool quit_box_open) {
     if (run->failed()) {
       s.request_quit();
       return false;
+    }
+    if (run->strict()) {
+      const auto tick = run->next_strict_tick([&](double deadline) {
+        if (!s.render->wait_benchmark_present(deadline))
+          return std::optional<benchmark::StrictPresent>{};
+        return run->take_strict_present();
+      });
+      if (!tick || run->failed()) {
+        s.request_quit();
+        return false;
+      }
+      s.playback_elapsed = tick->elapsed;
+      s.clock.t = float(tick->time);
+      s.set_strict_time(tick->time, tick->delta);
+      return true;
     }
     const double elapsed = run->elapsed();
     if (elapsed >= run->scene.end()) {
@@ -470,7 +514,14 @@ void Replay3dView::after_lists() {
 }
 
 void Replay3dView::after_frame() {
-  if (s_->benchmark_run) ztimer::state().dt = s_->real_dt;
+  if (s_->saved_timer) {
+    ztimer::state() = *s_->saved_timer;
+    mech3::sync_frame_step(s_->saved_timer->dt, s_->saved_timer->total_scaled);
+    mech3::mech_set_game_time(s_->saved_game_time);
+    s_->saved_timer.reset();
+  } else if (s_->benchmark_run) {
+    ztimer::state().dt = s_->real_dt;
+  }
 }
 
 void Replay3dView::State::pose() {
@@ -658,6 +709,30 @@ void Replay3dView::State::free_round(LiveRound& r) {
   if (rh.node_destroy) rh.node_destroy(r.node);
 }
 
+// Whether an impact is a missile's: every missile weapon's soil impact is
+// impact_missle_mech or impact_lrm_min (weapons.zrd), animations that only
+// tint the screen within 20 m of the player (docs/anim-run.md) and draw
+// nothing in the world.
+static bool is_missile_impact(const zwep::Effect& effect) {
+  const auto* animation = static_cast<const zeff::AnimDef*>(effect.animation);
+  if (!animation) return false;
+  const std::string_view name = animation->name();
+  return name.rfind("impact_missle", 0) == 0 || name.rfind("impact_lrm", 0) == 0;
+}
+
+// Ours (replay only, not the original): a missile impact also plays the
+// game's own small fireball, fire_explode_tiny, so a replay watched from a
+// chase camera shows where the missiles land.
+void Replay3dView::State::start_missile_explosion(const zwep::Vec3f3& at) {
+  // Looked up each time: a map load replaces the animation table.
+  zeff::AnimDef* const fireball = zeff::anim_find("fire_explode_tiny");
+  if (!fireball) return;
+  static const float kZero[3] = {};
+  const float pos[3] = {at.x, at.y, at.z};
+  zeff::AnimDef* playing = zeff::anim_start_at(fireball, nullptr, pos, kZero, kZero);
+  if (playing && benchmark_run) impact_animations.insert(playing);
+}
+
 // A logged shot's fire effect and sound at its muzzle, or a hit's impact
 // effect where it struck (the default soil), from the weapon's own def.
 void Replay3dView::State::start_effects(const Event& e) {
@@ -675,6 +750,29 @@ void Replay3dView::State::start_effects(const Event& e) {
   } else if (impact && def->impacts) {
     effect = &def->impacts[zwep::kSoilDefault];
     position = e.at;
+  }
+  // A hit on a mech plays the weapon's damage animation instead of the soil
+  // impact, as apply_damage (zweapon.cpp, 0x00583480) chooses one or the
+  // other. The log has no health after the hit, so the game's starting value
+  // (1.0) picks the first entry at or above it; none matching plays nothing.
+  // A missile's impact draws nothing in the world (is_missile_impact), so the
+  // replay adds a fireball, counted as the impact's explosion in its place.
+  const bool missile = impact && def->impacts && is_missile_impact(def->impacts[zwep::kSoilDefault]);
+  if (missile) start_missile_explosion(f3(e.at));
+  if (e.type == "hit" && e.has_at && def->damage_anim_count > 0) {
+    constexpr int32_t kDamageAnimSlots = 4;  // WeaponDef::damage_anims
+    const int32_t count = std::min<int32_t>(def->damage_anim_count, kDamageAnimSlots);
+    for (int32_t i = 0; i < count; ++i) {
+      const bool reached = !(1.0f > def->damage_anims[i].health);
+      if (!reached) continue;
+      if (zwep::Handle damage_anim = def->damage_anims[i].anim) {
+        const float at[3] = {e.at.x, e.at.y, e.at.z};
+        zeff::AnimDef* damage = zeff::anim_start_at(static_cast<zeff::AnimDef*>(damage_anim),
+                                                    nullptr, at, kZero, kZero);
+        if (damage && benchmark_run && !missile) impact_animations.insert(damage);
+      }
+      return;
+    }
   }
   if (!effect) return;
   const float pos[3] = {position.x, position.y, position.z};
@@ -694,7 +792,7 @@ void Replay3dView::State::start_effects(const Event& e) {
     const auto point = f3(position);
     zwep::hit_hooks().impact_effect(effect->effect, &point);
   }
-  if (impact && playing && benchmark_run) impact_animations.insert(playing);
+  if (impact && playing && benchmark_run && !missile) impact_animations.insert(playing);
   if (effect->sound_count > 0 && effect->sounds[0])
     zsnd::play_at(static_cast<zsnd::Object*>(effect->sounds[0]), pos, 1.0f, nullptr);
 }

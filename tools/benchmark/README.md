@@ -104,6 +104,78 @@ equally with a geometric mean. Verdicts use mean frame time. Negative changes ar
 faster. A change must exceed 5% and the applicable spread. A within-arm spread greater
 than 5% in any scene makes the full block inconclusive.
 
+## Launcher Run benchmark button
+
+The launcher's Settings & Steam page has a **Run Benchmark** button for players. It runs
+`player.py` with the bundled planner Python (`Tools/PlannerPython`), the installed
+`Planner` folder and the installed `NativePreview` runtime. The installer copies
+`player.py`, `run.py`, `freeze.py` and the suite and recipe fixtures into a `Benchmark`
+folder. The coordinator reads the saved Play settings and active packs the same way as
+`run.py`, so the run uses what Play would launch.
+
+The reference logs come from the player's original install and never ship. On the first
+run, the coordinator generates each scene's log with `freeze.py`, which records twice
+and requires byte-identical logs. It freezes the hash in that scene's `freeze.json`.
+The logs are stored under `%LOCALAPPDATA%\Core Critical Benchmark\references\KEY`.
+KEY is derived from the game executable, the install's `.zbd` archives and the recipes.
+Later runs reuse a frozen log only when its bytes still match. A changed log stops the
+run and names the folder to delete.
+
+The digests in `suite-benchmark.json` belong to the build that qualified the suite.
+Determinism is proven only for one build on one machine, so a different digest only
+warns. Each report is compared only with the player's own newest earlier report that
+has the same KEY and effective settings.
+
+The coordinator prints progress lines that start with `BENCHMARK-EVENT ` followed by JSON.
+Results go under `results/TIMESTAMP/`, with `report.json` beside the suite output. The
+report lists average FPS, 1% low FPS, and p95 and p99 frame times for each scene. The
+overall figures pool the measured frames from all four scenes, using the native formulas.
+If a scene loses window focus, the native summary records the reason. The launcher then
+reports that the run was stopped and not scored, and asks the player to keep the game
+in front. The button requires a game executable that supports `--arena-record-every-update`
+and `--benchmark-scene`. Release 1.0.58 lacks both options, so the button reports that
+the game needs an update.
+
+## Developer strict playback
+
+Use `--strict` for single-scene repeatability or renderer parity checks. Each recorded
+`state.t` in `[scene start, scene start + warm-up + measured)` gets one resident worker
+present. The replay uses the recorded time and consecutive tick deltas, with the first
+delta measured from the scene start. Startup and fade are outside this sequence. The
+final tick must complete before the run can succeed.
+
+```powershell
+python tools/benchmark/run.py --launcher-runtime $launcher --exe $exeA --scene c1mp1 `
+  --strict --strict-capture 12 --out local/benchmark/strict-a
+python tools/benchmark/run.py --launcher-runtime $launcher --exe $exeA --scene c1mp1 `
+  --strict --out local/benchmark/strict-b
+python tools/benchmark/strict_compare.py local/benchmark/strict-a local/benchmark/strict-b
+```
+
+The native flags are `--benchmark-strict` and `--benchmark-strict-capture TICK`, used
+with the existing benchmark flags. Tick indices start at zero. Omit the capture flag to
+record hashes only. With a capture, `tick-N.png` contains the selected swapchain image.
+
+`strict.json` records each completed tick's index, recorded time in seconds, and
+FNV-1a 64-bit hash of the full swapchain image after the resident blit and before WSI
+presentation. The hash covers tightly packed BGRA8 bytes in image row order, including
+alpha and any letterbox pixels. RGBA swapchain formats are reordered to BGRA with no
+color conversion. Strict playback requires transfer-source support and an 8-bit BGRA or
+RGBA Vulkan swapchain. The desktop compositor and scanout are outside the capture.
+
+A missing worker receipt, failed acquire or present, or swapchain change fails the run.
+The result retains completed ticks and records the failure reason. `strict_compare.py`
+accepts result directories or `strict.json` files and exits 0 for matching ticks, 1 for
+the first difference, or 2 for invalid or incompatible input. Use the same scene,
+settings, packs, resolution, GPU and driver for repeatability checks. Strict runs are
+unscored, and `compare.py` rejects them from A-B-B-A.
+
+### Limitations
+
+Worker waits during pre-arm startup and fade frames can be unbounded. If the app
+throws mid-frame, producer work may remain unflushed. Losing window focus
+invalidates a strict run.
+
 ## Stress qualification
 
 Use the freezer's `candidate_windows` to select a log start 10 s before each candidate's

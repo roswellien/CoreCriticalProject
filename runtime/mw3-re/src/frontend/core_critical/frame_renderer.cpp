@@ -585,7 +585,18 @@ public:
   }
 
   bool benchmark_ready() override {
-    drain();
+    if (benchmark_run_ && benchmark_run_->strict()) {
+      if (!wait_benchmark_idle()) {
+        benchmark_run_->invalidate({}, "timed out waiting for strict benchmark startup");
+        return false;
+      }
+      last_present_job_ = 0;
+      // Startup runs outside the recorded window. Tick zero starts with
+      // fresh observation IDs and no retained fixtures or effect lights.
+      local_lights_clear();
+    } else {
+      drain();
+    }
     if (!benchmark_run_ || !worker_ || !native_wsi_ || !window_bound_ ||
         bridge_config_.vsync || !renderer_->immediate_swapchain())
       return false;
@@ -750,6 +761,39 @@ public:
   void set_benchmark_time(double time) override {
     benchmark_time_ = time;
     benchmark_effects_ = {};
+  }
+  bool wait_benchmark_present(double deadline) override {
+    if (!last_present_job_ || !wait_strict_job(last_present_job_, deadline)) return false;
+    last_present_job_ = 0;
+    return true;
+  }
+
+  bool wait_benchmark_idle() override {
+    if (!worker_) return true;
+    const auto job = worker_->statistics().submitted;
+    const double deadline = benchmark_run_->now() + sdlfe::benchmark::kStrictPresentTimeoutSeconds;
+    return wait_strict_job(job, deadline);
+  }
+
+  bool wait_strict_job(std::size_t job, double deadline) {
+    // A timeout fails the run, so later waits return immediately to keep shutdown bounded.
+    if (strict_wait_timed_out_) return false;
+    using Clock = std::chrono::steady_clock;
+    // The run can use an injected clock with a different epoch.
+    const auto remaining = std::chrono::duration<double>(std::max(0.0, deadline - benchmark_run_->now()));
+    const auto until = Clock::now() + std::chrono::duration_cast<Clock::duration>(remaining);
+    strict_wait_timed_out_ = !worker_->wait_for_job_until(job, until);
+    return !strict_wait_timed_out_;
+  }
+
+  void record_strict_present(sdlfe::benchmark::FrameTag tag,
+                             sdlfe::benchmark::PresentReceipt receipt,
+                             const vk::Renderer::ResidentPresentResult& status) {
+    sdlfe::benchmark::StrictPresent sample{tag.sequence, receipt, {}, {}};
+    sdlfe::benchmark::hash_strict_pixels(sample, status.pixels.data(), status.pixels.size(),
+                                       status.rgba_pixels,
+                                       benchmark_run_->captures(tag.sequence));
+    benchmark_run_->record_strict_present(std::move(sample));
   }
   void set_benchmark_effects(unsigned beams, unsigned explosions) override {
     benchmark_effects_.beams = beams;
@@ -939,6 +983,19 @@ public:
     return handle;
   }
 
+  bool has_environment_pom_sources() const {
+    if (!bridge_config_.parallax_materials || !environment_)
+      return false;
+    if (!environment_->material_targets.empty())
+      return true;
+    for (const auto &[region, resources] : environment_->resources) {
+      if (resources.count(::platform::prepared::EnvironmentRole::surface_materials) ||
+          resources.count(::platform::prepared::EnvironmentRole::ground_materials))
+        return true;
+    }
+    return false;
+  }
+
   std::shared_ptr<const ::platform::DeferredMaterialBinding>
   capture_deferred_material_binding(int32_t texture) override {
     VisualFloatScope preserve;
@@ -946,8 +1003,7 @@ public:
       return {};
     const bool normal_admission = lighting_.normals &&
         (!bridge_config_.native_material_sidecar.empty() ||
-         (bridge_config_.parallax_materials && environment_ &&
-          !environment_->material_targets.empty()));
+         has_environment_pom_sources());
     const auto fixture = capture_fixture_polygon(texture);
     if (!normal_admission && !fixture)
       return {};
@@ -964,6 +1020,10 @@ public:
     if (normal_admission) {
       receipt->surface_parameters = native_surface_parameters(key, texture);
       receipt->height_binding = native_height_binding(key, texture);
+      if (receipt->height_binding && receipt->surface_parameters[3] < 0.5f) {
+        const auto &record = receipt->height_binding->material;
+        receipt->surface_parameters = {record.roughness, record.reflectivity, record.metallic, 1.f};
+      }
       receipt->normal_index = surface_normal_index(receipt->key, true, texture);
     }
     return receipt;
@@ -984,8 +1044,7 @@ public:
     return fixture_producer_enabled() || fixture_trace_run().open() ||
            (lighting_.normals &&
             (!bridge_config_.native_material_sidecar.empty() ||
-             (bridge_config_.parallax_materials && environment_ &&
-              !environment_->material_targets.empty()) ||
+             has_environment_pom_sources() ||
              bridge_config_.trace_native_bindings));
   }
   bool wants_model_context() const override {
@@ -1337,6 +1396,25 @@ public:
           "Prepared materials: %llu per-pixel draws, %llu normal-map draws\n",
           static_cast<unsigned long long>(assets.lit_draws),
           static_cast<unsigned long long>(assets.normal_draws));
+    if (bridge_config_.parallax_materials) {
+      const char *quality_label =
+          bridge_config_.parallax_quality == 1U ? "low" : "high";
+      std::fprintf(
+          stderr,
+          "Parallax occlusion mapping (%s): %llu draws, %llu height uploads "
+          "(%llu bytes), %llu cache hits, %llu retired\n",
+          quality_label,
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_draws : 0ULL),
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_uploads : 0ULL),
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_uploaded_bytes : 0ULL),
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_cache_hits : 0ULL),
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_retired_images : 0ULL));
+    }
     cc_mw3_re::platform::unregister_window_handle(native_window_);
   }
 
@@ -2087,6 +2165,10 @@ private:
       const auto &slot = textures_.at(state.texture);
       draw.height_binding = deferred_height_binding(slot.surface_key, state.texture);
       if (draw.height_binding) {
+        if (draw.surface_parameters[3] < 0.5f) {
+          const auto &record = draw.height_binding->material;
+          draw.surface_parameters = {record.roughness, record.reflectivity, record.metallic, 1.f};
+        }
         // projection is selected from the producing view above.
         if (!(projection.near_z > 0) || !(projection.fx_near > 0) ||
             !(projection.fy_near > 0) || !(projection.far_z > projection.near_z) ||
@@ -3199,6 +3281,7 @@ private:
   // Submission number of the last queued resident present (0 = none), so the producer keeps at
   // most one presented frame in flight.
   std::size_t last_present_job_ = 0;
+  bool strict_wait_timed_out_ = false;
   std::mutex recycle_mutex_;
   std::vector<vk::Scene> recycled_scenes_;
   std::map<std::uint64_t, std::array<std::uint64_t, 3>> submitted_textures_;
@@ -3270,12 +3353,13 @@ private:
 RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
                                       const sdlfe::CoreCriticalQuality &quality,
                                       const sdlfe::CoreCriticalAssets &assets) {
-  if (assets.pom &&
+  const bool pom_requested = assets.pom || assets.pom_quality != 0U;
+  if (pom_requested &&
       (backend != sdlfe::RendererBackend::core_critical_dxgi &&
        backend != sdlfe::RendererBackend::core_critical_wsi))
     throw std::runtime_error(
         "--cc-pom 1 requires a Core Critical Vulkan backend");
-  if (assets.pom && assets.lighting != "normal")
+  if (pom_requested && assets.lighting != "normal")
     throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
   const bool water_detail_requested =
       assets.water_detail_explicit && assets.water_detail;
@@ -3330,7 +3414,9 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
     config.stock_headlights = assets.stock_headlights;
     config.headlight_bindings = assets.headlight_bindings;
   }
-  config.parallax_materials = assets.pom;
+  config.parallax_materials = pom_requested;
+  config.parallax_quality =
+      pom_requested ? (assets.pom_quality ? assets.pom_quality : 2U) : 0U;
   // These explicit launch options own surface detail for this session. They
   // are not inferred from development environment variables.
   config.water_detail = assets.water_detail_explicit && assets.water_detail;
@@ -3357,6 +3443,7 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   // from it.
   if (assets.benchmark_run) config.vsync = false;
   config.require_immediate_present = assets.benchmark_run != nullptr;
+  config.strict_swapchain_readback = assets.benchmark_run && assets.benchmark_run->strict();
   if (assets.benchmark_run && (config.cpu_profile || config.gpu_profile ||
                               config.vk_validation || config.detail_fixed_time ||
                               config.buffer_growth_trace || config.trace_native_bindings))

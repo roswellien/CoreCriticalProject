@@ -14,6 +14,8 @@
 #include <cstdio>
 
 #include "crt/msvc_math.h"
+#include "gamez/zclass/camera.h"
+#include "gamez/zutil/ztimer.h"
 #include "gamez/zvideo/zvid_format.h"
 #include "mech3/app.h"
 #include "mech3/pilot.h"
@@ -325,8 +327,9 @@ void CoreState::pick_renderer() {
 // silent; docs/discoveries.md).
 void CoreState::start_mission() {
   Engine& en = e();
+  const bool strict = en.replay_strict();
   en.timer_update();
-  en.sleep(30);
+  if (!strict) en.sleep(30);
   en.timer_update();
   // Ours (#485): this frame's action lists are a simulation step too, so with
   // the fixed step they run on 1/30 s, not on the time the sleep measured.
@@ -346,8 +349,11 @@ void CoreState::start_mission() {
     en.camera_set_5ea53c(0);
     en.camera_set_hse_test(0);  // the objects' hidden-surface test off with a card
   }
-  const float dt = en.frame_dt();
-  en.lists_update();
+  // The dummy view supplies the fade's still. Strict effects and action lists
+  // start at tick zero, and the fade must not tune LOD using wall-clock time.
+  const float dt = strict ? 0.0f : en.frame_dt();
+  if (strict) zcls::scene_walk().lod_dynamic = 0;
+  else en.lists_update();
   render_rect_ = en.render_rect();
   display_rect_ = en.display_rect();
   window_rect_ = en.window_rect();
@@ -372,6 +378,11 @@ void CoreState::start_mission() {
   }
   if (cockpit) en.node_set_active(en.vehicle_node(veh), 0);
   en.view_reset(en.player_view());
+  // Model draws read the global scaled step for texture cycles and lights.
+  // Freeze it for the still so those phases do not advance before tick zero.
+  float& frame_step = ztimer::state().dt;
+  const float saved_frame_step = frame_step;
+  if (strict) frame_step = 0.0f;
   en.vcall(en.player_view(), 0x08, {zgame::bits(dt)});
   en.vcall(en.player_view(), 0x04, {});
   if (cockpit) {
@@ -380,6 +391,7 @@ void CoreState::start_mission() {
     const Handle part = en.cockpit_node(veh);
     en.view_draw_node(en.field32(v, 0x4), part, en.field32(v, 0x14));
   }
+  if (strict) frame_step = saved_frame_step;
   en.ai_reset(0x604038);
   if (en.video_mode() != 0) {
     en.video_begin_3d();
@@ -449,8 +461,10 @@ bool CoreState::poll_and_run_lists(bool replay) {
     }
   }
   if (replay && !en.replay_before_lists()) return false;
-  en.lists_update();
-  if (replay) en.replay_after_lists();  // update the replay time, puppets and camera
+  if (!replay || en.replay_advance_lists()) {
+    en.lists_update();
+    if (replay) en.replay_after_lists();  // update the replay time and puppets
+  }
   return true;
 }
 
@@ -528,6 +542,9 @@ bool CoreState::frame() {
       if (engine) engine->replay_after_frame();
     }
   } replay_frame{replay ? &en : nullptr};
+  // The view's draw call emits the world synchronously. Strict ticks need
+  // their camera after the puppets are posed and before any draw path runs.
+  if (replay && en.replay_strict()) en.replay_camera();
   en.sound_update(0, 1);
   const Handle view = en.player_view();
   const Handle target = en.field32(view, 0x64);
@@ -608,7 +625,8 @@ void world_tick(Engine& en) {
   // Ours (#289): a 3D replay simulates nothing; only its camera runs.
   if (en.replay_on()) {
     en.camera_update();
-    return en.replay_camera();
+    if (!en.replay_strict()) en.replay_camera();
+    return;
   }
   en.sensors_update();
   en.missions_update(0x6098d0, en.frame_dt());

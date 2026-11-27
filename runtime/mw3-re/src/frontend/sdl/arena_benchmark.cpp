@@ -20,6 +20,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <wincodec.h>
+#include <wrl/client.h>
 #endif
 
 #include "nlohmann-json/json.hpp"
@@ -440,6 +442,88 @@ std::optional<Statistics> Measurements::statistics() const {
                       slowest > 0 ? 1000 * tail / slowest : 0};
 }
 
+StrictPlayback::StrictPlayback(std::vector<float> times, double start, std::function<double()> now)
+    : times_(std::move(times)), start_(static_cast<float>(start)), now_(std::move(now)) {
+    // Match state_times() so an included boundary tick starts with a zero delta.
+    if (times_.empty())
+        throw std::runtime_error("strict benchmark window has no recorded state ticks");
+    frames_.reserve(times_.size());
+}
+
+void hash_strict_pixels(StrictPresent &present, const uint8_t *pixels, size_t pixel_bytes,
+                        bool rgba, bool capture) {
+    present.pixel_hash.clear();
+    present.capture_bgra.clear();
+    if (pixel_bytes == 0 || pixel_bytes % 4 != 0)
+        return;
+
+    constexpr uint64_t prime = 1099511628211ULL;
+    uint64_t hash = 14695981039346656037ULL;
+    const size_t blue = rgba ? 2 : 0;
+    const size_t red = rgba ? 0 : 2;
+    if (capture)
+        present.capture_bgra.resize(pixel_bytes);
+    for (size_t offset = 0; offset < pixel_bytes; offset += 4) {
+        const std::array<uint8_t, 4> bgra{pixels[offset + blue], pixels[offset + 1],
+                                         pixels[offset + red], pixels[offset + 3]};
+        for (uint8_t channel : bgra)
+            hash = (hash ^ channel) * prime;
+        if (capture)
+            std::copy(bgra.begin(), bgra.end(), present.capture_bgra.data() + offset);
+    }
+    constexpr char digits[] = "0123456789abcdef";
+    present.pixel_hash.resize(16);
+    for (auto digit = present.pixel_hash.rbegin(); digit != present.pixel_hash.rend(); ++digit) {
+        *digit = digits[hash & 0xf];
+        hash >>= 4;
+    }
+}
+
+FrameTag StrictPlayback::pending_frame() const {
+    return issued_ > frames_.size() ? FrameTag{issued_, times_[issued_ - 1], {}} : FrameTag{};
+}
+
+std::optional<StrictTick> StrictPlayback::next(const PresentSource &wait) {
+    return advance(wait_for_pending(wait));
+}
+
+std::optional<StrictPresent> StrictPlayback::wait_for_pending(const PresentSource &wait) const {
+    if (!pending_frame().sequence)
+        return {};
+    const double deadline = now_() + kStrictPresentTimeoutSeconds;
+    auto present = wait(deadline);
+    if (now_() > deadline)
+        return {};
+    return present;
+}
+
+std::optional<StrictTick> StrictPlayback::advance(std::optional<StrictPresent> present) {
+    if (const auto pending = pending_frame(); pending.sequence) {
+        if (!present)
+            throw std::runtime_error("timed out waiting for strict worker present");
+        if (present->sequence != pending.sequence)
+            throw std::runtime_error("strict worker present sequence mismatch");
+        const auto &receipt = present->receipt;
+        if (receipt.acquire_result != 0 || receipt.present_result != 0)
+            throw std::runtime_error(
+                "strict Vulkan acquire/present failed: " + std::to_string(receipt.acquire_result) +
+                "/" + std::to_string(receipt.present_result));
+        if (!receipt.same_swapchain)
+            throw std::runtime_error("strict Vulkan swapchain changed");
+        if (!receipt.resident || receipt.present_count != 1)
+            throw std::runtime_error("strict tick requires exactly one resident worker present");
+        if (present->pixel_hash.empty())
+            throw std::runtime_error("strict worker present has no pixel hash");
+        frames_.push_back(std::move(*present));
+    }
+    if (finished())
+        return {};
+    const size_t index = issued_++;
+    const double time = times_[index];
+    const double previous = index == 0 ? start_ : times_[index - 1];
+    return StrictTick{index, time, time - start_, time - previous};
+}
+
 Run::Run(Scene selected, double log_start, int window_width, int window_height,
          std::filesystem::path output, std::optional<double> process_epoch,
          std::function<double()> now)
@@ -467,21 +551,188 @@ void Run::record_present(FrameTag frame, const PresentReceipt &receipt) {
     }
 }
 
+void Run::enable_strict(std::vector<float> times, std::optional<size_t> capture) {
+    strict_.emplace(std::move(times), log_start_time, [this] { return clock_.now(); });
+    if (capture && *capture >= strict_->size())
+        throw std::runtime_error("strict capture index is outside the recorded tick window");
+    capture_tick_ = capture;
+}
+
+void Run::record_strict_present(StrictPresent present) {
+    std::lock_guard lock(mutex_);
+    strict_presents_.push_back(std::move(present));
+}
+
+std::optional<StrictPresent> Run::take_strict_present() {
+    std::lock_guard lock(mutex_);
+    if (strict_presents_.empty())
+        return {};
+    auto present = std::move(strict_presents_.front());
+    strict_presents_.pop_front();
+    return present;
+}
+
+std::optional<StrictTick> Run::next_strict_tick(const StrictPlayback::PresentSource &wait) {
+    try {
+        if (failed())
+            return {};
+        auto present = strict_->wait_for_pending(wait);
+        // The worker and window callbacks may invalidate the pending tick while
+        // we wait. Accept its receipt under the same lock as invalidation.
+        std::lock_guard lock(mutex_);
+        if (strict_failure_)
+            return {};
+        if (present && !strict_presents_.empty()) {
+            strict_failure_ =
+                InvalidFrame{strict_->pending_frame(), "unexpected extra strict worker present"};
+            return {};
+        }
+        return strict_->advance(std::move(present));
+    } catch (const std::exception &error) {
+        invalidate(strict_->pending_frame(), error.what());
+        return {};
+    }
+}
+
 void Run::invalidate(FrameTag frame, std::string reason) {
     std::lock_guard lock(mutex_);
-    measurements_.invalidate(frame, std::move(reason));
+    if (strict()) {
+        if (!strict_failure_)
+            strict_failure_ = InvalidFrame{frame, std::move(reason)};
+    } else {
+        measurements_.invalidate(frame, std::move(reason));
+    }
 }
 
 bool Run::failed() const {
     std::lock_guard lock(mutex_);
-    return measurements_.failure().has_value();
+    return strict() ? strict_failure_.has_value() : measurements_.failure().has_value();
+}
+
+#ifdef _WIN32
+namespace {
+void save_strict_png(const std::filesystem::path &path, unsigned width, unsigned height,
+                     const std::vector<uint8_t> &bgra) {
+    const auto check = [](HRESULT result, const char *operation) {
+        if (FAILED(result))
+            throw std::runtime_error(std::string("strict PNG: ") + operation + " failed (" +
+                                     std::to_string(result) + ")");
+    };
+    const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (apartment != RPC_E_CHANGED_MODE)
+        check(apartment, "COM initialization");
+    struct Apartment {
+        bool owned;
+        ~Apartment() {
+            if (owned)
+                CoUninitialize();
+        }
+    } guard{SUCCEEDED(apartment)};
+    using Microsoft::WRL::ComPtr;
+    ComPtr<IWICImagingFactory> factory;
+    check(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                           IID_PPV_ARGS(factory.GetAddressOf())),
+          "imaging factory");
+    ComPtr<IWICStream> stream;
+    check(factory->CreateStream(stream.GetAddressOf()), "create stream");
+    check(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE), "open file");
+    ComPtr<IWICBitmapEncoder> encoder;
+    check(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, encoder.GetAddressOf()),
+          "create encoder");
+    check(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache), "initialize encoder");
+    ComPtr<IWICBitmapFrameEncode> frame;
+    check(encoder->CreateNewFrame(frame.GetAddressOf(), nullptr), "create image");
+    check(frame->Initialize(nullptr), "initialize image");
+    check(frame->SetSize(width, height), "set dimensions");
+    WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+    check(frame->SetPixelFormat(&format), "set pixel format");
+    if (format != GUID_WICPixelFormat32bppBGRA)
+        throw std::runtime_error("strict PNG: encoder does not accept BGRA8");
+    check(frame->WritePixels(height, width * 4, static_cast<UINT>(bgra.size()),
+                             const_cast<BYTE *>(bgra.data())),
+          "write pixels");
+    check(frame->Commit(), "commit image");
+    check(encoder->Commit(), "commit file");
+}
+} // namespace
+#endif
+
+bool Run::write_strict_results() {
+    if (!strict_->finished() && !strict_failure_)
+        strict_failure_ =
+            InvalidFrame{strict_->pending_frame(), "strict playback exited before final drain"};
+
+    Json frames = Json::array();
+    const auto &presents = strict_->frames();
+    for (size_t index = 0; index < presents.size(); ++index)
+        frames.push_back({{"tick", index},
+                          {"time_seconds", strict_->time(index)},
+                          {"pixel_hash", presents[index].pixel_hash}});
+
+    if (capture_tick_ && *capture_tick_ < presents.size()) {
+        const auto index = *capture_tick_;
+        const std::string name = "tick-" + std::to_string(index) + ".png";
+        const auto pending = output_ / (name + ".tmp");
+        try {
+#ifdef _WIN32
+            const auto &pixels = presents[index].capture_bgra;
+            if (pixels.size() != size_t(width) * height * 4)
+                throw std::runtime_error("strict PNG: missing captured pixels");
+            save_strict_png(pending, width, height, pixels);
+            std::filesystem::rename(pending, output_ / name);
+            frames[index]["capture"] = name;
+#else
+            throw std::runtime_error("strict PNG capture requires Windows");
+#endif
+        } catch (const std::exception &error) {
+            std::error_code ignored;
+            std::filesystem::remove(pending, ignored);
+            if (!strict_failure_)
+                strict_failure_ = InvalidFrame{{index + 1, strict_->time(index), {}}, error.what()};
+        }
+    }
+
+    Json result = {{"version", 1},
+                   {"mode", "strict"},
+                   {"valid", !strict_failure_},
+                   {"scene_id", scene.id},
+                   {"log_sha256", scene.log_sha256},
+                   {"width", width},
+                   {"height", height},
+                   {"pixel_hash_kind", "fnv1a64-swapchain-bgra8"},
+                   {"expected_ticks", strict_->size()},
+                   {"source_sha", source_sha},
+                   {"executable_sha256", executable_sha256},
+                   {"gpu", gpu},
+                   {"vulkan_driver_version", driver},
+                   {"settings", settings},
+                   {"frames", std::move(frames)}};
+    if (strict_failure_) {
+        const auto &failure = *strict_failure_;
+        result["failure"] = {{"reason", failure.reason}};
+        if (failure.frame.sequence) {
+            result["failure"]["tick"] = failure.frame.sequence - 1;
+            result["failure"]["time_seconds"] = failure.frame.replay_time;
+        }
+        std::fprintf(stderr, "mw3: strict benchmark failed: %s\n", failure.reason.c_str());
+    }
+
+    const auto pending = output_ / "strict.json.tmp";
+    std::ofstream output(pending, std::ios::binary);
+    output.exceptions(std::ios::failbit | std::ios::badbit);
+    output << result.dump(2) << '\n';
+    output.close();
+    std::filesystem::rename(pending, output_ / "strict.json");
+    return !strict_failure_;
 }
 
 bool Run::write_results() {
     std::lock_guard lock(mutex_);
-    if (!reached_end_)
-        measurements_.invalidate({}, "playback exited before measurement ended");
-    measurements_.finish(submitted_);
+    if (!strict()) {
+        if (!reached_end_)
+            measurements_.invalidate({}, "playback exited before measurement ended");
+        measurements_.finish(submitted_);
+    }
     require_empty_output(output_);
     std::filesystem::create_directories(output_);
     const auto write_lock = output_ / ".writing";
@@ -497,6 +748,9 @@ bool Run::write_results() {
     for (const auto &entry : std::filesystem::directory_iterator(output_))
         if (entry.path() != write_lock)
             throw std::runtime_error("benchmark output changed after validation");
+
+    if (strict())
+        return write_strict_results();
 
     const auto csv_path = output_ / "frames.csv";
     std::ofstream csv(csv_path, std::ios::binary);

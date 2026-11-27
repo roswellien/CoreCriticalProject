@@ -45,6 +45,10 @@ proven original producer scale factor.
 
 ## Compatibility identity (`asset_id`, `material_name`, `mesh_uv_hash`)
 
+A region-level environment catalog uses `mesh_uv_hash == 0` to identify a
+catalog whose records are selected through admitted texture and normal
+identities. Model-bound sidecars still require the exact mesh/UV digest.
+
 A surface-material sidecar is bound to a specific replacement asset and LOD
 geometry/UV layout so that switching appearances, skins, or meshes cannot
 silently inherit incompatible surface relief or thickness maps:
@@ -81,7 +85,7 @@ All multi-byte integers and IEEE-754 `binary32` floats are little-endian.
 | `8` | `uint32` | `version` | `1` = legacy RGBA8; `2` = grayscale scalar |
 | `12` | `uint32` | `batch_count` | `1..4096`; must match mesh/albedo batch count |
 | `16` | `uint32` | `record_count` | `0..4096` |
-| `20` | `uint32` | `image_count` | `0..512` |
+| `20` | `uint32` | `image_count` | `0..2048` |
 | `24` | `uint64` | `mesh_uv_hash` | 64-bit FNV-1a compatibility digest of the bound mesh/UV payload |
 
 ### 2. Batch binding table (`batch_count * 4` bytes)
@@ -144,7 +148,7 @@ with `role == 2` (`THICKNESS`).
 
 - Maximum material records per sidecar: `4096`
 - Maximum batch bindings per sidecar: `4096`
-- Maximum images per sidecar: `512`
+- Maximum images per sidecar: `2048`
 - Maximum UTF-8 bytes per identifier: `4096`
 - Maximum total sidecar size and decoded scalar-image byte budget per sidecar:
   `512 MiB` (`536,870,912` bytes). Both the Python and C++ readers check all

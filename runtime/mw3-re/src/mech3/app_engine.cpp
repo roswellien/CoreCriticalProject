@@ -700,6 +700,14 @@ void GameEngine::frame_keys_begin() {
 }
 
 bool GameEngine::replay_on() { return replay_hooks() != nullptr; }
+bool GameEngine::replay_strict() {
+  const ReplayHooks* replay = replay_hooks();
+  return replay && replay->strict();
+}
+bool GameEngine::replay_advance_lists() {
+  const ReplayHooks* replay = replay_hooks();
+  return !replay || replay->advance_lists();
+}
 void GameEngine::replay_start() {
   if (ReplayHooks* replay = replay_hooks()) replay->start();
 }

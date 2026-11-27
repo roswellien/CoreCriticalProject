@@ -4,7 +4,9 @@
 #include <vector>
 
 #include "check.h"
+#include "gamez/zclass/camera.h"
 #include "gamez/zreader/zreader.h"
+#include "gamez/zutil/ztimer.h"
 #include "mech3/app.h"
 #include "mech3/app_states.h"
 #include "mech3/options.h"
@@ -96,6 +98,48 @@ TEST(app_mission_music_can_pick_the_data_track) {
   mech3::states().core.start_mission();
   const std::vector<uint32_t> want9 = {9, 6};
   EXPECT(f.engine.last("music") == want9);
+}
+
+TEST(app_mission_dummy_draw_freezes_the_scaled_step_only_in_strict_mode) {
+  struct Engine : Log {
+    bool strict = true;
+    int timer_updates = 0;
+    std::vector<float> draw_steps;
+
+    bool replay_strict() override { return strict; }
+    void timer_update() override {
+      ++timer_updates;
+      ztimer::state().dt = timer_updates == 1 ? 0.25f : 0.125f;
+    }
+    uint32_t peek32(uint32_t address) override { return address == 0x5f4c8c ? 1 : 0; }
+    uint32_t vcall(zgame::Handle object, uint32_t slot, std::initializer_list<zgame::Arg>) override {
+      if (object == player_view() && slot == 0x04) draw_steps.push_back(ztimer::state().dt);
+      return 0;
+    }
+  } engine;
+  const auto saved_timer = ztimer::state();
+  const auto saved_lod_dynamic = zcls::scene_walk().lod_dynamic;
+  const auto saved_script = mech3::globals().script;
+  auto* previous_app = mech3::app_if_any();
+  mech3::Mech3App app(&engine);
+  mech3::set_app(&app);
+  mech3::CoreState core;
+  core.start_mission();
+  EXPECT(engine.timer_updates == 2);
+  EXPECT(engine.draw_steps == std::vector<float>{0.0f});
+  EXPECT(ztimer::state().dt == 0.125f);
+
+  engine.strict = false;
+  engine.timer_updates = 0;
+  engine.draw_steps.clear();
+  core.start_mission();
+  EXPECT(engine.timer_updates == 2);
+  EXPECT(engine.draw_steps == std::vector<float>{0.125f});
+  EXPECT(ztimer::state().dt == 0.125f);
+  mech3::set_app(previous_app);
+  mech3::globals().script = saved_script;
+  zcls::scene_walk().lod_dynamic = saved_lod_dynamic;
+  ztimer::state() = saved_timer;
 }
 
 TEST(app_main_menu_idles_into_the_attract_movie) {

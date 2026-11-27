@@ -404,6 +404,9 @@ add_library(mw3core STATIC
 )
 target_include_directories(mw3core PUBLIC src)
 target_link_libraries(mw3core PUBLIC cc_geometry_resources)
+if(WIN32)
+  target_link_libraries(mw3core PRIVATE ole32 windowscodecs)
+endif()
 if(MSVC)
   target_compile_options(mw3core PRIVATE /EHsc)
 endif()
@@ -751,7 +754,7 @@ add_executable(mw3tests
 if(WIN32)
   target_sources(mw3tests PRIVATE tools/windows/utf8.manifest)
 endif()
-target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export)
+target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export Threads::Threads)
 target_include_directories(mw3tests PRIVATE third_party)  # nlohmann-json, among others the arena log's records (#287)
 # Tests that read the player's install skip themselves when it is not there.
 target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"

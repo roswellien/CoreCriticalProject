@@ -783,8 +783,11 @@ static class NativeRuntimeLayoutChecks
                 Width = 1280, Height = 720, WindowMode = "windowed", RenderThread = true,
                 AntiAliasing = "fxaa", AnisotropicFiltering = 16, DrawDistance = 1200,
                 DynamicLighting = true, Shadows = true,
-                WaterDetail = false, CloudDetail = false, FlareStyle = "original"
+                WaterDetail = false, CloudDetail = false, FlareStyle = "original",
+                PomQuality = "high"
             };
+            if (new LauncherSettings().PomQuality != "off")
+                throw new Exception("Default LauncherSettings.PomQuality must be off.");
             var options = NativeGameRunner.PlanningOptionsForSettings(settings, contract,
                 NativeGameRunner.PreviewDrawDistance(settings.DrawDistance, out _),
                 new[] { mechs }, new[] { map, shared }, null, new[] { ui });
@@ -795,6 +798,7 @@ static class NativeRuntimeLayoutChecks
                 !wire["preview"]!["dynamic_lighting"]!.GetValue<bool>() ||
                 !wire["preview"]!["shadows"]!.GetValue<bool>() ||
                 wire["visuals"]!["pom"]!.GetValue<bool>() != true ||
+                wire["visuals"]!["pom_quality"]!.GetValue<string>() != "high" ||
                 wire["preview"]!["water_detail"]!.GetValue<bool>() ||
                 wire["preview"]!["cloud_detail"]!.GetValue<bool>())
                 throw new Exception("Native preview projection lost its schema, distance, dynamic lighting, shadows, POM or detail choices.");
@@ -809,7 +813,7 @@ static class NativeRuntimeLayoutChecks
                 argv[argv.IndexOf("--cc-sun-shadows") + 1] != "1" ||
                 argv[argv.IndexOf("--cc-flare-style") + 1] != "original")
                 throw new Exception("Native launcher dynamic lighting and shadows choices did not reach the runtime argv.");
-            var expectedTail = new[] { "--cc-pom", "1", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
+            var expectedTail = new[] { "--cc-pom", "high", "--cc-environment-packs-explicit", "--cc-draw-distance", "1200", "--cc-hud", "core-critical",
                 "--cc-hud-text", "1", "--cc-menu-background", Path.Combine(ui, "ui", "background.mwhd"),
                 "--cc-hud-artwork", ui, "--cc-geometry", "partial",
                 "--cc-model", "owens", "0", Path.Combine(mechs, "payload", "mesh.bin"), Path.Combine(mechs, "payload", "tex.bin"),

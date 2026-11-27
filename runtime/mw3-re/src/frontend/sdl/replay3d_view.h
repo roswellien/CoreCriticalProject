@@ -44,6 +44,8 @@ class Replay3dView : public mech3::ReplayHooks {
 
   void start() override;
   void scene_load_enter() override;
+  bool strict() const override;
+  bool advance_lists() const override;
   bool before_lists(bool quit_box_open) override;
   void after_lists() override;
   void after_frame() override;

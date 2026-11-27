@@ -59,7 +59,7 @@ if ($MyInvocation.InvocationName -ne '.') {
         if (!(Test-Path -LiteralPath (Join-Path $PublishDirectory $name) -PathType Leaf)) { throw "Incomplete launcher publication: $name" }
     }
     # A fresh publication only: the MW3-RE runtime and planner are copied in below, never reused.
-    foreach ($name in @('Runtime', 'user', 'native-inputs', 'NativePreview', 'Planner', 'Tools/PlannerPython')) {
+    foreach ($name in @('Runtime', 'user', 'native-inputs', 'NativePreview', 'Planner', 'Benchmark', 'Tools/PlannerPython')) {
         if (Test-Path -LiteralPath (Join-Path $PublishDirectory $name)) { throw "Use a fresh launcher publication; it must not already contain: $name" }
     }
     if ($NativePreviewDirectory) {
@@ -78,6 +78,17 @@ if ($MyInvocation.InvocationName -ne '.') {
     foreach ($plannerFile in @('mw3_re_launch.py', 'prepared_skin_packs.py', 'prepared_mech_packs.py',
             'content_capabilities.py', 'native_assets.py', 'legacy_content_capabilities.json')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../remaster-launcher/$plannerFile") -Destination (Join-Path $PublishDirectory "Planner/$plannerFile")
+    }
+    # The settings page's Run benchmark button runs this coordinator with the planner Python.
+    # It holds no game data: each player's replay logs are generated from their own install.
+    $benchmarkRoot = Join-Path $PublishDirectory 'Benchmark'
+    New-Item -ItemType Directory -Path (Join-Path $benchmarkRoot 'fixtures') | Out-Null
+    foreach ($benchmarkFile in @('player.py', 'run.py', 'freeze.py')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../benchmark/$benchmarkFile") -Destination (Join-Path $benchmarkRoot $benchmarkFile)
+    }
+    foreach ($fixture in @('suite-benchmark.json', 'c1mp1-4v4-reference.json', 'c2mp2-4v4-reference.json',
+            'c3mp1-4v4-reference.json', 'c4mp2-8v8-stress.json')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../benchmark/fixtures/$fixture") -Destination (Join-Path $benchmarkRoot "fixtures/$fixture")
     }
     $pythonRoot = Join-Path $PublishDirectory 'Tools/PlannerPython'
     if ($NativePreviewDirectory -or $PlannerPythonArchive) {
