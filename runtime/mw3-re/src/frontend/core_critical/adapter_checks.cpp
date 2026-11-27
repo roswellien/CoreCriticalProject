@@ -2416,9 +2416,12 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       geometry.key = 0x4241544348000001ULL;
       geometry.hash = 1;
       geometry.vertices.resize(3);
+      // The green value of 1 in the first texel keeps these fixtures RGBA8:
+      // pure colors are exact 16-bit data and would be stored at half the
+      // bytes these byte-cap checks count (#518).
       const auto texture = [](std::uint64_t key) {
         return TextureRef{key, 1, 2, 2, TexFormat::rgba8888, {},
-                          {0xff0000ff, 0xff00ff00, 0xffff0000, 0xffffffff}};
+                          {0xff0001ff, 0xff00ff00, 0xffff0000, 0xffffffff}};
       };
       Renderer mixed(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
       mixed.set_preload_batch_cap_for_test(256);
@@ -2677,8 +2680,9 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                   limited.preload_pending_count() == 0,
               "Preload staging or queued payload exceeded the hard byte cap");
       limited.begin_preload();
+      // Values of 1 keep it RGBA8 (64 bytes); at 16 bits it would fit the cap (#518).
       TextureRef oversized{24, 1, 4, 4, TexFormat::rgba8888, {},
-                           std::vector<std::uint32_t>(16, 0xffffffff)};
+                           std::vector<std::uint32_t>(16, 0xff0101ff)};
       require(!limited.preload_texture(oversized) && limited.preload_stopped() &&
                   !limited.partial_texture(24) && !limited.texture_resident(24) &&
                   limited.preload_allocation_attempts() == 4,

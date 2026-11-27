@@ -34,7 +34,7 @@ void log_texture_memory(const char *reason) noexcept {
       if (!texture.image)
         continue;
       rows.push_back({texture.source, texture.width, texture.height, texture.memory_size,
-                      false});
+                      texture.pack != mw34::texture_staging::Pack16::none});
     }
     rows.push_back({TextureSource::height, 0, 0, height_resident_bytes, false});
     const auto line =
