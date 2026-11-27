@@ -4,9 +4,11 @@
 #pragma once
 
 #include "frontend/sdl/game_health.h"
+#include "frontend/sdl/log.h"
 #include "platform/vk_loader.hpp"
 
 #include <algorithm>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -36,6 +38,17 @@ inline void print_memory_table(std::FILE* out, const std::vector<sdlfe::HeapFigu
   std::fflush(out);
 }
 
+// One device fault line, marked E so every line of the report, details included,
+// reaches mw3-problems.log beside its summary.
+inline void fault_line(std::FILE* out, const char* format, ...) {
+  const std::string mark = sdlfe::log::marked(sdlfe::log::Level::error, "");
+  std::fputs(mark.c_str(), out);
+  va_list args;
+  va_start(args, format);
+  std::vfprintf(out, format, args);
+  va_end(args);
+}
+
 #ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
 using DeviceFaultInfoFn = PFN_vkGetDeviceFaultInfoEXT;
 #else
@@ -49,7 +62,7 @@ inline void print_device_fault(std::FILE* out, VkDevice device, DeviceFaultInfoF
   try {
 #ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
     if (!device || !get_fault_info) {
-      std::fprintf(out, "mw3: device fault: not supported\n");
+      fault_line(out, "mw3: device fault: not supported\n");
       std::fflush(out);
       return;
     }
@@ -57,7 +70,7 @@ inline void print_device_fault(std::FILE* out, VkDevice device, DeviceFaultInfoF
     counts.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT;
     VkResult r = get_fault_info(device, &counts, nullptr);
     if (r != VK_SUCCESS && r != VK_INCOMPLETE) {
-      std::fprintf(out, "mw3: device fault: query failed (%d)\n", int(r));
+      fault_line(out, "mw3: device fault: query failed (%d)\n", int(r));
       std::fflush(out);
       return;
     }
@@ -73,31 +86,31 @@ inline void print_device_fault(std::FILE* out, VkDevice device, DeviceFaultInfoF
     info.pVendorInfos = vendor.empty() ? nullptr : vendor.data();
     r = get_fault_info(device, &counts, &info);
     if (r != VK_SUCCESS && r != VK_INCOMPLETE) {
-      std::fprintf(out, "mw3: device fault: query failed (%d)\n", int(r));
+      fault_line(out, "mw3: device fault: query failed (%d)\n", int(r));
       std::fflush(out);
       return;
     }
     const std::string description(info.description, strnlen(info.description, VK_MAX_DESCRIPTION_SIZE));
-    std::fprintf(out, "mw3: device fault: %s; %u addresses, %u vendor faults%s\n", description.c_str(),
+    fault_line(out, "mw3: device fault: %s; %u addresses, %u vendor faults%s\n", description.c_str(),
                  counts.addressInfoCount, counts.vendorInfoCount, r == VK_INCOMPLETE ? " (incomplete)" : "");
     unsigned printed = 0;
     for (std::uint32_t i = 0; i < counts.addressInfoCount && printed < kMaxDetail; ++i, ++printed)
-      std::fprintf(out, "mw3: device fault address type=%d address=0x%016llx precision=%llu\n",
+      fault_line(out, "mw3: device fault address type=%d address=0x%016llx precision=%llu\n",
                    int(addresses[i].addressType), (unsigned long long)addresses[i].reportedAddress,
                    (unsigned long long)addresses[i].addressPrecision);
     for (std::uint32_t i = 0; i < counts.vendorInfoCount && printed < kMaxDetail; ++i, ++printed) {
       const std::string text(vendor[i].description, strnlen(vendor[i].description, VK_MAX_DESCRIPTION_SIZE));
-      std::fprintf(out, "mw3: device fault vendor code=0x%llx data=0x%llx %s\n",
+      fault_line(out, "mw3: device fault vendor code=0x%llx data=0x%llx %s\n",
                    (unsigned long long)vendor[i].vendorFaultCode, (unsigned long long)vendor[i].vendorFaultData,
                    text.c_str());
     }
 #else
     (void)device, (void)get_fault_info;
-    std::fprintf(out, "mw3: device fault: not supported\n");
+    fault_line(out, "mw3: device fault: not supported\n");
 #endif
     std::fflush(out);
   } catch (...) {
-    std::fprintf(out, "mw3: device fault: query failed (exception)\n");
+    fault_line(out, "mw3: device fault: query failed (exception)\n");
     std::fflush(out);
   }
 }

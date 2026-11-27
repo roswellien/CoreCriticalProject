@@ -539,6 +539,8 @@ public static class ArenaMatchRunner
             line.StartsWith("Native readiness observation ended: ", StringComparison.Ordinal) ||
             line.StartsWith("mw3 (MechWarrior 3 rebuild) ", StringComparison.Ordinal) ||
             line.StartsWith("mw3: timing ", StringComparison.Ordinal) ||
+            line.StartsWith("mw3: header ", StringComparison.Ordinal) ||
+            line.StartsWith("mw3: first frame shown ", StringComparison.Ordinal) ||
             line.StartsWith("mw3: disk cache ", StringComparison.Ordinal) ||
             line.StartsWith("mw3: input bindings: ", StringComparison.Ordinal) ||
             line.StartsWith("mw3: install ", StringComparison.Ordinal) ||

@@ -47,6 +47,9 @@ public static class GameProblemsLog
         return new Problem(seconds, match.Groups["level"].Value[0], text, trimmed);
     }
 
+    /// <summary>True when the text holds at least one W or E line.</summary>
+    public static bool HasProblem(string text) => text.Split('\n').Any(line => Parse(line) != null);
+
     private const string FirstFrameMarker = "mw3: first frame shown ";
     private static readonly Regex StampedLine = new(
         @"\A\[(?<seconds>[0-9]{1,9}(?:\.[0-9]{1,6})?)\] [IWE] (?<text>.*)\z", RegexOptions.CultureInvariant);

@@ -620,6 +620,15 @@ static class PlaytestSupportChecks
             GameProblemsLog.PlayProblems(gameClockSession, 99000).Count == 1 &&
             GameProblemsLog.FirstProblemSummary(gameClockSession) == "play warning",
             "The game's own first-frame line did not set the cutoff, or the summary named a startup problem");
+        Check(!GameProblemsLog.HasProblem("[0.5] I mw3: header hdr=0\n[2.5] I mw3: first frame shown at 2500 ms\n") &&
+            GameProblemsLog.HasProblem("[0.5] I mw3: header hdr=0\n[3.0] E broken\n"),
+            "A problems log with only I lines counted as having a problem, or one with an E line did not");
+
+        // A tail that reaches back past the kept head starts where the head ends, on a whole line.
+        var shortLines = string.Concat(Enumerable.Range(0, 70000).Select(i => $"line {i:D8}\n"));
+        var cutWhole = ReportExport.CutLog(shortLines, shortLines.Length);
+        Check(cutWhole.Replace(ReportExport.CutMarker + "\n", "") == shortLines,
+            "Export's cut lost or split a line between its head and a tail covering the rest");
 
         // Export Report keeps a 5 MB log whole, and the new files get their own zip names.
         var wholeZip = Path.Combine(root, "report-521-whole.zip");
@@ -700,6 +709,16 @@ static class PlaytestSupportChecks
                 ["textures/b.PNG"] = new PackFile { Bytes = 24 },
                 ["audio/c.wav"] = new PackFile { Bytes = 5000 }
             } },
+            // Shaped like an installed texture pack's pack.json: payloads named by hash, typed by format.
+            new PackManifest { Id = "test.prepared", IsEnabled = true, Files = new Dictionary<string, PackFile>
+            {
+                ["textures/rtex1.zbd"] = new PackFile { Bytes = 4000, Format = "ZBD-texture-v1" },
+                ["payload/aa.bin"] = new PackFile { Bytes = 300, Format = "BWSNR3" },
+                ["payload/bb.bin"] = new PackFile { Bytes = 20, Format = "BWSNR2" },
+                ["payload/cc.bin"] = new PackFile { Bytes = 9000, Format = "MWFX1" },
+                ["lighting.json"] = new PackFile { Bytes = 9000, Format = "MW34-lighting-v1" },
+                ["ui/background.mwhd"] = new PackFile { Bytes = 5 }
+            } },
             new PackManifest { Id = "test.disabled", IsEnabled = false, Files = new Dictionary<string, PackFile>
             {
                 ["textures/a.dds"] = new PackFile { Bytes = 7 }
@@ -734,10 +753,13 @@ static class PlaytestSupportChecks
                 !h.TryGetProperty("favorite_color", out _),
                 "Report header did not parse the game's header lines as the contract says: " + h);
             var packTextures = h.GetProperty("pack_texture_bytes");
-            Check(packTextures.GetArrayLength() == 1 &&
+            Check(packTextures.GetArrayLength() == 2 &&
                 packTextures[0].GetProperty("id").GetString() == "test.textures" &&
-                packTextures[0].GetProperty("bytes").GetInt64() == 1024,
-                "Report header pack texture sizes counted non-textures, disabled packs or packs without textures");
+                packTextures[0].GetProperty("bytes").GetInt64() == 1024 &&
+                packTextures[1].GetProperty("id").GetString() == "test.prepared" &&
+                packTextures[1].GetProperty("bytes").GetInt64() == 4325,
+                "Report header pack texture sizes counted non-textures, disabled packs or packs without textures, " +
+                "or missed a prepared pack's texture formats");
             Check(devices.GetArrayLength() == 2 && devices[0].GetString() == "Flight Stick" &&
                 devices[1].GetString()!.Length <= ReportHeader.MaxTextLength &&
                 !devices[1].GetString()!.Contains("Jane Doe", StringComparison.Ordinal),

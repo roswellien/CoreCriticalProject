@@ -93,7 +93,7 @@ public static class ReportExport
                 if (zipBytes <= MaxExportZipBytes || logs.Count == 0) break;
                 if (attempt >= MaxCutAttempts)
                 {
-                    CutEveryLargeLog(logs, originals);
+                    CutEveryLargeLog(logs, originals, tailChars);
                     WriteZip(temporary, reportJson, logs);
                     break;
                 }
@@ -134,24 +134,29 @@ public static class ReportExport
 
     private const int LastResortTailChars = 64 * 1024;
 
-    private static void CutEveryLargeLog(List<(string ZipName, string Text)> logs, Dictionary<string, string> originals)
+    private static void CutEveryLargeLog(List<(string ZipName, string Text)> logs, Dictionary<string, string> originals,
+        Dictionary<string, int> tailChars)
     {
         for (var index = 0; index < logs.Count; index++)
         {
-            var original = originals[logs[index].ZipName];
-            if (original.Length > KeptLogHeadChars)
-                logs[index] = (logs[index].ZipName, CutLog(original, LastResortTailChars));
+            var name = logs[index].ZipName;
+            var original = originals[name];
+            if (original.Length <= KeptLogHeadChars) continue;
+            // Never longer than a tail the halving already chose.
+            var tail = tailChars.TryGetValue(name, out var kept) ? Math.Min(kept, LastResortTailChars) : LastResortTailChars;
+            logs[index] = (name, CutLog(original, tail));
         }
     }
 
     /// <summary>The log's first 1 MB and its last <paramref name="tailChars"/>, each on a line boundary.</summary>
-    internal static string CutLog(string text, int tailChars)
+    public static string CutLog(string text, int tailChars)
     {
         if (text.Length <= KeptLogHeadChars) return text;
         var head = text[..KeptLogHeadChars];
         var lastHeadNewline = head.LastIndexOf('\n');
         if (lastHeadNewline >= 0) head = head[..(lastHeadNewline + 1)];
-        var tail = UploadLogCuts.SliceTailOnLineBoundary(text[KeptLogHeadChars..], tailChars);
+        // From the head's own end, so a tail reaching back that far starts on a whole line.
+        var tail = UploadLogCuts.SliceTailOnLineBoundary(text[head.Length..], tailChars);
         return head + CutMarker + "\n" + tail;
     }
 

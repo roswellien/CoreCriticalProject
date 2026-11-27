@@ -1683,7 +1683,6 @@ public:
     settle();
     retire_height_images();
     ++render_frame_;
-    refresh_health_snapshot();  // #521: at most once a second; every frame renders here, shown or not
     // Stamp before any part of this frame can free (range backdrop captures
     // render first); its captures and batches reuse this scene's resources.
     mark_used_this_frame(s);
@@ -1708,6 +1707,9 @@ public:
     }
     if (!device)
       init();
+    // #521: at most once a second; every frame renders here, shown or not. After
+    // init(), so the first snapshot sees the heaps and the test hang has a device.
+    refresh_health_snapshot();
     if (s.width != width || s.height != height || scale_req != scale ||
         s.frontend_canvas != target_frontend)
       target(s.width, s.height, s.frontend_canvas);

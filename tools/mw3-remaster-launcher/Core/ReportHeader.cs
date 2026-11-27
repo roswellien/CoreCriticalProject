@@ -40,7 +40,14 @@ public static class ReportHeader
     private const int MaxInputDevices = 16;
     private const int MaxRefreshHz = 1000;
 
-    private static readonly string[] TextureExtensions = { ".dds", ".png", ".tga", ".bmp", ".ktx2" };
+    // Prepared packs name payloads by hash (payload/<sha256>.bin) and give their type in
+    // "format": world textures, mech textures, normal, surface normal and emission maps.
+    private static readonly HashSet<string> TextureFormats = new(StringComparer.Ordinal)
+    {
+        "ZBD-texture-v1", "BWTEX1", "BWNRM2", "BWSNR2", "BWSNR3", "BWMEM1"
+    };
+    // Files without a format: plain image files and the UI packs' raw images.
+    private static readonly string[] TextureExtensions = { ".dds", ".png", ".tga", ".bmp", ".ktx2", ".rgba", ".mwhd" };
     private static readonly string[] TextKeys = { "vulkan_device", "vulkan_api_version", "vulkan_driver_version", "window_mode" };
     private static readonly Regex Resolution = new(@"\A[0-9]{1,5}x[0-9]{1,5}\z", RegexOptions.CultureInvariant);
 
@@ -96,6 +103,10 @@ public static class ReportHeader
             int count;
             while (length < buffer.Length && (count = stream.Read(buffer, length, buffer.Length - length)) != 0)
                 length += count;
+            // A line (or a character) cut by the scan's end would parse short, and the first
+            // value per key wins, so drop the partial last line when the file goes on.
+            if (length < stream.Length)
+                length = Array.LastIndexOf(buffer, (byte)'\n', length - 1) + 1;
             return Encoding.UTF8.GetString(buffer, 0, length).Split('\n');
         }
         catch
@@ -177,7 +188,9 @@ public static class ReportHeader
             long textureBytes = 0;
             foreach (var (name, file) in pack.Files)
             {
-                var isTexture = TextureExtensions.Any(extension => name.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
+                var isTexture = string.IsNullOrEmpty(file.Format)
+                    ? TextureExtensions.Any(extension => name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+                    : TextureFormats.Contains(file.Format);
                 if (isTexture && file.Bytes > 0) textureBytes += file.Bytes;
             }
             if (textureBytes == 0) continue; // A pack without textures says nothing about video memory.

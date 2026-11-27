@@ -366,6 +366,9 @@ public static class PlaytestDiagnostics
             var isRunLog = wireKey == "native_run";
             var text = isRunLog ? TryReadRedactedWhole(path, roots) : TryReadRedactedTail(path, roots);
             if (string.IsNullOrEmpty(text)) continue;
+            // A problems log with only setup and event lines (level I) has no problem to show;
+            // mw3.log carries those lines anyway.
+            if (wireKey == "native_problems" && !GameProblemsLog.HasProblem(text)) continue;
             if (isRunLog)
             {
                 text = UploadLogCuts.WithLastHealthLines(text, cap);
