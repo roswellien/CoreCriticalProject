@@ -752,10 +752,6 @@ std::vector<NativeGroundRangeAdmission> native_geometry_admissions(
         admission.normal_index = surface_normal_index(slot.surface_key, true, material.texture);
         admission.surface_parameters = native_surface_parameters(slot.surface_key, material.texture);
         admission.height_binding = native_height_binding(slot.surface_key, material.texture);
-        if (admission.height_binding) {
-          const auto &record = admission.height_binding->material;
-          admission.surface_parameters = {record.roughness, record.reflectivity, record.metallic, 1.f};
-        }
         return admission;
       });
 }
@@ -913,11 +909,6 @@ std::shared_ptr<const CapturedNativeRigid> capture_original_rigid(
       out_range.normal_index = surface_normal_index(slot.surface_key, true, material.texture);
       out_range.surface_parameters = native_surface_parameters(slot.surface_key, material.texture);
       out_range.height_binding = native_height_binding(slot.surface_key, material.texture);
-      if (out_range.height_binding) {
-        const auto &record = out_range.height_binding->material;
-        out_range.surface_parameters =
-            {record.roughness, record.reflectivity, record.metallic, 1.f};
-      }
 
       auto albedo_it = local_albedo_images.find(material.texture);
       if (albedo_it == local_albedo_images.end()) {

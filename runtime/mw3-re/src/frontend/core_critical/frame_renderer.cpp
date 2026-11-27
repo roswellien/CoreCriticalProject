@@ -1020,10 +1020,6 @@ public:
     if (normal_admission) {
       receipt->surface_parameters = native_surface_parameters(key, texture);
       receipt->height_binding = native_height_binding(key, texture);
-      if (receipt->height_binding && receipt->surface_parameters[3] < 0.5f) {
-        const auto &record = receipt->height_binding->material;
-        receipt->surface_parameters = {record.roughness, record.reflectivity, record.metallic, 1.f};
-      }
       receipt->normal_index = surface_normal_index(receipt->key, true, texture);
     }
     return receipt;
@@ -2224,10 +2220,6 @@ private:
       const auto &slot = textures_.at(state.texture);
       draw.height_binding = deferred_height_binding(slot.surface_key, state.texture);
       if (draw.height_binding) {
-        if (draw.surface_parameters[3] < 0.5f) {
-          const auto &record = draw.height_binding->material;
-          draw.surface_parameters = {record.roughness, record.reflectivity, record.metallic, 1.f};
-        }
         // projection is selected from the producing view above.
         if (!(projection.near_z > 0) || !(projection.fx_near > 0) ||
             !(projection.fy_near > 0) || !(projection.far_z > projection.near_z) ||
