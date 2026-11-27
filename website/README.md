@@ -91,8 +91,10 @@ workflow. The generic unexpected-exit message is never grouped. Reports from a
 clean exit (exit code 0) are accepted only when the game's problems log they
 carry holds at least one warning or error line (`[<seconds>] W ...` or
 `[<seconds>] E ...`; its setup header lines alone don't count), and are titled
-"Problems" instead of "Crash"; their failure summary is the log's first error
-line (or first warning), so they group by problem like crashes. They share the
+"Problems" instead of "Crash". As for crashes, the launcher sets the failure
+summary: for these, the first error line (or first warning) logged after the
+game's first frame, so they group by problem like crashes. The service only
+requires it to be non-blank; like the logs, it is the client's word. They share the
 daily new-issue limit with crash reports; if they start crowding out crashes,
 lower their share or give them a limit of their own. The launcher
 displays a short report ID, not a private GitHub URL.
