@@ -134,7 +134,7 @@ def frame(root, title, description, content, nested=False):
         f'<meta name="description" content="{escape(description, quote=True)}"><meta name="theme-color" content="#141717">'
         f'<title>{escape(title)} — Core Critical</title><link rel="icon" href="{prefix}assets/plates/brand-mark-64.png" type="image/png">'
         f'<link rel="alternate" type="application/rss+xml" title="Core Critical MechLab" href="{prefix}feed.xml">'
-        f'<link rel="stylesheet" href="{prefix}styles.css?v=20261128"><script src="{prefix}site.js?v=20261128" defer></script></head>'
+        f'<link rel="stylesheet" href="{prefix}styles.css?v=20261130"><script src="{prefix}site.js?v=20261130" defer></script></head>'
         '<body class="interior overview"><a class="skip-link" href="#main">Skip to content</a>' + header + '<main id="main">' + content + '</main>' + footer + '</body></html>\n')
 
 def render_site(root, out, notes):

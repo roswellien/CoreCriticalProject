@@ -29,8 +29,9 @@ built against, by their number in [contracts.md](contracts.md).
 
 ### A. Contracts and example packs
 
-- **Owns:** `docs/packs/`, the schema files and the shared example packs (location to be
-  chosen in A's first task; no original game files in them).
+- **Owns:** `docs/packs/` with its schema files in `docs/packs/schemas/`, the shared
+  example packs in `tests/fixtures/packs/` (no original game files in them), and the
+  pack check in `tools/packs/`.
 - **Delivers:** each contract's open questions closed, a schema file per contract, and a
   small set of example packs: one valid pack of each kind, and one broken pack per rule a
   contract states.
@@ -75,7 +76,8 @@ built against, by their number in [contracts.md](contracts.md).
 
 ### E. Authoring tools
 
-- **Owns:** `games/mw3/mod-tools/`.
+- **Owns:** `games/mw3/mod-tools/`. It builds on workstream A's `tools/packs/` and asks A
+  for changes there.
 - **Uses:** contracts 1, 3 and 4.
 - **Delivers:** a pack builder that writes `pack.json` and the file hashes, a checker
   that runs the runtime's content report on a pack folder, starter packs, and Mod Studio

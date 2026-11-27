@@ -83,14 +83,8 @@ def media_nav(active, nested=False):
 
 
 def page(root, title, description, content, nested=False):
+    # frame() already copies the shared site header, so only the current-page mark is added here.
     html = frame(root, title, description, content, nested)
-    home = (root / 'index.html').read_text(encoding='utf-8')
-    nav = home[home.index('<nav class="primary-nav"'):home.index('</nav>') + 6]
-    if nested:
-        import re
-        nav = re.sub(r'href="(?!https?://)([^"]+)"', r'href="../\1"', nav)
-    old_nav = html[html.index('<nav class="primary-nav"'):html.index('</nav>') + 6]
-    html = html.replace(old_nav, nav)
     href = '../media.html' if nested else 'media.html'
     return html.replace(f'href="{href}">Media', f'href="{href}" aria-current="page">Media')
 

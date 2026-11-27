@@ -20,9 +20,6 @@ document.addEventListener("click", (event) => {
 document
     .querySelectorAll(".primary-nav a")
     .forEach((link) => link.addEventListener("click", () => closeMenu()));
-window.matchMedia("(min-width: 761px)").addEventListener("change", (event) => {
-    if (event.matches) closeMenu();
-});
 const activePage = (window.location.pathname.split("/").pop() || "index").replace(/\.html$/, "");
 document.querySelectorAll(".primary-nav a").forEach((link) => {
     if (link.getAttribute("href")?.replace(/\.html$/, "") === activePage)

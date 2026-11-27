@@ -72,13 +72,15 @@ class SelectionTests(unittest.TestCase):
             return [item.name for item in check.selected_checks(only, areas)]
 
     def test_default_run_is_the_ci_checks_in_order(self):
-        self.assertEqual(self.names(), ["build", "ctest", "format-check", "style"])
+        expected = ["build", "ctest", "format-check", "style", "pack-contracts"]
+        self.assertEqual(self.names(), expected)
 
     def test_only_keeps_table_order(self):
         self.assertEqual(self.names(only=["style", "build"]), ["build", "style"])
 
     def test_launcher_area_adds_both_launcher_checks(self):
-        expected = ["build", "ctest", "format-check", "style", "launcher-wpf", "launcher-dispatch"]
+        expected = ["build", "ctest", "format-check", "style", "pack-contracts"]
+        expected += ["launcher-wpf", "launcher-dispatch"]
         self.assertEqual(self.names(areas=["launcher"]), expected)
 
     def test_windows_only_check_elsewhere_is_not_run_and_exits_2(self):
