@@ -67,6 +67,14 @@ class MovieShapePlay {
 // (spaces as _), its frames and its picture's size: "intro/2737/640x480".
 std::string movie_shape_key(const std::string& path, uint32_t frames, int32_t width, int32_t height);
 
+// A key taken back apart into what movie_shape_key put in it.
+struct MovieShapeKeyParts {
+  std::string name;
+  int32_t frames = 0, width = 0, height = 0;
+};
+// False when `key` isn't in movie_shape_key's form.
+bool movie_shape_key_parts(const std::string& key, MovieShapeKeyParts* parts);
+
 // The cache's line for one movie: its key (name, frames, size), then the runs.
 std::string movie_shape_line(const std::string& key, const std::vector<MovieShapeRun>& runs);
 bool movie_shape_parse(const std::string& line, std::string* key, std::vector<MovieShapeRun>* runs);

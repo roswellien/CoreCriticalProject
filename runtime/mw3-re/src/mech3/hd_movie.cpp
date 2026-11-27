@@ -84,23 +84,20 @@ void HdFrameQueue::stop() {
 }
 
 std::string hd_movie_name(const char* avi_path) {
-  const std::string key = movie_shape_key(avi_path ? avi_path : "", 0, 0, 0);  // "name/0/0x0"
-  return key.substr(0, key.find('/'));
+  MovieShapeKeyParts parts;
+  movie_shape_key_parts(movie_shape_key(avi_path ? avi_path : "", 0, 0, 0), &parts);
+  return parts.name;
 }
 
 bool hd_movie_table(const std::string& name, int* frames, int* width, int* height) {
   for (const std::string& line : movie_shape_table()) {
-    // "intro/2737/640x480 0:79-400": the key's name, frames and size.
-    const std::string key = line.substr(0, line.find(' '));
-    const size_t first_slash = key.find('/');
-    const size_t second_slash = key.find('/', first_slash + 1);
-    if (first_slash == std::string::npos || second_slash == std::string::npos) continue;
-    if (key.compare(0, first_slash, name) != 0 || first_slash != name.size()) continue;
-    int table_width = 0, table_height = 0;
-    const int table_frames = std::atoi(key.c_str() + first_slash + 1);
-    if (std::sscanf(key.c_str() + second_slash + 1, "%dx%d", &table_width, &table_height) != 2) return false;
-    *frames = table_frames, *width = table_width, *height = table_height;
-    return table_frames > 0 && table_width > 0 && table_height > 0;
+    std::string key;
+    std::vector<MovieShapeRun> runs;
+    MovieShapeKeyParts parts;
+    if (!movie_shape_parse(line, &key, &runs) || !movie_shape_key_parts(key, &parts)) continue;
+    if (parts.name != name) continue;
+    *frames = parts.frames, *width = parts.width, *height = parts.height;
+    return parts.frames > 0 && parts.width > 0 && parts.height > 0;
   }
   return false;
 }
