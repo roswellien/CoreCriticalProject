@@ -13,7 +13,7 @@ static class GraphicsPreferencesChecks
             var settings=new SettingsManager(root,root);
             if(settings.Current.InitialSetupCompleted || settings.Current.DynamicLighting || settings.Current.Shadows || settings.Current.Headlights ||
                !settings.Current.WaterDetail || !settings.Current.CloudDetail || settings.Current.DrawDistance != 800 ||
-               settings.Current.FlareStyle != "modern" || settings.Current.Vsync)
+               settings.Current.FlareStyle != "modern" || settings.Current.Vsync || !settings.Current.UpscaledCutscenes)
                 throw new Exception("Fresh setup must start with stock lighting and remain incomplete");
             settings.Current.ActivePacks.Add("test.keep-pack");
             settings.Save();
@@ -31,6 +31,10 @@ static class GraphicsPreferencesChecks
             settings.Save();
             if (new SettingsManager(root, root).Current.Vsync)
                 throw new Exception("Turning VSync off did not persist.");
+            (choice with { UpscaledCutscenes = false }).ApplyTo(settings.Current);
+            settings.Save();
+            if (new SettingsManager(root, root).Current.UpscaledCutscenes)
+                throw new Exception("Turning Upscaled cutscenes off did not persist.");
             var headlightStore=new HeadlightBindings(root);
             if(headlightStore.Load()!=new HeadlightBinding())throw new Exception("Fresh headlight settings must default to L");
             var nativeSession=Path.Combine(root,"headlight-native");

@@ -45,7 +45,7 @@ class InstalledPreparationTests(unittest.TestCase):
         self.assertEqual(repo_caps, producer._DEFAULT_CAPABILITIES + (
             ("prepared-mechs", (1,)), ("mesh-payload", (1, 2, 3, 4, 5, 6, 7)),
             ("normal-map", (1, 2, 3)), ("surface-materials", (1,)),
-            ("environment-resources", (1,)), ("c1-height-stream", (1,)),
+            ("environment-resources", (1,)), ("c1-height-stream", (1,)), ("hd-movie", (1,)),
         ))
         with tempfile.TemporaryDirectory() as temporary:
             old_source = Path(temporary)
@@ -80,6 +80,14 @@ class InstalledPreparationTests(unittest.TestCase):
             core_critical.mkdir(parents=True)
             (core_critical / "frame_renderer.cpp").write_text("config.vsync = assets.vsync;\n", encoding="utf-8")
             self.assertEqual(producer._source_capabilities(capable_source), producer._DEFAULT_CAPABILITIES)
+            # HD movies need the option, its parser assignment and the decoder source.
+            main_source.write_text(main_source.read_text(encoding="utf-8") + "--hd-movie\na.hd_movies[name] =\n",
+                                   encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(capable_source), producer._DEFAULT_CAPABILITIES)
+            (capable_source / "runtime/mw3-re/src/mech3").mkdir(parents=True)
+            (capable_source / "runtime/mw3-re/src/mech3/hd_movie_mf.cpp").write_text("// decoder\n", encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(capable_source),
+                             producer._DEFAULT_CAPABILITIES + (("hd-movie", (1,)),))
 
     def test_sdl3_sound_recipe_pins_version_and_enables_selected_sdk(self):
         import stage_mw3_re_runtime as producer

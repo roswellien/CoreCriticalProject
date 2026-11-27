@@ -35,6 +35,7 @@ public partial class GraphicsPreferencesPanel : UserControl
             Select(ComboPomQuality, settings.PomQuality is "low" or "high" ? settings.PomQuality : "off");
             ChkLoadCache.IsChecked = settings.LoadCache;
             ChkVsync.IsChecked = settings.Vsync;
+            ChkUpscaledCutscenes.IsChecked = settings.UpscaledCutscenes;
         }
         finally { _loading = false; }
     }
@@ -49,7 +50,7 @@ public partial class GraphicsPreferencesPanel : UserControl
             ChkDynamicLighting.IsChecked == true, ChkShadows.IsChecked == true,
             ChkHeadlights.IsChecked == true, ChkWaterDetail.IsChecked == true,
             ChkCloudDetail.IsChecked == true, Value(ComboFlareStyle), ChkLoadCache.IsChecked == true,
-            ChkVsync.IsChecked == true, Value(ComboPomQuality));
+            ChkVsync.IsChecked == true, Value(ComboPomQuality), ChkUpscaledCutscenes.IsChecked == true);
         result.Validate();
         return result;
     }

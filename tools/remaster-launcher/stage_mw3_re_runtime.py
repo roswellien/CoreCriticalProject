@@ -605,6 +605,12 @@ def _source_capabilities(source):
     if (_file_contains_bytes(environment_reader, b"MW34-c1-height-stream-v1")
             and _file_contains_bytes(renderer_source, b"void select_terrain_cell(")):
         caps.extend((("environment-resources", (1,)), ("c1-height-stream", (1,))))
+    # The launcher's Upscaled cutscenes setting passes --hd-movie only when the runtime both parses
+    # it and has the Windows decoder that plays the clips (#559, #625).
+    if (_file_contains_bytes(main_source, b"--hd-movie")
+            and _file_contains_bytes(main_source, b"a.hd_movies[name] =")
+            and (source / "runtime/mw3-re/src/mech3/hd_movie_mf.cpp").is_file()):
+        caps.append(("hd-movie", (1,)))
     return tuple(caps)
 
 
