@@ -4577,6 +4577,8 @@ public:
   // Checks only: switch 16-bit formats off (a mask of pack16_bit values), on
   // top of what the device supports.
   void set_pack16_disabled_for_test(unsigned mask) { pack16_disabled_for_test_ = mask; }
+  // The 16-bit formats textures may use now (the device's, less the checks' mask).
+  unsigned pack16_allowed_for_test() const { return pack16_allowed(); }
   // Copies a resident texture's base level back to the CPU, so checks can
   // compare what reached the card with what staging should have written: RGBA8
   // texels as they are, and a 16-bit image's texels each as its 16-bit value.
