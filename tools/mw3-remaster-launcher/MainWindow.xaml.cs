@@ -1124,6 +1124,77 @@ namespace MW3RemasterLauncher
             }
         }
 
+        private System.Threading.CancellationTokenSource? _benchmarkCancellation;
+
+        private async void BtnRunBenchmark_Click(object sender, RoutedEventArgs e)
+        {
+            if (_nativeSessionActive || _launchPreparing || _assetInstallActive)
+            {
+                MessageBox.Show(this, "Close the current game session before running the benchmark.", "Graphics benchmark",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            // Settings are saved as they change, and the benchmark reads that saved file through
+            // the Play planner, so it uses the same graphics settings and packs Play would.
+            _settingsMgr.Save();
+            _nativeSessionActive = true; // Blocks Play, pack installs and update prompts meanwhile.
+            // Restore exactly these afterwards: Play may have been disabled for another reason.
+            var playWasEnabled = BtnLaunchGame.IsEnabled;
+            var installWasEnabled = BtnInstallPack.IsEnabled;
+            var packsWereEnabled = ListPacks.IsEnabled;
+            BtnLaunchGame.IsEnabled = false;
+            BtnInstallPack.IsEnabled = false;
+            ListPacks.IsEnabled = false;
+            BtnRunBenchmark.IsEnabled = false;
+            BtnCancelBenchmark.Visibility = Visibility.Visible;
+            TxtBenchmarkResult.Visibility = Visibility.Collapsed;
+            TxtBenchmarkStatus.Visibility = Visibility.Visible;
+            TxtBenchmarkStatus.Foreground = (System.Windows.Media.Brush)FindResource("BrushMuted");
+            TxtBenchmarkStatus.Text = "Starting the benchmark...";
+            _benchmarkCancellation = new System.Threading.CancellationTokenSource();
+            try
+            {
+                var runner = new BenchmarkRunner(_basePath, _nativeGameRunner);
+                var outcome = await runner.RunAsync(
+                    // RunAsync resumes on the UI thread, so progress can update the page directly.
+                    item => TxtBenchmarkStatus.Text = BenchmarkRunner.DescribeProgress(item),
+                    _benchmarkCancellation.Token);
+                if (outcome.Report is { } report)
+                {
+                    TxtBenchmarkStatus.Text = report.Gpu is { } gpu ? $"Finished on {gpu}." : "Finished.";
+                    TxtBenchmarkResult.Text = BenchmarkRunner.FormatReport(report);
+                    TxtBenchmarkResult.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    TxtBenchmarkStatus.Foreground = (System.Windows.Media.Brush)FindResource("BrushAmber");
+                    TxtBenchmarkStatus.Text = BenchmarkRunner.DescribeError(outcome);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                TxtBenchmarkStatus.Text = "Benchmark cancelled.";
+            }
+            catch (Exception error)
+            {
+                TxtBenchmarkStatus.Foreground = (System.Windows.Media.Brush)FindResource("BrushAmber");
+                TxtBenchmarkStatus.Text = "The benchmark could not run: " + error.Message;
+            }
+            finally
+            {
+                _benchmarkCancellation.Dispose();
+                _benchmarkCancellation = null;
+                BtnCancelBenchmark.Visibility = Visibility.Collapsed;
+                BtnRunBenchmark.IsEnabled = true;
+                _nativeSessionActive = false;
+                BtnLaunchGame.IsEnabled = playWasEnabled;
+                BtnInstallPack.IsEnabled = installWasEnabled;
+                ListPacks.IsEnabled = packsWereEnabled;
+            }
+        }
+
+        private void BtnCancelBenchmark_Click(object sender, RoutedEventArgs e) => _benchmarkCancellation?.Cancel();
+
         private async void BtnExportReport_Click(object sender, RoutedEventArgs e)
         {
             var launchLog = CurrentLaunchLog();

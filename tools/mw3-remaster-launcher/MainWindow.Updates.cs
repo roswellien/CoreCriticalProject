@@ -148,6 +148,7 @@ public partial class MainWindow
         StopAssetPackUpdateChecks();
         _updateNotificationTimer?.Stop();
         _updateNotificationCancellation?.Cancel();
+        _benchmarkCancellation?.Cancel(); // Stops the coordinator and any benchmark game process.
         base.OnClosed(e);
     }
 }
