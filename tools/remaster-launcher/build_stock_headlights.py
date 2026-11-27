@@ -113,7 +113,7 @@ def _lamp(lamp: object, profile_name: str) -> bytes:
     color = _vector(lamp["color"], "lamp color", 0, 1)
     scalars = (
         _number(lamp["intensity"], "lamp intensity", 0, 8),
-        _number(lamp["range"], "lamp range", 1, 300),
+        _number(lamp["range"], "lamp range", 1, 315),
         _number(lamp["inner_angle"], "lamp inner angle", 0, 89),
         _number(lamp["outer_angle"], "lamp outer angle", 0, 89),
     )

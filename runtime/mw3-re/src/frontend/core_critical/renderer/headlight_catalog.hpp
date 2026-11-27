@@ -68,7 +68,7 @@ inline std::vector<Lamp> read_lamps(Number number, Text text, Fail fail, bool do
         for (auto& v : light.direction) v = float(v / length);
         for (auto& v : light.color) v = scalar(0, 1);
         light.intensity = scalar(0, 8);
-        light.range = scalar(1, donor ? 256 : 300);
+        light.range = scalar(1, donor ? 256 : 315);
         light.inner_angle = scalar(0, 89);
         light.outer_angle = scalar(0, 89);
         if (light.inner_angle >= light.outer_angle) fail();
