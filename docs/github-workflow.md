@@ -399,12 +399,11 @@ agents must not invent a direct-push exception.
 
 ### Launcher publication gate
 
-For each approved launcher release, including native MW3-RE changes shipped
-inside it, the release operator completes these steps on the same Release
-checklist issue. A live feed by itself is not a completed release.
+This gate covers launcher releases and MW3-RE runtime updates. Complete these
+steps on the same Release checklist issue.
 
 1. Before promoting the feed, prepare one GitHub Release draft for the
-   exact launcher version, against the reviewed source SHA recorded in the
+   exact release version, against the reviewed source SHA recorded in the
    build receipt. Check that the source commit contains the
    [Discord release observer](../.github/workflows/discord-release-detect.yml).
    For a preview, use the matching `vX.Y.Z-preview` tag and prerelease flag;
@@ -413,17 +412,17 @@ checklist issue. A live feed by itself is not a completed release.
    and compare the commit SHA with the signed build receipt before publishing.
    If it differs, stop and report the mismatch; changing the release target
    does not override an existing tag. Do not move tags or create duplicates.
-2. Describe player-facing launcher and bundled MW3-RE changes in the release
-   notes. End the notes with `<!-- corecritical-discord-targets: corecritical=X.Y.Z -->`,
-   substituting the numeric signed launcher version, without the tag suffix.
-   The bundled native runtime ships through the launcher. The retired legacy
-   runtime is not a new release target or an announcement prerequisite. Do
-   not attach protected artifacts or include private download references in
-   the announcement summary.
+2. Describe player-facing changes in the release notes. End the notes with
+   the [release target marker][release-target-marker] listing every affected
+   target and its numeric signed version. Use `corecritical` for the launcher
+   and `mw3` for the MW3-RE runtime. The tag's numeric version must match one
+   of the listed versions. A preview's marker has no `-preview` suffix. Do not
+   attach protected artifacts or include private download references in the
+   announcement summary.
 3. After the existing signing, install and update checks pass, promote the
-   signed feed and verify that its live launcher entry matches the tested
-   bundle. Then publish the draft via GitHub's release UI or another
-   authorized maintainer publisher that emits `release: published`.
+   signed feed and verify that every affected live catalog entry matches its
+   tested signed package. Then publish the draft via GitHub's release UI or
+   another authorized maintainer publisher that emits `release: published`.
    A tag, draft, or publish using Actions' built-in `GITHUB_TOKEN` will not
    trigger the release announcement.
 4. Check the published release URL, tag, source commit, notes, and release
@@ -434,6 +433,9 @@ checklist issue. A live feed by itself is not a completed release.
    [announcement recovery instructions](../tools/github/discord-release-announcement.md#recovery)
    rather than recreating a tag, deleting a reservation or guessing whether
    a post was sent.
+
+[release-target-marker]:
+   ../tools/github/discord-release-announcement.md#labeling-releases
 
 ## Synchronize the branches
 

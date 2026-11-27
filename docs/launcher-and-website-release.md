@@ -181,7 +181,15 @@ inputs and release artifacts outside Git.
    update objects, download them through the Worker and verify full SHA-256,
    byte count and a resumed Range request as well.
 
-8. **Promote the feed last.** Extend the existing Worker's `PUBLIC_OBJECTS`
+8. **Prepare the GitHub Release draft.** Draft the release for the exact
+   version against the recorded source SHA. Check for an existing tag or
+   release and verify that any existing tag resolves to that SHA. Confirm
+   the Discord release observer is present in the source commit. Add release
+   notes with the target marker. Follow the
+   [launcher publication gate](github-workflow.md#launcher-publication-gate)
+   for tag, preview and marker rules.
+
+9. **Promote the signed feed.** Extend the existing Worker's `PUBLIC_OBJECTS`
    allowlist with the four exact new update metadata/package paths and byte
    counts from `publication.json`, retaining every existing entry. In the
    Cloudflare dashboard, open Workers & Pages → `core-critical-updates` →
@@ -202,22 +210,22 @@ inputs and release artifacts outside Git.
    The exact upload/readback and catalog checks are also documented in
    [`tools/update-service/README.md`](../tools/update-service/README.md).
 
-9. **Verify the protected Setup listing.** Read back both playtest Setup
-   catalog snapshots from these R2 keys: for each of `r1` and `r2`,
-   `packs/2026-10-21-<revision>/index.html`,
-   `packs/2026-10-21-<revision>/packs.json` and
-   `packs/2026-10-21-<revision>/SHA256SUMS.txt`. Verify only the intended
-   setup rows, release fields and checksum lines changed; retain every existing
-   pack, asset and native-update row. Read the objects back after upload, then
-   check the versioned installer URL and download filename through
-   `playtest.corecritical.dev`. Keep this protected installer publication
-   separate from the public update-only feed.
+10. **Verify the protected Setup listing.** Read back both playtest Setup
+    catalog snapshots from these R2 keys: for each of `r1` and `r2`,
+    `packs/2026-10-21-<revision>/index.html`,
+    `packs/2026-10-21-<revision>/packs.json` and
+    `packs/2026-10-21-<revision>/SHA256SUMS.txt`. Verify only the intended
+    setup rows, release fields and checksum lines changed; retain every existing
+    pack, asset and native-update row. Read the objects back after upload, then
+    check the versioned installer URL and download filename through
+    `playtest.corecritical.dev`. Keep this protected installer publication
+    separate from the public update-only feed.
 
-10. **Publish and verify the matching GitHub Release.** Prepare the draft
-    before feed promotion and publish only after the live signed feed is
-    verified. Follow the
+11. **Publish the draft and verify the receipts.** After verifying the live
+    signed feed, publish the draft. Follow the
     [launcher publication gate](github-workflow.md#launcher-publication-gate)
-    for the launcher-only marker and the GitHub and Discord receipts.
+    to verify the GitHub Release and Discord announcement and record their
+    URLs and the signed catalog sequence on the release checklist issue.
 
 ## Website deployment
 

@@ -26,7 +26,7 @@ body:
       label: Products in this release
       options:
         - label: Launcher
-        - label: Native MW3-RE bundled in the launcher
+        - label: MW3-RE runtime
         - label: Packs
   - type: checkboxes
     id: checklist
@@ -40,7 +40,15 @@ body:
         - label: Install, update and rollback tested.
         - label: Site links, download names and checksums match the build receipt.
         - label: Historical artifacts and compatibility URLs kept.
-        - label: If shipping the launcher, Matching GitHub Release drafted against the verified source SHA before feed promotion.
-        - label: If shipping the launcher, Launcher-only release marker matches the signed launcher version.
-        - label: If shipping the launcher, Matching GitHub Release published after live signed feed verification.
-        - label: If shipping the launcher, GitHub Release URL and Discord announcement URL recorded on this issue.
+        - label: >-
+            If shipping the launcher or MW3-RE runtime, matching GitHub Release
+            drafted against the verified source SHA before feed promotion.
+        - label: >-
+            Release target marker lists each affected target's numeric signed
+            version.
+        - label: >-
+            If shipping the launcher or MW3-RE runtime, matching GitHub Release
+            published after live signed feed verification.
+        - label: >-
+            If shipping the launcher or MW3-RE runtime, GitHub Release URL and
+            Discord announcement URL recorded on this issue.
