@@ -336,10 +336,15 @@ class GameFmvHost : public zfmv::Host {
     auto known = hd_valid_.find(name);
     if (known != hd_valid_.end()) return known->second;
     std::string reason;
-    const bool valid = HdMovieStandIn::validate(name, *hd_path, default_hd_movie_factory(), &reason);
+    const bool valid = HdMovieStandIn::validate(name, *hd_path, hd_movie_factory(), &reason);
     if (!valid) log_hd_line("mw3: hd movie " + name + " not used (" + reason + "); playing the original");
     hd_valid_[name] = valid;
     return valid;
+  }
+  // The platform's decoder for HD movies, or a test's (Platform::hd_movie_factory).
+  HdMovieFactory hd_movie_factory() const {
+    const HdMovieFactory& given = e_->platform_parts().hd_movie_factory;
+    return given ? given : default_hd_movie_factory();
   }
   // The AVI's stream from its HD stand-in, when mapped and valid: its first
   // stream (the sound) starts the stand-in, the second shares it.
@@ -348,7 +353,7 @@ class GameFmvHost : public zfmv::Host {
     const std::string* hd_path = hd_movie_path(path, &name);
     if (!hd_path || !hd_movie_valid(path)) return false;
     if (!hd_ || hd_->name() != name) {
-      auto stand_in = std::make_shared<HdMovieStandIn>(name, *hd_path, default_hd_movie_factory(), log_hd_line);
+      auto stand_in = std::make_shared<HdMovieStandIn>(name, *hd_path, hd_movie_factory(), log_hd_line);
       if (!stand_in->start()) {
         hd_valid_[name] = false;  // its line is logged; the original from now on
         return false;

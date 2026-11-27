@@ -5,6 +5,7 @@
 // fake decoder and MP4s built in memory, so no media is needed.
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <initializer_list>
 #include <memory>
@@ -14,7 +15,12 @@
 #include <vector>
 
 #include "check.h"
+#include "gamez/zfmv/fmv_script.h"
+#include "gamez/zfmv/fmv_stream.h"
+#include "gamez/zsound/zsnd.h"
+#include "mech3/app_engine.h"
 #include "mech3/hd_movie.h"
+#include "platform/silent_sound.h"
 
 namespace {
 
@@ -354,4 +360,123 @@ TEST(hd_movie_mp4_edit_list_of_a_broken_file_is_zero) {
   EXPECT(zero(sound_edit_of(moov)));
   EXPECT(zero(sound_edit_of(Bytes{'n', 'o', 't', ' ', 'm', 'p', '4', '!', '!'})));
   EXPECT(zero(sound_edit_of(Bytes())));
+}
+
+namespace {
+
+// The movie host's side (GameFmvHost, app_fmv.cpp): a screen that records
+// the HD frames it is given, and a clock the silent sound's cursor follows.
+struct HdScreen : platform::Screen2D {
+  struct Shown {
+    uint64_t serial = 0;
+    int width = 0, height = 0, src_top = 0, src_bottom = 0;
+  };
+  std::vector<Shown> shown;
+  int released = 0;
+  void present_16(const uint16_t*, int, int, int, bool) override {}
+  bool present_frame_rgba(const uint8_t*, int width, int height, int, uint64_t serial, int src_top,
+                          int src_bottom) override {
+    shown.push_back({serial, width, height, src_top, src_bottom});
+    return true;
+  }
+  void release_frame_rgba() override { ++released; }
+};
+
+struct StepClock : platform::Clock {
+  uint32_t ms = 0;
+  uint32_t ticks_ms() override { return ms; }
+};
+
+HdFrame fake_picture(double pts, uint64_t serial) {
+  HdFrame frame;
+  frame.width = 1280, frame.height = 960, frame.pitch = 1280 * 4;
+  frame.bgra = std::make_shared<std::vector<uint8_t>>(static_cast<size_t>(frame.pitch) * frame.height,
+                                                       uint8_t{0x80});
+  frame.pts = pts, frame.serial = serial;
+  return frame;
+}
+
+}  // namespace
+
+// The whole path a mapped movie takes in the program, with a fake decoder:
+// the script's file check finds it without the original AVI, the ported
+// player (zfmv::Stream) opens the stand-in through the host and plays it on
+// the silent sound's clocked cursor, the engine shows the decoded picture
+// due for that sound in the movie's shape, and the player's release ends it.
+TEST(hd_movie_host_plays_a_mapped_movie_through_the_player) {
+  StepClock clock;
+  HdScreen screen;
+  platform::SilentSoundOutput sound;
+  sound.clock = &clock;
+  mech3::Platform p;
+  p.clock = &clock, p.movie_clock = &clock, p.screen = &screen, p.sound = &sound;
+  p.hd_movies["intro"] = "intro.mp4";
+  int sources_made = 0;
+  p.hd_movie_factory = [&sources_made]() -> std::unique_ptr<HdMovieSource> {
+    auto fake = std::make_unique<FakeSource>();
+    fake->info = intro_clip();
+    fake->sound_frames = 22050 * 4;
+    fake->frames = {fake_picture(0.0, 1), fake_picture(1.0, 2)};
+    ++sources_made;
+    return fake;
+  };
+  {
+    mech3::GameEngine engine(p, "mech3.exe -nofmv");
+    engine.quiet = true;
+    zsnd::state() = zsnd::State{};  // as a new process: zSound not yet initialised
+    EXPECT(engine.sound_init(0) == 1);
+    // The device as zsnd::load opens it before reading sounds.zrd, which
+    // this test has no need of.
+    EXPECT(zsnd::open_device() == 1);
+    zsnd::state().open = 1;
+    zfmv::Host& host = zfmv::host();
+    EXPECT(host.file_stat("./video\\INTRO.AVI") == 0);    // no original here: found as the HD clip
+    EXPECT(host.file_stat("./video\\CAMPAIGN.AVI") == -1);  // not mapped, and no original
+    {
+      zfmv::Stream stream("./video\\INTRO.AVI", true);
+      EXPECT(stream.video_ok && stream.audio_ok);
+      EXPECT(stream.length == 2737 && stream.fps == 15);  // the original's frames, from the shape table
+      EXPECT(engine.hd_movie_active_);
+      EXPECT(sources_made == 2);  // checked at the file check, then the one that plays
+
+      // A PLAYAVI pass as the script makes it (fmv_script.cpp): the frame
+      // for the sound, then its image asked for to draw.
+      const auto script_pass = [&] {
+        stream.frame(-1);
+        host.stream_image(&stream);
+      };
+      script_pass();  // the sound starts; the stand-in's frame 0 decoded
+      bool all_black = true;
+      for (uint16_t pixel : stream.pixels) all_black = all_black && pixel == 0;
+      EXPECT(all_black);  // the 16-bit picture is never shown, the HD one is
+      EXPECT(engine.present_hd_movie(true));
+      EXPECT(screen.shown.size() == 1 && screen.shown[0].serial == 1);
+      // Between the script's flips the same picture counts as shown (the
+      // 16-bit buffer stays hidden) but isn't drawn again.
+      EXPECT(engine.present_hd_movie(false));
+      EXPECT(screen.shown.size() == 1);
+
+      // The script's passes, one each 1/15 s (the player refills the half of
+      // its sound buffer the cursor has left), each flip showing the picture
+      // due: the first until 1 s of sound has played, then the second.
+      double second_seen_at = -1;
+      for (uint32_t ms = 66; ms <= 1500; ms += 66) {
+        clock.ms = ms;
+        script_pass();
+        EXPECT(engine.present_hd_movie(true));
+        if (second_seen_at < 0 && screen.shown.back().serial == 2) second_seen_at = stream.sound_seconds();
+      }
+      EXPECT(second_seen_at >= 1.0 && second_seen_at < 1.0 + 0.067);
+      const HdScreen::Shown& last = screen.shown.back();
+      EXPECT(last.serial == 2 && last.width == 1280 && last.height == 960);
+      // INTRO's rows 79..400 of the original's 480 as rows of the 960-row clip.
+      EXPECT(last.src_top == 158 && last.src_bottom == 801);
+      EXPECT(screen.released == 0);
+    }
+    EXPECT(!engine.hd_movie_active_);  // the player's streams released: the movie is over
+    EXPECT(screen.released == 1);
+    EXPECT(!engine.present_hd_movie(true));
+    engine.sound_shutdown();
+  }
+  zsnd::hooks() = zsnd::Hooks{};  // the silent output goes with this test
 }

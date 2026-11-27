@@ -40,6 +40,8 @@ struct MountFiles : platform::Files {
   bool exists(const std::string& path) override;
 };
 
+class HdMovieSource;  // hd_movie.h
+
 struct Platform {
   platform::Window* window = nullptr;
   platform::Alert* alert = nullptr;
@@ -69,6 +71,9 @@ struct Platform {
   // Ours (#559): `mw3 --hd-movie NAME PATH`, the movie name (lower case, as
   // hd_movie_name gives it) to its HD MP4; empty: every movie its original.
   std::map<std::string, std::string> hd_movies;
+  // Their decoder; empty: the platform's own (default_hd_movie_factory,
+  // hd_movie.h). Tests give a fake one.
+  std::function<std::unique_ptr<HdMovieSource>()> hd_movie_factory;
 };
 
 class ActionGame;
