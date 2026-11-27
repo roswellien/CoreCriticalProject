@@ -57,7 +57,7 @@ Follow this sequence in order:
    `tools/update-service/build_catalog.py`, upload immutable release objects to Cloudflare R2,
    promote the feed allowlist, and verify readbacks (`docs/launcher-and-website-release.md`).
 8. **Deploy website updates:** If the release includes website updates, build with
-   `python website/build.py` from `website/` and deploy to Cloudflare Pages following
+   `python website/build.py` from the repository root and deploy to Cloudflare Pages following
    `docs/launcher-and-website-release.md` "Website deployment".
 9. **Draft release notes:** Draft notes in GitHub Releases from the prior tag to the new tag
    using `.github/release.yml`, lightly editing for clarity on shipped products and player
