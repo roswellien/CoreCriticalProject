@@ -44,8 +44,8 @@ body:
             If shipping the launcher or MW3-RE runtime, matching GitHub Release
             drafted against the verified source SHA before feed promotion.
         - label: >-
-            Release target marker lists each affected target's numeric signed
-            version.
+            If shipping the launcher or MW3-RE runtime, release target marker
+            lists each affected target's numeric signed version.
         - label: >-
             If shipping the launcher or MW3-RE runtime, matching GitHub Release
             published after live signed feed verification.
