@@ -492,7 +492,8 @@ native_height_binding(const mw34::materials::SurfaceKey &key, int texture) {
           }
         }
         try {
-          return admit_native_ground_height(*target, input, prepared_.surface_budget());
+          return admit_native_ground_height(*target, input, prepared_.surface_budget(),
+                                            streamed_height_cache_.get());
         } catch (const std::runtime_error &error) {
           reject_surface_binding(error.what());
           throw;

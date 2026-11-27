@@ -200,7 +200,9 @@ int read_model_data(std::FILE* f, Model& m, zcls::ZbdReadContext* proof) {
   for (uint32_t i = 0; i < polys; ++i) {
     Polygon& q = m.polygons[i];
     const uint32_t k = q.flags & 0xff;
-    if (proof) proof->require(k >= 3 && k <= 64, "invalid source polygon corner count");
+    // The source corner count occupies the full low byte. Native POM can
+    // still reject individual models outside its own smaller render limits.
+    if (proof) proof->require(k >= 3, "invalid source polygon corner count");
     if (k) {
       if ((q.vertex_indices = read_array<uint32_t>(f, k, 4, &ok, proof), !ok)) return -1;
       if ((q.flags & 0x200) && (q.normal_indices = read_array<uint32_t>(f, k, 4, &ok, proof), !ok)) return -1;
