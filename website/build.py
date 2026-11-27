@@ -3,6 +3,7 @@ from pathlib import Path
 import shutil
 from tools.render_mechlab import render_site
 from tools.render_media import render_media
+from tools.social_meta import add_social_tags
 from tools.sync_mechlab import read_notes
 
 ROOT = Path(__file__).resolve().parent
@@ -23,4 +24,6 @@ studio_dir.mkdir(exist_ok=True)
 tour_file = OUT / "studio-tour.html"
 if tour_file.is_file():
     shutil.copy2(tour_file, studio_dir / "index.html")
+tagged_pages = add_social_tags(OUT)
+print(f"Added link-preview tags to {tagged_pages} pages")
 print(f"Static preview ready: {OUT}")

@@ -155,6 +155,19 @@ bool has_partial_model_buffer_entry(VulkanFrameRenderer &renderer,
                                     std::uint64_t geometry_key);
 // #496: "video memory full" lines logged so far, and render() calls so far.
 std::size_t video_memory_full_log_count(VulkanFrameRenderer &renderer);
+// #521: memory tables printed this session, and heaps whose reported use fits
+// their size (of how many heaps).
+std::size_t memory_table_log_count(VulkanFrameRenderer &renderer);
+std::size_t memory_report_heaps_within_size(VulkanFrameRenderer &renderer, std::size_t &heaps);
+// #521: the session object the current backend reports into, and whether it
+// has printed the renderer header block.
+const void *health_session_of(VulkanFrameRenderer &renderer);
+bool renderer_header_printed(VulkanFrameRenderer &renderer);
+// #521 device fault report: whether this renderer's device is the one a lost
+// device reports from, and whether VK_EXT_device_fault is on for it.
+bool is_device_fault_owner(VulkanFrameRenderer &renderer);
+bool device_fault_enabled(VulkanFrameRenderer &renderer);
+bool any_device_fault_owner();
 std::uint64_t scene_render_frame(VulkanFrameRenderer &renderer);
 void free_unused_model_buffers(VulkanFrameRenderer &renderer, std::uint64_t min_age_frames);
 void free_unused_textures(VulkanFrameRenderer &renderer, std::uint64_t min_age_frames);

@@ -345,7 +345,7 @@ void create_world_target() {
   check(
       f.vkCreateFramebuffer(device, &info, nullptr, &reconstructionFramebuffer),
       "reconstruction framebuffer");
-  std::fprintf(stderr,
+  MW3_LOG(I,
                "World resolution: internal %ux%u, output %ux%u, guest %ux%u\n",
                alternate_width, alternate_height, rw, rh, width, height);
 }

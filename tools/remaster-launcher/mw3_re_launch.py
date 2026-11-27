@@ -26,7 +26,7 @@ _MAX_JSON_DEPTH = 64
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _MAX_PREVIEW_PACKS = 64
 _MAX_REGISTRY_MODELS = 256
-_PREVIEW_FIELDS = frozenset({"draw_distance", "hud", "hud_text", "geometry", "model_packs",
+_PREVIEW_FIELDS = frozenset({"draw_distance", "fog_distance", "hud", "hud_text", "geometry", "model_packs",
                              "environment_packs", "ui_packs", "skin_packs", "dynamic_lighting", "shadows",
                              "headlights", "water_detail", "cloud_detail",
                              "headlight_bindings", "stock_effect_catalog",
@@ -50,6 +50,10 @@ _MAX_SURFACE_RECORDS = 4096
 _MAX_SURFACE_IMAGES = 512
 _MAX_SURFACE_DIMENSION = 4096
 MAX_SIDECAR_BYTES = 512 * 1024 * 1024
+# Decoded scalar-image budget per sidecar. The contract counts one retained byte per texel for
+# both v1 (RGBA, red channel kept) and v2 (grayscale). It equals the file cap today, but stays a
+# separate name so tests can lower it without the file-size gate hiding the per-texel accounting.
+_MAX_SURFACE_DECODED_BYTES = MAX_SIDECAR_BYTES
 _NO_SURFACE_MATERIAL = 0xFFFFFFFF
 _NO_SURFACE_IMAGE = 0xFFFFFFFF
 _ROLE_HEIGHT = 1
@@ -324,11 +328,15 @@ def read_surface_materials_file(path, *, expected_asset_id=None, expected_mesh_u
                 not 1 <= width <= _MAX_SURFACE_DIMENSION or
                 not 1 <= height <= _MAX_SURFACE_DIMENSION):
             raise ValueError("Invalid surface material image header")
-        byte_count = width * height * (4 if version == 1 else 1)
-        if decoded_total + byte_count > max_bytes:
+        pixel_count = width * height
+        # v1 stores RGBA but only the red scalar is retained, so both versions decode to one
+        # byte per texel; the stored bytes are still read and hashed in full below.
+        stored_byte_count = pixel_count * (4 if version == 1 else 1)
+        decoded_budget = min(max_bytes, _MAX_SURFACE_DECODED_BYTES)
+        if decoded_total + pixel_count > decoded_budget:
             raise ValueError("Surface material decoded images exceed budget")
-        decoded_total += byte_count
-        pixels = take(byte_count)
+        decoded_total += pixel_count
+        pixels = take(stored_byte_count)
         actual_hash = 0xCBF29CE484222325
         for byte in pixels:
             actual_hash = ((actual_hash ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
@@ -769,6 +777,7 @@ def _preview_choices(preview):
         raise ValueError("Invalid native preview fields")
     choices = {
         "draw_distance": 800,
+        "fog_distance": None,
         "hud": None,
         "hud_text": None,
         "geometry": None,
@@ -789,6 +798,9 @@ def _preview_choices(preview):
     distance = choices["draw_distance"]
     if type(distance) is not int or distance not in _PREVIEW_DRAW_DISTANCES:
         raise ValueError("Native preview scenery distance must be 800, 1200, 1600, 2400 or 3200")
+    fog = choices["fog_distance"]
+    if fog is not None and (type(fog) is not int or not 0 <= fog <= 3200):
+        raise ValueError("Native fog distance must be between 0 and 3200")
     if choices["hud"] is not None and choices["hud"] not in _PREVIEW_HUDS:
         raise ValueError("Unknown native preview HUD")
     if choices["hud_text"] is not None:
@@ -846,14 +858,26 @@ def plan_launch(request):
     if not _FIELDS.issubset(request) or not set(request).issubset(allowed):
         raise ValueError("Missing or unknown native request fields")
     pom = False
+    pom_quality = None
     if schema >= 3 and "visuals" in request:
         visuals = request["visuals"]
-        if type(visuals) is not dict or not set(visuals).issubset({"pom"}):
+        if type(visuals) is not dict or not set(visuals).issubset({"pom", "pom_quality"}):
             raise ValueError("Invalid native visuals fields")
         if "pom" in visuals:
             if type(visuals["pom"]) is not bool:
                 raise ValueError("Native POM selection must be Boolean")
             pom = visuals["pom"]
+        if "pom_quality" in visuals:
+            quality = visuals["pom_quality"]
+            if type(quality) is not str or quality not in ("off", "low", "high"):
+                raise ValueError("Native POM quality must be off, low, or high")
+            if (quality == "off" and pom) or (
+                quality != "off" and "pom" in visuals and not pom
+            ):
+                raise ValueError("Conflicting native POM selection")
+            if quality != "off":
+                pom = True
+                pom_quality = quality
     if pom and request["lighting"] != "normal":
         raise ValueError("Native POM requires normal lighting")
     preview = _preview_choices(request.get("preview", {})) if schema == 4 else None
@@ -948,7 +972,7 @@ def plan_launch(request):
         detail_flag_indices["cloud_detail"] = len(argv) + 1
         argv.extend(("--cc-cloud-detail", "1" if preview["cloud_detail"] else "0"))
     if pom:
-        argv.extend(("--cc-pom", "1"))
+        argv.extend(("--cc-pom", pom_quality if pom_quality is not None else "1"))
     skipped = []
     for choice in disabled_detail:
         skipped.append({
@@ -971,6 +995,8 @@ def plan_launch(request):
         # 800 is the original range, so it adds no argument and older runtimes stay compatible.
         if preview["draw_distance"] != 800:
             argv.extend(("--cc-draw-distance", str(preview["draw_distance"])))
+        if preview["fog_distance"] is not None:
+            argv.extend(("--cc-fog-distance", str(preview["fog_distance"])))
         if preview["hud"] is not None:
             argv.extend(("--cc-hud", preview["hud"]))
         if preview["hud_text"] is not None:

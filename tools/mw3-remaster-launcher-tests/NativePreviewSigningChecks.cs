@@ -11,7 +11,7 @@ static class NativePreviewSigningChecks
 {
     public static void Run()
     {
-        var repoRoot = FindRepositoryRoot();
+        var repoRoot = RepositoryRoot.Find();
         var launcherDir = Path.Combine(repoRoot, "tools", "mw3-remaster-launcher");
         var checksProject = Path.Combine(repoRoot, "tools", "mw3-remaster-launcher-tests", "LauncherChecks.csproj");
         var signWindowsScript = Path.Combine(launcherDir, "sign_windows.ps1");
@@ -580,23 +580,6 @@ Assert-AllBinariesSigned -Root '{{EscapeSingleQuoted(publishRoot)}}'
         File.WriteAllText(Path.Combine(root, "runtime.json"), manifest.ToJsonString(), new UTF8Encoding(false));
     }
 
-    private static string FindRepositoryRoot()
-    {
-        foreach (var anchor in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
-        {
-            var dir = new DirectoryInfo(Path.GetFullPath(anchor));
-            while (dir != null)
-            {
-                if (File.Exists(Path.Combine(dir.FullName, "tools", "mw3-remaster-launcher", "sign_native_preview.ps1")) &&
-                    File.Exists(Path.Combine(dir.FullName, "tools", "mw3-remaster-launcher-tests", "LauncherChecks.csproj")))
-                {
-                    return dir.FullName;
-                }
-                dir = dir.Parent;
-            }
-        }
-        throw new DirectoryNotFoundException("Could not locate repository root containing launcher signing scripts.");
-    }
 
     private static string FindPowerShellExecutable()
     {

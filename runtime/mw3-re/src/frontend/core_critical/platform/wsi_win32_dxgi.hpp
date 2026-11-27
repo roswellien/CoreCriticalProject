@@ -3,6 +3,8 @@
 #include <SDL3/SDL.h>
 #include <vulkan/vulkan_core.h>
 
+#include "frontend/sdl/log.h"
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -364,7 +366,7 @@ public:
       if (r != VK_SUCCESS)
         throw std::runtime_error("acquire Vulkan exclusive fullscreen failed");
       held_ = true;
-      std::fprintf(stderr, "Vulkan exclusive fullscreen acquired\n");
+      MW3_LOG(I, "Vulkan exclusive fullscreen acquired\n");
     }
     return true;
   }

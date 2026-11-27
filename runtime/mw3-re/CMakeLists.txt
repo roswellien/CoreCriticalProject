@@ -22,6 +22,8 @@ execute_process(COMMAND git describe --tags --match "v[0-9]*" --always --dirty W
                 OUTPUT_VARIABLE MW3_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 execute_process(COMMAND git rev-list --count HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                 OUTPUT_VARIABLE MW3_BUILD_NUMBER OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                OUTPUT_VARIABLE MW3_SOURCE_SHA OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 if(NOT MW3_VERSION)
   set(MW3_VERSION "unknown")
 endif()
@@ -45,6 +47,7 @@ if(MSVC)
 endif()
 add_library(mw3core STATIC
   src/mech3/world_mesh.cpp  # ours: mw3view's world loader, shared with the replay viewer (#289)
+  src/frontend/sdl/arena_benchmark.cpp
   src/mech3/replay_log.cpp  # ours (#289): an arena match log read for replay
   src/mech3/replay_terrain.cpp  # ours (#289): an arena map seen from above
   src/mech3/replay_puppet.cpp  # ours (#289): a logged mech posed by the game's own animation
@@ -398,6 +401,9 @@ add_library(mw3core STATIC
 )
 target_include_directories(mw3core PUBLIC src)
 target_link_libraries(mw3core PUBLIC cc_geometry_resources)
+if(WIN32)
+  target_link_libraries(mw3core PRIVATE ole32 windowscodecs)
+endif()
 if(MSVC)
   target_compile_options(mw3core PRIVATE /EHsc)
 endif()
@@ -644,6 +650,35 @@ if(MSVC)
 endif()
 add_test(NAME mw3render_worker_checks COMMAND mw3render_worker_checks)
 set_tests_properties(mw3render_worker_checks PROPERTIES TIMEOUT 15)
+add_executable(mw3game_health_checks tests/test_game_health.cpp)
+target_include_directories(mw3game_health_checks PRIVATE src)
+# The header lines' shared format sample, read by the launcher's checks too (#521).
+target_compile_definitions(mw3game_health_checks PRIVATE
+  "MW3_HEADER_SAMPLE=\"${CMAKE_CURRENT_SOURCE_DIR}/../../tests/fixtures/game_header_lines.txt\"")
+if(MSVC)
+  target_compile_options(mw3game_health_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3game_health_checks COMMAND mw3game_health_checks)
+set_tests_properties(mw3game_health_checks PROPERTIES TIMEOUT 15)
+# Log line stamping, the problems log and MW3_LOG repeat counts (#521).
+add_executable(mw3log_lines_checks tests/test_log_lines.cpp)
+target_include_directories(mw3log_lines_checks PRIVATE src)
+if(MSVC)
+  target_compile_options(mw3log_lines_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3log_lines_checks COMMAND mw3log_lines_checks)
+set_tests_properties(mw3log_lines_checks PROPERTIES TIMEOUT 15)
+# RunLog with real pipes: the drain before a fast exit (#521).
+add_executable(mw3run_log_checks tests/test_run_log.cpp src/frontend/sdl/run_log.cpp
+                                 src/frontend/sdl/log_start.cpp)
+target_include_directories(mw3run_log_checks PRIVATE src)
+target_link_libraries(mw3run_log_checks PRIVATE Threads::Threads)
+target_compile_definitions(mw3run_log_checks PRIVATE MW3_TEST_TMP="${CMAKE_CURRENT_BINARY_DIR}/test-tmp")
+if(MSVC)
+  target_compile_options(mw3run_log_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3run_log_checks COMMAND mw3run_log_checks)
+set_tests_properties(mw3run_log_checks PROPERTIES TIMEOUT 15)
 add_executable(mw3derived_cache_checks tests/test_derived_cache.cpp)
 target_include_directories(mw3derived_cache_checks PRIVATE src)
 target_link_libraries(mw3derived_cache_checks PRIVATE Threads::Threads)
@@ -695,6 +730,7 @@ add_executable(mw3tests
   tests/test_hunt.cpp
   tests/test_arena.cpp
   tests/test_arena_camera.cpp
+  tests/test_arena_benchmark.cpp
   tests/test_replay.cpp
   tests/test_replay_game.cpp
   tests/test_arena_game.cpp
@@ -742,7 +778,7 @@ add_executable(mw3tests
 if(WIN32)
   target_sources(mw3tests PRIVATE tools/windows/utf8.manifest)
 endif()
-target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export)
+target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export Threads::Threads)
 target_include_directories(mw3tests PRIVATE third_party)  # nlohmann-json, among others the arena log's records (#287)
 # Tests that read the player's install skip themselves when it is not there.
 target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
@@ -934,7 +970,7 @@ if(SDL3_FOUND)
     if(MW3_CORE_CRITICAL_VULKAN)
       target_compile_definitions(mw3 PRIVATE CC_MW3_RE_ADAPTER=1)
     endif()
-    target_compile_definitions(mw3 PRIVATE MW3_VERSION="${MW3_VERSION}")
+    target_compile_definitions(mw3 PRIVATE MW3_SOURCE_SHA="${MW3_SOURCE_SHA}" MW3_VERSION="${MW3_VERSION}")
     # The launcher's art (assets/launcher) in a development build; a package
     # carries it beside the exe (tools/windows/package.cmd) or in the app's
     # Resources (tools/macos/make_app.sh), and keeps no path of this machine.
@@ -1018,6 +1054,7 @@ if(SDL3_FOUND)
       src/frontend/sdl/sdl_update.cpp
       src/frontend/sdl/sdl_restart.cpp
       src/frontend/sdl/crash_report.cpp
+      src/frontend/sdl/run_log.cpp
       src/frontend/sdl/win_cmdline.cpp
       tests/test_net_enet.cpp
       tests/test_net_upnp.cpp

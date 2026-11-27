@@ -57,12 +57,13 @@ private:
 
   [[noreturn]] static void editor_fatal(const char *operation, VkResult initiating,
                                        VkResult completion) noexcept {
-    std::fprintf(stderr,
+    MW3_LOG(E,
                  "Core editor FATAL: %s; initiating=%d completion=%d; "
                  "terminating before unsafe resource/context/device unwinding\n",
                  operation, int(initiating), int(completion));
     std::fflush(stderr);
     std::fflush(stdout);
+    sdlfe::log::drain();  // the line above into mw3.log before _Exit (log.h)
     std::_Exit(3);
   }
   static void editor_check(VkResult result, const char *operation) {
@@ -108,7 +109,7 @@ private:
                    editor_.statistics.first_result, VK_RESULT_MAX_ENUM);
     }
     if (first)
-      std::fprintf(stderr,
+      MW3_LOG(E,
                    "Core editor failure: first=%d backend_terminal=%d "
                    "upload_submit=%d upload_wait=%d bytes=%llu peak=%llu\n",
                    int(editor_.statistics.first_result),
@@ -190,7 +191,7 @@ private:
       editor_fatal(operation, initiating, completion);
     editor_clear_pending();
     if (completion == VK_ERROR_DEVICE_LOST)
-      std::fprintf(stderr, "Core editor lifetime disposition: device lost after %s (%d)\n",
+      MW3_LOG(E, "Core editor lifetime disposition: device lost after %s (%d)\n",
                    operation, int(initiating));
   }
   void editor_wait_present() {

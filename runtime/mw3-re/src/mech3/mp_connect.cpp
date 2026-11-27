@@ -138,7 +138,8 @@ ConnectScreen::ConnectScreen(Engine& e, Handle s)
   const Handle a = e.video_back_buffer();
   e.render_set_target2(e.video_target(), e.video_buffer_d90(), e.video_buffer_da0(), a);
   const bool moving = !e.fast_menu();
-  if (load_from(e.main_menu_definition(), "MULTIPLAYER_DIALOG", moving)) {
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
+  if (load_from(e.main_menu_definition(), "MULTIPLAYER_DIALOG", moving || !bake_menu)) {
     zimg::Texture* img = nullptr;
     uint8_t bg_moving = 0;
     e.main_menu_background(&img, &bg_moving);
@@ -152,7 +153,7 @@ ConnectScreen::ConnectScreen(Engine& e, Handle s)
     bind_primitive(&lines1, "LINES1");
     bind_primitive(&lines2, "LINES2");
     bind_button(&cancel_btn, "CANCEL_BUTTON");
-    if (!moving) {
+    if (bake_menu) {
       bake();
       remove(&background);
       remove(&lines1);

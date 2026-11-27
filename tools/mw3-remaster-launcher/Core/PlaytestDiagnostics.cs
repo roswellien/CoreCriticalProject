@@ -1,5 +1,4 @@
 using System.IO;
-using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -12,11 +11,8 @@ namespace MW3RemasterLauncher.Core;
 /// <summary>Pre-launch profile state so current-session native logs can be separated from stale prior runs.</summary>
 public sealed record NativeSessionDiagnosticsBaseline(
     string WriteDirectory,
-    string LogPath,
-    bool LogExisted,
-    DateTime LogCreationTimeUtc,
-    DateTime LogLastWriteTimeUtc,
-    long LogLength,
+    FileStamp RunLog,
+    FileStamp ProblemsLog,
     string CrashPath,
     long CrashOffset,
     DateTime StartedUtc);
@@ -36,6 +32,8 @@ public static class PlaytestDiagnostics
     public const string ApplicationHangSummary = "The game stopped responding and Windows closed it.";
     public const string NativeCrashFileName = "crash.txt";
     public const string NativeRunFileName = "mw3.log";
+    public const string NativeOldRunFileName = "mw3.old.log";
+    public const string NativeProblemsFileName = "mw3-problems.log";
 
     // Keep only the fixed diagnostic suffix of the legacy host fault record (issue #150).
     private static readonly Regex WindowsPathWithNativeSuffix = new(
@@ -137,24 +135,9 @@ public static class PlaytestDiagnostics
     public static NativeSessionDiagnosticsBaseline CaptureNativeBaseline(string writeDirectory)
     {
         var fullWriteDir = Path.GetFullPath(writeDirectory);
-        var logPath = Path.Combine(fullWriteDir, NativeRunFileName);
         var crashPath = Path.Combine(fullWriteDir, NativeCrashFileName);
-        bool logExisted = false;
-        DateTime logCreated = DateTime.MinValue;
-        DateTime logWritten = DateTime.MinValue;
-        long logLength = 0;
-        try
-        {
-            if (File.Exists(logPath) && !HasLinkInChain(logPath))
-            {
-                var info = new FileInfo(logPath);
-                logExisted = true;
-                logCreated = info.CreationTimeUtc;
-                logWritten = info.LastWriteTimeUtc;
-                logLength = info.Length;
-            }
-        }
-        catch { }
+        var runLog = FileStamp.Capture(Path.Combine(fullWriteDir, NativeRunFileName));
+        var problemsLog = FileStamp.Capture(Path.Combine(fullWriteDir, NativeProblemsFileName));
 
         long crashOffset = 0;
         try
@@ -168,11 +151,8 @@ public static class PlaytestDiagnostics
 
         return new NativeSessionDiagnosticsBaseline(
             fullWriteDir,
-            logPath,
-            logExisted,
-            logCreated,
-            logWritten,
-            logLength,
+            runLog,
+            problemsLog,
             crashPath,
             crashOffset,
             DateTime.UtcNow);
@@ -209,32 +189,52 @@ public static class PlaytestDiagnostics
             }
             catch { }
 
-            // 2. Current-session mw3.log, guarded against stale pre-launch log files.
-            try
+            // 2. The whole current-session mw3.log, skipped when it is a stale pre-launch file.
+            // The game renames the previous log to mw3.old.log when it starts, so a fresh
+            // mw3.log means mw3.old.log is the previous session's and worth keeping too.
+            var runLogFresh = baseline.RunLog.ChangedSince();
+            if (runLogFresh)
             {
-                if (File.Exists(baseline.LogPath) && !HasLinkInChain(baseline.LogPath))
-                {
-                    var info = new FileInfo(baseline.LogPath);
-                    var fresh = !baseline.LogExisted ||
-                        info.LastWriteTimeUtc != baseline.LogLastWriteTimeUtc ||
-                        info.CreationTimeUtc != baseline.LogCreationTimeUtc ||
-                        info.Length != baseline.LogLength;
-                    if (fresh)
-                    {
-                        var text = ReadLogForSession(baseline.LogPath);
-                        if (!string.IsNullOrWhiteSpace(text))
-                        {
-                            File.WriteAllText(Path.Combine(nativeDir, NativeRunFileName), text, new UTF8Encoding(false));
-                        }
-                    }
-                }
+                CopyWholeLog(baseline.RunLog.Path, Path.Combine(nativeDir, NativeRunFileName));
+                CopyWholeLog(Path.Combine(baseline.WriteDirectory, NativeOldRunFileName),
+                    Path.Combine(nativeDir, NativeOldRunFileName));
             }
-            catch { }
+
+            // 3. The whole problems log, under the same freshness test as mw3.log.
+            if (baseline.ProblemsLog.ChangedSince())
+                CopyWholeLog(baseline.ProblemsLog.Path, Path.Combine(nativeDir, NativeProblemsFileName));
         }
         catch { }
     }
 
-    private static bool HasLinkInChain(string path)
+    private static void CopyWholeLog(string source, string destination)
+    {
+        // Copied as bytes: the copy is the game's file exactly, with nothing decoded.
+        try
+        {
+            if (!File.Exists(source) || HasLinkInChain(source)) return;
+            using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (input.Length == 0) return;
+            using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None);
+            input.CopyTo(output);
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// The whole file as text, or "" when it is missing. It shares the file with a game
+    /// still writing it, and refuses a path that runs through a link.
+    /// </summary>
+    internal static string ReadWholeLog(string path)
+    {
+        if (!File.Exists(path)) return "";
+        PackStorage.EnsureNoLinks(path);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        return reader.ReadToEnd();
+    }
+
+    internal static bool HasLinkInChain(string path)
     {
         try
         {
@@ -285,12 +285,16 @@ public static class PlaytestDiagnostics
         return head + "...\n" + tail;
     }
 
+    /// <summary>The private folders every report redacts: the launcher, repository, game, user profile and data.</summary>
+    public static string[] ReportRoots(LauncherSettings settings, string applicationRoot) =>
+        new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
+
     public static object CreateCrashReport(LauncherSettings settings, IEnumerable<PackManifest> packs,
         string? launchLog, string applicationRoot, string? runtimeVersion = null, int? exitCode = null,
-        HardwareInventoryData? hardwareInventory = null)
+        HardwareInventoryData? hardwareInventory = null, IReadOnlyDictionary<string, object>? header = null)
     {
-        var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
+        var roots = ReportRoots(settings, applicationRoot);
         var logs = ReadSessionLogs(launchLog, roots);
         var failureSummary = Redact(FailureSummary(launchLog, exitCode), roots);
         if (failureSummary.Length > 2000) failureSummary = failureSummary[..2000];
@@ -306,58 +310,72 @@ public static class PlaytestDiagnostics
         var architecture = RuntimeInformation.ProcessArchitecture.ToString();
         var dotnetRuntime = RuntimeInformation.FrameworkDescription;
 
-        object BuildPayload(Dictionary<string, string> currentLogs) => new
+        object BuildPayload(Dictionary<string, string> currentLogs)
         {
-            format_version = 1,
-            report_id = reportId,
-            created_utc = createdUtc,
-            launcher_version = launcherVersion,
-            runtime_version = resolvedRuntimeVersion,
-            mode = settings.EngineMode,
-            exit_code = exitCode,
-            os,
-            architecture,
-            dotnet_runtime = dotnetRuntime,
-            hardware,
-            failure_summary = failureSummary,
-            settings = settingsObject,
-            packs = packArray,
-            logs = currentLogs
-        };
+            var payload = StartPayload(header);
+            payload["report_id"] = reportId;
+            payload["created_utc"] = createdUtc;
+            payload["launcher_version"] = launcherVersion;
+            payload["runtime_version"] = resolvedRuntimeVersion;
+            payload["mode"] = settings.EngineMode;
+            payload["exit_code"] = exitCode;
+            payload["os"] = os;
+            payload["architecture"] = architecture;
+            payload["dotnet_runtime"] = dotnetRuntime;
+            payload["hardware"] = hardware;
+            payload["failure_summary"] = failureSummary;
+            payload["settings"] = settingsObject;
+            payload["packs"] = packArray;
+            payload["logs"] = currentLogs;
+            return payload;
+        }
 
         TrimLogsToFitRequest(logs, BuildPayload);
         return BuildPayload(logs);
     }
 
-    private static readonly (string WireKey, string ZipName, string RelativePath)[] SessionLogMappings =
+    /// <summary>
+    /// Every session log a report carries, in upload priority order. An empty relative path
+    /// means the launcher's own session log. Rows with Upload false go only into Export
+    /// Report's zip, because the crash-report service accepts only its own log keys.
+    /// </summary>
+    internal static readonly (string WireKey, string ZipName, string RelativePath, bool Upload)[] SessionLogMappings =
     {
-        ("native_crash", "native-crash.txt", Path.Combine("native", NativeCrashFileName)),
-        ("native_run", "native-mw3.log", Path.Combine("native", NativeRunFileName)),
-        ("native_stderr", "native-stderr.txt", Path.Combine("native", "stderr.txt")),
-        ("launcher", "launcher.log", ""),
-        ("native_stdout", "native-stdout.txt", Path.Combine("native", "stdout.txt"))
+        ("native_problems", "native-mw3-problems.log", Path.Combine("native", NativeProblemsFileName), true),
+        ("native_crash", "native-crash.txt", Path.Combine("native", NativeCrashFileName), true),
+        ("native_run", "native-mw3.log", Path.Combine("native", NativeRunFileName), true),
+        ("native_old_run", "native-mw3.old.log", Path.Combine("native", NativeOldRunFileName), false),
+        ("native_stderr", "native-stderr.txt", Path.Combine("native", "stderr.txt"), true),
+        ("launcher", "launcher.log", "", true),
+        ("native_stdout", "native-stdout.txt", Path.Combine("native", "stdout.txt"), true)
     };
 
     private static Dictionary<string, string> ReadSessionLogs(string? launchLog, string[] roots)
     {
         var logs = new Dictionary<string, string>();
-        if (launchLog == null) return logs;
-        string? folder;
-        try { folder = Path.GetDirectoryName(launchLog); }
-        catch { return logs; }
-        if (string.IsNullOrEmpty(folder)) return logs;
+        var folder = SessionFolder(launchLog);
+        if (launchLog == null || folder == null) return logs;
 
         var remainingBudget = MaxAggregateLogBytes;
-        foreach (var (wireKey, _, relativePath) in SessionLogMappings)
+        foreach (var (wireKey, _, relativePath, upload) in SessionLogMappings)
         {
             if (remainingBudget <= 0) break;
-            var path = relativePath.Length == 0 ? launchLog : Path.Combine(folder, relativePath);
-            var text = TryReadRedactedTail(path, roots);
-            if (string.IsNullOrEmpty(text)) continue;
+            if (!upload) continue;
+            var path = SessionLogPath(launchLog, folder, relativePath);
             var cap = Math.Min(MaxLogBytes, remainingBudget);
-            if (text.Length > cap)
+            var isRunLog = wireKey == "native_run";
+            var text = isRunLog ? TryReadRedactedWhole(path, roots) : TryReadRedactedTail(path, roots);
+            if (string.IsNullOrEmpty(text)) continue;
+            // A problems log with only setup and event lines (level I) has no problem to show;
+            // mw3.log carries those lines anyway.
+            if (wireKey == "native_problems" && !GameProblemsLog.HasProblem(text)) continue;
+            if (isRunLog)
             {
-                text = wireKey == "native_crash" ? text[..cap] : SliceTailOnLineBoundary(text, cap);
+                text = UploadLogCuts.WithLastHealthLines(text, cap);
+            }
+            else if (text.Length > cap)
+            {
+                text = UploadLogCuts.CutLog(wireKey, text, cap);
             }
             if (text.Length == 0) continue;
             logs[wireKey] = text;
@@ -366,17 +384,24 @@ public static class PlaytestDiagnostics
         return logs;
     }
 
-    private static string SliceTailOnLineBoundary(string text, int maxChars)
+    /// <summary>
+    /// A report's first fields: the format version, then the setup header when it has a field,
+    /// so a reader of the upload meets the header (and then the problems log) first.
+    /// </summary>
+    internal static Dictionary<string, object?> StartPayload(IReadOnlyDictionary<string, object>? header)
     {
-        if (text.Length <= maxChars) return text;
-        var sliced = text[^maxChars..];
-        var newline = sliced.IndexOf('\n');
-        return newline >= 0 && newline + 1 < sliced.Length ? sliced[(newline + 1)..] : sliced;
+        var payload = new Dictionary<string, object?> { ["format_version"] = 1 };
+        if (header is { Count: > 0 }) payload["header"] = header;
+        return payload;
     }
+
+    internal static string SessionLogPath(string launchLog, string sessionFolder, string relativePath) =>
+        relativePath.Length == 0 ? launchLog : Path.Combine(sessionFolder, relativePath);
 
     private static void TrimLogsToFitRequest(Dictionary<string, string> logs, Func<Dictionary<string, string>, object> buildPayload)
     {
-        var trimOrder = new[] { "native_stdout", "launcher", "native_stderr", "native_run", "native_crash" };
+        // The problems log is cut last; the header is never cut, since ReportHeader's own limits bound its size.
+        var trimOrder = new[] { "native_stdout", "launcher", "native_stderr", "native_run", "native_crash", "native_problems" };
         var webOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         for (var attempt = 0; attempt < 16; attempt++)
         {
@@ -395,12 +420,16 @@ public static class PlaytestDiagnostics
             else
             {
                 var nextLen = Math.Max(0, current.Length - cut);
-                logs[targetKey] = targetKey == "native_crash"
-                    ? current[..nextLen]
-                    : SliceTailOnLineBoundary(current, nextLen);
+                logs[targetKey] = UploadLogCuts.CutLog(targetKey, current, nextLen);
                 if (logs[targetKey].Length == 0) logs.Remove(targetKey);
             }
         }
+    }
+
+    private static string TryReadRedactedWhole(string path, string[] roots)
+    {
+        try { return Redact(ReadWholeLog(path), roots); }
+        catch { return ""; }
     }
 
     private static string TryReadRedactedTail(string path, string[] roots)
@@ -408,9 +437,10 @@ public static class PlaytestDiagnostics
         try
         {
             if (!File.Exists(path)) return "";
-            var raw = Path.GetFileName(path).Equals(NativeRunFileName, StringComparison.OrdinalIgnoreCase)
-                ? ReadLogForSession(path)
-                : ReadTail(path);
+            var fileName = Path.GetFileName(path);
+            var keepsStartAndEnd = fileName.Equals(NativeRunFileName, StringComparison.OrdinalIgnoreCase) ||
+                fileName.Equals(NativeProblemsFileName, StringComparison.OrdinalIgnoreCase);
+            var raw = keepsStartAndEnd ? ReadLogForSession(path) : ReadTail(path);
             return string.IsNullOrEmpty(raw) ? "" : Redact(raw, roots);
         }
         catch
@@ -445,19 +475,33 @@ public static class PlaytestDiagnostics
     /// </summary>
     public static string FailureSummary(string? launchLog, int? exitCode = null)
     {
+        // After a clean exit, the problems log's first error (else warning) names the report.
+        if (exitCode == 0 && SessionFolder(launchLog) is { } sessionFolder &&
+            GameProblemsLog.FirstProblemSummary(sessionFolder) is { } problem)
+            return problem;
         var specificFailure = FindSpecificFailure(launchLog);
         if (specificFailure != null) return specificFailure;
         var windowsClosedHungGame = exitCode == ApplicationHangExitCode;
         return windowsClosedHungGame ? ApplicationHangSummary : GenericFailureSummary;
     }
 
+    /// <summary>The session folder that holds a launcher session log, or null.</summary>
+    internal static string? SessionFolder(string? launchLog)
+    {
+        if (launchLog == null) return null;
+        try
+        {
+            var folder = Path.GetDirectoryName(launchLog);
+            return string.IsNullOrEmpty(folder) ? null : folder;
+        }
+        catch { return null; }
+    }
+
     private static string? FindSpecificFailure(string? launchLog)
     {
         if (launchLog == null) return null;
-        string? directory;
-        try { directory = Path.GetDirectoryName(launchLog); }
-        catch { return null; }
-        if (string.IsNullOrEmpty(directory)) return null;
+        var directory = SessionFolder(launchLog);
+        if (directory == null) return null;
 
         // 1. Check native/crash.txt first for direct crash_report.cpp fault lines.
         var crashFile = Path.Combine(directory, "native", NativeCrashFileName);
@@ -516,7 +560,7 @@ public static class PlaytestDiagnostics
         line.Trim().StartsWith("mw3: rendering failed:", StringComparison.Ordinal);
 
     /// <summary>The graphics settings that apply to the session's engine.</summary>
-    private static object ReportSettings(LauncherSettings settings) => settings.EngineMode == "d7vk"
+    internal static object ReportSettings(LauncherSettings settings) => settings.EngineMode == "d7vk"
         ? new { settings.D7VkResolution, settings.D7VkAntiAliasing,
             settings.D7VkAnisotropicFiltering, settings.D7VkAiTextures }
         : new { settings.Width, settings.Height, settings.WindowMode, settings.AntiAliasing,
@@ -532,7 +576,10 @@ public static class PlaytestDiagnostics
             var text = Path.GetFileName(path).Equals(NativeRunFileName, StringComparison.OrdinalIgnoreCase)
                 ? ReadLogForSession(path)
                 : ReadTail(path);
-            return text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            // The game stamps each mw3.log line with its time and level; the summary rules match the text.
+            return text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(GameProblemsLog.WithoutStamp)
+                .ToArray();
         }
         catch
         {
@@ -624,7 +671,31 @@ public static class PlaytestDiagnostics
             text = text.Replace(root, "<local-path>", StringComparison.OrdinalIgnoreCase);
             text = text.Replace(root.Replace('\\', '/'), "<local-path>", StringComparison.OrdinalIgnoreCase);
         }
-        return text;
+        return RedactMultiplayer(text);
+    }
+
+    // Multiplayer lines the game logs (mw3_main.cpp's network messages): chat text, player names and
+    // the address joined belong to other people, so reports and exports keep only that they happened.
+    private static readonly Regex ChatLine = new(
+        @"(mw3: network: player ).*? says "".*$", RegexOptions.Multiline | RegexOptions.CultureInvariant);
+    private static readonly Regex PlayerEventLine = new(
+        @"(mw3: network: player ).*?( joined| left| is the host)\r?$",
+        RegexOptions.Multiline | RegexOptions.CultureInvariant);
+    private static readonly Regex SessionLine = new(
+        @"(mw3: network: (?:hosting|joined) ?)\S*( on port \d+ as player \d+ )\(.*\)(, the host \d+)",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex JoinFailedLine = new(
+        @"(mw3: network: joining ).*( failed)", RegexOptions.CultureInvariant);
+
+    internal static string RedactMultiplayer(string text)
+    {
+        text = ChatLine.Replace(text, "${1}<player> says <chat removed>");
+        text = PlayerEventLine.Replace(text, "${1}<player>${2}");
+        text = SessionLine.Replace(text, m =>
+            m.Groups[1].Value.StartsWith("mw3: network: joined", StringComparison.Ordinal)
+                ? $"mw3: network: joined <address>{m.Groups[2].Value}(<player>){m.Groups[3].Value}"
+                : $"mw3: network: hosting{m.Groups[2].Value}(<player>){m.Groups[3].Value}");
+        return JoinFailedLine.Replace(text, "${1}<address>${2}");
     }
 
     private static string ScrubSingleQuotedPaths(string text, string[] orderedRoots)
@@ -948,52 +1019,4 @@ public static class PlaytestDiagnostics
         return -1;
     }
 
-    public static void Export(string destination, LauncherSettings settings, IEnumerable<PackManifest> packs,
-        string? launchLog, string applicationRoot, HardwareInventoryData? hardwareInventory = null,
-        string? runtimeVersion = null, int? exitCode = null)
-    {
-        // No profiles, settings files, saves, archives, media, dumps or recursive directory walks.
-        var roots = new[] { applicationRoot, GameRunner.FindRepositoryRoot(applicationRoot) ?? "", settings.GamePath,
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), LauncherPaths.DataRoot };
-        var failureSummary = Redact(FailureSummary(launchLog, exitCode), roots);
-        if (failureSummary.Length > 2000) failureSummary = failureSummary[..2000];
-        var report = new
-        {
-            format_version = 1,
-            created_utc = DateTimeOffset.UtcNow,
-            launcher_version = LauncherVersionString(),
-            runtime_version = runtimeVersion ?? "unknown",
-            mode = settings.EngineMode,
-            exit_code = exitCode,
-            os = OperatingSystemDescription(),
-            architecture = RuntimeInformation.ProcessArchitecture.ToString(),
-            dotnet_runtime = RuntimeInformation.FrameworkDescription,
-            hardware = hardwareInventory ?? HardwareInventory.Capture(),
-            failure_summary = failureSummary,
-            settings = ReportSettings(settings),
-            packs = packs.Select(pack => new { pack.Id, pack.Version, pack.SchemaVersion, pack.IsEnabled, pack.Priority }).ToArray(),
-            note = "Review this local report before sharing. It includes selected settings, pack metadata, a limited hardware inventory and redacted log tails."
-        };
-        var sessionLogs = ReadSessionLogs(launchLog, roots);
-        var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            using (var zip = ZipFile.Open(temporary, ZipArchiveMode.Create))
-            {
-                void AddRaw(string name, string redactedContent)
-                {
-                    using var writer = new StreamWriter(zip.CreateEntry(name, CompressionLevel.Optimal).Open(), Encoding.UTF8);
-                    writer.Write(redactedContent);
-                }
-                AddRaw("report.json", Redact(JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), roots));
-                foreach (var (wireKey, zipName, _) in SessionLogMappings)
-                {
-                    if (sessionLogs.TryGetValue(wireKey, out var content) && !string.IsNullOrEmpty(content))
-                        AddRaw(zipName, content);
-                }
-            }
-            File.Move(temporary, destination, overwrite: true);
-        }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
-    }
 }

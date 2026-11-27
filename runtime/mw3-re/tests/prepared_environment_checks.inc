@@ -343,6 +343,54 @@ void check_environment_packs() {
     }
   } cleanup{folder};
   {
+    EnvironmentFixture stream(folder / "streamed-heights", "operation1");
+    constexpr auto index_name = "environment/stream.json";
+    constexpr auto image_name = "environment/height.r8";
+    stream.put(image_name, "x", "MW34-height-r8-v1");
+    auto &payload = stream.manifest["native_payload"];
+    payload["required_capabilities"] = {{"surface-materials", 1}};
+    payload["required_formats"].push_back("MW34-c1-height-stream-v1");
+    payload["required_formats"].push_back("MW34-height-r8-v1");
+    stream.registry["streamed_height_materials"] = index_name;
+    const EnvJson document = {
+        {"schema_version", 1},
+        {"images", {{{"member", image_name}, {"width", 1}, {"height", 1}}}},
+        {"subsets", {{{"world", 0}, {"x", 13}, {"z", 16}, {"images", {0}}}}},
+        {"targets", {{{"asset_id", "c1:cliff"},
+                      {"source", {{"kind", "gamez-zbd-v27"}, {"member", "zbd/c1/gamez.zbd"},
+                                  {"sha256", env_test_digest("terrain")},
+                                  {"bytes", 7}, {"model_slot", 9}}},
+                      {"mesh_uv_hash", "0000000000000009"},
+                      {"polygon_materials", {"txwall01"}},
+                      {"surface_keys", {{{"width", 1}, {"height", 1}, {"format", 1},
+                                         {"hash", "0000000000000049"}}}},
+                      {"height_bindings", {{{"image", 0}, {"amplitude", 0.8}}}}}}}};
+    const auto save = [&](const EnvJson &value) {
+      stream.put(index_name, value.dump(), "MW34-c1-height-stream-v1");
+      stream.save();
+    };
+    save(document);
+    const auto loaded = load_environment_packs({stream.path()});
+    const auto &cliff = loaded.material_targets.at("operation1").front();
+    require(loaded.streamed_heights && loaded.surface_budget->used() == 0 && !cliff.pack &&
+                cliff.streamed_bindings.at(0)->amplitude == 0.8f,
+            "C1 stream must admit verified metadata without decoding R8 payloads");
+    for (unsigned fault = 0; fault != 6; ++fault) {
+      auto bad = document;
+      switch (fault) {
+      case 0: bad["images"][0]["member"] = "../height.r8"; break;
+      case 1: bad["images"][0]["width"] = 2; break;
+      case 2: bad["subsets"][0]["images"].push_back(0); break;
+      case 3: bad["targets"][0]["source"]["member"] = "zbd/t1/gamez.zbd"; break;
+      case 4: bad["targets"][0]["height_bindings"][0]["amplitude"] = 0.75; break;
+      case 5: bad["targets"][0]["surface_keys"][0]["width"] = 2; break;
+      }
+      save(bad);
+      env_test_reject([&] { load_environment_packs({stream.path()}); },
+                      "Invalid C1 streamed height index was admitted");
+    }
+  }
+  {
     EnvironmentFixture targets(folder / "material-targets");
     targets.put("environment/height.bin", build_bwsfm1(9, .05f, .05f), "BWSFM1");
     targets.manifest["native_payload"]["required_capabilities"] = {{"surface-materials", 1}};

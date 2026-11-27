@@ -79,7 +79,8 @@ IaModsScreen::IaModsScreen(Engine& e, Handle s, bool multiplayer)
     : MenuScreen(e, s), accept_btn(e, kAccept), back(e, kBack), all_off(e, kAllOff), ticks(e), mp(multiplayer) {
   mods_screen_target(e);
   const bool moving = !e.fast_menu();
-  if (load("dialog.zrd", "IAMODSDIALOG", moving)) {
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
+  if (load("dialog.zrd", "IAMODSDIALOG", moving || !bake_menu)) {
     zimg::Texture* img = nullptr;
     uint8_t bg_moving = 0;
     e.main_menu_background(&img, &bg_moving);
@@ -95,7 +96,7 @@ IaModsScreen::IaModsScreen(Engine& e, Handle s, bool multiplayer)
     if ((own_lines = mods_screen_lines(lines2.image, false))) lines2.set_image(own_lines);  // no box at the left
     bind_button(&accept_btn, "ACCEPT");
     bind_button(&back, "BACK");
-    if (!moving) {
+    if (bake_menu) {
       bake();
       remove(&background);
       remove(&lines);

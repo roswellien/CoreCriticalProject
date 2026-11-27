@@ -1,6 +1,6 @@
 #pragma once
 
-#include "frontend/core_critical/renderer/surface_materials.hpp"
+#include "frontend/core_critical/renderer/streamed_height_cache.hpp"
 #include "platform/orion_guard_fit.h"
 
 #include <algorithm>
@@ -124,8 +124,18 @@ struct MaterialTargetSource {
            std::tie(other.kind, other.member, other.sha256, other.bytes, other.model_slot);
   }
 };
+struct StreamedHeightBinding {
+  std::uint32_t image{};
+  float amplitude{};
+};
+struct StreamedHeightIndex {
+  std::vector<mw34::materials::StreamedHeightPin> images;
+  std::map<std::tuple<std::uint32_t, std::int32_t, std::int32_t>,
+           std::vector<std::uint32_t>> subsets;
+};
 struct MaterialTarget {
   std::string asset_id, sidecar_path, sidecar_sha256;
+  std::vector<std::optional<StreamedHeightBinding>> streamed_bindings;
   MaterialTargetSource source;
   std::uint64_t mesh_uv_hash{};
   std::vector<std::string> polygon_materials;
@@ -142,10 +152,12 @@ inline bool require_material_target_source(const MaterialTarget &target,
   return true;
 }
 struct EnvironmentSelection {
+  std::shared_ptr<const StreamedHeightIndex> streamed_heights;
   std::shared_ptr<mw34::materials::SurfaceDecodedBudget> surface_budget;
   std::map<std::string, std::string> banks;
   std::map<std::string, std::map<EnvironmentRole, std::string>> resources;
   std::map<EnvironmentRole, std::string> detail_digests;
+  std::map<std::string, std::string> surface_material_digests;
   std::map<std::string, MissionAmbientOverride> mission_ambient;
   std::map<std::string, MissionSkyOverride> mission_sky;
   std::map<std::string, MissionSkyGlowOverride> mission_sky_glow;

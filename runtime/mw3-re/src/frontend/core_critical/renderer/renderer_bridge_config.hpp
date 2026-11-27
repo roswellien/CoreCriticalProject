@@ -15,6 +15,8 @@ struct RendererBridgeConfig {
   bool dxgi_present{true};
   std::string window_mode{"windowed"};
   bool vsync{true};
+  bool require_immediate_present{false};
+  bool strict_swapchain_readback{false};
   std::string present_mode;
 
   // Output / Resolution
@@ -37,8 +39,9 @@ struct RendererBridgeConfig {
   bool geometry_debug_normals{false};
   bool gpu_models{false};
   bool normal_maps_enabled{false};
-  // Transport is opt-in for internal qualification; no CLI/capability claim.
+  // Opt-in parallax occlusion mapping: 0 = off, 1 = low, 2 = high.
   bool parallax_materials{false};
+  unsigned parallax_quality{0};
   bool prepared_cache{true};
 
   // Lighting / Sun
@@ -90,6 +93,12 @@ struct RendererBridgeConfig {
   std::string texture_staging;
   std::string sky_debug;
   std::string sun_shadow_audit;
+
+  // Playtest report test switches (#521); 0 is off. Each prints a
+  // "mw3: test switch" line so a report made with one can't pass for real.
+  unsigned test_vram_budget_mb{0};  // MW3_TEST_VRAM_BUDGET_MB: the health budget for device-local heaps
+  unsigned test_fail_alloc{0};      // MW3_TEST_FAIL_ALLOC: failed play texture allocations to inject
+  bool test_device_lost{false};     // MW3_TEST_DEVICE_LOST: hang the GPU 30 s into the first mission
 
   static RendererBridgeConfig from_diagnostic_env(bool include_local_lights = true,
                                                    bool include_sun_shadows = true) {
@@ -144,6 +153,13 @@ struct RendererBridgeConfig {
     if (const char *v = std::getenv("MW3_CC_CPU_PROFILE")) {
       cfg.cpu_profile = (std::strcmp(v, "1") == 0);
     }
+    auto read_env_count = [](const char *name) {
+      const char *value = std::getenv(name);
+      return value ? unsigned(std::strtoul(value, nullptr, 10)) : 0u;
+    };
+    cfg.test_vram_budget_mb = read_env_count("MW3_TEST_VRAM_BUDGET_MB");
+    cfg.test_fail_alloc = read_env_count("MW3_TEST_FAIL_ALLOC");
+    cfg.test_device_lost = read_env_count("MW3_TEST_DEVICE_LOST") != 0;
     if (const char *v = std::getenv("MW3_CC_PREPARED_CACHE")) {
       if (std::strcmp(v, "0") == 0)
         cfg.prepared_cache = false;

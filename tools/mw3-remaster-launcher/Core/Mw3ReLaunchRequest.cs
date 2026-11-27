@@ -22,6 +22,7 @@ public sealed record Mw3RePlanningOptions
     public Mw3ReLighting Lighting { get; init; } = Mw3ReLighting.Off;
     public Mw3ReFlareStyle FlareStyle { get; init; } = Mw3ReFlareStyle.Modern;
     public bool Pom { get; init; } = false;
+    public string? PomQuality { get; init; } = null;
     public bool Vsync { get; init; } = false;
     public bool DiskCache { get; init; } = true;
     public IReadOnlyList<string> Assets { get; init; } = Array.Empty<string>();
@@ -97,20 +98,25 @@ public static class Mw3ReLaunchRequest
             Mw3ReFlareStyle.Original => "original",
             _ => throw new InvalidDataException("Unknown native flare style.")
         };
+        if (options.PomQuality is not null and not ("off" or "low" or "high"))
+            throw new InvalidDataException("Unknown native POM quality.");
+        if (options.Pom && options.PomQuality == "off")
+            throw new InvalidDataException("Conflicting native POM options.");
+        var pomEnabled = options.Pom || options.PomQuality is "low" or "high";
         // The preview ships its planner with the launcher, so it has no pinned planner roles to check;
         // the planner still refuses POM without normal lighting.
         if (options.Preview != null)
             return CreatePreview(contract, options, gameDirectory, dataRoot, id, renderer, antialiasing,
                 windowMode, lighting, flareStyle, indeoCodec);
         // This pinned combined runtime/planner claim is observational, not trusted execution admission.
-        if (options.Pom && (options.Lighting != Mw3ReLighting.Normal ||
+        if (pomEnabled && (options.Lighting != Mw3ReLighting.Normal ||
             !contract.Capabilities.TryGetValue("pom", out var versions) || !versions.Contains(1) ||
             !contract.Roles.ContainsKey("coordinator") || !contract.Roles.ContainsKey("python")))
             throw new InvalidDataException("Native POM planning requires normal lighting and compatible pinned runtime/planner roles.");
         // Do not create directories or repair input paths; the sole planner validates their lexical contract.
         var request = new JsonObject
         {
-            ["schema_version"] = options.Pom ? 3 : 2, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
+            ["schema_version"] = pomEnabled ? 3 : 2, ["engine"] = "mw3-re", ["runtime_root"] = contract.Root,
             ["executable"] = contract.Executable, ["game_dir"] = gameDirectory,
             ["indeo_codec"] = indeoCodec, ["disk_cache"] = options.DiskCache,
             ["write_dir"] = Path.Combine(dataRoot, "mw3-re", "profiles", id), ["renderer"] = renderer,
@@ -121,7 +127,8 @@ public static class Mw3ReLaunchRequest
             ["flare_style"] = flareStyle,
             ["assets"] = new JsonArray(options.Assets.Select(asset => (JsonNode?)JsonValue.Create(asset)).ToArray())
         };
-        if (options.Pom) request["visuals"] = new JsonObject { ["pom"] = true };
+        var visuals = BuildVisuals(options);
+        if (visuals != null) request["visuals"] = visuals;
         return GameRunner.SerializeLaunchProfile(request);
     }
 
@@ -164,8 +171,22 @@ public static class Mw3ReLaunchRequest
                 ["stock_headlight_catalog"] = preview.StockHeadlightCatalog
             }
         };
-        if (options.Pom) request["visuals"] = new JsonObject { ["pom"] = true };
+        var visuals = BuildVisuals(options);
+        if (visuals != null) request["visuals"] = visuals;
         return GameRunner.SerializeLaunchProfile(request);
+    }
+
+    private static JsonObject? BuildVisuals(Mw3RePlanningOptions options)
+    {
+        if (options.PomQuality is not null)
+        {
+            if (options.PomQuality is not ("off" or "low" or "high"))
+                throw new InvalidDataException("Unknown native POM quality.");
+            if (options.PomQuality == "off")
+                return null;
+            return new JsonObject { ["pom"] = true, ["pom_quality"] = options.PomQuality };
+        }
+        return options.Pom ? new JsonObject { ["pom"] = true } : null;
     }
 
     private static JsonArray Paths(IEnumerable<string> paths) =>

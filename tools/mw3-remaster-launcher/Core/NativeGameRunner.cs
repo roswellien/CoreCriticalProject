@@ -59,6 +59,12 @@ public sealed class NativeGameRunner
 
     public string? LastLogPath { get; private set; }
     public string? LastRuntimeVersion { get; private set; }
+
+    /// <summary>
+    /// Milliseconds from process start to the game's first frame in the latest launch, or
+    /// null when it never drew one. Problems logged before it are startup noise.
+    /// </summary>
+    public long? LastFirstFrameMilliseconds { get; private set; }
     public Task<int>? LastSessionCompletion { get; private set; }
 
     public static Mw3ReWindowMode WindowModeForSettings(string savedWindowMode) => savedWindowMode switch
@@ -216,7 +222,13 @@ public sealed class NativeGameRunner
                 "original" => Mw3ReFlareStyle.Original,
                 _ => throw new InvalidOperationException("Unknown lens flare style: " + settings.FlareStyle)
             },
-            Pom = true,
+            Pom = settings.PomQuality is "low" or "high",
+            PomQuality = settings.PomQuality switch
+            {
+                "off" => null,
+                "low" or "high" => settings.PomQuality,
+                _ => throw new InvalidOperationException("Unknown parallax occlusion mapping quality: " + settings.PomQuality)
+            },
             // The environment switch stays a support override for a saved "on".
             DiskCache = settings.LoadCache && Environment.GetEnvironmentVariable("MW3_DISK_CACHE") != "0",
             Preview = new Mw3RePreviewOptions
@@ -285,6 +297,7 @@ public sealed class NativeGameRunner
         }
 
         LastRuntimeVersion = null;
+        LastFirstFrameMilliseconds = null;
         LastSessionCompletion = null;
         NativeSessionDiagnosticsBaseline? baseline = null;
         // Keep updates and pack changes out of the active MW3-RE session.
@@ -301,8 +314,10 @@ public sealed class NativeGameRunner
                 try
                 {
                     var exit = await GameRunner.WaitForCompletionAsync(process).ConfigureAwait(false);
-                    if (exit != 0)
-                        PlaytestDiagnostics.CollectNativeSessionArtifacts(baseline, session);
+                    // Copy the game's own log on every exit, not only crashes: a session that
+                    // ran out of video memory can recover and exit cleanly, and Export Report
+                    // reads this copy, so without it a clean exit exports no game log at all.
+                    PlaytestDiagnostics.CollectNativeSessionArtifacts(baseline, session);
                     return exit;
                 }
                 finally
@@ -451,7 +466,8 @@ public sealed class NativeGameRunner
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         log("MW3-RE PID " + process.Id);
-        _ = ObserveReadinessAsync(process, readyFile, log);
+        _ = ObserveReadinessAsync(process, readyFile, log,
+            milliseconds => LastFirstFrameMilliseconds = milliseconds);
         return process;
     }
 
@@ -532,7 +548,8 @@ public sealed class NativeGameRunner
     /// Follows the game's ready/status files (they work even when the GUI native host sends its
     /// stdout to its own log) until the main menu is on screen, logging timings and progress.
     /// </summary>
-    public static async Task ObserveReadinessAsync(Process process, string readyFile, Action<string> log)
+    public static async Task ObserveReadinessAsync(Process process, string readyFile, Action<string> log,
+        Action<long>? onFirstFrame = null)
     {
         var clock = Stopwatch.StartNew();
         string lastStatus = "";
@@ -561,7 +578,9 @@ public sealed class NativeGameRunner
                 if (!shown && File.Exists(readyFile))
                 {
                     shown = true;
-                    log($"Native first frame: {clock.ElapsedMilliseconds} ms after process start");
+                    var firstFrameMilliseconds = clock.ElapsedMilliseconds;
+                    onFirstFrame?.Invoke(firstFrameMilliseconds);
+                    log($"Native first frame: {firstFrameMilliseconds} ms after process start");
                 }
                 if (!menu && File.Exists(readyFile + ".menu"))
                 {

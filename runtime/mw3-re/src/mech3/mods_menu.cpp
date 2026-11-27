@@ -375,8 +375,9 @@ ModsScreen::ModsScreen(Engine& e, Handle s)
       enabled(ticks.ticks) {
   target_buffers(e);
   const bool moving = !e.fast_menu();
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
   // Made when MODS is pressed, past the main menu's read: dialog.zrd read again.
-  if (load("dialog.zrd", "MODSDIALOG", moving)) {
+  if (load("dialog.zrd", "MODSDIALOG", moving || !bake_menu)) {
     zimg::Texture* img = nullptr;
     uint8_t bg_moving = 0;
     e.main_menu_background(&img, &bg_moving);
@@ -392,7 +393,7 @@ ModsScreen::ModsScreen(Engine& e, Handle s)
     if ((own_lines = campaign_lines(lines2.image))) lines2.set_image(own_lines);
     bind_button(&enter, "ENTER");
     bind_button(&back, "BACK");
-    if (!moving) {
+    if (bake_menu) {
       bake();
       remove(&background);
       remove(&lines);

@@ -1,4 +1,7 @@
 #include "depth_transfer.hpp"
+#include "device_diagnostics.hpp"
+#include "frontend/sdl/game_health.h"
+#include "frontend/sdl/log.h"
 #include "sky_backdrop.hpp"
 // Vulkan scene renderer for the Direct3D 6 provider (adapted from
 // tools/vulkan-probe/replay.cpp). The provider records a scene
@@ -37,6 +40,7 @@
 #include "geometry/resource.hpp"
 #include "launcher_display.hpp"
 #include "light_cull_tiled_comp.h"
+#include "test_gpu_hang_comp.h"
 #include "menu_ripple_frag.h"
 #include "model_scene_vert.h"
 #include "native_geometry_vert.h"
@@ -77,6 +81,7 @@
 #include <new>
 #include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -338,7 +343,25 @@ public:
       throw std::runtime_error("Invalid Vulkan quality configuration");
   }
   bool alpha_target() const { return rgba; }
+  struct ResidentPresentResult {
+    VkResult acquire = VK_NOT_READY;
+    VkResult present = VK_NOT_READY;
+    double completion{};
+    // Borrowed until the worker starts its next renderer operation.
+    std::span<const uint8_t> pixels;
+    bool rgba_pixels{};
+  };
+  struct VideoMemoryPressure {
+    uint64_t recoveries{}, model_omissions{}, texture_substitutions{}, preload_stops{};
+  };
+  VideoMemoryPressure memory_pressure;
   std::string device_name;
+  uint32_t driver_version{};
+  uint64_t swapchain_generation{};
+  VkPresentModeKHR swapchain_mode = VK_PRESENT_MODE_MAX_ENUM_KHR;
+  bool immediate_swapchain() const {
+    return swapchain && swapchain_mode == VK_PRESENT_MODE_IMMEDIATE_KHR;
+  }
   mw34::temporal::History camera_history;
   void invalidate_camera_history(mw34::temporal::Reset reason) {
     if (bridge_config.temporal_inputs)
@@ -355,7 +378,7 @@ public:
       if (pair.current && pair.current->mode < 32)
         mode_mask |= 1U << pair.current->mode;
     }
-    std::fprintf(stderr,
+    MW3_LOG(I,
                  "Camera history frame=%llu views=%zu pairs=%u mode_mask=%x "
                  "reset=%s rejected=%s mismatch=%s\n",
                  (unsigned long long)frame, camera_history.pairs().size(),
@@ -669,7 +692,8 @@ public:
 #if defined(_WIN32)
                         , sdlfe::EditorUi *editor = nullptr
 #endif
-                        ) {
+                        , ResidentPresentResult *result = nullptr) {
+    const bool read_strict_pixels = result && bridge_config.strict_swapchain_readback;
     mw34::timing::PresentBoundaryScope<mw34::timing::GpuResourceTiming>
         gpu_timing_scope(gpu_resource_timing_);
 #if defined(_WIN32)
@@ -701,11 +725,20 @@ public:
       resize_present_window(hwnd);
     if (!swapchainReady())
       return true;
+    if (read_strict_pixels && (swapExtent.width != w || swapExtent.height != h))
+      throw std::runtime_error("strict Vulkan swapchain extent differs from benchmark size");
+    const size_t pixel_bytes = size_t(swapExtent.width) * swapExtent.height * 4;
+    if (read_strict_pixels)
+      ensure(readback, pixel_bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     unsigned index = 0;
     VkResult r = VK_SUCCESS;
     if (!dxgi.active()) {
-      r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired,
+      const uint64_t acquire_timeout_ns = read_strict_pixels ? 5000000000ULL : UINT64_MAX;
+      r = f.vkAcquireNextImageKHR(device, swapchain, acquire_timeout_ns, acquired,
                                   VK_NULL_HANDLE, &index);
+      if (result) result->acquire = r;
+      if (read_strict_pixels && r != VK_SUCCESS)
+        return false;
       if ((r == VK_ERROR_OUT_OF_DATE_KHR ||
            r == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)) {
         dropSwapchain();
@@ -811,7 +844,26 @@ public:
 #endif
     if (dxgi.active())
       dxgi.release_image(presentCmd, f.vkCmdPipelineBarrier);
-    else
+    else if (read_strict_pixels) {
+      bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+          VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+          VK_PIPELINE_STAGE_TRANSFER_BIT);
+      VkBufferImageCopy copy{};
+      copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+      copy.imageExtent = {swapExtent.width, swapExtent.height, 1};
+      f.vkCmdCopyImageToBuffer(presentCmd, swap_target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               readback.buffer, 1, &copy);
+      VkMemoryBarrier host_read{};
+      host_read.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+      host_read.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      host_read.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+      f.vkCmdPipelineBarrier(presentCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &host_read, 0, nullptr, 0, nullptr);
+      bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+          VK_ACCESS_TRANSFER_READ_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
+          VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    } else
       bar(swap_target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
           VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0,
           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
@@ -869,9 +921,18 @@ public:
     pi.pSwapchains = &swapchain;
     pi.pImageIndices = &index;
     r = f.vkQueuePresentKHR(queue, &pi);
+    if (result) {
+      result->completion = std::chrono::duration<double>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      result->present = r;
+    }
     if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
       ++presents;
       ++resident_presents;
+    }
+    if (read_strict_pixels && r != VK_SUCCESS) {
+      presentInFlight = true; // The command buffer was submitted before WSI failed.
+      return false;
     }
     if ((r == VK_ERROR_OUT_OF_DATE_KHR ||
          r == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) ||
@@ -892,6 +953,14 @@ public:
     }
     check(r, "present");
     presentInFlight = true;
+    if (read_strict_pixels) {
+      check(f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
+            "wait for strict swapchain pixel readback");
+      presentInFlight = false;
+      result->pixels = {static_cast<const uint8_t *>(readback.mapped), pixel_bytes};
+      result->rgba_pixels = swapFormat == VK_FORMAT_R8G8B8A8_UNORM ||
+                            swapFormat == VK_FORMAT_R8G8B8A8_SRGB;
+    }
     return true;
 #if defined(_WIN32)
     } catch (...) {
@@ -1271,7 +1340,7 @@ public:
   std::vector<std::uint8_t> tiled_draw_modes_last;
   std::uint64_t normal_draws{};
   std::uint64_t height_uploads{}, height_uploaded_bytes{}, height_cache_hits{},
-      height_retired_images{};
+      height_retired_images{}, height_draws{};
   std::uint64_t presents{};
   bool presentInFlight{};
   // True when the cached texture for this guest surface already holds content
@@ -1638,6 +1707,9 @@ public:
     }
     if (!device)
       init();
+    // #521: at most once a second; every frame renders here, shown or not. After
+    // init(), so the first snapshot sees the heaps and the test hang has a device.
+    refresh_health_snapshot();
     if (s.width != width || s.height != height || scale_req != scale ||
         s.frontend_canvas != target_frontend)
       target(s.width, s.height, s.frontend_canvas);
@@ -1725,8 +1797,8 @@ private:
       const auto cleared = leading_full_clear(s);
       if (!s.hud && !reduced_world_active && !s.draws.empty() &&
           fxaa_enabled() && !retained_color_warning) {
-        std::fprintf(
-            stderr,
+        MW3_LOG(
+            I,
             "World resolution: non-reconstructed submissions retain output "
             "resolution; "
             "world FXAA applies separately to reconstructed opaque batches\n");
@@ -1868,6 +1940,7 @@ private:
           }
           bound[i] = &white;
           stand_in_slots[i] = true;
+          ++memory_pressure.texture_substitutions;
           continue;
         }
         if (retry != texture_retry_at_.end())
@@ -1885,6 +1958,7 @@ private:
       if (c.image && (c.width != t.width || c.height != t.height))
         destroy(c);
       if (!c.image && !create_play_texture(c, t)) {
+        ++memory_pressure.texture_substitutions;
         // create_play_texture erased c; draw white until the pixels come back.
         bound[i] = &white;
         stand_in_slots[i] = true;
@@ -2021,28 +2095,31 @@ private:
                            z = matrix[row * 4 + 2];
               return std::sqrt(x * x + y * y + z * z);
             };
-            std::fprintf(stderr,
-                         "Tiled lights: affine all-light fallback draw=%zu source=%s "
-                         "model_id=",
-                         at, d.model ? "model" : "TL");
-            if (d.model)
-              std::fprintf(stderr, "%llu", static_cast<unsigned long long>(d.model->geometry->key));
-            else
-              std::fprintf(stderr, "none");
-            std::fprintf(stderr,
-                         " model_name=unavailable scale=(%.6g,%.6g,%.6g) "
-                         "translation=(%.6g,%.6g,%.6g) matrix=[",
-                         matrix_scale(0), matrix_scale(1), matrix_scale(2), matrix[3], matrix[7],
-                         matrix[11]);
-            for (unsigned element = 0; element < matrix.size(); ++element)
-              std::fprintf(stderr, "%s%.6g", element ? "," : "", matrix[element]);
-            if (d.model) {
-              std::fprintf(stderr, "] camera=[");
-              for (unsigned element = 0; element < d.model->camera.size(); ++element)
-                std::fprintf(stderr, "%s%.6g", element ? "," : "",
-                             d.model->camera[element]);
+            // One log line is built from pieces, so it goes out in a single MW3_LOG call.
+            char number[48];
+            const std::string model_id =
+                d.model ? std::to_string(static_cast<unsigned long long>(d.model->geometry->key))
+                        : std::string("none");
+            std::string matrix_text;
+            for (unsigned element = 0; element < matrix.size(); ++element) {
+              std::snprintf(number, sizeof number, "%s%.6g", element ? "," : "", matrix[element]);
+              matrix_text += number;
             }
-            std::fprintf(stderr, "] reason=%s\n", reason);
+            if (d.model) {
+              matrix_text += "] camera=[";
+              for (unsigned element = 0; element < d.model->camera.size(); ++element) {
+                std::snprintf(number, sizeof number, "%s%.6g", element ? "," : "",
+                              d.model->camera[element]);
+                matrix_text += number;
+              }
+            }
+            MW3_LOG(W,
+                    "Tiled lights: affine all-light fallback draw=%zu source=%s "
+                    "model_id=%s model_name=unavailable scale=(%.6g,%.6g,%.6g) "
+                    "translation=(%.6g,%.6g,%.6g) matrix=[%s] reason=%s\n",
+                    at, d.model ? "model" : "TL", model_id.c_str(), matrix_scale(0),
+                    matrix_scale(1), matrix_scale(2), matrix[3], matrix[7], matrix[11],
+                    matrix_text.c_str(), reason);
           };
           if (!mw34::tiled::try_affine_camera_or_all_lights(
                   camera, tiledDrawViews[at], allEffectLights, tiledAffineFallbackReported,
@@ -2080,7 +2157,7 @@ private:
             // Preserve this exact draw's lighting when the tiled optimization is full.
             tiledDrawViews[at] = allEffectLights;
             if (!tiledOverflowReported) {
-              std::fprintf(stderr, "Tiled lights: GPU all-light overflow path; "
+              MW3_LOG(W, "Tiled lights: GPU all-light overflow path; "
                                    "views=%zu bytes=%llu range=%llu\n",
                            budget.views, static_cast<unsigned long long>(budget.used),
                            static_cast<unsigned long long>(budget.range));
@@ -2121,6 +2198,9 @@ private:
               sunChecked[geometry.key] = geometry.hash;
             }
             u = mw34::sun::uniform(instance.sun_normal, environment);
+            u.projection = {instance.projection[1], instance.projection[2],
+                            instance.projection[3], instance.projection[4]};
+            u.extra[0] = instance.projection[0];
             u.world = instance.sun_world;
             u.geometry_fog0 = instance.geometry_fog0;
             u.geometry_fog1 = instance.geometry_fog1;
@@ -2142,7 +2222,7 @@ private:
             u.surface_parameters = draw.surface_parameters;
             u.surface_eye = draw.surface_eye;
           }
-          height_uniform(s, draw, u);
+          height_uniform(s, draw, draw_heights[at], u);
           if (skyEyeValid) {
             const auto &e =
                 draw.sun_tl && !draw.sky ? draw.sun_tl->camera_world : skyEye;
@@ -3084,6 +3164,7 @@ private:
     VkDeviceSize memory_offset{}, memory_size{}, memory_alignment{1};
   };
 #include "tiled_light_gpu.inc"
+#include "gpu_hang_test.inc"
   struct Image {
     VkImage image{};
     VkDeviceMemory memory{};
@@ -3301,7 +3382,7 @@ private:
     check(f.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gi, nullptr,
                                       &shadowPipeline),
           "sun shadow pipeline");
-    std::fprintf(stderr,
+    MW3_LOG(I,
                  "Sun shadows: %ux%u %s map, range +-%.1f, receiver bias %.3f, "
                  "darkness %.2f, %s PCF; GPU replacement models cast\n",
                  size, size, format == VK_FORMAT_D32_SFLOAT ? "D32" : "D16",
@@ -3379,7 +3460,7 @@ private:
                                 ? nullptr
                                 : bridge_config.sun_shadow_audit.c_str();
         audit && std::strtoull(audit, nullptr, 10) == sun_shadow_scenes) {
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "Sun shadow audit scene %llu camera %.2f %.2f %.2f\n",
                    (unsigned long long)sun_shadow_scenes, m[3], m[7], m[11]);
       for (const auto &d : s.draws) {
@@ -3394,7 +3475,7 @@ private:
             lo[r] = std::min(lo[r], x);
             hi[r] = std::max(hi[r], x);
           }
-        std::fprintf(stderr,
+        MW3_LOG(I,
                      "  caster key %016llx verts %zu world x %.2f..%.2f y "
                      "%.2f..%.2f z %.2f..%.2f\n",
                      (unsigned long long)d.model->geometry->key,
@@ -3408,8 +3489,8 @@ private:
     }
     if (frame.active &&
         (sun_shadow_scenes < 3 || sun_shadow_scenes % 600 == 0)) {
-      std::fprintf(
-          stderr,
+      MW3_LOG(
+          I,
           "Sun shadow scene %llu: camera %.2f %.2f %.2f forward %.3f %.3f, "
           "casters %zu (%u ahead, %u outside region), texel %.4f\n",
           (unsigned long long)sun_shadow_scenes, m[3], m[7], m[11], fx, fz,
@@ -3417,13 +3498,13 @@ private:
       // Projection contract: screen = centre + scale * camera.xy / camera.z for
       // both receiver kinds.
       const auto &tp = camera->projection;
-      std::fprintf(stderr, "  TL receivers: scale %.3f %.3f centre %.2f %.2f\n",
+      MW3_LOG(I, "  TL receivers: scale %.3f %.3f centre %.2f %.2f\n",
                    double(tp[1]) * tp[0], double(tp[2]) * tp[0], tp[3], tp[4]);
       for (const auto &d : s.draws)
         if (d.model && !d.model->world && sun_lit(d)) {
           const auto &p = d.model->projection;
           const auto &w = d.model->sun_world;
-          std::fprintf(stderr,
+          MW3_LOG(I,
                        "  GPU model: scale %.3f %.3f centre %.2f %.2f, camera "
                        "origin %.2f %.2f %.2f, world origin %.2f %.2f %.2f\n",
                        double(p[1]) * p[0], double(p[2]) * p[0], p[3], p[4],
@@ -3796,6 +3877,17 @@ private:
   PFN_vkGetBufferMemoryRequirements2 buffer_memory_requirements2_{};
   PFN_vkGetPhysicalDeviceMemoryProperties2 memory_properties2_{};
   bool memory_budget_supported_{};
+  // #521: once-per-session report state. FrameRenderer hands every Renderer it
+  // builds the same session (set_health_session); a Renderer made on its own
+  // (checks, tools) uses its own.
+  sdlfe::HealthSession own_health_session_;
+  sdlfe::HealthSession *health_session_{&own_health_session_};
+  // The health line's renderer figures, refreshed by the render thread at most
+  // once a second and read by the producer thread.
+  mutable std::mutex health_mutex_;
+  sdlfe::HealthSnapshot health_snapshot_{};
+  std::chrono::steady_clock::time_point health_refreshed_at_{};
+  DeviceFaultInfoFn device_fault_info_{};
   bool preload_active_{};
   // Opt-in CPU scopes distinguish producer work, driver allocation, command
   // recording and fence completion; allocation scopes nest inside resource scopes.
@@ -3910,6 +4002,7 @@ private:
   // (#496): crash reports carry the log, so the next report shows whether the
   // game's own use or something else filled the card.
   void log_video_memory_full(const char *kind, VkDeviceSize bytes) {
+    ++memory_pressure.recoveries;
     const auto now = std::chrono::steady_clock::now();
     const bool logged_before = video_memory_full_log_count_ > 0;
     if (logged_before && now - video_memory_full_logged_at_ < std::chrono::minutes(1))
@@ -3922,18 +4015,115 @@ private:
         continue;
       VkDeviceSize driver_usage = 0, driver_budget = 0;
       if (heap_budget(heap, driver_usage, driver_budget))
-        std::fprintf(stderr,
+        MW3_LOG(W,
                      "mw3: video memory full: %s %llu bytes; game %.0f MiB in %zu allocations; "
                      "driver usage %.0f of budget %.0f MiB (heap %u)\n",
                      kind, (unsigned long long)bytes, tracked_heap_bytes(heap) / mib,
                      memory_allocations_.size(), driver_usage / mib, driver_budget / mib, heap);
       else
-        std::fprintf(stderr,
+        MW3_LOG(W,
                      "mw3: video memory full: %s %llu bytes; game %.0f MiB in %zu allocations; "
                      "driver figures unavailable (heap %u)\n",
                      kind, (unsigned long long)bytes, tracked_heap_bytes(heap) / mib,
                      memory_allocations_.size(), heap);
     }
+  }
+  // A play-time allocation that didn't fit (#496, #521): the existing log line,
+  // then once per session the per-heap table, and a health event the launcher
+  // reads. Both failure paths call this one function so they can't drift apart.
+  void note_allocation_failure(const char *kind, VkDeviceSize bytes) {
+    log_video_memory_full(kind, bytes);
+    if (!health_session_->memory_table_printed.exchange(true)) {
+      print_memory_table(stdout, memory_report());  // facts beside the warning: level I
+      ++health_session_->memory_table_log_count;
+    }
+    const double now = sdlfe::process_seconds();
+    if (health_session_->limiter.allow(sdlfe::HealthEvent::alloc_failed, now)) {
+      MW3_LOG(W, "%s\n", sdlfe::format_alloc_failed_event(kind, bytes, now).c_str());
+      std::fflush(stdout);
+    }
+  }
+  // The setup facts the launcher puts in a report's header (#521), on stdout,
+  // once per session: every mission start builds a new Renderer and runs init().
+  void print_renderer_header_once() {
+    if (health_session_->renderer_header_printed.exchange(true))
+      return;
+    VkPhysicalDeviceProperties properties{};
+    f.vkGetPhysicalDeviceProperties(gpu, &properties);
+    sdlfe::print_lines(stdout, sdlfe::renderer_header_lines(properties.deviceName, properties.apiVersion,
+                                                            properties.vendorID, properties.driverVersion,
+                                                            memory_report()));
+  }
+  // #521 device fault report. check() is static and is where every VkResult
+  // passes, so the renderer to report from is registered here: set when its
+  // device is made, cleared (only if still its own) at shutdown. With several
+  // live devices it names the newest, which is exact with the game's one.
+  static std::atomic<Renderer *> &fault_owner() {
+    static std::atomic<Renderer *> owner{nullptr};
+    return owner;
+  }
+  static std::atomic<bool> &fault_reported() {
+    static std::atomic<bool> reported{false};
+    return reported;
+  }
+  // Prints the driver's fault report once per process, on the first lost device.
+  // With no registered device (a lost device during vkCreateDevice, or after
+  // shutdown) there is nothing to ask, and the once flag stays free for a
+  // later real loss.
+  static void report_device_fault_once() noexcept {
+    Renderer *owner = fault_owner().load();
+    if (!owner || !owner->device || fault_reported().exchange(true))
+      return;
+    sdlfe::log::line(sdlfe::log::Level::error, "mw3: graphics device lost; the driver's fault report follows\n");
+    print_device_fault(stderr, owner->device, owner->device_fault_info_);
+  }
+#ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
+  VkPhysicalDeviceFaultFeaturesEXT device_fault_features_{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
+  // True when the device reports VK_EXT_device_fault's deviceFault feature.
+  bool device_fault_supported(PFN_vkGetInstanceProcAddr get) {
+    auto features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+        get(instance, "vkGetPhysicalDeviceFeatures2"));
+    if (!features2)
+      features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+          get(instance, "vkGetPhysicalDeviceFeatures2KHR"));
+    if (!features2)
+      return false;
+    VkPhysicalDeviceFaultFeaturesEXT fault{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
+    VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    features.pNext = &fault;
+    features2(gpu, &features);
+    device_fault_features_.deviceFault = fault.deviceFault;
+    device_fault_features_.deviceFaultVendorBinary = VK_FALSE;
+    return fault.deviceFault == VK_TRUE;
+  }
+#endif
+  // Called by the render thread as each frame renders: copies the heap figures
+  // and memory trouble counts for the health line, at most once a second.
+  void refresh_health_snapshot() {
+    hang_gpu_if_due();
+    const auto now = std::chrono::steady_clock::now();
+    if (now - health_refreshed_at_ < std::chrono::seconds(1))
+      return;
+    health_refreshed_at_ = now;
+    sdlfe::HealthSnapshot snapshot;
+    for (const auto &heap : memory_report()) {
+      if (snapshot.heap_count == snapshot.heaps.size())
+        break;
+      snapshot.heaps[snapshot.heap_count++] = heap;
+    }
+    if (bridge_config.test_vram_budget_mb)  // test switch: a small budget a normal mission crosses
+      for (std::size_t i = 0; i < snapshot.heap_count; ++i)
+        if (snapshot.heaps[i].device_local) {
+          snapshot.heaps[i].budget_bytes = std::uint64_t(bridge_config.test_vram_budget_mb) * 1024 * 1024;
+          snapshot.heaps[i].driver_figures = true;
+        }
+    snapshot.mem_recoveries = memory_pressure.recoveries;
+    snapshot.models_skipped = memory_pressure.model_omissions;
+    snapshot.textures_swapped = memory_pressure.texture_substitutions;
+    snapshot.preload_stops = memory_pressure.preload_stops;
+    std::lock_guard lock(health_mutex_);
+    health_snapshot_ = snapshot;
   }
   // Frees model buffers no frame has used for min_age_frames, once the GPU is
   // done with them. Their ModelGeometry keeps vertices and indices in system
@@ -3987,8 +4177,10 @@ private:
     const auto retry = model_retry_at_.find(g.key);
     if (retry != model_retry_at_.end()) {
       // A model already resident again (a mission preload) needs no back-off.
-      if (render_frame_ < retry->second && !model_buffers.count(g.key))
+      if (render_frame_ < retry->second && !model_buffers.count(g.key)) {
+        ++memory_pressure.model_omissions;
         return nullptr;
+      }
       model_retry_at_.erase(retry);
     }
     try {
@@ -4000,7 +4192,7 @@ private:
     }
     const VkDeviceSize model_bytes = VkDeviceSize(g.vertices.size()) * sizeof(ModelVertex) +
                                      VkDeviceSize(g.indices.size()) * sizeof(std::uint32_t);
-    log_video_memory_full("model", model_bytes);
+    note_allocation_failure("model", model_bytes);
     free_unused_resources();
     try {
       ModelBuffer &b = model_buffer(g);
@@ -4008,6 +4200,7 @@ private:
       return &b;
     } catch (const PreloadAllocationFailure &) {
       // model_buffer's own catch has already discarded the half-made buffer.
+      ++memory_pressure.model_omissions;
       model_retry_at_[g.key] = render_frame_ + kRetryAfterFrames;
       return nullptr;
     }
@@ -4103,7 +4296,7 @@ private:
       // destroy() clears the age; keep this frame's texture out of the freeing below.
       c.last_used_frame = render_frame_;
     }
-    log_video_memory_full("texture base level", VkDeviceSize(t.width) * t.height * 4);
+    note_allocation_failure("texture base level", VkDeviceSize(t.width) * t.height * 4);
     free_unused_resources();
     try {
       create_once();
@@ -4349,6 +4542,7 @@ private:
     }
   }
   void stop_preload(VkResult result) noexcept {
+    if (!preload_stopped_) ++memory_pressure.preload_stops;
     preload_stopped_ = true;
     if (preload_stop_.reason != PreloadStopReason::budget_denied) {
       preload_stop_.vk_result = result;
@@ -4407,7 +4601,7 @@ public:
     require_preload();
     flush_preload();
     if (gpu_resource_timing_.enabled)
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "[PRELOAD_PROFILE] geometry_us=%llu hash_us=%llu image_us=%llu "
                    "staging_us=%llu record_us=%llu flush_us=%llu budget_us=%llu allocate_us=%llu "
                    "wait_us=%llu submit_us=%llu\n",
@@ -4528,6 +4722,40 @@ public:
     return found != textures.end() && !found->second.valid;
   }
   std::size_t video_memory_full_log_count() const { return video_memory_full_log_count_; }
+  // #521: the session this Renderer reports into; set before init().
+  void set_health_session(sdlfe::HealthSession &session) { health_session_ = &session; }
+  // For checks: the device fault report's registration.
+  static Renderer *device_fault_owner_for_test() { return fault_owner().load(); }
+  bool device_fault_enabled_for_test() const { return device_fault_info_ != DeviceFaultInfoFn{}; }
+  // #521 test switch MW3_TEST_DEVICE_LOST: from this long after the call, the
+  // next present first submits a compute dispatch that never ends, so the GPU
+  // timeout resets the driver and the game takes its real lost-device path.
+  void hang_gpu_after(std::chrono::steady_clock::duration delay) {
+    hang_gpu_at_ = std::chrono::steady_clock::now() + delay;
+  }
+  sdlfe::HealthSession &health_session() const { return *health_session_; }
+  // Each heap's size and use: the driver's figures where VK_EXT_memory_budget
+  // gives them, the game's tracked allocations otherwise. The one budget read.
+  std::vector<sdlfe::HeapFigures> memory_report() const {
+    std::vector<sdlfe::HeapFigures> heaps;
+    for (unsigned heap = 0; heap < memory.memoryHeapCount; ++heap) {
+      sdlfe::HeapFigures report;
+      report.index = heap;
+      report.size_bytes = memory.memoryHeaps[heap].size;
+      report.device_local = memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
+      VkDeviceSize used = 0, budget = 0;
+      report.driver_figures = heap_budget(heap, used, budget);
+      report.used_bytes = report.driver_figures ? used : tracked_heap_bytes(heap);
+      report.budget_bytes = report.driver_figures ? budget : 0;
+      heaps.push_back(report);
+    }
+    return heaps;
+  }
+  // The render thread's latest health figures (refresh_health_snapshot).
+  sdlfe::HealthSnapshot health_snapshot() const {
+    std::lock_guard lock(health_mutex_);
+    return health_snapshot_;
+  }
   std::uint64_t render_frame() const { return render_frame_; }
   void free_unused_model_buffers_for_test(std::uint64_t min_age_frames) {
     free_unused_model_buffers(min_age_frames);
@@ -4586,6 +4814,8 @@ public:
 
 private:
   static void check(VkResult r, const char *what) {
+    if (r == VK_ERROR_DEVICE_LOST)
+      report_device_fault_once();
     if (r != VK_SUCCESS)
       throw std::runtime_error(std::string("Vulkan scene renderer: ") + what +
                                " failed (" + std::to_string(int(r)) + ")");
@@ -4739,6 +4969,7 @@ private:
             gpu = g;
             family = i;
             device_name = p.deviceName;
+            driver_version = p.driverVersion;
           }
           break;
         }
@@ -4843,6 +5074,15 @@ private:
           memory_budget_supported_ = true;
           deviceExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
         }
+#ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
+        // #521: the driver's own account of a lost device, where it has one.
+        if (!std::strcmp(p.extensionName, VK_EXT_DEVICE_FAULT_EXTENSION_NAME) &&
+            device_fault_supported(get)) {
+          deviceExtensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+          device_fault_features_.pNext = const_cast<void *>(dci.pNext);
+          dci.pNext = &device_fault_features_;
+        }
+#endif
         if (!std::strcmp(p.extensionName, swapExt)) {
           bool native_surface_supported = false;
 #if defined(_WIN32)
@@ -4880,6 +5120,12 @@ private:
     dci.enabledExtensionCount = unsigned(deviceExtensions.size());
     dci.ppEnabledExtensionNames = deviceExtensions.data();
     check(f.vkCreateDevice(gpu, &dci, nullptr, &device), "create device");
+#ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
+    if (device_fault_features_.deviceFault)
+      device_fault_info_ = reinterpret_cast<PFN_vkGetDeviceFaultInfoEXT>(
+          f.vkGetDeviceProcAddr(device, "vkGetDeviceFaultInfoEXT"));
+#endif
+    fault_owner().store(this);
 #define MW34_VK_DLOAD(n)                                                       \
   f.n = reinterpret_cast<PFN_##n>(f.vkGetDeviceProcAddr(device, #n));          \
   if (!f.n)                                                                    \
@@ -4995,8 +5241,8 @@ private:
       dxgi.attach(device, identity, family, f.vkGetDeviceProcAddr,
                   limits.imageFormatProperties.maxExtent);
       presentable = true;
-      std::fprintf(
-          stderr,
+      MW3_LOG(
+          I,
           "Presentation bridge: Vulkan/DXGI on %s; adapter LUID matched\n",
           device_name.c_str());
     }
@@ -5131,8 +5377,8 @@ private:
         pli.setLayoutCount = 3;
         pli.pSetLayouts = sets.data();
         const auto &sun = lighting_settings;
-        std::fprintf(
-            stderr,
+        MW3_LOG(
+            I,
             "Per-pixel lighting: world +Y up, azimuth %.3f elevation %.3f "
             "strength %.3f ambient %.3f\n",
             double(sun.azimuth), double(sun.elevation), double(sun.strength),
@@ -5206,8 +5452,8 @@ private:
       init_shadow();
       init_fixture_shadow();
       const auto &sun = lighting_settings;
-      std::fprintf(
-          stderr,
+      MW3_LOG(
+          I,
           "Sun colour %.3f %.3f %.3f, ambient tint %.3f %.3f %.3f; sky tint "
           "%.3f %.3f %.3f (%s), haze %s %.3f %.3f %.3f\n",
           sun.color[0], sun.color[1], sun.color[2], sun.ambient_color[0],
@@ -5231,8 +5477,8 @@ private:
       aa_name = "2-sample SSAA";
     if (fxaa_enabled() || anisotropy() > 1 || grid.x > 1 ||
         bridge_config.draw_distance != zcls::kDefaultVisualFar)
-      std::fprintf(
-          stderr,
+      MW3_LOG(
+          I,
           "Remaster quality: %s, %ux AF, samplerAnisotropy %u, draw distance %u "
           "(fog start %.0f), GPU %s\n",
           aa_name, anisotropy(), enabled.samplerAnisotropy,
@@ -5247,13 +5493,14 @@ private:
       for (unsigned i = 0; i < memory.memoryHeapCount; ++i)
         if (memory.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
           local_bytes += memory.memoryHeaps[i].size;
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "Playtest GPU: vendor=%04x device=%04x driver_raw=%08x "
                    "vulkan_api=%08x device_local_heap_MiB=%llu\n",
                    diagnostic_props.vendorID, diagnostic_props.deviceID,
                    diagnostic_props.driverVersion, diagnostic_props.apiVersion,
                    (unsigned long long)(local_bytes / 1048576));
     }
+    print_renderer_header_once();
     pool(256);
     // 1x1 opaque white texture for draws without a texture (D3DTA_TEXTURE then
     // reads 1.0).
@@ -5336,7 +5583,7 @@ private:
     if (b.buffer && bridge_config.buffer_reserve && reserve_hint)
       size = mw34::allocation::stream_capacity(size);
     if (b.buffer && bridge_config.buffer_growth_trace)
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "Buffer growth: present=%llu previous=%llu requested=%llu capacity=%llu\n",
                    (unsigned long long)(presents + 1), (unsigned long long)b.size,
                    (unsigned long long)requested,
@@ -5395,7 +5642,7 @@ private:
     if (b.buffer && bridge_config.buffer_reserve && reserve_hint)
       size = mw34::allocation::stream_capacity(size);
     if (b.buffer && bridge_config.buffer_growth_trace)
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "Buffer growth: present=%llu previous=%llu requested=%llu capacity=%llu\n",
                    (unsigned long long)(presents + 1), (unsigned long long)b.size,
                    (unsigned long long)requested,
@@ -5668,8 +5915,8 @@ private:
         rh > limits.limits.maxFramebufferHeight)
       throw std::runtime_error(
           "Requested resolution and SSAA exceed GPU target limits");
-    std::fprintf(
-        stderr,
+    MW3_LOG(
+        I,
         "Display target: output %ux%u, raster %ux%u, SSAA %ux%u, frontend %u\n",
         remaster_width(), remaster_height(), rw, rh, samples.x, samples.y,
         unsigned(target_frontend));
@@ -6120,6 +6367,8 @@ private:
     }
     if (!swapchain)
       return;
+    ++swapchain_generation;
+    swapchain_mode = VK_PRESENT_MODE_MAX_ENUM_KHR;
     f.vkDeviceWaitIdle(device);
     exclusive_fullscreen_.release(device, swapchain);
     f.vkDestroySwapchainKHR(device, swapchain, nullptr);
@@ -6220,6 +6469,14 @@ private:
     sc.imageExtent = e;
     sc.imageArrayLayers = 1;
     sc.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (bridge_config.strict_swapchain_readback) {
+      if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT))
+        throw std::runtime_error("strict Vulkan swapchain cannot be read back");
+      if (fmt.format != VK_FORMAT_B8G8R8A8_UNORM && fmt.format != VK_FORMAT_B8G8R8A8_SRGB &&
+          fmt.format != VK_FORMAT_R8G8B8A8_UNORM && fmt.format != VK_FORMAT_R8G8B8A8_SRGB)
+        throw std::runtime_error("strict Vulkan swapchain needs an 8-bit BGRA or RGBA format");
+      sc.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    }
     sc.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     sc.preTransform = caps.currentTransform;
     sc.compositeAlpha =
@@ -6228,14 +6485,22 @@ private:
             : VkCompositeAlphaFlagBitsKHR(caps.supportedCompositeAlpha &
                                           -caps.supportedCompositeAlpha);
     sc.presentMode = VK_PRESENT_MODE_FIFO_KHR;
-    sc.clipped = VK_TRUE;
+    // The diagnostic hashes every pixel, including any obscured part of the window.
+    sc.clipped = bridge_config.strict_swapchain_readback ? VK_FALSE : VK_TRUE;
+    if (bridge_config.require_immediate_present &&
+        (bridge_config.vsync || !f.vkGetPhysicalDeviceSurfacePresentModesKHR))
+      throw std::runtime_error("Benchmark requires native IMMEDIATE presentation with v-sync off");
     if (!bridge_config.vsync && f.vkGetPhysicalDeviceSurfacePresentModesKHR) {
       unsigned pm = 0;
-      f.vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, windowSurface, &pm,
-                                                  nullptr);
+      const VkResult count_result =
+          f.vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, windowSurface, &pm, nullptr);
       std::vector<VkPresentModeKHR> modes(pm);
-      f.vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, windowSurface, &pm,
-                                                  modes.data());
+      const VkResult list_result =
+          f.vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, windowSurface, &pm, modes.data());
+      if (bridge_config.require_immediate_present &&
+          (count_result != VK_SUCCESS || list_result != VK_SUCCESS || modes.empty()))
+        throw std::runtime_error("Benchmark could not enumerate Vulkan present modes");
+      modes.resize(std::min<size_t>(pm, modes.size()));
       auto has = [&](VkPresentModeKHR m) {
         return std::find(modes.begin(), modes.end(), m) != modes.end();
       };
@@ -6243,10 +6508,12 @@ private:
           has(VK_PRESENT_MODE_IMMEDIATE_KHR) ? VK_PRESENT_MODE_IMMEDIATE_KHR
           : has(VK_PRESENT_MODE_MAILBOX_KHR) ? VK_PRESENT_MODE_MAILBOX_KHR
                                              : VK_PRESENT_MODE_FIFO_KHR;
+      if (bridge_config.require_immediate_present && sc.presentMode != VK_PRESENT_MODE_IMMEDIATE_KHR)
+        throw std::runtime_error("Benchmark requires VK_PRESENT_MODE_IMMEDIATE_KHR");
       static bool told = false;
       if (!told) {
         told = true;
-        std::fprintf(stderr, "Vsync off: present mode %s\n",
+        MW3_LOG(I, "Vsync off: present mode %s\n",
                      sc.presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR
                          ? "IMMEDIATE"
                      : sc.presentMode == VK_PRESENT_MODE_MAILBOX_KHR
@@ -6256,6 +6523,8 @@ private:
     }
     check(f.vkCreateSwapchainKHR(device, &sc, nullptr, &swapchain),
           "swapchain");
+    ++swapchain_generation;
+    swapchain_mode = sc.presentMode;
     check(f.vkGetSwapchainImagesKHR(device, swapchain, &n, nullptr),
           "swapchain images");
     swapImages.resize(n);
@@ -6300,6 +6569,11 @@ private:
   // image/buffer handles precede their backing memory; the loader is released
   // last.
   void shutdown() {
+    // #521: stop being the renderer a lost device reports from, before anything
+    // is torn down. Only this renderer's own registration is cleared, so an old
+    // renderer's teardown never clears a newer one's.
+    Renderer *self = this;
+    fault_owner().compare_exchange_strong(self, nullptr);
 #if defined(_WIN32)
     editor_retire_for_shutdown();
 #endif
@@ -6312,14 +6586,14 @@ private:
     }
     f.vkDeviceWaitIdle(device);
     if (coverage_scenes)
-      std::fprintf(
-          stderr,
+      MW3_LOG(
+          I,
           "World reconstruction: %llu opaque scenes, %llu coverage draws\n",
           (unsigned long long)coverage_scenes,
           (unsigned long long)coverage_draws);
     collect_profile_queries();
     if (profile_queries) {
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "GPU scene profile (includes warmup/inline quality; "
                    "excludes separate "
                    "quality/presentation): "
@@ -6331,10 +6605,10 @@ private:
       profile_queries = VK_NULL_HANDLE;
     }
     if (profile_cpu)
-      std::fprintf(
-          stderr, "CPU scene wait profile (includes warmup): %.4f ms\n",
+      MW3_LOG(
+          I, "CPU scene wait profile (includes warmup): %.4f ms\n",
           double(profile_wait_ticks) * 1000.0 / SDL_GetPerformanceFrequency());
-    std::fprintf(stderr,
+    MW3_LOG(I,
                  "Submission: %llu logical draws, %llu GPU draws, %llu "
                  "adjacent TL draws combined\n",
                  (unsigned long long)draws, (unsigned long long)submitted_draws,
@@ -6361,12 +6635,13 @@ private:
       }
     model_buffers.clear();
     if (emission_draw_records)
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "Draw emission storage: %llu draw records, %llu payloads, "
                    "Draw size %zu bytes\n",
                    (unsigned long long)emission_draw_records,
                    (unsigned long long)emission_payloads, sizeof(Draw));
     destroy_tiled();
+    destroy_gpu_hang();
     for (auto &[k, t] : textures)
       destroy(t);
     for (auto &[key, cached] : height_images)
@@ -6406,7 +6681,7 @@ private:
         release_memory(device, b->memory, nullptr);
       }
     if (worldColor.image) {
-      std::fprintf(stderr,
+      MW3_LOG(I,
                    "World resolution: reduced scenes %llu, promotions %llu\n",
                    (unsigned long long)reduced_world_scenes,
                    (unsigned long long)world_promotions);

@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -458,4 +459,63 @@ TEST(replay_log_without_end_and_refusals) {
   flags = {};
   flags.mission = flags.fly = true;  // --fly sets the mission too
   EXPECT(mech3::replay::replay_refusal(flags).find("--fly") != std::string::npos);
+}
+
+TEST(replay_scored_coverage_starts_at_first_state_and_requires_terminal_end) {
+  const std::string first_state = R"({"type":"state","t":0.03125,"mechs":[]})" "\n";
+  const std::string last_state = R"({"type":"state","t":1.03125,"mechs":[]})" "\n";
+  const std::string end = R"({"type":"end","t":1.03125})" "\n";
+  const std::string shots =
+      R"({"type":"shot","t":0,"id":0})" "\n"
+      R"({"type":"shot","t":0.03125,"id":1})" "\n"
+      R"({"type":"shot","t":0.0625,"id":0})" "\n"
+      R"({"type":"shot","t":0.125,"id":1})" "\n";
+  std::string error;
+  ReplayLog good;
+  EXPECT(load(&good, "scored-coverage-good", kStart + shots + first_state + last_state + end,
+              &error));
+  const auto start = good.first_state_time();
+  EXPECT(start == 0.03125f);
+  if (!start) return;
+  EXPECT(good.complete() && good.covers(*start, *start + 1.0));
+  EXPECT(!good.covers(0, 1.0));
+  EXPECT(!good.covers(*start, *start + 1.01));
+
+  const auto initial = good.fire_between(-std::numeric_limits<float>::infinity(), *start);
+  EXPECT(initial.size() == 2 && initial.front().t == 0 && initial.back().t == *start);
+  const auto crossed = good.fire_between(*start, 0.125f);
+  EXPECT(crossed.size() == 2 && crossed.front().t == 0.0625f && crossed.back().t == 0.125f);
+  EXPECT(good.fire_between(0.125f, 1).empty());
+
+  for (const auto& body : {first_state + end, first_state + end + last_state,
+                           first_state + first_state + last_state + end,
+                           first_state + last_state + end + "not-json\n"}) {
+    ReplayLog bad;
+    EXPECT(load(&bad, "scored-coverage-bad", kStart + body, &error));
+    EXPECT(!bad.covers(*start, *start + 1.0));
+  }
+  ReplayLog empty;
+  EXPECT(load(&empty, "scored-coverage-empty", kStart + end, &error));
+  EXPECT(!empty.first_state_time());
+}
+
+
+TEST(replay_scored_camera_rejects_dead_or_missing_subject_and_recovers_terrain_weapon) {
+  const std::string body =
+      R"({"type":"state","t":0.03125,"mechs":[{"id":0,"pos":[0,0,0]}],"rounds":[{"id":1,"by":0,"weapon":"srm","pos":[0,0,0]}]})" "\n"
+      R"({"type":"state","t":1,"mechs":[{"id":0,"pos":[1,0,0]}]})" "\n"
+      R"({"type":"round_end","t":1.0625,"round":1,"at":[2,0,0],"terrain":true})" "\n"
+      R"({"type":"destroyed","t":1.125,"id":0})" "\n"
+      R"({"type":"state","t":2,"mechs":[{"id":0,"pos":[2,0,0],"standing":false}]})" "\n"
+      R"({"type":"end","t":2})" "\n";
+  std::string error;
+  ReplayLog log;
+  EXPECT(load(&log, "scored-camera-subject", kStart + body, &error));
+  EXPECT(log.covers(0.5, 1.25));
+  EXPECT(!log.covers(0.5, 2.01));
+  EXPECT(log.mech_alive_during(0, 0.5, 1.1));
+  EXPECT(!log.mech_alive_during(0, 0.5, 1.2));
+  EXPECT(!log.mech_alive_during(1, 0.5, 1.1));
+  const auto impact = log.fire_between(1, 1.1f);
+  EXPECT(impact.size() == 1 && impact.front().terrain && impact.front().weapon == "srm");
 }

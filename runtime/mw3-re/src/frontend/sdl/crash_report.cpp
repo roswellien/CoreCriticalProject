@@ -1,4 +1,6 @@
 #include "frontend/sdl/crash_report.h"
+#include "frontend/sdl/log.h"
+#include "frontend/sdl/run_log.h"
 
 #include <SDL3/SDL.h>
 
@@ -302,7 +304,7 @@ void set_text(const std::string& program, const std::string& log) {
     what = e.what();
   } catch (...) {
   }
-  std::fprintf(stderr, "%s: uncaught exception: %s\n", g_program, what);
+  sdlfe::log::line(sdlfe::log::Level::error, "%s: uncaught exception: %s\n", g_program, what);
   std::abort();  // the crash's report from here
 #endif
 }
@@ -320,7 +322,6 @@ void say_crash() {
                   g_dump_exception_record.ExceptionCode);
     reason = exception_reason;
   }
-  Sleep(100);  // the log's thread passes this on (run_log.cpp)
   std::snprintf(text, sizeof text, "MechWarrior 3 crashed (%s)%s", reason, g_tail);
   // Topmost: with no owner it could open behind a fullscreen game.
   if (g_box)
@@ -413,6 +414,9 @@ void request_crash_report(EXCEPTION_POINTERS* exception, CrashReportCause cause)
   const HANDLE handles[] = {g_dump_complete_event, g_dump_worker_thread};
   const DWORD result = WaitForMultipleObjects(2, handles, FALSE, 5000);
   const CrashReportWaitOutcome outcome = crash_report_classify_wait_result(result);
+  // The last lines printed before the crash reach mw3.log before anything below can end the process
+  // (log.h's drain: no lock, no allocation, no call on the pipes; at most 500 ms).
+  sdlfe::log::drain_after_crash(500);
   // There is deliberately no logging here: even an error/timeout must not touch the stderr pipe.
   const bool report_written =
       crash_report_report_was_written(outcome, g_dump_worker_failed.load());
@@ -702,7 +706,7 @@ bool crash_box_main(int argc, char** argv) {
 }
 
 void fatal_box(const std::string& message, bool hidden) {
-  std::fprintf(stderr, "mw3: %s\n", message.c_str());
+  log::line(log::Level::error, "mw3: %s\n", message.c_str());
   if (!hidden && !SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "MechWarrior 3", message.c_str(), nullptr))
     std::fprintf(stderr, "mw3: no message box either: %s\n", SDL_GetError());
 }

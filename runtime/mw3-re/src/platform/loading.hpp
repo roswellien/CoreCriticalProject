@@ -13,6 +13,8 @@
 #include <functional>
 #include <string>
 
+#include "frontend/sdl/log.h"
+
 namespace platform::loading {
 using Clock = std::chrono::steady_clock;
 
@@ -67,7 +69,7 @@ inline void checkpoint(bool force = false) noexcept {
   try {
     observer(progress);
   } catch (...) {
-    std::fprintf(stderr, "mw3: loading display failed; continuing load\n");
+    MW3_LOG(W, "mw3: loading display failed; continuing load\n");
   }
   notifying = false;
   last_notified = Clock::now();
@@ -138,7 +140,7 @@ class Session {
     progress.percent = -1;
     checkpoint(true);  // A session always shows at once.
     HostFpScope fp;
-    std::printf("mw3: phase begin %s\n", name_);
+    sdlfe::log::line(sdlfe::log::Level::info, "mw3: phase begin %s\n", name_);
   }
   ~Session() {
     --depth;
@@ -147,13 +149,15 @@ class Session {
       HostFpScope fp;
       const auto elapsed =
           std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start_).count();
-      std::printf("mw3: phase end %s %lld ms (longest unpumped %lld ms)\n", name_,
-                  static_cast<long long>(elapsed), longest_unpumped_ms);
+      sdlfe::log::line(sdlfe::log::Level::info,
+                       "mw3: phase end %s %lld ms (longest unpumped %lld ms)\n", name_,
+                       static_cast<long long>(elapsed), longest_unpumped_ms);
       for (unsigned i = 0; i < counters.size(); ++i) {
         const auto& counter = counters[i];
         if (counter.calls)
-          std::printf("mw3: work %s calls=%llu hits=%llu bytes=%llu ms=%lld\n", work_names[i],
-                      counter.calls, counter.hits, counter.bytes, counter.microseconds / 1000);
+          sdlfe::log::line(sdlfe::log::Level::info,
+                           "mw3: work %s calls=%llu hits=%llu bytes=%llu ms=%lld\n", work_names[i],
+                           counter.calls, counter.hits, counter.bytes, counter.microseconds / 1000);
       }
     }
     progress.active = false;
@@ -176,7 +180,8 @@ class Phase {
     HostFpScope fp;
     const auto elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start_).count();
-    std::printf("mw3: phase %s %lld ms\n", name_, static_cast<long long>(elapsed));
+    sdlfe::log::line(sdlfe::log::Level::info, "mw3: phase %s %lld ms\n", name_,
+                     static_cast<long long>(elapsed));
   }
   Phase(const Phase&) = delete;
   Phase& operator=(const Phase&) = delete;

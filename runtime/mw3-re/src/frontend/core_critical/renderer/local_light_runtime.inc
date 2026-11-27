@@ -542,7 +542,7 @@ mw34::materials::SurfaceKey fixture_visual_key(int texture) {
 
 void fixture_reject(const char *reason) {
   if (++fixture_rejections_ <= 8)
-    std::fprintf(stderr, "[NATIVE_FIXTURE_REJECT] reason=%s\n", reason);
+    MW3_LOG(I, "[NATIVE_FIXTURE_REJECT] reason=%s\n", reason);
 }
 
 std::shared_ptr<const mw34::native_fixtures::Observation> fixture_observation(
@@ -561,7 +561,7 @@ std::shared_ptr<const mw34::native_fixtures::Observation> fixture_observation(
         key, triangles, mw34::native_fixtures::Winding::original, separate_triangles, forward);
     if (result.status == mw34::native_fixtures::ObservationStatus::vehicle_pending) {
       if (++fixture_vehicle_pending_ == 1)
-        std::fprintf(stderr, "[NATIVE_FIXTURES] vehicle rejected: missing registered active healthy pose proof\n");
+        MW3_LOG(I, "[NATIVE_FIXTURES] vehicle rejected: missing registered active healthy pose proof\n");
     } else if (result.status == mw34::native_fixtures::ObservationStatus::unsupported_mapping) {
       fixture_reject("repeating or nonfinite original UV mapping");
     }
@@ -783,7 +783,7 @@ std::uint64_t local_observations_{}, local_native_peak_{}, local_packet_peak_{};
 void local_lights_load() {
   if (!bridge_config_.effect_lights) {
     if (bridge_config_.mech_headlights)
-      fprintf(stderr, "[HEADLIGHTS] inactive: local lights disabled\n");
+      MW3_LOG(I, "[HEADLIGHTS] inactive: local lights disabled\n");
     return;
   }
   VisualFloatScope guard;
@@ -816,7 +816,7 @@ void local_lights_load() {
   if (!bridge_config_.mech_headlights)
     return;
   if (bridge_config_.stock_headlights.empty()) {
-    fprintf(stderr, "[HEADLIGHTS] inactive: no stock catalog selected\n");
+    MW3_LOG(I, "[HEADLIGHTS] inactive: no stock catalog selected\n");
     return;
   }
   std::ifstream catalog(std::filesystem::u8path(bridge_config_.stock_headlights),
@@ -825,7 +825,7 @@ void local_lights_load() {
     throw std::runtime_error("Headlights: cannot open stock catalog");
   headlight_catalog_ = mw34::headlights::read_stock_catalog(catalog);
   if (bridge_config_.headlight_bindings.empty()) {
-    fprintf(stderr, "[HEADLIGHTS] inactive: no input binding selected\n");
+    MW3_LOG(I, "[HEADLIGHTS] inactive: no input binding selected\n");
     return;
   }
   std::ifstream bindings(std::filesystem::u8path(bridge_config_.headlight_bindings));
@@ -833,7 +833,7 @@ void local_lights_load() {
   headlight_key_ = binding.key;
   headlight_mouse_ = binding.mouse;
   if ((!headlight_key_ && !headlight_mouse_) || headlight_catalog_.empty())
-    fprintf(stderr, "[HEADLIGHTS] inactive: no keyboard or mouse binding, or no stock profile\n");
+    MW3_LOG(I, "[HEADLIGHTS] inactive: no keyboard or mouse binding, or no stock profile\n");
 }
 
 uint32_t headlight_wheel_mask() const override {
@@ -937,7 +937,15 @@ void local_lights_begin() {
   local_fixture_sources_.clear();
   local_active_ = false;
   local_native_.clear();
-  if (!bridge_config_.effect_lights || current_mission_id_.empty())
+  // The strict warm-up views populate render resources only. Their camera
+  // and wall-clock time must not seed the tick-zero lighting selection.
+  if (benchmark_run_ && benchmark_run_->strict() && !benchmark_run_->armed())
+    return;
+  // A multiplayer or IA map has no campaign profile. Admit its camera's
+  // world pass, since the preceding fade and tint passes have no projection.
+  if (!bridge_config_.effect_lights ||
+      (current_mission_id_.empty() &&
+       !(mission_world_loaded_ && zvid::capture_producer_view().present)))
     return;
   VisualFloatScope guard;
   const auto p = zmth::projection();
@@ -958,7 +966,7 @@ void local_lights_begin() {
   for (float v : local_camera_)
     if (!std::isfinite(v))
       throw std::runtime_error("Local lights: invalid camera");
-  local_time_ = ztimer::state().total_scaled;
+  local_time_ = benchmark_time_.value_or(ztimer::state().total_scaled);
   if (!std::isfinite(local_time_) || local_time_ < 0.0)
     throw std::runtime_error("Local lights: invalid time");
   if (bridge_config_.fixture_lights) {
@@ -1028,6 +1036,11 @@ void local_lights_attach(vk::Scene &target) {
     }
   }
   target.effect_lights = mw34::effects::rank_frame_lights(sources, eye, 64, 16);
+  if (benchmark_run_ && benchmark_run_->armed()) {
+    // Use the weapon prefix, so steady fixture lights cannot mask a missing effect.
+    benchmark_effects_.lights = std::max(benchmark_effects_.lights,
+                                        static_cast<unsigned>(target.effect_lights.params[1]));
+  }
   local_packet_peak_ =
       std::max(local_packet_peak_,
                static_cast<std::uint64_t>(target.effect_lights.params[0]));
@@ -1037,18 +1050,18 @@ void local_lights_report() {
   if (!bridge_config_.effect_lights) {
     return;
   }
-  fprintf(
-      stderr,
+  MW3_LOG(
+      I,
       "[LOCAL_LIGHTS] observations=%llu native_peak=%llu packet_peak=%llu\n",
       static_cast<unsigned long long>(local_observations_),
       static_cast<unsigned long long>(local_native_peak_),
       static_cast<unsigned long long>(local_packet_peak_));
-  fprintf(stderr, "[NATIVE_FIXTURES] observations=%llu rejected=%llu vehicle_pending=%llu\n",
+  MW3_LOG(I, "[NATIVE_FIXTURES] observations=%llu rejected=%llu vehicle_pending=%llu\n",
       (unsigned long long)fixture_observations_, (unsigned long long)fixture_rejections_,
       (unsigned long long)fixture_vehicle_pending_);
-  fprintf(stderr, "[NATIVE_FIXTURE_LIFETIME] retained_peak=%llu expired=%llu evicted=%llu\n",
+  MW3_LOG(I, "[NATIVE_FIXTURE_LIFETIME] retained_peak=%llu expired=%llu evicted=%llu\n",
       (unsigned long long)fixture_retained_peak_,(unsigned long long)fixture_expired_,
       (unsigned long long)fixture_evictions_);
   if (bridge_config_.mech_headlights)
-    fprintf(stderr, "[HEADLIGHTS] candidate_peak=%zu\n", headlight_peak_);
+    MW3_LOG(I, "[HEADLIGHTS] candidate_peak=%zu\n", headlight_peak_);
 }

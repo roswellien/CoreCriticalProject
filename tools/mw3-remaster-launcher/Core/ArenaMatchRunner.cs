@@ -527,8 +527,9 @@ public static class ArenaMatchRunner
         return string.Join(Environment.NewLine, meaningfulLines);
     }
 
-    private static bool IsRoutineStartupLine(string line)
+    private static bool IsRoutineStartupLine(string stampedLine)
     {
+        var line = GameProblemsLog.WithoutStamp(stampedLine);
         return line.StartsWith("Startup: ", StringComparison.Ordinal) ||
             line.StartsWith("Starting MW3-RE: ", StringComparison.Ordinal) ||
             line.StartsWith("MW3-RE PID ", StringComparison.Ordinal) ||
@@ -538,6 +539,8 @@ public static class ArenaMatchRunner
             line.StartsWith("Native readiness observation ended: ", StringComparison.Ordinal) ||
             line.StartsWith("mw3 (MechWarrior 3 rebuild) ", StringComparison.Ordinal) ||
             line.StartsWith("mw3: timing ", StringComparison.Ordinal) ||
+            line.StartsWith("mw3: header ", StringComparison.Ordinal) ||
+            line.StartsWith("mw3: first frame shown ", StringComparison.Ordinal) ||
             line.StartsWith("mw3: disk cache ", StringComparison.Ordinal) ||
             line.StartsWith("mw3: input bindings: ", StringComparison.Ordinal) ||
             line.StartsWith("mw3: install ", StringComparison.Ordinal) ||

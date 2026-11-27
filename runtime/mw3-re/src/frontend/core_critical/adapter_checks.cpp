@@ -1,5 +1,6 @@
 #include "frame_renderer.hpp"
 #include "prepared_models.hpp"
+#include "renderer/device_diagnostics.hpp"
 
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/sdl_platform.h"
@@ -63,6 +64,7 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <random>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 
 namespace cc_mw3_re::checks {
 void check_scene_binding_slots();
@@ -93,6 +95,75 @@ void require(bool condition, const char *message) {
   if (!condition) {
     throw std::runtime_error(message);
   }
+}
+
+// #521: the device fault report's printing, against a fake driver entry point
+// (no GPU, no lost device), so every answer a driver can give is covered.
+#ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
+struct FakeFault {
+  VkResult first = VK_SUCCESS, second = VK_SUCCESS;
+  std::uint32_t addresses = 0, vendors = 0;
+};
+FakeFault fake_fault;
+VKAPI_ATTR VkResult VKAPI_CALL fake_fault_info(VkDevice, VkDeviceFaultCountsEXT *counts,
+                                                 VkDeviceFaultInfoEXT *info) {
+  if (!info) {
+    counts->addressInfoCount = fake_fault.addresses;
+    counts->vendorInfoCount = fake_fault.vendors;
+    return fake_fault.first;
+  }
+  std::snprintf(info->description, VK_MAX_DESCRIPTION_SIZE, "page fault");
+  for (std::uint32_t i = 0; i < counts->addressInfoCount; ++i)
+    info->pAddressInfos[i] = {VK_DEVICE_FAULT_ADDRESS_TYPE_READ_INVALID_EXT, 0x1000u * (i + 1), 16};
+  for (std::uint32_t i = 0; i < counts->vendorInfoCount; ++i) {
+    info->pVendorInfos[i] = {};
+    std::snprintf(info->pVendorInfos[i].description, VK_MAX_DESCRIPTION_SIZE, "vendor %u", i);
+  }
+  return fake_fault.second;
+}
+#endif
+
+std::vector<std::string> device_fault_lines(VkDevice device, mw34::vkscene::DeviceFaultInfoFn fn) {
+  std::FILE *out = std::tmpfile();
+  require(out != nullptr, "Device fault print check could not open a temporary file");
+  mw34::vkscene::print_device_fault(out, device, fn);
+  std::rewind(out);
+  std::vector<std::string> lines;
+  char line[512];
+  while (std::fgets(line, sizeof line, out)) {
+    std::string text(line);
+    if (!text.empty() && text.back() == '\n')
+      text.pop_back();
+    lines.push_back(text);
+  }
+  std::fclose(out);
+  return lines;
+}
+
+void check_device_fault_print() {
+  const auto unsupported = device_fault_lines(VK_NULL_HANDLE, {});
+  require(unsupported.size() == 1 && unsupported[0] == "mw3: device fault: not supported",
+          "A device without VK_EXT_device_fault did not print only 'not supported'");
+#ifdef VK_EXT_DEVICE_FAULT_EXTENSION_NAME
+  const auto device = reinterpret_cast<VkDevice>(std::uintptr_t{1});  // never dereferenced by the fake
+  fake_fault = {VK_SUCCESS, VK_SUCCESS, 1, 1};
+  const auto full = device_fault_lines(device, fake_fault_info);
+  require(full.size() == 3 && full[0] == "mw3: device fault: page fault; 1 addresses, 1 vendor faults" &&
+              full[1].find("address=0x0000000000001000") != std::string::npos &&
+              full[2].find("vendor 0") != std::string::npos,
+          "A device fault report did not print its description, address and vendor lines");
+  fake_fault = {VK_SUCCESS, VK_INCOMPLETE, 2, 0};
+  const auto incomplete = device_fault_lines(device, fake_fault_info);
+  require(!incomplete.empty() && incomplete[0].ends_with("(incomplete)"),
+          "An incomplete device fault report did not say so");
+  fake_fault = {VK_SUCCESS, VK_SUCCESS, 40, 40};
+  require(device_fault_lines(device, fake_fault_info).size() == 1 + 32,
+          "A device fault report printed more than 32 detail lines");
+  fake_fault = {VK_ERROR_UNKNOWN, VK_SUCCESS, 0, 0};
+  const auto failed = device_fault_lines(device, fake_fault_info);
+  require(failed.size() == 1 && failed[0] == "mw3: device fault: query failed (-13)",
+          "A failed device fault query did not print one 'query failed' line");
+#endif
 }
 
 #include "local_light_checks.inc"
@@ -3019,6 +3090,59 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
               "A texture that didn't fit did not draw once its pixels came back");
     }
     {
+      // #521: two textures that don't fit (three failed allocations): the
+      // per-heap memory table prints once for the session, and every heap's
+      // reported use fits its size.
+      auto twice = play_texture_fault(3, 0);
+      const auto first = twice->create_texture(2, 2, native_pixels, 1);
+      const auto second = twice->create_texture(2, 2, native_pixels, 1);
+      draw_texture(*twice, first);
+      draw_texture(*twice, second);
+      std::size_t heaps = 0;
+      const auto within = memory_report_heaps_within_size(*twice, heaps);
+      require(memory_table_log_count(*twice) == 1 && heaps > 0 && within == heaps,
+              "Two play allocation failures did not print the memory table exactly once");
+    }
+    {
+      // #521: the device fault report follows the live renderer. Destroying an
+      // older one leaves the newer registered; destroying that clears it. The
+      // report never throws, with or without VK_EXT_device_fault (asked on a
+      // working device, the driver may answer with an error, printed as one line).
+      auto older = play_texture_fault(0, 0);
+      draw_texture(*older, -1);
+      auto newer = play_texture_fault(0, 0);
+      draw_texture(*newer, -1);
+      require(is_device_fault_owner(*newer), "The newest renderer is not the device fault owner");
+      std::printf("Device fault report: VK_EXT_device_fault %s\n",
+                  device_fault_enabled(*newer) ? "on" : "not supported");
+      older.reset();
+      require(is_device_fault_owner(*newer), "Destroying an older renderer cleared the newer one's registration");
+      newer.reset();
+      require(!any_device_fault_owner(), "Destroying the last renderer left a device fault owner");
+      check_device_fault_print();
+    }
+    {
+      // #521: a scene reset builds a new backend Renderer, which reports into
+      // the same session, so the setup header block printed once stays printed.
+      // Its one recovered allocation stays in the health line's session total.
+      auto resets = play_texture_fault(1, 0);
+      draw_texture(*resets, resets->create_texture(2, 2, native_pixels, 1));
+      const auto session = health_session_of(*resets);
+      require(renderer_header_printed(*resets), "The first renderer did not print the setup header");
+      resets->reset_scene_resources();
+      draw_texture(*resets, -1);
+      require(health_session_of(*resets) == session && renderer_header_printed(*resets),
+              "A scene reset's new renderer did not keep the session's header state");
+      sdlfe::HealthSnapshot totals;
+      require(resets->health(totals) && totals.mem_recoveries == 1,
+              "The health line's memory recoveries did not survive a scene reset");
+      auto fresh = play_texture_fault(0, 0);
+      draw_texture(*fresh, -1);
+      require(health_session_of(*fresh) != session && renderer_header_printed(*fresh),
+              "A second frame renderer did not get its own session");
+      std::puts("#521 health session, memory table and device fault checks passed");
+    }
+    {
       // (f) Only textures unused past the age limit are freed, and a freed one
       // draws its pixels again on its next use.
       auto aging = play_texture_fault(0, 0);
@@ -3590,6 +3714,35 @@ void check_campaign_lighting_and_policy() {
               c1m1_lift.sdr_extra_shadow_lift == 0.f &&
               base.sdr_extra_shadow_lift == 0.f,
           "C1M2 SDR tuning leaked into other missions");
+  const std::pair<std::string_view, float> sdr_missions[] = {
+      {"c1m2", 1.4f},      {"c1m3", 11.023497f}, {"c2m2", 1.4f}, {"c2m4", 1.4f},
+      {"c3m5", 6.025114f}, {"c3m6", 1.4f},       {"c4m1", 1.4f}, {"c4m2", 1.4f}};
+  for (const auto &[id, multiplier] : sdr_missions) {
+      const auto mission = resolve_mission_lighting(id);
+      const auto authored = mission_sun_settings(base, mission, true, false);
+      const auto boosted = mw34::sun::display_ambient(authored, true, false);
+      require(std::abs(boosted.ambient - authored.ambient * 1.2f * multiplier) < 1e-6f &&
+                  boosted.ambient_color == authored.ambient_color &&
+                  boosted.strength == authored.strength,
+              "Night or interior mission did not receive extra SDR ambient");
+      require(mw34::sun::display_ambient(authored, true, true).ambient == authored.ambient &&
+                  mw34::sun::display_ambient(authored, false, false).ambient == authored.ambient,
+              "Extra SDR ambient reached HDR or lighting-off mode");
+  }
+  const auto daytime = mission_sun_settings(base, resolve_mission_lighting("c3m1"), true, false);
+  require(mw34::sun::display_ambient(daytime, true, false).ambient == daytime.ambient * 1.2f,
+          "Extra SDR ambient reached a daytime mission");
+  platform::prepared::EnvironmentSelection low_light_pack{};
+  low_light_pack.mission_ambient.emplace(
+      "c3m5", platform::prepared::MissionAmbientOverride{{.2f, .3f, .4f}, .25f});
+  const auto packed_interior = mission_sun_settings(base, resolve_mission_lighting("c3m5"), true,
+                                                    false, &low_light_pack, "c3m5");
+  require(std::abs(mw34::sun::display_ambient(packed_interior, true, false).ambient -
+                   (.25f * 1.2f * 6.025114f)) < 1e-6f &&
+              packed_interior.strength == 0.f,
+          "Hangar SDR ambient did not scale the pack override or gained directional light");
+  const auto bridgehead = mission_sun_settings(base, resolve_mission_lighting("c1m3"), true, false);
+  require(bridgehead.strength == .4875f, "Bridgehead moonlight intensity changed");
   const auto training = resolve_mission_lighting("t1m1");
   const auto lit = mission_sun_settings(base, training, true, false);
   require(lit.azimuth == 95.f && lit.elevation == 6.f && lit.strength == 1.05f,
@@ -3687,8 +3840,8 @@ void check_campaign_lighting_and_policy() {
                 c1m2_builtin.azimuth == 210.0f &&
                 c1m2_builtin.elevation == 25.0f &&
                 c1m2_builtin.color ==
-                    std::array<float, 3>{0.35f, 0.45f, 0.65f} &&
-                c1m2_builtin.strength == 0.28f &&
+                    std::array<float, 3>{0.46f, 0.56f, 0.74f} &&
+                c1m2_builtin.strength == 0.34f &&
                 c1m2_builtin.night_world_gain == 0.24f &&
                 !c1m2_builtin.suppress_sky,
             "Absent c1m2 pack entry did not restore c1m2 built-in ambient and "
@@ -3706,7 +3859,7 @@ void check_campaign_lighting_and_policy() {
     require(c1m2_after_distinct.ambient_color ==
                     std::array<float, 3>{0.18f, 0.22f, 0.32f} &&
                 c1m2_after_distinct.ambient == 0.14f &&
-                c1m2_after_distinct.strength == 0.28f,
+                c1m2_after_distinct.strength == 0.34f,
             "Transition to absent c1m2 leaked previous c1m1 pack ambient");
     for (const auto invalid_identity :
          {platform::MissionIdentity{},
@@ -4281,6 +4434,8 @@ void check_renderer_bridge_config() {
       require(test.accepted, "Unsupported POM configuration was accepted");
       require(config.parallax_materials == test.pom,
               "Typed POM option did not reach the renderer bridge");
+      require(config.parallax_quality == (test.pom ? 2U : 0U),
+              "Default POM quality level mismatch");
       require(config.normal_maps_enabled == (pom_assets.lighting == "normal"),
               "POM changed normal-map permission");
     } catch (const std::runtime_error &error) {
@@ -4290,6 +4445,16 @@ void check_renderer_bridge_config() {
     }
     require(rejected != test.accepted,
             "POM configuration acceptance mismatch");
+  }
+  for (unsigned quality : {1U, 2U}) {
+    pom_assets = {};
+    pom_assets.lighting = "normal";
+    pom_assets.pom = true;
+    pom_assets.pom_quality = quality;
+    const auto config = cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, {}, pom_assets);
+    require(config.parallax_materials && config.parallax_quality == quality,
+            "Explicit POM quality level did not reach the renderer bridge");
   }
 
   check_campaign_lighting_and_policy();

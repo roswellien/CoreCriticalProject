@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "frontend/sdl/game_health.h"
 #include "frontend/sdl/sdl_fit.h"
 #include "platform/render3d.h"
 
@@ -31,6 +32,9 @@ struct MenuRipplePass {
 };
 
 class EditorUiSource;
+namespace benchmark {
+class Run;
+}
 
 enum class RendererBackend { sdl, core_critical_dxgi, core_critical_wsi };
 
@@ -38,6 +42,7 @@ struct CoreCriticalQuality {
   std::string antialiasing = "off";
   std::string anisotropy = "1";
   unsigned draw_distance = 800;
+  unsigned fog_distance = 0;
 };
 
 struct PreparedModelBinding {
@@ -58,8 +63,10 @@ struct CoreCriticalAssets {
   bool environment_packs_explicit = false;
   std::shared_ptr<const platform::prepared::EnvironmentSelection> environment;
   bool render_thread = false;
+  benchmark::Run* benchmark_run = nullptr;
   std::string flare_style = "modern";
   bool pom = false;
+  unsigned pom_quality = 0; // 0 = off, 1 = low, 2 = high
   std::string geometry = "legacy";
   bool geometry_debug_normals = false;
   std::string textures;
@@ -86,7 +93,7 @@ struct CoreCriticalAssets {
            !cloud_detail_explicit && !effect_lights && !fixture_lights &&
            !mech_headlights && effect_light_catalog.empty() &&
            stock_headlights.empty() && headlight_bindings.empty() &&
-           !render_thread && !pom && geometry == "legacy" && !geometry_debug_normals &&
+           !render_thread && !pom && pom_quality == 0 && geometry == "legacy" && !geometry_debug_normals &&
            flare_style == "modern" &&
            textures.empty() && models.empty() && normals.empty() &&
            materials.empty() && skins.empty() && skin_catalog.empty() &&
@@ -98,6 +105,16 @@ struct CoreCriticalAssets {
 class FrameRenderer : public platform::Render3D {
  public:
   virtual bool ok() const = 0;
+  // #521: the renderer's figures for the minute health line, read on the
+  // producer thread without waiting for the GPU. False when the backend has none.
+  virtual bool health(sdlfe::HealthSnapshot&) { return false; }
+  virtual void benchmark_load() {}
+  virtual bool benchmark_ready() { return false; }
+  virtual bool wait_benchmark_present(double) { return false; }
+  virtual bool wait_benchmark_idle() { return true; }
+  virtual void set_benchmark_time(double) {}
+  virtual void set_benchmark_effects(unsigned, unsigned) {}
+  virtual void benchmark_finish() {}
   // Unsupported recorders reject attachment explicitly. Null detach is safe.
   virtual void attach_editor(EditorUiSource* source) {
     if (source) throw std::invalid_argument("renderer: editor attachment unsupported");

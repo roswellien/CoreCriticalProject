@@ -522,6 +522,20 @@
                                 </StackPanel>
                             </Border>
 
+                            <Border Background="#1C2220" BorderBrush="{StaticResource BrushRule}" BorderThickness="1" CornerRadius="4" Padding="16" Margin="0,0,0,20">
+                                <StackPanel>
+                                    <TextBlock Text="GRAPHICS BENCHMARK" FontFamily="{StaticResource FontDisplay}" FontSize="13" Foreground="{StaticResource BrushAmber}" Margin="0,0,0,6" />
+                                    <TextBlock Text="Replays four arena battles with your current graphics settings and active packs, then shows average FPS, 1% low and frame-time p95/p99. The first run prepares the replays from your MechWarrior 3 install, which takes several extra minutes. Keep the game window in front until it closes: switching apps stops the run."
+                                               FontSize="12" Foreground="{StaticResource BrushMuted}" TextWrapping="Wrap" Margin="0,0,0,14" />
+                                    <WrapPanel>
+                                        <Button x:Name="BtnRunBenchmark" Content="Run Benchmark" Style="{StaticResource SecondaryButton}" Click="BtnRunBenchmark_Click" Margin="0,0,12,0" />
+                                        <Button x:Name="BtnCancelBenchmark" Content="Cancel" Style="{StaticResource SecondaryButton}" Click="BtnCancelBenchmark_Click" Visibility="Collapsed" />
+                                    </WrapPanel>
+                                    <TextBlock x:Name="TxtBenchmarkStatus" FontSize="12" Foreground="{StaticResource BrushMuted}" TextWrapping="Wrap" Margin="0,12,0,0" Visibility="Collapsed" />
+                                    <TextBlock x:Name="TxtBenchmarkResult" FontFamily="Consolas" FontSize="12" Foreground="{StaticResource BrushInk}" TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed" />
+                                </StackPanel>
+                            </Border>
+
                             <TextBlock Text="UPDATES" FontFamily="{StaticResource FontHeader}" Foreground="{StaticResource BrushAmber}" Margin="0,0,0,10" />
                             <CheckBox x:Name="ChkAutomaticUpdateChecks" Content="Automatically check for launcher and game updates"
                                       Foreground="{StaticResource BrushInk}" Checked="AutomaticUpdateChecks_Changed" Unchecked="AutomaticUpdateChecks_Changed" />

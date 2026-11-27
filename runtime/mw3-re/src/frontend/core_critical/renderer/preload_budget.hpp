@@ -94,7 +94,9 @@ struct PreloadStopInfo {
 };
 
 // Test-only C++ fault and budget-cap injection configuration. Default-inactive
-// in production builds; never driven by environment variables or owner settings.
+// in production builds and never driven by owner settings. One test environment
+// variable may arm it: MW3_TEST_FAIL_ALLOC sets fail_next_play_texture_allocations
+// at the first mission start (#521); nothing else in it is env-driven.
 struct PreloadFaultInjection {
   bool override_budget{};
   std::uint64_t synthetic_heap_budget_bytes{};
@@ -108,6 +110,7 @@ struct PreloadFaultInjection {
   // injected_result, one after another.
   std::size_t fail_next_play_model_allocations{};
   std::size_t fail_next_play_texture_allocations{};
+  std::size_t fail_next_height_staging_allocations{};
 };
 
 } // namespace mw34::vkscene

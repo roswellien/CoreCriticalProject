@@ -1,0 +1,9 @@
+mw3: header vulkan_device=NVIDIA GeForce RTX 5070
+mw3: header vulkan_api_version=1.4.312
+mw3: header vulkan_driver_version=570.41.0.0 (0x8E8A4000)
+mw3: header heap index=0 size_bytes=12884901888 budget_bytes=11811160064 device_local=1
+mw3: header heap index=1 size_bytes=33285996544 budget_bytes=16642998272 device_local=0
+mw3: header resolution=2560x1080
+mw3: header window_mode=borderless
+mw3: header refresh_hz=144
+mw3: header hdr=0

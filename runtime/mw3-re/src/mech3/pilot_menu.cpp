@@ -172,7 +172,8 @@ PilotScreen::PilotScreen(Engine& e, Handle s)
   setup_bar(new_bar);
   target_buffers(e);
   const bool moving = !e.fast_menu();
-  if (load_from(e.main_menu_definition(), "PILOTDIALOG", moving)) {
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
+  if (load_from(e.main_menu_definition(), "PILOTDIALOG", moving || !bake_menu)) {
     zimg::Texture* img = nullptr;
     uint8_t bg_moving = 0;
     e.main_menu_background(&img, &bg_moving);
@@ -187,7 +188,7 @@ PilotScreen::PilotScreen(Engine& e, Handle s)
     bind_primitive(&lines2, "LINES2");
     bind_button(&cancel_btn, "CANCEL");
     bind_button(&accept, "ACCEPT");
-    if (!moving) {
+    if (bake_menu) {
       bake();
       remove(&background);
       remove(&lines);

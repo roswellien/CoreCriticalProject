@@ -970,10 +970,19 @@ namespace MW3RemasterLauncher
                     ? await sessionCompletion
                     : await GameRunner.WaitForCompletionAsync(process);
                 RecordSessionExit(context, exit);
+                // Read before ResetNativeLaunchControls allows a new launch, which resets it.
+                var sessionFolder = PlaytestDiagnostics.SessionFolder(context.LaunchLog);
+                var playProblems = exit == 0 && sessionFolder != null
+                    ? GameProblemsLog.PlayProblems(sessionFolder, _nativeGameRunner.LastFirstFrameMilliseconds)
+                    : Array.Empty<string>();
                 ResetNativeLaunchControls();
                 TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "\u26A0 MW3-RE ENDED WITH AN ERROR";
                 if (exit != 0)
-                    await HandleCrashReportAsync(exit, context);
+                    await HandleCrashReportAsync(exit, context,
+                        ReportPrompt.ForCrash(context.Settings, exit, context.LaunchLog));
+                else if (playProblems.Count > 0)
+                    await HandleCrashReportAsync(exit, context,
+                        ReportPrompt.ForProblems(playProblems));
             }
             catch (Exception error)
             {
@@ -1003,7 +1012,9 @@ namespace MW3RemasterLauncher
                 BtnLaunchGame.IsEnabled = true;
                 BtnLaunchGame.Content = "▶  LAUNCH ORIGINAL (D7VK)";
                 TxtStatusReady.Text = exit == 0 ? "GAME STATUS: READY" : "⚠ ORIGINAL GAME OR WRAPPER FAILED";
-                if (exit != 0) await HandleCrashReportAsync(exit, context);
+                if (exit != 0)
+                    await HandleCrashReportAsync(exit, context,
+                        ReportPrompt.ForCrash(context.Settings, exit, context.LaunchLog));
             }
             catch (Exception error)
             {
@@ -1015,38 +1026,34 @@ namespace MW3RemasterLauncher
             finally { process.Dispose(); }
         }
 
-        private async Task HandleCrashReportAsync(int exitCode, CrashReportSessionContext context)
+        private async Task HandleCrashReportAsync(int exitCode, CrashReportSessionContext context, ReportPrompt prompt)
         {
             var settingsSnapshot = context.Settings;
             var packsSnapshot = context.Packs;
             var launchLog = context.LaunchLog;
             var runtimeVersion = context.RuntimeVersion;
-            var summary = PlaytestDiagnostics.FailureSummary(launchLog, exitCode);
-            var engineTitle = settingsSnapshot.EngineMode == "d7vk" ? "Original Game (D7VK)" : "MW3-RE";
-            var exitStatus = PlaytestDiagnostics.FormatExitCode(exitCode);
-            var statusLabel = $"{engineTitle} stopped (exit {exitStatus})";
-            var dialogSummary = summary == PlaytestDiagnostics.GenericFailureSummary
-                ? $"{summary} Exit code: {exitStatus}."
-                : summary;
 
-            if (_settingsMgr.Current.AutomaticCrashReports)
+            if (!prompt.AlwaysAsk && _settingsMgr.Current.AutomaticCrashReports)
             {
-                MessageBox.Show(dialogSummary + "\n\nUse Open Logs or Export Report under Settings & Steam.",
-                    statusLabel, MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(prompt.Summary + "\n\nUse Open Logs or Export Report under Settings & Steam.",
+                    prompt.Title, MessageBoxButton.OK, MessageBoxImage.Error);
             }
             else
             {
                 var choice = MessageBox.Show(this,
-                    dialogSummary + "\n\nSend the redacted recent launcher and native logs, hardware inventory (CPU, installed memory, graphics adapters and drivers), launcher/runtime details, selected graphics settings and pack metadata to Core Critical for review? The inventory does not request serial numbers or device identifiers. Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. Saves, original media or memory dumps are not included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
-                    statusLabel, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+                    prompt.Summary + "\n\nSend the redacted launcher and game logs (file paths, multiplayer chat and other players' names removed), hardware inventory (CPU, installed memory, graphics adapters and drivers), display mode and resolution, controller and input device names, launcher/runtime details, selected graphics settings, and pack names and texture sizes to Core Critical for review? The inventory does not request serial numbers or device identifiers. Reports are stored in private review systems, including an admin-only archive retained until the maintainer deletes them. Saves, original media or memory dumps are not included.\n\nChoose No to keep all diagnostics on this PC. You can still use Export Report to review a local copy.",
+                    prompt.Title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
                 if (choice != MessageBoxResult.Yes) return;
             }
 
             try
             {
                 var hardwareInventory = await Task.Run(HardwareInventory.Capture);
-                var report = PlaytestDiagnostics.CreateCrashReport(settingsSnapshot, packsSnapshot,
-                    launchLog, _basePath, runtimeVersion, exitCode, hardwareInventory);
+                var basePath = _basePath;
+                var header = await Task.Run(() => BuildReportHeader(settingsSnapshot, packsSnapshot, launchLog, basePath));
+                // Off the window's thread: it reads and redacts the whole game log.
+                var report = await Task.Run(() => PlaytestDiagnostics.CreateCrashReport(settingsSnapshot,
+                    packsSnapshot, launchLog, basePath, runtimeVersion, exitCode, hardwareInventory, header));
                 var result = await new CrashReportService().SubmitAsync(report);
                 var detail = result.ArchivedOnly
                     ? "The report was saved to the private admin archive. GitHub issue delivery was unavailable."
@@ -1054,14 +1061,14 @@ namespace MW3RemasterLauncher
                         ? "Report sent, thanks. The report was added to the daily overflow queue."
                         : "Report sent, thanks.";
                 MessageBox.Show(this, detail + "\nReport ID: " + result.ReportId,
-                    "Crash report sent", MessageBoxButton.OK, MessageBoxImage.Information);
+                    prompt.SentTitle, MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception error)
             {
                 MessageBox.Show(this,
-                    "The crash report could not be sent. Your logs remain on this PC. " + error.Message +
+                    prompt.NotSentMessage + " Your logs remain on this PC. " + error.Message +
                     "\n\nUse Export Report under Settings & Steam to save a local copy.",
-                    "Crash report not sent", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    prompt.NotSentTitle, MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
@@ -1124,6 +1131,77 @@ namespace MW3RemasterLauncher
             }
         }
 
+        private System.Threading.CancellationTokenSource? _benchmarkCancellation;
+
+        private async void BtnRunBenchmark_Click(object sender, RoutedEventArgs e)
+        {
+            if (_nativeSessionActive || _launchPreparing || _assetInstallActive)
+            {
+                MessageBox.Show(this, "Close the current game session before running the benchmark.", "Graphics benchmark",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            // Settings are saved as they change, and the benchmark reads that saved file through
+            // the Play planner, so it uses the same graphics settings and packs Play would.
+            _settingsMgr.Save();
+            _nativeSessionActive = true; // Blocks Play, pack installs and update prompts meanwhile.
+            // Restore exactly these afterwards: Play may have been disabled for another reason.
+            var playWasEnabled = BtnLaunchGame.IsEnabled;
+            var installWasEnabled = BtnInstallPack.IsEnabled;
+            var packsWereEnabled = ListPacks.IsEnabled;
+            BtnLaunchGame.IsEnabled = false;
+            BtnInstallPack.IsEnabled = false;
+            ListPacks.IsEnabled = false;
+            BtnRunBenchmark.IsEnabled = false;
+            BtnCancelBenchmark.Visibility = Visibility.Visible;
+            TxtBenchmarkResult.Visibility = Visibility.Collapsed;
+            TxtBenchmarkStatus.Visibility = Visibility.Visible;
+            TxtBenchmarkStatus.Foreground = (System.Windows.Media.Brush)FindResource("BrushMuted");
+            TxtBenchmarkStatus.Text = "Starting the benchmark...";
+            _benchmarkCancellation = new System.Threading.CancellationTokenSource();
+            try
+            {
+                var runner = new BenchmarkRunner(_basePath, _nativeGameRunner);
+                var outcome = await runner.RunAsync(
+                    // RunAsync resumes on the UI thread, so progress can update the page directly.
+                    item => TxtBenchmarkStatus.Text = BenchmarkRunner.DescribeProgress(item),
+                    _benchmarkCancellation.Token);
+                if (outcome.Report is { } report)
+                {
+                    TxtBenchmarkStatus.Text = report.Gpu is { } gpu ? $"Finished on {gpu}." : "Finished.";
+                    TxtBenchmarkResult.Text = BenchmarkRunner.FormatReport(report);
+                    TxtBenchmarkResult.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    TxtBenchmarkStatus.Foreground = (System.Windows.Media.Brush)FindResource("BrushAmber");
+                    TxtBenchmarkStatus.Text = BenchmarkRunner.DescribeError(outcome);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                TxtBenchmarkStatus.Text = "Benchmark cancelled.";
+            }
+            catch (Exception error)
+            {
+                TxtBenchmarkStatus.Foreground = (System.Windows.Media.Brush)FindResource("BrushAmber");
+                TxtBenchmarkStatus.Text = "The benchmark could not run: " + error.Message;
+            }
+            finally
+            {
+                _benchmarkCancellation.Dispose();
+                _benchmarkCancellation = null;
+                BtnCancelBenchmark.Visibility = Visibility.Collapsed;
+                BtnRunBenchmark.IsEnabled = true;
+                _nativeSessionActive = false;
+                BtnLaunchGame.IsEnabled = playWasEnabled;
+                BtnInstallPack.IsEnabled = installWasEnabled;
+                ListPacks.IsEnabled = packsWereEnabled;
+            }
+        }
+
+        private void BtnCancelBenchmark_Click(object sender, RoutedEventArgs e) => _benchmarkCancellation?.Cancel();
+
         private async void BtnExportReport_Click(object sender, RoutedEventArgs e)
         {
             var launchLog = CurrentLaunchLog();
@@ -1140,11 +1218,19 @@ namespace MW3RemasterLauncher
             if (dialog.ShowDialog() != true) return;
             try
             {
-                var hardwareInventory = await System.Threading.Tasks.Task.Run(HardwareInventory.Capture);
-                PlaytestDiagnostics.Export(dialog.FileName, settingsSnapshot, packsSnapshot,
-                    launchLog, _basePath, hardwareInventory, runtimeVersion,
-                    exitCode: matchingSession?.ExitCode);
-                MessageBox.Show("Report saved. It contains build/system details, selected settings, pack metadata and redacted recent log tails. Review it before sharing.",
+                var destination = dialog.FileName;
+                var basePath = _basePath;
+                var exitCode = matchingSession?.ExitCode;
+                // Whole logs can run to many megabytes, so redacting and compressing them
+                // stays off the UI thread.
+                await System.Threading.Tasks.Task.Run(() =>
+                {
+                    var hardwareInventory = HardwareInventory.Capture();
+                    var header = BuildReportHeader(settingsSnapshot, packsSnapshot, launchLog, basePath);
+                    ReportExport.Export(destination, settingsSnapshot, packsSnapshot,
+                        launchLog, basePath, hardwareInventory, runtimeVersion, exitCode, header);
+                });
+                MessageBox.Show("Report saved. It contains build/system details, selected settings, pack metadata and redacted game and launcher logs. Review it before sharing.",
                     "Playtest report saved", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex) { MessageBox.Show(ex.Message, "Cannot export report", MessageBoxButton.OK, MessageBoxImage.Error); }
@@ -1186,8 +1272,28 @@ namespace MW3RemasterLauncher
                 Version = pack.Version,
                 SchemaVersion = pack.SchemaVersion,
                 IsEnabled = pack.IsEnabled,
-                Priority = pack.Priority
+                Priority = pack.Priority,
+                // The report header sums texture sizes from the file list; it is only read.
+                Files = pack.Files
             }).ToArray();
+        }
+
+        /// <summary>
+        /// The report's setup header for a session. It lists attached input devices, so it runs
+        /// on a background task like the hardware inventory.
+        /// </summary>
+        private static Dictionary<string, object> BuildReportHeader(LauncherSettings settings,
+            IEnumerable<PackManifest> packs, string? launchLog, string basePath)
+        {
+            List<string> inputDevices;
+            try
+            {
+                inputDevices = DirectInputJoystickCatalog.EnumerateAttached()
+                    .Select(device => device.ProductName)
+                    .ToList();
+            }
+            catch { inputDevices = new List<string>(); }
+            return ReportHeader.ForSession(settings, packs, launchLog, basePath, inputDevices);
         }
 
         private void BtnOpenScreenshots_Click(object sender, RoutedEventArgs e)

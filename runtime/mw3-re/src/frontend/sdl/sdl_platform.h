@@ -55,6 +55,7 @@ class SdlWindow : public platform::Window {
   void frame_size(int width, int height, int canvas_w = 0, int canvas_h = 0) override;
   // --window not given: the window takes the frame's shape (sdl_fit.h).
   void set_auto_size(bool on) { auto_size_ = on; }
+  bool open_benchmark(int width, int height, bool fullscreen);
   void set_fullscreen(bool on) { fullscreen_ = on; }  // ours: borderless, the desktop's size
   // Ours (Alt+Enter): fullscreen or a window now, for this run only; the
   // window takes the frame's shape at the size it would open with, kept
@@ -100,6 +101,7 @@ class SdlScreen2D : public platform::Screen2D {
   void begin_menu_observation(const uint16_t*, int width, int height, int pitch) override;
   void cancel_menu_observation() noexcept override;
   void finish_menu_observation() noexcept override;
+  bool hd_menu_background_ready() const override;  // ours (#552): live or Stage C HD admission
   void present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) override;
   // A 16-bit pixel (565, else 555) as the layer's RGBA8, opaque.
   static uint32_t rgba(uint16_t pixel, bool rgb565);
@@ -162,6 +164,7 @@ class SdlScreen2D : public platform::Screen2D {
   uint64_t menu_report_frames_{}, menu_report_images_{}, menu_report_text_hits_{},
       menu_report_fallbacks_{};
   std::map<std::string, uint64_t> menu_report_shadow_reasons_;
+  bool menu_gpu_configured() const;  // ours (#552): also queried before a new menu becomes current
   bool live_menu_gpu_enabled() const;
   void set_menu_layout_active(bool active) noexcept;
 };

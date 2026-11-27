@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "crt/msvc_rand.h"
+#include "frontend/sdl/log.h"
 #include "mech3/mech_config.h"
 #include "mech3/mech_reader.h"
 #include "mech3/mech_salvage.h"
@@ -434,7 +435,10 @@ uint8_t Engine::mission_running() { return states().core.active_; }
 void Engine::options_save() { mech3::save_options(); }
 void Engine::settings_free() { zreg::shutdown(); }
 
-void Engine::exit_process(uint32_t code) { std::exit(static_cast<int>(code)); }
+void Engine::exit_process(uint32_t code) {
+  sdlfe::log::drain();  // std::exit skips the log's own end: the last lines into mw3.log first (log.h)
+  std::exit(static_cast<int>(code));
+}
 void Engine::cursor_pos(int32_t* x, int32_t* y) {
   unported("GetCursorPos", {});
   *x = 0;

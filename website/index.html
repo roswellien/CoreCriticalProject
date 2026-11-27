@@ -10,8 +10,8 @@
         <meta name="theme-color" content="#141717" />
         <title>Core Critical — MW3</title>
         <link rel="icon" href="assets/plates/brand-mark-64.png" type="image/png" />
-        <link rel="stylesheet" href="styles.css?v=20261126" />
-        <script src="site.js" defer></script>
+        <link rel="stylesheet" href="styles.css?v=20261129" />
+        <script src="site.js?v=20261128" defer></script>
         <link
             rel="preload"
             href="assets/fonts/Orbitron.woff2"
@@ -157,6 +157,69 @@
                     ></iframe>
                 </div>
             </section>
+            <section class="compare section-shell" aria-labelledby="compare-title">
+                <div class="compare-copy">
+                    <h2 id="compare-title">Same battle. New core.</h2>
+                    <p>
+                        One replayed arena match, captured on the same frame twice: once with the
+                        stock MW3 assets, once with Core Critical's upgraded mechs, textures,
+                        lighting and shadows. Drag the handle to compare.
+                    </p>
+                </div>
+                <figure class="compare-figure">
+                    <div class="compare-frame" style="--split: 50%">
+                        <img
+                            class="compare-after"
+                            src="assets/plates/compare-core-critical.webp"
+                            srcset="
+                                assets/plates/compare-core-critical-1280.webp 1280w,
+                                assets/plates/compare-core-critical.webp      2560w
+                            "
+                            sizes="(max-width: 1600px) 100vw, 1600px"
+                            width="2560"
+                            height="1080"
+                            alt="Core Critical: upgraded mechs under dynamic lighting and shadows"
+                            loading="lazy"
+                            decoding="async"
+                        />
+                        <img
+                            class="compare-before"
+                            src="assets/plates/compare-stock.webp"
+                            srcset="
+                                assets/plates/compare-stock-1280.webp 1280w,
+                                assets/plates/compare-stock.webp      2560w
+                            "
+                            sizes="(max-width: 1600px) 100vw, 1600px"
+                            width="2560"
+                            height="1080"
+                            alt="Stock MW3: the same frame with the original assets"
+                            loading="lazy"
+                            decoding="async"
+                        />
+                        <span class="compare-label compare-label-before" aria-hidden="true"
+                            >Stock MW3</span
+                        >
+                        <span class="compare-label compare-label-after" aria-hidden="true"
+                            >Core Critical</span
+                        >
+                        <span class="compare-handle" aria-hidden="true"></span>
+                        <input
+                            class="compare-range"
+                            type="range"
+                            min="0"
+                            max="100"
+                            value="50"
+                            step="1"
+                            aria-label="Share of the frame showing stock MW3"
+                            aria-valuetext="50% stock MW3, 50% Core Critical"
+                        />
+                    </div>
+                    <figcaption>
+                        Matched frame from a replayed c1mp1 arena match. Work in progress; final
+                        visuals may change.
+                    </figcaption>
+                </figure>
+            </section>
             <section class="playtest section-shell" aria-labelledby="playtest-title">
                 <div class="playtest-intro">
                     <span class="state">Closed playtest</span>
@@ -214,16 +277,16 @@
                 <div class="track-grid">
                     <a class="track" href="native.html"
                         ><img
-                            src="assets/plates/native-art.webp"
+                            src="assets/plates/native-c1mp1-beach.webp"
                             srcset="
-                                assets/plates/native-art-1024.webp 1024w,
-                                assets/plates/native-art.webp      2048w
+                                assets/plates/native-c1mp1-beach-1280.webp 1280w,
+                                assets/plates/native-c1mp1-beach.webp      2560w
                             "
                             sizes="(max-width: 760px) 100vw, 33vw"
                             loading="lazy"
                             alt=""
-                            width="2048"
-                            height="768" />
+                            width="2560"
+                            height="1080" />
                         <div class="track-content">
                             <span class="track-icon" aria-hidden="true"
                                 ><svg viewBox="0 0 24 24">
@@ -299,15 +362,11 @@
                 <div class="project-family">
                     <a href="project.html?id=pirates-moon" class="family-project"
                         ><img
-                            src="assets/plates/vulkan-art.webp"
-                            srcset="
-                                assets/plates/vulkan-art-1024.webp 1024w,
-                                assets/plates/vulkan-art.webp      2048w
-                            "
-                            sizes="(max-width: 760px) 100vw, 50vw"
+                            class="family-project-capture"
+                            src="assets/plates/pirates-moon-menu.webp"
                             alt=""
-                            width="2048"
-                            height="768"
+                            width="640"
+                            height="480"
                             loading="lazy"
                         />
                         <div>
@@ -315,20 +374,8 @@
                             <h3>MW3: Pirate’s Moon</h3>
                             <p>A new chapter for the same core.</p>
                         </div></a
-                    ><a href="project.html?id=mw4" class="family-project"
-                        ><img
-                            src="assets/plates/hero-art.webp"
-                            srcset="
-                                assets/plates/hero-art-1280.webp 1280w,
-                                assets/plates/hero-art.webp      2056w
-                            "
-                            sizes="(max-width: 760px) 100vw, 50vw"
-                            alt=""
-                            width="2056"
-                            height="765"
-                            loading="lazy"
-                        />
-                        <div>
+                    ><a href="project.html?id=mw4" class="family-project family-project-blank"
+                        ><div>
                             <span class="state">Future targets</span>
                             <h3>MW4</h3>
                             <p>Vengeance. Black Knight. Mercenaries.</p>
@@ -385,8 +432,8 @@
                 <p>Independent. Open source. Built to endure.</p>
                 <p>Original game files required. <a href="about.html#faq">Read the FAQ</a></p>
                 <p class="art-note">
-                    Vulkan Graphics and Launcher &amp; Tools use development screenshots; other site
-                    artwork is illustrative.
+                    Game images are development screenshots from Core Critical builds. The Mad Cat
+                    hangar artwork is illustrative.
                 </p>
             </div>
             <a href="https://github.com/roswellien/CoreCriticalProject">GitHub</a>
