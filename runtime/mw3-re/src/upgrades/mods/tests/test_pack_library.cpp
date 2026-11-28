@@ -2,6 +2,7 @@
 #include "check.h"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -10,10 +11,16 @@
 #include <vector>
 
 #include "gamez/zutil/zutl_path.h"
+#include "gamez/zutil/zutl_zar.h"
+#include "gamez/zclass/cls_mechlib.h"
+#include "gamez/zclass/cls_node.h"
+#include "gamez/zclass/list.h"
 #include "mech3/mods.h"
+#include "mech3/mech_names.h"
 #include "mech3/mods_tables.h"
 #include "mech3/mods_menu.h"
 #include "upgrades/mods/mod_export.h"
+#include "upgrades/mods/entry_archives.h"
 #include "upgrades/mods/mod_report.h"
 #include "upgrades/editor/save_as.h"
 #include "upgrades/mods/campaign_entries.h"
@@ -130,6 +137,205 @@ TEST(pack_library_fixture_lists_mounts_ticks_and_hashes_like_player_mod) {
   EXPECT(mech3::mods_gameplay_hash(test.write, enabled) == hash);
   EXPECT(mech3::mods_gameplay_hash(test.write, enabled, &install) == mounted_hash);
   EXPECT(snapshot(test.library) == before);
+}
+
+namespace {
+// A real, minimal tree for the bounded model reader: one Object3d node with
+// no geometry or children. Different root names identify the winning bytes.
+std::vector<uint8_t> model_tree(const std::string& name) {
+  std::vector<uint8_t> bytes(0xd0 + 0x90, 0);
+  std::memcpy(bytes.data(), name.c_str(), name.size() + 1);
+  const int32_t object_class = 5;
+  std::memcpy(bytes.data() + 0x34, &object_class, 4);
+  return bytes;
+}
+
+void model_archive(const fs::path& path,
+                   const std::vector<std::pair<std::string, std::string>>& models) {
+  fs::create_directories(path.parent_path());
+  const bool confined = zutl::mounts().confined;
+  zutl::mounts().confined = false;  // authored fixtures use host paths
+  zutl_zar::Archive archive;
+  zutl_zar::init(archive);
+  EXPECT(zutl_zar::create(archive, path.string().c_str()));
+  if (archive.file) {
+    const uint32_t version = 27, format = 1;
+    const uint32_t materials = 0;
+    zutl_zar::add(archive, "version", &version, 4);
+    zutl_zar::add(archive, "format", &format, 4);
+    zutl_zar::add(archive, "materials", &materials, 4);
+    for (const auto& model : models) {
+      const auto bytes = model_tree(model.second);
+      zutl_zar::add(archive, model.first.c_str(), bytes.data(), static_cast<uint32_t>(bytes.size()));
+    }
+  }
+  zutl_zar::destroy(archive);
+  zutl::mounts().confined = confined;
+}
+
+struct ModelLibraryTest {
+  PackTest files;
+  const fs::path install = files.root / "install";
+
+  ModelLibraryTest() {
+    model_archive(install / "zbd/mechlib.zbd", {{"mech_stock.flt", "stock"}});
+  }
+  ~ModelLibraryTest() { mech3::mech_rows_clear(); }
+
+  fs::path mod(const std::string& name, bool pack = false) {
+    const fs::path folder = pack ? files.library / name / "mod" : fs::path(files.write) / "mods" / name;
+    if (pack) manifest(files.library / name, name);
+    put(folder / "mod.txt", "name=" + name + "\n");
+    return folder;
+  }
+  std::vector<std::string> mount(const std::vector<std::string>& enabled) {
+    zutl::mounts() = {};
+    zutl::set_write_dir(files.write);
+    zutl::mounts().confined = true;
+    auto log = mech3::mods_mount(files.write, enabled, {install.generic_string()});
+    zutl::mount(install.generic_string());
+    return log;
+  }
+};
+
+// Exercises the actual game reader, including the merged archive's lifetime.
+void expect_models(const std::vector<std::pair<std::string, std::string>>& models) {
+  zcls::MechLib library;
+  zutl_zar::init(library.archive);
+  const bool opened = zcls::mechlib_open(library, "zbd\\mechlib.zbd");
+  EXPECT(opened);
+  if (opened) {
+    for (const auto& model : models) {
+      zcls::Node* node = zcls::mechlib_load(library, model.first.c_str());
+      EXPECT(node != nullptr);
+      if (node) EXPECT(std::string(node->name()) == model.second);
+    }
+  }
+  const std::vector<zcls::Node*> trees(library.trees.begin(), library.trees.end());
+  zcls::mechlib_close(library);
+  for (zcls::Node* tree : trees) zcls::node_destroy(tree);
+}
+
+std::vector<std::string> model_library_log() {
+  zutl_zar::Archive archive;
+  zutl_zar::init(archive);
+  std::vector<std::string> log;
+  EXPECT(mech3::model_library_open(archive, "zbd/mechlib.zbd", &log));
+  EXPECT(mech3::model_library_close(archive));
+  return log;
+}
+}  // namespace
+
+TEST(model_library_two_mods_keep_each_others_models_and_stock) {
+  const std::vector<std::pair<bool, bool>> pack_sources = {{false, false}, {false, true}, {true, true}};
+  for (const auto& packs : pack_sources) {
+    ModelLibraryTest test;
+    const auto one = test.mod("one", packs.first), two = test.mod("two", packs.second);
+    model_archive(one / "zbd/mechlib.zbd", {{"mech_one.flt", "one"}});
+    model_archive(two / "ZBD/MECHLIB.ZBD", {{"mech_two.flt", "two"}});
+    const auto pack_before = snapshot(test.files.library);
+    const auto install_before = snapshot(test.install);
+    test.mount({"one", "two"});
+    expect_models({{"mech_one.flt", "one"}, {"mech_two.flt", "two"}, {"mech_stock.flt", "stock"}});
+    test.mount({"two", "one"});
+    expect_models({{"mech_one.flt", "one"}, {"mech_two.flt", "two"}, {"mech_stock.flt", "stock"}});
+    EXPECT(snapshot(test.files.library) == pack_before);
+    EXPECT(snapshot(test.install) == install_before);
+  }
+}
+
+TEST(model_library_same_entry_uses_tick_order_then_write_directory) {
+  ModelLibraryTest test;
+  const auto one = test.mod("one"), two = test.mod("two", true);
+  model_archive(one / "zbd/mechlib.zbd", {{"mech_shared.flt", "first"}});
+  model_archive(two / "zbd/mechlib.zbd", {{"MECH_SHARED.FLT", "second"}});
+  test.mount({"one", "two"});
+  const auto log = model_library_log();
+  EXPECT(std::count_if(log.begin(), log.end(), [&](const std::string& line) {
+    return line.find("entry mech_shared.flt from " + (two / "zbd/mechlib.zbd").generic_string()) != std::string::npos &&
+           line.find((one / "zbd/mechlib.zbd").generic_string() + " wins") != std::string::npos;
+  }) == 1);
+  expect_models({{"mech_shared.flt", "first"}, {"mech_stock.flt", "stock"}});
+  test.mount({"two", "one"});
+  expect_models({{"mech_shared.flt", "second"}, {"mech_stock.flt", "stock"}});
+  model_archive(fs::path(test.files.write) / "zbd/mechlib.zbd", {{"mech_shared.flt", "write"}});
+  test.mount({"two", "one"});
+  expect_models({{"mech_shared.flt", "write"}, {"mech_stock.flt", "stock"}});
+}
+
+TEST(model_library_no_archive_and_no_mods_keep_the_original_path) {
+  ModelLibraryTest test;
+  test.mod("empty");
+  test.mount({"empty"});
+  expect_models({{"mech_stock.flt", "stock"}});
+  EXPECT(fs::equivalent(zutl::find("zbd/mechlib.zbd"), test.install / "zbd/mechlib.zbd"));
+  test.mount({});
+  expect_models({{"mech_stock.flt", "stock"}});
+  EXPECT(!fs::exists(fs::path(test.files.write) / "mod-merged"));
+}
+
+TEST(model_library_unreadable_archive_does_not_hide_other_sources) {
+  ModelLibraryTest test;
+  const auto broken = test.mod("broken"), good = test.mod("good");
+  put(broken / "zbd/mechlib.zbd", "not an archive");
+  model_archive(good / "zbd/mechlib.zbd", {{"mech_good.flt", "good"}});
+  test.mount({"broken", "good"});
+  const auto log = model_library_log();
+  EXPECT(std::count_if(log.begin(), log.end(), [&](const std::string& line) {
+    return line.find((broken / "zbd/mechlib.zbd").generic_string() +
+                     ": mechlib.zbd cannot be read, its models left out") != std::string::npos;
+  }) == 1);
+  expect_models({{"mech_good.flt", "good"}, {"mech_stock.flt", "stock"}});
+  test.mount({"good", "broken"});
+  expect_models({{"mech_good.flt", "good"}, {"mech_stock.flt", "stock"}});
+}
+
+TEST(model_library_bad_entry_ranges_names_and_headers_leave_the_whole_source_out) {
+  ModelLibraryTest test;
+  const auto broken = test.mod("broken"), good = test.mod("good");
+  const fs::path archive = broken / "zbd/mechlib.zbd";
+  model_archive(good / "zbd/mechlib.zbd", {{"mech_good.flt", "good"}});
+  model_archive(archive, {{"mech_bad.flt", "bad"}});
+  const std::string valid = read(archive);
+  // These corruptions leave enough of the table intact for the legacy opener:
+  // an entry in table bytes, a name with no terminator, and an incompatible version.
+  const size_t last_entry = valid.size() - 8 - sizeof(zutl_zar::Entry);
+  for (int corruption = 0; corruption < 3; ++corruption) {
+    std::string bytes = valid;
+    if (corruption == 0) {
+      const uint32_t table_start = static_cast<uint32_t>(valid.size() - 8 - 4 * sizeof(zutl_zar::Entry));
+      std::memcpy(bytes.data() + last_entry, &table_start, 4);
+    } else if (corruption == 1) {
+      std::memset(bytes.data() + last_entry + 8, 'x', 64);
+    } else {
+      bytes[0] = 0;
+    }
+    put(archive, bytes);
+    test.mount({"broken", "good"});
+    EXPECT(contains(model_library_log(), "mechlib.zbd cannot be read, its models left out"));
+    expect_models({{"mech_good.flt", "good"}, {"mech_stock.flt", "stock"}});
+    EXPECT(!mech3::model_library_has(archive.generic_string(), "mech_bad.flt"));
+  }
+}
+
+TEST(model_library_missing_model_warning_searches_all_sources) {
+  ModelLibraryTest test;
+  const auto rows = test.mod("rows"), models = test.mod("models");
+  put(rows / "mod.txt", "name=Rows\nmech=scout tech=any mass=20 class=light model=remote\n"
+                         "mech=absent tech=any mass=20 class=light model=missing\n");
+  put(rows / "zbd/dfn_scout.zrd", "(version (2))\n");
+  put(rows / "zbd/dfn_absent.zrd", "(version (2))\n");
+  model_archive(rows / "zbd/mechlib.zbd", {{"mech_local.flt", "local"}});
+  model_archive(models / "zbd/mechlib.zbd", {{"mech_remote.flt", "remote"}});
+  const auto log = test.mount({"rows", "models"});
+  EXPECT(mech3::mech_index("scout") >= 20);
+  EXPECT(!contains(log, "no mech_remote.flt"));
+  EXPECT(contains(log, "no mech_missing.flt in mechlib.zbd"));
+  EXPECT(mech3::mech_index("absent") == -1);
+  model_archive(fs::path(test.files.write) / "zbd/mechlib.zbd", {{"mech_missing.flt", "write"}});
+  const auto with_write_model = test.mount({"rows", "models"});
+  EXPECT(mech3::mech_index("absent") >= 20);
+  EXPECT(!contains(with_write_model, "no mech_missing.flt"));
 }
 
 TEST(pack_library_player_folder_clash_wins_even_without_mod_txt) {

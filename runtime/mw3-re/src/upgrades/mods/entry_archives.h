@@ -3,6 +3,10 @@
 #include <string>
 #include <vector>
 
+namespace zutl_zar {
+struct Archive;
+}
+
 // Ours (docs/modding.md, Archives by their changed entries): a mod made for
 // the original carries whole reader archives (zbd\reader.zbd, a mission's
 // readerm<N>.zbd), each many records of which it changed a few; two such
@@ -32,6 +36,19 @@ struct ArchiveEntry {
 // entry lies outside the file.
 bool archive_read_entries(const std::string& host, std::vector<ArchiveEntry>* out);
 std::vector<std::string> archive_entry_names(const std::string& host);
+
+// Only mechlib.zbd merges whole archives by entry. Host paths and starts with
+// no mod model archive keep the original opener. The merged stream belongs to
+// `archive` until model_library_close; its logical path stays unchanged so JSON
+// overrides and source identity still use the game's name. Logs name each losing
+// entry and unreadable source once per open; without a sink distinct diagnostics
+// go to stderr once per process so mission reloads do not repeat them.
+bool model_library_open(zutl_zar::Archive& archive, const char* path,
+                        std::vector<std::string>* log = nullptr);
+bool model_library_close(zutl_zar::Archive& archive);
+// The row warning uses the same archive bounds as the merged opener, including
+// under the game's path confinement. Does not decode the model tree.
+bool model_library_has(const std::string& host, const std::string& entry);
 
 struct EntriesCut {
   enum What { kLeft, kSame, kCut } what = kLeft;  // left whole; dropped (every entry the install's); cut to its entries

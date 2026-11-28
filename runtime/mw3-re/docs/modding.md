@@ -397,9 +397,8 @@ waiting mech hold, so it is never a mod's. A name
 already a mech (any case, the exe's or an earlier mod's), an unknown key, a
 value out of range, or files the game would not find (`dfn_<name>.zrd` in the
 first `reader.zbd` of the enabled mods, the patch and the install, or loose
-beside it; `mech_<model>.flt` in the first `mechlib.zbd`: a mod's archive is
-the whole archive, so its own hides a later mod's) is said in the log and the
-row left out, so no list offers it; `--check-mod` says the same (the files
+beside it; `mech_<model>.flt` in any readable mounted `mechlib.zbd`) is said
+in the log and the row left out, so no list offers it; `--check-mod` says the same (the files
 against the mod and the install given). A row whose files fail anyway
 reaches the launch's error box, "Failed to create player[ <name> ]" (0xf30;
 the build's boxes, 0xf25 and 0xf30, are shown now, where they were only
@@ -1913,6 +1912,35 @@ dlls: 1.2's over 1.0's is 42 lines, 38 of them names, and gives exactly
 (its made dll is no table: the warning and the left-out record, 3 programs
 where it counted 4, five files unpacked where four). Breaks caught: every
 text taken, the dll kept in the mod, the names not given.
+
+### Mech model libraries across mods
+
+When a mounted mod supplies `zbd/mechlib.zbd`, the model library is read entry
+by entry across sources. The write directory wins first, then enabled mods in
+tick-file order (player mods and installed packs have equal rank), then the
+patch and install mounts. A source that lacks an entry leaves later sources
+visible, including the game's own models. Names match without regard to case.
+Each losing entry is named once, with its winning and losing source, when the
+library opens; mission reloads do not repeat the same diagnostic. An archive
+with an unreadable table or entry range is named and left out whole; other
+sources remain available.
+
+`upgrades/mods/entry_archives` builds a temporary, ordinary archive for the
+existing bounded model reader. It lives until the library closes and never
+changes the installed game, mod or pack. With no mod model archive, the
+original open path is used. No other archive kind changes its merge rules.
+
+The shared `version`, `format` and `materials` entries follow the same first
+source rule. Model authors must use a compatible shared material table; this
+merge does not remap a model's material indices or combine material tables.
+Models and materials still pass through the existing bounded readers when
+used. JSON folder and zip overrides keep their existing lookup rules.
+
+Asset-free tests in `src/upgrades/mods/tests/test_pack_library.cpp`, named
+`model_library_*`, build small archives from authored bytes and load their
+trees through the game reader. They cover different models, duplicate names,
+write-directory precedence, missing and unreadable archives, and the missing
+model warning. This is archive loading evidence, not a live gameplay playtest.
 
 ### Archives by their changed entries (2026-11-11)
 

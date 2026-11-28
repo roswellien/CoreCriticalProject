@@ -3,15 +3,18 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <set>
 
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zutil/zutl_zar.h"
+#include "gamez/zutil/zutl_zip.h"
 #include "mech3/net_save.h"
 #include "upgrades/mods/marked_remove.h"
 
@@ -71,6 +74,47 @@ struct Unconfined {
   Unconfined() { zutl::mounts().confined = false; }
   ~Unconfined() { zutl::mounts().confined = was; }
 };
+
+// A model library's table must not borrow bytes from its own table or another
+// entry's unterminated name. Reject the whole source before it can win anything.
+bool model_library_read(const std::string& host, std::vector<ArchiveEntry>* entries) {
+  entries->clear();
+  const Unconfined unconfined;
+  zutl_zar::Archive archive;
+  zutl_zar::init(archive);
+  bool readable = zutl_zar::open(archive, host.c_str());
+  const int64_t end = readable ? zutl_zar::data_end(archive) : 0;
+  for (int i = 0; readable && i < archive.count; ++i) {
+    const auto& entry = archive.entries[i];
+    readable = std::memchr(entry.name, 0, sizeof entry.name) && entry.name[0] &&
+               entry.start <= end && entry.length <= end - entry.start;
+    if (!readable) break;
+    ArchiveEntry copy;
+    copy.name = entry.name;
+    copy.data.resize(entry.length);
+    std::FILE* file = zutl_zar::seek(archive, i, nullptr);
+    readable = file && std::fread(copy.data.data(), 1, copy.data.size(), file) == copy.data.size();
+    // Mods may supply just new trees, borrowing the install's headers. An
+    // explicitly incompatible header must not poison every other source.
+    const std::string name = lower(copy.name);
+    if (readable && (name == "version" || name == "format")) {
+      uint32_t value = 0;
+      if (copy.data.size() == sizeof value) std::memcpy(&value, copy.data.data(), sizeof value);
+      readable = value == (name == "version" ? 27u : 1u);
+    }
+    entries->push_back(std::move(copy));
+  }
+  zutl_zar::destroy(archive);
+  if (!readable) entries->clear();
+  return readable;
+}
+
+// ScratchFile uses the system temp folder on Windows, where std::tmpfile can
+// require drive-root permissions. Keep its owner until the library closes.
+std::map<zutl_zar::Archive*, std::unique_ptr<zutl_zip::ScratchFile>>& model_library_streams() {
+  static std::map<zutl_zar::Archive*, std::unique_ptr<zutl_zip::ScratchFile>> streams;
+  return streams;
+}
 // What the last mount built (entries_merge): by the archive's path in lower case, '/' between its parts.
 struct Merged {
   std::string folder, base;       // the folder mounted in front; the lowest layer's host path
@@ -148,6 +192,92 @@ std::vector<std::string> archive_entry_names(const std::string& host) {
   if (archive_read_entries(host, &all))
     for (const ArchiveEntry& e : all) names.push_back(e.name);
   return names;
+}
+
+bool model_library_has(const std::string& host, const std::string& entry) {
+  std::vector<ArchiveEntry> entries;
+  if (!model_library_read(host, &entries)) return false;
+  const std::string wanted = lower(entry);
+  return std::any_of(entries.begin(), entries.end(), [&](const ArchiveEntry& candidate) {
+    return lower(candidate.name) == wanted;
+  });
+}
+
+bool model_library_open(zutl_zar::Archive& archive, const char* path, std::vector<std::string>* log) {
+  const std::string logical = zutl::host(path);
+  bool mod_archive = false;
+  if (lower(logical) == "zbd/mechlib.zbd")
+    for (size_t i = 0; i < zutl::mounts().mods.size(); ++i)
+      mod_archive = mod_archive || !zutl::find_in_mod(i, logical).empty();
+  if (!mod_archive) return zutl_zar::open(archive, path);
+
+  static std::set<std::string> reported_messages;
+  const auto say = [&](const std::string& message) {
+    if (log) log->push_back(message);
+    else if (reported_messages.insert(message).second) std::fprintf(stderr, "mw3: %s\n", message.c_str());
+  };
+  std::vector<ArchiveEntry> winners;
+  std::map<std::string, std::string> owners;
+  // find_all includes the write directory before ticked mods, with no special
+  // rank for installed packs. Do not let an unreadable first file hide the rest.
+  for (const std::string& source : zutl::find_all(path)) {
+    std::vector<ArchiveEntry> entries;
+    if (!model_library_read(source, &entries)) {
+      say("mods: " + source + ": mechlib.zbd cannot be read, its models left out");
+      continue;
+    }
+    std::set<std::string> reported;
+    for (ArchiveEntry& entry : entries) {
+      const std::string name = lower(entry.name);
+      const auto owner = owners.emplace(name, source);
+      if (owner.second) winners.push_back(std::move(entry));
+      else if (reported.insert(name).second)
+        say("mods: zbd/mechlib.zbd: entry " + name + " from " + source +
+            " ignored; " + owner.first->second + " wins");
+    }
+  }
+  if (winners.empty()) {
+    say("mods: zbd/mechlib.zbd: no readable entries in the mounted sources");
+    return false;
+  }
+  auto scratch = std::make_unique<zutl_zip::ScratchFile>(nullptr, 0);
+  if (!scratch->file) {
+    say("mods: zbd/mechlib.zbd: cannot create the merged library's temporary file");
+    return false;
+  }
+  zutl_zar::Archive merged;
+  zutl_zar::init(merged);
+  merged.file = scratch->file;
+  merged.path = strdup(path);  // JSON lookup needs the logical name, not the temp path
+  bool written = merged.path != nullptr;
+  for (const ArchiveEntry& entry : winners) {
+    if (!written) break;
+    const int before = merged.count;
+    zutl_zar::add(merged, entry.name.c_str(), entry.data.data(), static_cast<uint32_t>(entry.data.size()));
+    written = merged.count == before + 1 && !std::ferror(merged.file);
+  }
+  written = written && zutl_zar::write_table(merged) && std::fflush(merged.file) == 0 && !std::ferror(merged.file);
+  if (!written) {
+    say("mods: zbd/mechlib.zbd: cannot write the merged library's temporary file");
+    merged.file = nullptr;
+    merged.dirty = false;
+    zutl_zar::destroy(merged);
+    return false;
+  }
+  archive = merged;
+  model_library_streams().emplace(&archive, std::move(scratch));
+  return true;
+}
+
+bool model_library_close(zutl_zar::Archive& archive) {
+  const auto stream = model_library_streams().find(&archive);
+  if (stream == model_library_streams().end()) return zutl_zar::close(archive);
+  // The ScratchFile owns this stream; the archive owns only its table and path.
+  archive.file = nullptr;
+  zutl_zar::destroy(archive);
+  zutl_zar::init(archive);
+  model_library_streams().erase(stream);
+  return true;
 }
 
 EntriesCut entries_cut(const std::string& mod_file, const std::string& own_file) {

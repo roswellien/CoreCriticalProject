@@ -23,6 +23,7 @@
 #include "gamez/zutil/zutl_zar.h"
 #include "gamez/zutil/zutl_zip.h"
 #include "platform/sha256.hpp"
+#include "upgrades/mods/entry_archives.h"  // Ours: whole model libraries merge by entry.
 
 namespace zcls {
 
@@ -122,12 +123,12 @@ void mechlib_strip(Node* node) {
 
 // Mech3.exe 1.2 @ 0x004fc6d0
 bool mechlib_open(MechLib& lib, const char* path) {
-  const bool ok = zutl_zar::open(lib.archive, path);
+  const bool ok = mech3::model_library_open(lib.archive, path);  // Ours: preserves each mounted source's entries.
   uint32_t version = 0, format = 0, size = 4, size2 = 4;
   zutl_zar::read(lib.archive, zutl_zar::find(lib.archive, "version"), &version, &size);
   zutl_zar::read(lib.archive, zutl_zar::find(lib.archive, "format"), &format, &size2);
   if (version != 27 || format != 1) {  // [0x005eb1f0], [0x005eb1f4]
-    zutl_zar::close(lib.archive);
+    mech3::model_library_close(lib.archive);  // Ours: releases a merged library's temporary stream too.
     return false;
   }
   if (ok) mechlib_read_materials(lib);
@@ -282,7 +283,7 @@ void mechlib_close(MechLib& lib) {
   }
   lib.materials.clear();
   lib.trees.clear();
-  zutl_zar::close(lib.archive);
+  mech3::model_library_close(lib.archive);  // Ours: releases a merged library's temporary stream too.
 }
 
 // Mech3.exe 1.2 @ 0x004fc570. A non-zero texture field means a name follows.

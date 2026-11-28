@@ -361,8 +361,8 @@ std::vector<ModInfo> mods_found(const std::string& write_dir, std::vector<std::s
 
 namespace {
 // Whether the game would find `entry`: in the first of `roots` holding the
-// archive `rel` (the game's reader.zbd or mechlib.zbd, a mod's before the
-// install's), or as a loose file beside it (`loose`, a reader file's).
+// archive `rel` (a mod's before the install's), or as a loose file beside it
+// (`loose`, a reader file's). Ours: mechlib entries remain visible across sources.
 bool archive_has(const std::vector<std::string>& roots, const std::string& rel, const std::string& entry, bool loose) {
   std::error_code ec;
   const fs::path archive(rel);
@@ -378,6 +378,13 @@ bool archive_has(const std::vector<std::string>& roots, const std::string& rel, 
               return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
             }))
           return true;
+    // Ours: model_library_open merges these whole archives, ignoring unreadable
+    // sources. The roster must search the same entries rather than stop early.
+    if (rel == "zbd/mechlib.zbd") {
+      const std::string model_archive = zutl::any_case(root, rel);
+      if (!model_archive.empty() && model_library_has(model_archive, entry)) return true;
+      continue;
+    }
     const fs::path a = fs::path(root) / rel;
     // The archive kept as its changed entries (entry_archives.h): one of them is the game's; any other entry is
     // the next holder's.
@@ -397,9 +404,12 @@ bool archive_has(const std::vector<std::string>& roots, const std::string& rel, 
 // Why a mech row cannot be built from `roots`, "" when it can: its definition
 // and its model must be there, or the row is left out (ours: an Instant
 // Action launch or the lab would find nothing).
-std::string mech_row_missing(const ModMech& r, const std::vector<std::string>& roots) {
+std::string mech_row_missing(const ModMech& r, const std::vector<std::string>& roots,
+                             const std::string& write_dir = {}) {
   if (!archive_has(roots, "zbd/reader.zbd", "dfn_" + r.name + ".zrd", true)) return "no dfn_" + r.name + ".zrd in the reader archive";
-  if (!archive_has(roots, "zbd/mechlib.zbd", "mech_" + r.model + ".flt", false)) return "no mech_" + r.model + ".flt in mechlib.zbd";
+  std::vector<std::string> model_roots = roots;
+  if (!write_dir.empty()) model_roots.insert(model_roots.begin(), write_dir);  // Ours: contract 2's first source.
+  if (!archive_has(model_roots, "zbd/mechlib.zbd", "mech_" + r.model + ".flt", false)) return "no mech_" + r.model + ".flt in mechlib.zbd";
   return "";
 }
 }  // namespace
@@ -483,7 +493,7 @@ std::vector<std::string> mods_mount(const std::string& write_dir, const std::vec
       std::string why;
       bool ok = mech_row_parse(line, &row, &why);
       if (ok && mech_index(row.name.c_str()) >= 0) ok = false, why = "there is a mech " + row.name + " already";  // said before its files
-      if (ok && !(why = mech_row_missing(row, roots)).empty()) ok = false;
+      if (ok && !(why = mech_row_missing(row, roots, write_dir)).empty()) ok = false;
       if (!ok || !mech_row_add(row, &why))
         log.push_back("  mech " + line + ": " + why + ", left out"), left(want, "mech " + (row.name.empty() ? line : row.name) + ": " + why);
       else
