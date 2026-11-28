@@ -21,6 +21,8 @@ public sealed class PackEntryTicks
     public PackEntryTicks(string dataRoot, string? writeDirectory = null, Func<bool>? gameIsRunning = null)
     {
         this.dataRoot = Path.GetFullPath(dataRoot);
+        // This is NativeGameRunner's standard profile. Legacy modular content profiles
+        // use a different write directory and are not part of this pack-tick path.
         WriteDirectory = Path.GetFullPath(writeDirectory ?? Path.Combine(dataRoot,
             "mw3-re", "profiles", NativeGameRunner.ProfileId));
         this.gameIsRunning = gameIsRunning ?? AnyGameRunning;
@@ -54,9 +56,27 @@ public sealed class PackEntryTicks
 
     private string TickPath(string id)
     {
-        var path = Path.Combine(EntryDirectory(id), "mods.txt");
+        var directory = EntryDirectory(id);
+        PackStorage.EnsureNoLinks(Path.Combine(directory, Marker));
+        var path = Path.Combine(directory, "mods.txt");
         PackStorage.EnsureNoLinks(path);
         return path;
+    }
+
+    private bool TryTickPath(string id, out string path)
+    {
+        try
+        {
+            path = TickPath(id);
+            return true;
+        }
+        catch (Exception error) when (error is InvalidDataException or ArgumentException or
+            NotSupportedException or PathTooLongException)
+        {
+            // One unusable folder or campaign row must not block the other entries.
+            path = "";
+            return false;
+        }
     }
 
     /// <summary>
@@ -65,17 +85,14 @@ public sealed class PackEntryTicks
     /// </summary>
     public IReadOnlyList<PackCampaignEntry> Entries(IEnumerable<PackManifest> installedPacks)
     {
-        var entries = new Dictionary<string, PackCampaignEntry>(StringComparer.Ordinal)
-        {
-            ["mw3"] = new("mw3", "MechWarrior 3"),
-            ["ia"] = new("ia", "Instant Action"),
-            ["mp"] = new("mp", "Multiplayer")
-        };
+        var entries = new Dictionary<string, PackCampaignEntry>(StringComparer.Ordinal);
         void Add(string id, string name)
         {
-            EntryDirectory(id);
-            entries.TryAdd(id, new(id, name));
+            if (TryTickPath(id, out _)) entries.TryAdd(id, new(id, name));
         }
+        Add("mw3", "MechWarrior 3");
+        Add("ia", "Instant Action");
+        Add("mp", "Multiplayer");
 
         var mods = Path.Combine(WriteDirectory, "mods");
         PackStorage.EnsureNoLinks(mods);
@@ -95,7 +112,7 @@ public sealed class PackEntryTicks
         {
             foreach (var directory in Directory.GetDirectories(campaigns).OrderBy(path => path, StringComparer.Ordinal))
             {
-                PackStorage.EnsureNoLinks(directory);
+                if (!TryTickPath(Path.GetFileName(directory), out _)) continue;
                 if (File.Exists(Path.Combine(directory, Marker)))
                     Add(Path.GetFileName(directory), Path.GetFileName(directory));
             }
@@ -106,7 +123,8 @@ public sealed class PackEntryTicks
     private static void AddModEntries(string directory, string modId, Action<string, string> add)
     {
         var path = Path.Combine(directory, "mod.txt");
-        PackStorage.EnsureNoLinks(path);
+        try { PackStorage.EnsureNoLinks(path); }
+        catch (InvalidDataException) { return; }
         if (!File.Exists(path)) return;
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var campaigns = new List<string>();
@@ -127,7 +145,8 @@ public sealed class PackEntryTicks
         fields.TryGetValue("base", out var baseEntry);
         fields.TryGetValue("for", out var game);
         if (string.IsNullOrEmpty(name) || (!string.IsNullOrEmpty(game) &&
-            game.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)[0] != "mw3")) return;
+            !game.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)[0]
+                .Equals("mw3", StringComparison.OrdinalIgnoreCase))) return;
         if (string.Equals(kind, "assets", StringComparison.OrdinalIgnoreCase)) return;
         if (campaigns.Count == 0)
         {
@@ -211,22 +230,47 @@ public sealed class PackEntryTicks
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
-    private void WriteTick(PackCampaignEntry entry, string packId, bool ticked)
+    private void EnsureEntry(PackCampaignEntry entry, string directory,
+        List<string>? createdFiles, List<string>? createdDirectories)
     {
-        var path = TickPath(entry.Id);
+        RequireGameClosed();
+        var marker = Path.Combine(directory, Marker);
+        if (Directory.Exists(directory) && !File.Exists(marker) &&
+            Directory.EnumerateFileSystemEntries(directory).Any())
+            throw new InvalidOperationException("Cannot change gameplay ticks for " + entry.Id +
+                ": this folder holds files the game did not put there.");
+
+        var missing = new Stack<string>();
+        for (var parent = directory; parent != null && !Directory.Exists(parent);
+            parent = Path.GetDirectoryName(parent))
+            missing.Push(parent);
+        foreach (var path in missing)
+        {
+            RequireGameClosed();
+            Directory.CreateDirectory(path);
+            createdDirectories?.Add(path);
+        }
+        if (!File.Exists(marker))
+        {
+            RequireGameClosed();
+            using var stream = new FileStream(marker, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            createdFiles?.Add(marker);
+            var text = $"\"{entry.Name}\" ({entry.Id}): its mods, pilots and saves, made by the game. " +
+                "Deleting this folder deletes them." + Environment.NewLine;
+            stream.Write(Encoding.UTF8.GetBytes(text));
+        }
+        // Tick editing needs only the marker. The runtime's entry_ensure creates
+        // pilots/games and configs when it prepares this entry for play.
+    }
+
+    private void WriteTick(PackCampaignEntry entry, string packId, bool ticked,
+        List<string>? createdFiles = null, List<string>? createdDirectories = null)
+    {
+        if (!TryTickPath(entry.Id, out var path)) return;
+        EnsureEntry(entry, Path.GetDirectoryName(path)!, createdFiles, createdDirectories);
         var before = ReadBytes(path);
         var after = Change(before, PackStorage.ValidateId(packId), ticked);
-        if (before.AsSpan().SequenceEqual(after)) return;
-        RequireGameClosed();
-        var directory = Path.GetDirectoryName(path)!;
-        Directory.CreateDirectory(directory);
-        // The runtime refuses a nonempty campaign folder without its ownership marker.
-        if (!Directory.EnumerateFileSystemEntries(directory).Any())
-        {
-            var marker = Path.Combine(directory, Marker);
-            File.WriteAllText(marker, $"\"{entry.Name}\" ({entry.Id}): its mods, pilots and saves.\n");
-        }
-        Replace(path, after);
+        if (!before.AsSpan().SequenceEqual(after)) Replace(path, after);
     }
 
     public void SetTick(PackManifest pack, PackCampaignEntry entry, bool ticked)
@@ -248,22 +292,49 @@ public sealed class PackEntryTicks
             var path = TickPath(entry.Id);
             return (Path: path, Existed: File.Exists(path), Bytes: ReadBytes(path));
         }).ToList();
+        var createdFiles = new List<string>();
+        var createdDirectories = new List<string>();
         try
         {
-            foreach (var entry in entries) WriteTick(entry, pack.Id, true);
+            foreach (var entry in entries)
+                WriteTick(entry, pack.Id, true, createdFiles, createdDirectories);
         }
         catch (Exception failure)
         {
             // A default-tick failure must not leave a failed install ticked in earlier entries.
             var failures = new List<Exception> { failure };
-            foreach (var original in originals)
+            foreach (var original in originals.AsEnumerable().Reverse())
             {
                 try
                 {
-                    if (ReadBytes(original.Path).AsSpan().SequenceEqual(original.Bytes)) continue;
+                    if (File.Exists(original.Path) == original.Existed &&
+                        ReadBytes(original.Path).AsSpan().SequenceEqual(original.Bytes)) continue;
                     RequireGameClosed();
+                    PackStorage.EnsureNoLinks(original.Path);
                     if (original.Existed) Replace(original.Path, original.Bytes);
                     else File.Delete(original.Path);
+                }
+                catch (Exception restoreFailure) { failures.Add(restoreFailure); }
+            }
+            // The journal records successful creations, including a partially written
+            // marker. Nonrecursive deletion preserves any unrelated content added later.
+            foreach (var marker in createdFiles.AsEnumerable().Reverse())
+            {
+                try
+                {
+                    RequireGameClosed();
+                    PackStorage.EnsureNoLinks(marker);
+                    File.Delete(marker);
+                }
+                catch (Exception restoreFailure) { failures.Add(restoreFailure); }
+            }
+            foreach (var directory in createdDirectories.AsEnumerable().Reverse())
+            {
+                try
+                {
+                    RequireGameClosed();
+                    PackStorage.EnsureNoLinks(directory);
+                    Directory.Delete(directory, recursive: false);
                 }
                 catch (Exception restoreFailure) { failures.Add(restoreFailure); }
             }
@@ -280,6 +351,17 @@ public sealed class PackEntryTicks
         PackStorage.EnsureNoLinks(campaigns);
         if (!Directory.Exists(campaigns)) return;
         foreach (var directory in Directory.GetDirectories(campaigns))
-            WriteTick(new(Path.GetFileName(directory), Path.GetFileName(directory)), packId, false);
+        {
+            var id = Path.GetFileName(directory);
+            if (!TryTickPath(id, out var path)) continue;
+            var official = new[] { "mw3", "ia", "mp" }.Contains(id, StringComparer.OrdinalIgnoreCase);
+            if (!official && !File.Exists(Path.Combine(directory, Marker))) continue;
+            if (!File.Exists(path)) continue;
+            // entry_ticks reads the three built-ins even without a marker. Cleanup
+            // only edits their existing ticks; it must not adopt these folders.
+            var before = ReadBytes(path);
+            var after = Change(before, PackStorage.ValidateId(packId), false);
+            if (!before.AsSpan().SequenceEqual(after)) Replace(path, after);
+        }
     }
 }

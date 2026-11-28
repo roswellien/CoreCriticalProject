@@ -115,6 +115,13 @@ public static class PackEntryTickChecks
         Assert(!visual.HasGameplay && manager.ReadEntryTicks(visual).Count == 0, "Visual-only pack has entry ticks.");
         Assert(!Directory.GetFiles(Path.Combine(writeDirectory, "campaigns"), "mods.txt", SearchOption.AllDirectories)
             .Any(path => File.ReadAllText(path).Contains("mod=" + visual.Id)), "Visual-only install wrote a tick.");
+        // A pack without gameplay never owned a tick, so a mod= line with its ID belongs to
+        // a player's own mod of the same name and must survive the pack's uninstall.
+        var sameNameTick = Encoding.UTF8.GetBytes("mod=" + visual.Id + "\n");
+        WriteEntry(writeDirectory, "same-name-player-mod", sameNameTick);
+        manager.UninstallPack(visual);
+        Assert(File.ReadAllBytes(TickPath(writeDirectory, "same-name-player-mod")).SequenceEqual(sameNameTick),
+            "Uninstalling a visual-only pack removed a player's tick of the same name.");
         var campaign = manager.InstallPack(Archive(root, "gameplay-only", campaign: true));
         Assert(manager.ReadEntryTicks(campaign).Any(tick =>
             tick.Entry.Id == "example-campaign~First" && tick.IsTicked),
@@ -196,22 +203,298 @@ public static class PackEntryTickChecks
         Console.WriteLine("PASS: byte preservation, exact removal, idempotence, failed replacement, game refusal and session gate.");
     }
 
-    private static void FailedDefaults(string root)
+    private static void FailedDefaults(string root, bool keepEmptyDirectory = false)
     {
         var manager = new PackManager(root);
         WriteEntry(manager.EntryTicks.WriteDirectory, "mp", "mod=other\n"u8.ToArray());
-        var path = TickPath(manager.EntryTicks.WriteDirectory, "mp");
+        WriteEntry(manager.EntryTicks.WriteDirectory, "empty-saved", []);
+        WriteEntry(manager.EntryTicks.WriteDirectory, "zz-failure", "mod=other\n"u8.ToArray());
+        var iaDirectory = Path.GetDirectoryName(TickPath(manager.EntryTicks.WriteDirectory, "ia"))!;
+        if (keepEmptyDirectory) Directory.CreateDirectory(iaDirectory);
+        var path = TickPath(manager.EntryTicks.WriteDirectory, "zz-failure");
         var failed = false;
         using (var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            try { manager.InstallPack(Archive(root, "gameplay-only")); }
+            try { manager.InstallPack(Archive(root, "gameplay-only", campaign: true)); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { failed = true; }
         }
         Assert(failed, "Failed default write reported success.");
         Assert(File.ReadAllText(path) == "mod=other\n", "Failed default write changed old file.");
-        Assert(!Directory.Exists(Path.Combine(manager.ModsRoot, "example-gameplay")), "Failed install activated the pack.");
+        Assert(!Directory.Exists(Path.Combine(manager.ModsRoot, "example-campaign")), "Failed install activated the pack.");
         Assert(!File.Exists(TickPath(manager.EntryTicks.WriteDirectory, "ia")), "Failed defaults retained an earlier tick.");
+        Assert(!File.Exists(Path.Combine(iaDirectory, "mw3-campaign.txt")),
+            "Failed defaults retained a newly created marker.");
+        Assert(Directory.Exists(iaDirectory) == keepEmptyDirectory,
+            "Failed defaults retained a new folder or deleted a preexisting empty folder.");
+        if (keepEmptyDirectory)
+            Assert(!Directory.EnumerateFileSystemEntries(iaDirectory).Any(),
+                "Failed defaults changed a preexisting empty folder.");
+        Assert(!Directory.Exists(Path.GetDirectoryName(
+            TickPath(manager.EntryTicks.WriteDirectory, "example-campaign~First"))),
+            "Failed campaign-pack install left an orphan campaign folder.");
+        Assert(File.ReadAllText(TickPath(manager.EntryTicks.WriteDirectory, "mp")) == "mod=other\n",
+            "Failed defaults did not restore the preexisting multiplayer ticks.");
+        Assert(File.ReadAllText(Path.Combine(manager.EntryTicks.WriteDirectory, "campaigns", "mp",
+            "mw3-campaign.txt")) == "Test campaign entry\n", "Rollback replaced a preexisting marker.");
+        var emptyTicks = TickPath(manager.EntryTicks.WriteDirectory, "empty-saved");
+        Assert(File.Exists(emptyTicks) && new FileInfo(emptyTicks).Length == 0,
+            "Rollback deleted or changed a preexisting empty tick file.");
         Console.WriteLine("PASS: failed defaults restore earlier ticks and roll back pack activation.");
+    }
+
+    private static void CreateJunction(string path, string target)
+    {
+        // Junctions exercise Windows reparse points without requiring symlink privileges.
+        var command = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true
+        };
+        command.ArgumentList.Add("-NoProfile");
+        command.ArgumentList.Add("-NonInteractive");
+        command.ArgumentList.Add("-Command");
+        command.ArgumentList.Add("$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path '" +
+            path.Replace("'", "''") + "' -Target '" + target.Replace("'", "''") + "' | Out-Null");
+        using var process = System.Diagnostics.Process.Start(command)!;
+        if (!process.WaitForExit(10000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new Exception("Timed out creating the temporary junction.");
+        }
+        Assert(process.ExitCode == 0, "Temporary junction setup failed: " + process.StandardError.ReadToEnd());
+        Assert((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0,
+            "Temporary junction was not a reparse point.");
+    }
+
+    private static void OddEntry(string root, string kind, string operation)
+    {
+        var manager = new PackManager(root);
+        PackManifest pack = null;
+        if (operation != "install") pack = manager.InstallPack(Archive(root, "gameplay-only"));
+        var campaigns = Path.Combine(manager.EntryTicks.WriteDirectory, "campaigns");
+        Directory.CreateDirectory(campaigns);
+        string untouchedTicks = null;
+        string junction = null;
+        try
+        {
+            var oddId = "NUL.test";
+            if (kind == "folder")
+            {
+                var directory = @"\\?\" + Path.Combine(campaigns, oddId);
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(directory, "mw3-campaign.txt"), "Test marker\n");
+                untouchedTicks = Path.Combine(directory, "mods.txt");
+            }
+            else if (kind == "link")
+            {
+                oddId = "linked-entry";
+                var target = Path.Combine(root, "link-target");
+                Directory.CreateDirectory(target);
+                File.WriteAllText(Path.Combine(target, "mw3-campaign.txt"), "Test marker\n");
+                untouchedTicks = Path.Combine(target, "mods.txt");
+                junction = Path.Combine(campaigns, oddId);
+                CreateJunction(junction, target);
+            }
+            else
+            {
+                oddId = "broken~trailing ";
+                var source = Path.Combine(manager.EntryTicks.WriteDirectory, "mods", "broken");
+                Directory.CreateDirectory(source);
+                File.WriteAllText(Path.Combine(source, "mod.txt"),
+                    "name=Bad entry name\nfor=mw3 1.2\ncampaign=trailing .txt\n");
+            }
+            const string original = "mod=example-gameplay\n# leave this alone\n";
+            if (untouchedTicks != null) File.WriteAllText(untouchedTicks, original);
+            if (operation == "install") pack = manager.InstallPack(Archive(root, "gameplay-only"));
+            if (operation == "uninstall")
+                Assert(manager.UninstallPack(pack) && !Directory.Exists(pack.DirectoryPath),
+                    "Odd entry blocked uninstall.");
+            else
+            {
+                var entries = manager.ReadEntryTicks(pack);
+                Assert(entries.Any(tick => tick.Entry.Id == "ia" && tick.IsTicked),
+                    "Odd entry prevented reading normal dialog entries.");
+                Assert(entries.All(tick => tick.Entry.Id != oddId), "Unsafe entry was offered as a tick target.");
+            }
+            if (untouchedTicks != null)
+                Assert(File.ReadAllText(untouchedTicks) == original, "Unsafe entry or link target was edited.");
+        }
+        finally
+        {
+            // Remove the junction itself before the fixture recursively removes its own folders.
+            if (junction != null && Directory.Exists(junction)) Directory.Delete(junction);
+        }
+    }
+
+    private static void UninstallOwnership(string root)
+    {
+        var manager = new PackManager(root);
+        var pack = manager.InstallPack(Archive(root, "gameplay-only"));
+        var original = Encoding.UTF8.GetBytes("# keep\r\nmod=" + pack.Id + "\nother=bytes");
+        var unmarked = TickPath(manager.EntryTicks.WriteDirectory, "unmarked-custom");
+        Directory.CreateDirectory(Path.GetDirectoryName(unmarked)!);
+        File.WriteAllBytes(unmarked, original);
+        foreach (var entry in new[] { "mw3", "ia", "mp" })
+        {
+            var path = TickPath(manager.EntryTicks.WriteDirectory, entry);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.Delete(Path.Combine(Path.GetDirectoryName(path)!, "mw3-campaign.txt"));
+            File.WriteAllBytes(path, original);
+        }
+        WriteEntry(manager.EntryTicks.WriteDirectory, "marked-custom", original);
+        manager.UninstallPack(pack);
+        Assert(File.ReadAllBytes(unmarked).SequenceEqual(original),
+            "Uninstall edited an unmarked custom folder ignored by the runtime.");
+        foreach (var entry in new[] { "mw3", "ia", "mp", "marked-custom" })
+        {
+            var path = TickPath(manager.EntryTicks.WriteDirectory, entry);
+            Assert(File.ReadAllText(path) == "# keep\r\nother=bytes",
+                "Uninstall missed runtime-owned ticks in " + entry);
+            if (entry != "marked-custom")
+                Assert(!File.Exists(Path.Combine(Path.GetDirectoryName(path)!, "mw3-campaign.txt")),
+                    "Uninstall adopted an unmarked official entry.");
+        }
+    }
+
+    private static void BrokenOfficialLink(string root)
+    {
+        var manager = new PackManager(root);
+        var campaigns = Path.Combine(manager.EntryTicks.WriteDirectory, "campaigns");
+        Directory.CreateDirectory(campaigns);
+        var target = Path.Combine(root, "missing-target");
+        Directory.CreateDirectory(target);
+        var junction = Path.Combine(campaigns, "ia");
+        CreateJunction(junction, target);
+        try
+        {
+            Directory.Delete(target);
+            var pack = manager.InstallPack(Archive(root, "gameplay-only"));
+            var entries = manager.ReadEntryTicks(pack);
+            Assert(entries.All(tick => tick.Entry.Id != "ia") &&
+                entries.Any(tick => tick.Entry.Id == "mp" && tick.IsTicked),
+                "Broken built-in link was offered as a tick target or blocked normal defaults.");
+            manager.UninstallPack(pack);
+            Assert(!Directory.Exists(target), "Tick editing recreated the broken link's target.");
+        }
+        finally { Directory.Delete(junction); }
+    }
+
+    private static void UppercaseGame(string root)
+    {
+        var manager = new PackManager(root);
+        var source = Path.Combine(manager.EntryTicks.WriteDirectory, "mods", "uppercase");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "mod.txt"),
+            "name=Uppercase target\nfor=MW3 1.2\ncampaign=Chapter.txt\n");
+        var pack = manager.InstallPack(Archive(root, "gameplay-only"));
+        Assert(manager.ReadEntryTicks(pack).Any(tick =>
+            tick.Entry.Id == "uppercase~Chapter" && tick.IsTicked),
+            "for=MW3 was not discovered and default-ticked.");
+    }
+
+    private static void ForeignFolder(string root, bool existingTick)
+    {
+        var ticks = new PackEntryTicks(root);
+        var pack = new PackManifest { SchemaVersion = 3, Id = "example-gameplay", Gameplay = new() };
+        var path = TickPath(ticks.WriteDirectory, "ia");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var foreignPath = existingTick ? path : Path.Combine(Path.GetDirectoryName(path)!, "player-note.txt");
+        var bytes = existingTick ? "mod=example-gameplay\n"u8.ToArray() : "Keep my note\n"u8.ToArray();
+        File.WriteAllBytes(foreignPath, bytes);
+        var refused = false;
+        try { ticks.SetTick(pack, new("ia", "Instant Action"), true); }
+        catch (InvalidOperationException error) when (error.Message.Contains("game did not put there"))
+        {
+            refused = true;
+        }
+        Assert(refused, "Nonempty unmarked entry was not refused with a plain message.");
+        Assert(File.ReadAllBytes(foreignPath).SequenceEqual(bytes) &&
+            Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(path)!).Count() == 1,
+            "Refused edit wrote into a nonempty unmarked folder.");
+    }
+
+    private static void RuntimeMarker(string root, bool existingEmpty)
+    {
+        var ticks = new PackEntryTicks(root);
+        var directory = Path.GetDirectoryName(TickPath(ticks.WriteDirectory, "ia"))!;
+        if (existingEmpty) Directory.CreateDirectory(directory);
+        var pack = new PackManifest { SchemaVersion = 3, Id = "example-gameplay", Gameplay = new() };
+        ticks.SetTick(pack, new("ia", "Instant Action"), true);
+        var expected = "\"Instant Action\" (ia): its mods, pilots and saves, made by the game. " +
+            "Deleting this folder deletes them." + Environment.NewLine;
+        Assert(File.ReadAllBytes(Path.Combine(directory, "mw3-campaign.txt"))
+            .SequenceEqual(Encoding.UTF8.GetBytes(expected)), "New marker differs from entry_ensure's text.");
+    }
+
+    private static void RollbackGuards(string root, bool gameRunning)
+    {
+        var running = false;
+        var manager = new PackManager(root,
+            entryTicks: new PackEntryTicks(root, gameIsRunning: () => running));
+        manager.InstallPack(Archive(root, "gameplay-only"));
+        var pack = manager.InstallPack(Archive(root, "gameplay-only", "1.1.0"));
+        var manifestPath = Path.Combine(pack.DirectoryPath, "pack.json");
+        var before = File.ReadAllBytes(manifestPath);
+        if (gameRunning)
+        {
+            running = true;
+            Refused(() => manager.RollbackPack(pack));
+            running = false;
+        }
+        else
+        {
+            using var gate = GameUpdateGate.Acquire(root);
+            var refused = false;
+            try { manager.RollbackPack(pack); }
+            catch (InvalidOperationException error) when (error.Message.Contains("starting/running"))
+            {
+                refused = true;
+            }
+            Assert(refused, "Rollback did not acquire the launcher game-session gate.");
+        }
+        Assert(File.ReadAllBytes(manifestPath).SequenceEqual(before) && manager.Packs.Single().Version == "1.1.0",
+            "Refused rollback swapped pack contents or collection state.");
+        manager.RollbackPack(pack);
+        Assert(manager.Packs.Single().Version == "1.0.0", "Game-closed rollback no longer works.");
+    }
+
+    private static void ReviewRegressions(string root)
+    {
+        var cases = new List<(string Name, Action<string> Check)>();
+        foreach (var kind in new[] { "folder", "link", "row" })
+            foreach (var operation in new[] { "install", "uninstall", "dialog" })
+                cases.Add(($"1-{kind}-{operation}", folder => OddEntry(folder, kind, operation)));
+        cases.Add(("2-uninstall-ownership", UninstallOwnership));
+        cases.Add(("1-broken-official-link", BrokenOfficialLink));
+        cases.Add(("3-uppercase-for", UppercaseGame));
+        cases.Add(("4-foreign-folder", folder => ForeignFolder(folder, false)));
+        cases.Add(("4-foreign-existing-tick", folder => ForeignFolder(folder, true)));
+        cases.Add(("4-new-marker", folder => RuntimeMarker(folder, false)));
+        cases.Add(("4-empty-marker", folder => RuntimeMarker(folder, true)));
+        cases.Add(("5-new-folder-cleanup", folder => FailedDefaults(folder)));
+        cases.Add(("5-preserve-empty-folder", folder => FailedDefaults(folder, true)));
+        cases.Add(("6-running-rollback", folder => RollbackGuards(folder, true)));
+        cases.Add(("6-session-rollback", folder => RollbackGuards(folder, false)));
+        var failures = new List<Exception>();
+        foreach (var (name, check) in cases)
+        {
+            var folder = Path.Combine(root, name);
+            Directory.CreateDirectory(folder);
+            try
+            {
+                check(folder);
+                Console.WriteLine("PASS review regression: " + name);
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine("FAIL review regression: " + name + ": " + error.Message);
+                failures.Add(new Exception(name, error));
+            }
+        }
+        if (failures.Count != 0) throw new AggregateException("Review regressions failed.", failures);
     }
 
     private static void WindowToggle(string root)
@@ -268,11 +551,11 @@ public static class PackEntryTickChecks
         var temporary = Directory.CreateTempSubdirectory("MW3PackTicks-");
         try
         {
+            ReviewRegressions(temporary.FullName);
             foreach (var name in new[] { "lifecycle", "preservation", "failure", "window" })
                 Directory.CreateDirectory(Path.Combine(temporary.FullName, name));
             Lifecycle(Path.Combine(temporary.FullName, "lifecycle"));
             PreservationAndRefusals(Path.Combine(temporary.FullName, "preservation"));
-            FailedDefaults(Path.Combine(temporary.FullName, "failure"));
             WindowToggle(Path.Combine(temporary.FullName, "window"));
             Console.WriteLine("Pack entry tick checks passed.");
         }

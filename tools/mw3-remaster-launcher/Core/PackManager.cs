@@ -214,7 +214,9 @@ namespace MW3RemasterLauncher.Core
                 throw new InvalidDataException("Cannot uninstall content outside its owned pack directory.");
             using (var storageLock = PackStorage.Lock(_modsRoot))
             {
-                if (GameId == GameCatalog.Mw3) EntryTicks.RemovePack(pack.Id);
+                // Only a gameplay pack ever owned tick lines. For any other pack a mod= line with
+                // its ID is a player mod of the same name, which uninstall must leave alone.
+                if (GameId == GameCatalog.Mw3 && pack.HasGameplay) EntryTicks.RemovePack(pack.Id);
                 var previous = PackStorage.Resolve(_modsRoot, ".rollback-" + pack.Id);
                 if (Directory.Exists(previous)) PackStorage.DeleteOwnedTree(previous);
                 if (Directory.Exists(target)) PackStorage.DeleteOwnedTree(target);
@@ -228,6 +230,9 @@ namespace MW3RemasterLauncher.Core
         /// <summary>Swap with the retained previous version without changing enabled order.</summary>
         public void RollbackPack(PackManifest pack)
         {
+            EntryTicks.RequireGameClosed();
+            using var gate = GameUpdateGate.Acquire(_dataRoot);
+            EntryTicks.RequireGameClosed();
             using var storageLock = PackStorage.Lock(_modsRoot);
             var target = PackStorage.Resolve(_modsRoot, PackStorage.ValidateId(pack.Id));
             var previous = PackStorage.Resolve(_modsRoot, ".rollback-" + pack.Id);
