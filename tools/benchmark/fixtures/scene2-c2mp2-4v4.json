@@ -1,0 +1,91 @@
+{
+  "map": "c2mp2",
+  "minutes": 3,
+  "out": "local/benchmark/scene2",
+  "sides": [
+    [
+      {
+        "mech": "avatar",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        },
+        "spot": 0
+      },
+      {
+        "mech": "owens",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        },
+        "spot": 4
+      },
+      {
+        "mech": "cauldron",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        },
+        "spot": 1
+      },
+      {
+        "mech": "shadowcat",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        },
+        "spot": 2
+      }
+    ],
+    [
+      {
+        "mech": "blackhawk",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        },
+        "spot": 8
+      },
+      {
+        "mech": "bushwacker",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        },
+        "spot": 15
+      },
+      {
+        "mech": "strider",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        },
+        "spot": 6
+      },
+      {
+        "mech": "champion",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        },
+        "spot": 5
+      }
+    ]
+  ]
+}

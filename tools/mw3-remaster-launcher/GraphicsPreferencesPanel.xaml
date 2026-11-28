@@ -83,5 +83,8 @@
         <CheckBox x:Name="ChkVsync" Content="VSync" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged"
                   ToolTip="Limits frame rate to the monitor refresh rate and prevents tearing. Off: uncapped frame rate." />
         <TextBlock Text="Limits frame rate to the monitor refresh rate and prevents tearing. Off: uncapped frame rate." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
+        <CheckBox x:Name="ChkUpscaledCutscenes" Content="Upscaled cutscenes" Margin="0,0,0,6" Checked="ControlChanged" Unchecked="ControlChanged"
+                  ToolTip="Plays the HD intro from an enabled cinematics pack in place of the original. Other cutscenes stay original for now." />
+        <TextBlock Text="Plays the HD intro from an enabled cinematics pack in place of the original. Only the intro is covered for now; the other cutscenes stay original. Off, or without such a pack, the original intro plays." FontSize="11" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,16" />
     </StackPanel>
 </UserControl>

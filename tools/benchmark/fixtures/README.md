@@ -108,50 +108,69 @@ file's SHA-256. Key times are relative to playback start and the track must
 cover the whole 50 s span; `c1mp1-camera.json` ends at 40 s and needs
 extending first. Keep recording files and run outputs in local storage.
 
-## Four-scene suite (step 3, #514)
+## Four-scene suite (#596)
 
-`suite-benchmark.json` keeps the qualified c1mp1 definition and adds c2mp2 and
-c3mp1 4v4 baselines plus c4mp2 stress. The baselines use the same chassis,
-stock loadouts and pilot preset as c1mp1. The stress recipe doubles each
-side, filling the map's 16 spawn spots (`remote_0` through `remote_15`). The
-arena setup accepts at most eight bots per side, and generation verified all
-16 spawned.
+`suite-benchmark.json` replays four authored recipes. Every scene uses only different
+chassis, all with stock loadout 0 and the c1/ia1 `Enemy_01` preset. The sides are
+roughly matched by tonnage so the fight lasts through the camera plan.
 
-The three new logs were each generated twice in fresh serial Windows x64
-Release processes with separate profiles and log directories. Each pair was
-byte identical and ended with a complete terminal record. The generator was
-source `0368e1bd905f331d684a0ac2fb12f950dfa7e983`, executable SHA-256
-`76065ea217934d601bcb5c0d3fadae508dee760887ecdac5f440ca3d04639953`, MSVC
-19.51.36260.0, SDL 3.4.18 and SDL_ttf 3.2.2. The original install's
-`zbd/reader.zbd` SHA-256 was
-`5e17037f3634480f74265b3e378e4513b84cae518e20bc55cd5c6e9c6683851a`.
-The ten `.zbd` archives together fingerprinted as
-`c882ddae83e20e6d95f42b9555c3f1dda3f5cb07d9357744844eac931766e851`.
-All three logs used seed 7 and began at `state.t=0.033000119030475616`.
+| Scene | Recipe | Fight | Look | Chassis |
+| --- | --- | --- | --- | --- |
+| c1mp1 | `scene1-c1mp1-2v2.json` | 2v2 | dawn, rain | Mad Cat, Shadow Cat v Thor, Bushwacker |
+| c2mp2 | `scene2-c2mp2-4v4.json` | 4v4 | mid-day | Avatar, Owens, Cauldron-Born, Shadow Cat v Black Hawk, Bushwacker, Strider, Champion |
+| c3mp1 | `scene3-c3mp1-6v6.json` | 6v6 | dawn | Mad Cat, Thor, Vulture, Puma, Strider, Black Hawk v Orion, Avatar, Champion, Owens, Shadow Cat, Bushwacker |
+| c4mp2 | `scene4-c4mp2-8v8.json` | 8v8 | night, rain, headlights | all 16: Mad Cat, Thor, Vulture, Avatar, Owens, Strider, Daishi, Shadow Cat v Black Hawk, Bushwacker, Champion, Cauldron-Born, Puma, Sunder, Supernova, Orion |
 
-| Map | SHA-256 | Bytes | States | State spacing (ms) | Terminal record |
-| --- | --- | ---: | ---: | --- | --- |
-| c2mp2 | `f0e1f715fcac76ac9785d34a0edaef68e10dba233d9582b6cb8299e9c051e27c` | 53,939,593 | 5,607 | 32.989502–33.004761 | 185.031 s, draw, A/B losses 2/2 |
-| c3mp1 | `06628063fa10810716e72f0140720c8bd659e2c22b4d170f45eab23eba972d31` | 34,974,802 | 3,667 | 32.997131–33.004761 | 121.011 s, A wins, losses 3/4 |
-| c4mp2 | `e4a7c52fef671a036d88b5b64a0b7d6051c699194b13f3bea3466f6cff9e2645` | 105,104,293 | 5,607 | 32.989502–33.004761 | 185.031 s, B wins, losses 7/5 |
+Time of day, weather and headlights are scene fields in the definition, not recipe
+fields: they are visual only, so the recorded fight is the same either way.
+`time_of_day` borrows a campaign mission's lighting (`dawn` t1m1, `day` c3m1, `dusk`
+t1m4, `night` c1m3, as the arena's #507 times of day). `weather: "rain"` adds rain to
+a map without weather of its own, with the values of c3mp2's stock rain (100
+particles, colour 128 128 172, wind 0.2, gravity 3, alpha gradient 0.5 to 0).
+`headlights: true` lights every standing mech's stock headlights at full strength;
+`run.py` turns Headlights and Dynamic lighting on for that scene in both arms.
 
-Full-match shots and hits were 644 and 1,048 for c2mp2, 574 and 892 for
-c3mp1, and 1,095 and 1,223 for c4mp2.
+The old c2mp2 setup let the seed start the sides at spots 0, 1, 2, 4 and 9, 10, 11,
+14, and the fight piled up against the central plateau's cliff (median hit 15 m from
+raised ground, all within 100 m), below a camera that saw nothing. The c2mp2 recipe
+now gives every bot a `spot` (an arena setup option: every bot gets one or none, each
+spot once): side A starts at 0, 4, 1, 2 in the east and side B at 8, 15, 6, 5 along the
+north, all on open floor. Seven candidate layouts were recorded and scored by each
+hit's distance to raised ground in the arena catalog's terrain picture (pale tan,
+4 m cells). In the chosen layout the measured fight is on open ground north of the
+plateau: no hit within 100 m of raised ground, median 180 m.
 
-The baselines start at log times 30 s (`c1mp1`), 102 s (`c2mp2`) and 21 s
-(`c3mp1`). Each warms up for 10 s and measures for 30 s. The c2mp2 and c3mp1
-cuts use their highest-activity measured windows. The cameras follow surviving
-mechs 3, 1 and 4, respectively, with the same seven shot types and timings.
-For the new routes, subject selection counts shots and hits within 150 m of
-each surviving mech, using the nearest following pose and the lowest ID to
-break ties.
+### Logs
 
-The stress candidates were ranked by the mean per-state product of standing
-mechs and active recorded rounds plus beams. At nominal measured start
-10 s, the top c4mp2 window had a score of 69.96, with 14.61 standing mechs
-and 4.70 rounds plus beams on average. The next candidate at 11 s scored 62.74.
-The three baseline windows scored 18.39, 17.46 and 52.07 in suite order.
-The selected stress route follows mech 10 from the first recorded state
-(`t≈0.033 s`), measures `[10.033, 40.033)` and carries warm-up effects across
-the boundary. The Windows replay results are recorded in the
-[benchmark README](../README.md).
+Each log was generated twice in fresh serial Windows x64 Release processes and the
+pair was byte identical, with seed 7 and 33 ms updates. Generator source `c4087bc8d5c77c0b14fb9d2c9a72295caea05a73`
+plus the uncommitted changes of this PR, executable SHA-256 `ef5a673135dc987b993faa8e1ac7962908cecb1fe7f5b3c74aba2edd7479f1b9`.
+
+| Recipe | SHA-256 | Bytes | States | Terminal record | Shots / hits |
+| --- | --- | ---: | ---: | --- | ---: |
+| scene1-c1mp1-2v2 | `ed3bbde5034aa86808e36fd5bfad561b8a2c58d15d0295051e7addb04c3c72bd` | 13,459,997 | 2,838 | 93.654 s, B wins, losses 2/0 | 197 / 200 |
+| scene2-c2mp2-4v4 | `cad68fa66cad1c02d7ad8a1e893a4eb5adff3074885cae57a87f4c6cbec090b7` | 31,238,185 | 3,443 | 113.619 s, B wins, losses 4/2 | 414 / 439 |
+| scene3-c3mp1-6v6 | `af94084a8b6b63ca8ed7b08b11b239234b6becc87b1afe297e303197040381c6` | 42,036,940 | 3,022 | 99.726 s, A wins, losses 2/6 | 590 / 1482 |
+| scene4-c4mp2-8v8 | `8e6143b1db68867afe3e6733cac91ee3eb238e2787f2755651ee402ef193f1a1` | 102,691,780 | 5,607 | 185.031 s, B wins, losses 7/4 | 831 / 1579 |
+
+### Windows and cameras
+
+For each log the start and subjects were chosen by this rule. Subjects alternate
+sides, two from each. Each must stand through its whole window. A subject's score is
+the shots and hits within 150 m of it during its window, using the nearest following
+pose. The start is the integer second that maximises the summed subject scores plus
+the mean active rounds and beams over the measured span.
+
+| Scene | Log start | Warm-up + measured | Subjects in order | Seconds each |
+| --- | ---: | --- | --- | ---: |
+| c1mp1 | 36 s | 10 + 40 s | 1, 2, 0, 3 (all four) | 10 |
+| c2mp2 | 15 s | 10 + 80 s | 3, 7, 2, 4 | 20 |
+| c3mp1 | 4 s | 10 + 80 s | 5, 6, 1, 7 | 20 |
+| c4mp2 | 101 s | 10 + 60 s | 0, 8, 2, 15 | 15 |
+
+The warm-up is a wide chase (60 m back, 24 m up) on the first subject. Each subject
+then gets a chase 45 m back and 20 m up, a 5 s orbit at 55 m and 28 degrees per
+second, and a 5 s front or high angle. The c1mp1 subjects, 10 s each, alternate the
+orbit and the angle. The native parser needs shots of 5 to 20 s, a chase first, and
+two different angles after the first orbit. The side angle was dropped: on c2mp2
+it sat behind a tall structure.

@@ -193,6 +193,47 @@ public sealed class NativeGameRunner
         _ => throw new InvalidOperationException("Unknown antialiasing setting: " + saved)
     };
 
+    /// <summary>
+    /// Movies whose HD clips have been checked against the runtime (INTRO, #559). The others keep
+    /// playing the original until each one's timing is checked; add them here as they are.
+    /// </summary>
+    public static readonly IReadOnlyList<string> CheckedHdMovies = new[] { "intro" };
+
+    /// <summary>
+    /// The <c>--hd-movie NAME PATH</c> pairs for the "Upscaled cutscenes" setting (#625): each checked
+    /// movie that an enabled cinematics pack has an HD clip for. Empty, with a log line saying why,
+    /// when the runtime can't take them or a path can't be passed.
+    /// </summary>
+    public static List<string> HdMovieArguments(IEnumerable<string> activeModDirs, bool runtimeSupportsHdMovies,
+        Action<string> log)
+    {
+        var arguments = new List<string>();
+        foreach (var name in CheckedHdMovies)
+        {
+            // A damaged pack is skipped so a valid clip in a lower-priority pack can still be used.
+            var clip = CinematicPack.FindLibraryClip(activeModDirs, name, (root, error) =>
+                log("Upscaled " + name + " from " + Path.GetFileName(root) + " not used: " + error.Message));
+            if (clip == null) continue;
+            if (!runtimeSupportsHdMovies)
+            {
+                log("Upscaled cutscenes unavailable; the installed MW3-RE runtime does not support HD movies.");
+                return new List<string>();
+            }
+            var path = Path.GetFullPath(clip.Source);
+            // The runtime gets its command line in the system code page and its decoder then reads the
+            // path as UTF-8 (hd_movie_mf.cpp, local_file_path), so only ASCII reaches it unchanged; an
+            // accented code-page character would arrive as invalid UTF-8 and be refused there.
+            var pathIsAscii = path.All(character => character < 128);
+            if (!pathIsAscii)
+            {
+                log("Upscaled " + name + " not used; its path has non-ASCII characters. Move the pack storage to an ASCII path.");
+                continue;
+            }
+            arguments.AddRange(new[] { "--hd-movie", name, path });
+        }
+        return arguments;
+    }
+
     /// <summary>Project saved choices and prepared inputs; the planner applies shadow dependencies.</summary>
     public static Mw3RePlanningOptions PlanningOptionsForSettings(LauncherSettings settings,
         Mw3ReRuntimeContract contract, int drawDistance, IReadOnlyList<string> models,
@@ -412,6 +453,22 @@ public sealed class NativeGameRunner
         {
             argv.Add("--cc-input");
             argv.Add(inputBindings);
+        }
+        // Upscaled cutscenes are optional too: a damaged or locked clip leaves the original movies.
+        if (settings.UpscaledCutscenes)
+        {
+            try
+            {
+                var hdMovies = HdMovieArguments(activePacks, contract.SupportsHdMovies, log);
+                argv.AddRange(hdMovies);
+                if (hdMovies.Count > 0) log("Upscaled cutscenes: " + hdMovies.Count / 3 + " HD movie(s) for this launch.");
+            }
+            // InvalidOperationException: a registry value of the wrong JSON type (JsonNode.GetValue).
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or
+                JsonException or InvalidOperationException)
+            {
+                log("Upscaled cutscenes not used for this launch: " + error.Message);
+            }
         }
         // Music is optional: a broken or locked soundtrack file must not stop the game from starting.
         try

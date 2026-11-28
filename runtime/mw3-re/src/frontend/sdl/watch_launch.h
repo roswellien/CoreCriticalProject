@@ -50,6 +50,8 @@ struct WatchArgs {
   std::optional<size_t> benchmark_strict_capture;
   std::vector<std::string> benchmark_packs;
   std::shared_ptr<benchmark::Run> benchmark_run;
+  // The benchmark scene's arena look (platform::ArenaLookScope), restored when this goes.
+  std::shared_ptr<void> benchmark_look;
   // Either watched run: the host's seat is a spectator's.
   bool watched_match() const { return !arena_path.empty() || !replay3d_path.empty(); }
 };

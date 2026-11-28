@@ -65,6 +65,12 @@ static class GraphicsSetupUiChecks
             Check(panel.Read().Vsync, "VSync checkbox did not reach graphics preferences.");
             panel.Load(new LauncherSettings { DynamicLighting = true, Headlights = true, Vsync = true });
             Check(vsync.IsChecked == true, "Saved VSync choice did not load in Display.");
+            var cutscenes = (CheckBox)panel.FindName("ChkUpscaledCutscenes");
+            Check(cutscenes.IsChecked == true && panel.Read().UpscaledCutscenes, "Upscaled cutscenes must default on.");
+            cutscenes.IsChecked = false;
+            Check(!panel.Read().UpscaledCutscenes, "Upscaled cutscenes checkbox did not reach graphics preferences.");
+            panel.Load(new LauncherSettings { DynamicLighting = true, Headlights = true, UpscaledCutscenes = false });
+            Check(cutscenes.IsChecked == false, "Saved Upscaled cutscenes choice did not load.");
             var master = (CheckBox)panel.FindName("ChkHeadlights");
             var dynamicLighting = (CheckBox)panel.FindName("ChkDynamicLighting");
             Check(master.IsEnabled && master.IsChecked == true && panel.Read().Headlights,

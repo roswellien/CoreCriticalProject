@@ -10,8 +10,8 @@
         <meta name="theme-color" content="#141717" />
         <title>About — Core Critical</title>
         <link rel="icon" href="assets/plates/brand-mark-64.png" type="image/png" />
-        <link rel="stylesheet" href="styles.css" />
-        <script src="site.js" defer></script>
+        <link rel="stylesheet" href="styles.css?v=20261130" />
+        <script src="site.js?v=20261130" defer></script>
     </head>
     <body class="interior overview">
         <a class="skip-link" href="#main">Skip to content</a>
@@ -26,20 +26,31 @@
                 aria-expanded="false"
                 aria-controls="primary-nav"
             >
-                Menu
-                <svg viewBox="0 0 24 24" aria-hidden="true">
+                <span>Menu</span
+                ><svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M4 7h16M4 12h16M4 17h16" />
                 </svg>
             </button>
             <nav class="primary-nav" id="primary-nav" aria-label="Main navigation">
-                <a href="index.html">Home</a><a href="native.html">Native Recompilation</a
-                ><a href="vulkan.html">Vulkan Graphics</a
-                ><a href="tools.html">Launcher &amp; Tools</a
-                ><a href="studio-tour.html">Mod Studio</a
-                ><a href="about.html" aria-current="page">About</a
-                ><a href="https://discord.gg/NRkkmPa6ay" target="_blank" rel="noopener noreferrer"
+                <a href="index.html">Home</a>
+                <a href="native.html">Native Recompilation</a>
+                <a href="vulkan.html">Vulkan Graphics</a>
+                <a href="tools.html">Launcher &amp; Tools</a>
+                <a href="studio-tour.html">Mod Studio</a>
+                <a href="news.html">News</a>
+                <a href="media.html">Media</a>
+                <a href="index.html#projects">More Projects</a>
+                <a href="about.html" aria-current="page">About</a>
+                <a
+                    class="nav-external"
+                    href="https://discord.gg/NRkkmPa6ay"
+                    target="_blank"
+                    rel="noopener noreferrer"
                     >Discord</a
-                ><a href="https://github.com/roswellien/CoreCriticalProject">GitHub</a>
+                >
+                <a class="nav-external" href="https://github.com/roswellien/CoreCriticalProject"
+                    >GitHub</a
+                >
             </nav>
         </header>
         <main id="main">
@@ -90,29 +101,27 @@
                             running.
                         </p>
                         <p>
-                            MW3 is the current flagship. Native recompilation, Vulkan graphics, and
-                            launcher tooling are complementary efforts, each with its own progress
-                            and validation work.
+                            MW3 is the current flagship, now in a closed playtest. The native
+                            runtime, Vulkan graphics, and the launcher and tools work together, each
+                            with its own testing.
                         </p>
                         <div class="effort-list">
                             <a href="native.html"
                                 ><h3>Native Recompilation</h3>
-                                <p>
-                                    Bring original game logic into a native host for modern systems.
-                                </p>
+                                <p>Run the original game logic natively on modern Windows.</p>
                                 <svg viewBox="0 0 24 24" aria-hidden="true">
                                     <path d="M4 12h15m-6-6 6 6-6 6" /></svg></a
                             ><a href="vulkan.html"
                                 ><h3>Vulkan Graphics</h3>
                                 <p>
-                                    Develop modern rendering for both the native host and the
-                                    original executable.
+                                    Draw the original game at modern resolutions, with optional
+                                    lighting and upgrades.
                                 </p>
                                 <svg viewBox="0 0 24 24" aria-hidden="true">
                                     <path d="M4 12h15m-6-6 6 6-6 6" /></svg></a
                             ><a href="tools.html"
                                 ><h3>Launcher &amp; Tools</h3>
-                                <p>Make local configuration and testing easier to manage.</p>
+                                <p>Install, update, configure and mod the game from one place.</p>
                                 <svg viewBox="0 0 24 24" aria-hidden="true">
                                     <path d="M4 12h15m-6-6 6 6-6 6" /></svg
                             ></a>
@@ -136,7 +145,7 @@
                             playtesting.
                         </p>
                         <p>
-                            The aim is to recompile the original game logic and build modern
+                            The aim is to run the original game logic natively and build modern
                             platform support around it. AI-generated code and artwork are part of
                             the development process; working features are demonstrated through
                             actual execution, testing, and comparisons with the original game.
@@ -146,15 +155,15 @@
                     <section class="content-section" id="approach">
                         <h2>Faithful by default.</h2>
                         <p>
-                            Recompilation preserves the original game logic rather than inventing
-                            new physics, AI, or mission rules. Modern platform services support that
-                            foundation, with enhancements tested against an original-compatible
-                            baseline.
+                            The native runtime preserves the original game logic rather than
+                            inventing new physics, AI, or mission rules. Modern platform services
+                            support that foundation, every enhancement is optional, and comparing
+                            enhancements with the original presentation is ongoing work.
                         </p>
                         <p>
-                            Progress is reported by what actually runs and what has been checked. An
-                            experimental Training session is meaningful progress; full-game
-                            compatibility and release readiness still require more work.
+                            Progress is reported by what actually runs and what has been checked.
+                            The closed playtest is meaningful progress; full-game compatibility and
+                            a public release still require more work.
                         </p>
                     </section>
                     <section class="content-section" id="faq">
@@ -162,10 +171,10 @@
                         <details open>
                             <summary>Can I download and play it now?</summary>
                             <p>
-                                The documented builds are development setups. The native host has
-                                reached a live menu and partial Training, while the wrapper and
-                                launcher work in a prepared local profile. Neither is presented here
-                                as a portable, fully validated release.
+                                Not yet for everyone. MW3 is in a closed, invite-only playtest while
+                                stability and performance improve. Applications are handled on
+                                <a href="https://discord.gg/NRkkmPa6ay">our Discord</a>, and
+                                approved testers receive the launcher with signed updates.
                             </p>
                         </details>
                         <details>
@@ -184,6 +193,22 @@
                             </p>
                         </details>
                         <details>
+                            <summary>What is MW3-RE?</summary>
+                            <p>
+                                MW3-RE is the native runtime Core Critical runs on. It builds on
+                                <a href="https://github.com/telltaleatheist/mw3-re">mw3-re</a> by
+                                Owen Morgan, released under the
+                                <a
+                                    href="https://github.com/telltaleatheist/mw3-re/blob/main/LICENSE"
+                                    >MIT license</a
+                                >, and the
+                                <a href="https://github.com/roswellien/CoreCritical-MW3-RE"
+                                    >Core Critical fork</a
+                                >
+                                keeps the upstream license and notices.
+                            </p>
+                        </details>
+                        <details>
                             <summary>What is open source?</summary>
                             <p>
                                 The project’s own code and research tooling are developed on GitHub.
@@ -195,11 +220,11 @@
                         <details>
                             <summary>Are the website images gameplay screenshots?</summary>
                             <p>
-                                Some are. The Vulkan Graphics section uses a MechWarrior 3 C1M1
-                                opening beach screenshot, and Launcher &amp; Tools uses a screenshot
-                                of the Core Critical Launcher. Other artwork is illustrative; the
-                                gameplay image does not by itself demonstrate every rendering
-                                feature.
+                                Most are. The homepage comparison, Native Recompilation and Vulkan
+                                Graphics images are captures from Core Critical builds, and Launcher
+                                &amp; Tools shows an earlier build of the launcher. The Mad Cat
+                                hangar artwork is illustrative, and no single image demonstrates
+                                every rendering feature.
                             </p>
                         </details>
                     </section>

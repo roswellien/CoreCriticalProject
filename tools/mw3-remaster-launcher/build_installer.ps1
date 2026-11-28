@@ -86,8 +86,8 @@ if ($MyInvocation.InvocationName -ne '.') {
     foreach ($benchmarkFile in @('player.py', 'run.py', 'freeze.py')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../benchmark/$benchmarkFile") -Destination (Join-Path $benchmarkRoot $benchmarkFile)
     }
-    foreach ($fixture in @('suite-benchmark.json', 'c1mp1-4v4-reference.json', 'c2mp2-4v4-reference.json',
-            'c3mp1-4v4-reference.json', 'c4mp2-8v8-stress.json')) {
+    foreach ($fixture in @('suite-benchmark.json', 'scene1-c1mp1-2v2.json', 'scene2-c2mp2-4v4.json',
+            'scene3-c3mp1-6v6.json', 'scene4-c4mp2-8v8.json')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../benchmark/fixtures/$fixture") -Destination (Join-Path $benchmarkRoot "fixtures/$fixture")
     }
     $pythonRoot = Join-Path $PublishDirectory 'Tools/PlannerPython'

@@ -1,0 +1,27 @@
+{
+  "schema_version": 3,
+  "game_id": "mw3",
+  "id": "example-gameplay",
+  "name": "Example: gameplay only",
+  "version": "1.0.0",
+  "author": "Core Critical examples",
+  "description": "A mech row and nothing visual.",
+  "provides": {
+    "mechs": [
+      "example_thor_b"
+    ]
+  },
+  "gameplay": {
+    "root": "mod"
+  },
+  "files": {
+    "mod/about_this_mod.txt": {
+      "sha256": "72bb421d67dae8d2fccb72fcea0dac53119fdd588f22862a32f893b889c020cf",
+      "bytes": 207
+    },
+    "mod/mod.txt": {
+      "sha256": "2a4480d7350fc46d7e9297615824c38d00ffbb6d95533ffe7731a75831c80501",
+      "bytes": 220
+    }
+  }
+}

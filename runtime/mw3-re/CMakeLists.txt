@@ -732,6 +732,7 @@ add_executable(mw3tests
   tests/test_fmv_stream.cpp
   tests/test_hd_movie.cpp
   tests/test_mods.cpp
+  src/upgrades/mods/tests/test_pack_library.cpp
   tests/test_mod_install.cpp
   tests/test_import_folder.cpp
   tests/test_found_worlds.cpp
@@ -762,7 +763,7 @@ if(WIN32)
   target_sources(mw3tests PRIVATE tools/windows/utf8.manifest)
 endif()
 target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export Threads::Threads)
-target_include_directories(mw3tests PRIVATE third_party)  # nlohmann-json, among others the arena log's records (#287)
+target_include_directories(mw3tests PRIVATE third_party tests)  # nlohmann-json and the shared test runner
 # Tests that read the player's install skip themselves when it is not there.
 target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
                                           MW3_TEST_TMP_ROOT="${CMAKE_BINARY_DIR}"

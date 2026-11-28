@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <utility>
 #include "frontend/core_critical/renderer/geometry/resource.hpp"
 #include "platform/producer_view.h"
 
@@ -202,6 +203,10 @@ class Render3D {
   virtual uint32_t headlight_wheel_mask() const { return 0; }
   virtual bool wants_player_headlight_ticks() const { return false; }
   virtual void player_headlight_tick(const PlayerHeadlightTick&) {}
+  // Ours (benchmark scenes, arena_headlights): these mech nodes' stock headlights
+  // lit at full strength this frame, replacing the last call's. Replay only: a
+  // replay has no player mech, so player_headlight_tick never runs.
+  virtual void replay_headlights(const void* const* /*nodes*/, std::size_t /*count*/) {}
   virtual void retire_headlight_node(std::uintptr_t /*node*/) {}
   virtual bool wants_material_context() const { return false; }
   virtual std::shared_ptr<const DeferredMaterialBinding>
@@ -297,5 +302,45 @@ inline std::string& arena_lighting_mission() {
   static std::string id;
   return id;
 }
+
+// Ours (benchmark scenes): weather added to a watched arena map that has none
+// of its own. "rain" or empty. Visual only, like arena_lighting_mission: set
+// before the mission loads and read where the mission's world params are.
+inline std::string& arena_weather() {
+  static std::string kind;
+  return kind;
+}
+
+// Ours (benchmark scenes): every replayed mech's stock headlights lit, not only
+// a player's. Set before the replay starts; read by the replay viewer.
+inline bool& arena_headlights() {
+  static bool on = false;
+  return on;
+}
+
+// Ours (benchmark scenes): sets the three arena look globals above for one scene
+// and puts back what was there when it is destroyed, also when the scene fails or
+// exits early by an exception, so nothing later in the process inherits them.
+class ArenaLookScope {
+ public:
+  ArenaLookScope(std::string lighting_mission, std::string weather, bool headlights)
+      : lighting_(arena_lighting_mission()), weather_(arena_weather()),
+        headlights_(arena_headlights()) {
+    arena_lighting_mission() = std::move(lighting_mission);
+    arena_weather() = std::move(weather);
+    arena_headlights() = headlights;
+  }
+  ~ArenaLookScope() {
+    arena_lighting_mission() = std::move(lighting_);
+    arena_weather() = std::move(weather_);
+    arena_headlights() = headlights_;
+  }
+  ArenaLookScope(const ArenaLookScope&) = delete;
+  ArenaLookScope& operator=(const ArenaLookScope&) = delete;
+
+ private:
+  std::string lighting_, weather_;
+  bool headlights_;
+};
 
 }  // namespace platform

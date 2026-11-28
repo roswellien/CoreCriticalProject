@@ -35,8 +35,6 @@ TEXTURE_QUALITY = 70
 # fills the viewport; the others appear at most about half the viewport wide.
 ARTWORK_SMALLER_WIDTHS = {
     "hero-art": [1280],
-    "native-art": [1024],
-    "vulkan-art": [1024],
     "vulkan-c1m1-beach": [1280],
     "launcher-dashboard": [],
     # The before/after pair keeps identical sizes so the two frames line up.

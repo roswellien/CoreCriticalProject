@@ -28,9 +28,11 @@
 #include "gamez/zweapon/zweapon.h"
 #include "gamez/zweapon/zwep_init.h"
 #include "mech3/app_mech.h"
+#include "mech3/mech.h"
 #include "mech3/replay_puppet.h"
 #include "mech3/replay_run.h"
 #include "mech3/sound_extra.h"
+#include "platform/render3d.h"
 
 namespace sdlfe {
 
@@ -549,6 +551,19 @@ void Replay3dView::State::pose() {
       for (const int part : log->parts_lost_by(id, t + kLegKillLookahead))
         if ((part == 4 || part == 5) && std::find(lost.begin(), lost.end(), part) == lost.end()) leg_kill = true;
     puppet->set(*p, lost, live ? t - posed_t : 1.0f / 60, live, leg_kill);
+  }
+  // A benchmark scene with headlights on (platform::arena_headlights): every
+  // standing mech's lamps lit, posed after this frame's puppets.
+  // Off, the lamps are cleared each frame, so no earlier scene's lamps stay lit.
+  if (!platform::arena_headlights()) {
+    if (auto* renderer = zvid::render3d()) renderer->replay_headlights(nullptr, 0);
+  } else {
+    std::vector<const void*> lit;
+    for (auto& [id, puppet] : puppets) {
+      const MechPose* p = pose_of(frame, id);
+      if (p && p->standing && puppet->mech() && puppet->mech()->node) lit.push_back(puppet->mech()->node);
+    }
+    if (auto* renderer = zvid::render3d()) renderer->replay_headlights(lit.data(), lit.size());
   }
   if (benchmark_run) {
     if (benchmark_run->armed()) {

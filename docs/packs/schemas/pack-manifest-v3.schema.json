@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pack-manifest-v3.schema.json",
+  "title": "Content pack manifest, schema version 3",
+  "description": "Contract 1 in docs/packs/contracts.md. The checker in tools/packs reads only the keywords listed in tools/packs/json_schema_subset.py; adding another keyword here fails that checker until it is taught the keyword.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "game_id", "id", "name", "version", "files"],
+  "properties": {
+    "schema_version": { "const": 3 },
+    "game_id": { "enum": ["mw3"] },
+    "id": { "$ref": "#/$defs/pack_id" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "version": { "$ref": "#/$defs/version" },
+    "author": { "type": "string", "maxLength": 80 },
+    "homepage": { "type": "string", "maxLength": 240, "pattern": "^https://" },
+    "description": { "type": "string", "maxLength": 2000 },
+    "category": { "type": "string", "maxLength": 40 },
+    "min_engine_version": { "$ref": "#/$defs/version" },
+    "dependencies": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": { "$ref": "#/$defs/pack_id" },
+          "min_version": { "$ref": "#/$defs/version" },
+          "optional": { "type": "boolean" }
+        }
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/pack_id" }
+    },
+    "provides": {
+      "description": "A summary for display, written by the pack tool. Nothing may decide behaviour from it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mechs": { "$ref": "#/$defs/name_list" },
+        "weapons": { "$ref": "#/$defs/name_list" },
+        "skins": { "$ref": "#/$defs/name_list" },
+        "maps": { "$ref": "#/$defs/name_list" },
+        "missions": { "$ref": "#/$defs/name_list" },
+        "campaigns": { "$ref": "#/$defs/name_list" }
+      }
+    },
+    "gameplay": {
+      "description": "An ordinary MW3-RE mod folder inside the pack. Its mod.txt must be listed in files.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root"],
+      "properties": {
+        "root": { "$ref": "#/$defs/path" }
+      }
+    },
+    "visuals": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": { "$ref": "#/$defs/visual" }
+    },
+    "files": {
+      "description": "Every file in the pack except pack.json, by its path inside the pack.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sha256", "bytes"],
+        "properties": {
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "bytes": { "type": "integer", "minimum": 0 },
+          "format": { "type": "string", "maxLength": 40 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "pack_id": {
+      "description": "Also the mod's folder name once installed, so it follows the runtime's rule for mod names.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,39}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}$"
+    },
+    "path": {
+      "description": "Relative, forward slashes. The checker applies the full path rules of contract 1.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "name_list": {
+      "type": "array",
+      "maxItems": 512,
+      "items": { "type": "string", "minLength": 1, "maxLength": 80 }
+    },
+    "visual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "kind", "files"],
+      "properties": {
+        "target": {
+          "description": "<kind>:<name>, checked against the grammar in contract 4.",
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 80
+        },
+        "kind": { "enum": ["model", "skin", "environment", "ui", "music", "cinematic"] },
+        "lod": {
+          "description": "For a model: 0 is the close version, 1 the distant one.",
+          "enum": [0, 1]
+        },
+        "name": {
+          "description": "For a skin: the name shown in the Mech Lab.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "needs_gameplay": {
+          "description": "True when the target is added by this pack's own gameplay payload.",
+          "type": "boolean"
+        },
+        "files": {
+          "description": "Role to path. Each path must be listed in the manifest's files.",
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/path" }
+        },
+        "options": {
+          "description": "Per-binding corrections and sockets, by name. See contract 4.",
+          "type": "object"
+        }
+      }
+    }
+  }
+}
