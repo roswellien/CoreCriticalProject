@@ -1,6 +1,7 @@
 using System.IO;
 using MW3RemasterLauncher.Core;
 using System.Text.Json.Nodes;
+using MW3RemasterLauncherTests;
 
 // Manual check (#503): run one AI Arena match through the launcher's own catalog,
 // validation and native launch path, with the player's saved settings and packs.
@@ -39,6 +40,17 @@ if(args.Length==3 && args[0]=="--install-chassis-pack") { ChassisPackChecks.Inst
 
 if(args.Length==1 && args[0]=="--skins-only") { SkinPackChecks.Run(); return; }
 if(args.Length==3 && args[0]=="--install-skin-pack") { SkinPackChecks.Install(args[1],args[2]); return; }
+// A batch entry point lets the reference Python checker compare the same authored folders.
+if (args.Length == 2 && args[0] == "--pack-contract-codes")
+{
+    var folders = System.Text.Json.JsonSerializer.Deserialize<string[]>(File.ReadAllText(args[1]))!;
+    var codes = folders.Select(folder => PackCheck.CheckPack(folder).Select(problem => problem.Code).ToArray());
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(codes));
+    return;
+}
+if (args.Length == 1 && args[0] == "--pack-storage-only") { PackStorageChecks.Run(); return; }
+if (args.Length == 1 && args[0] == "--pack-schema-embedded-only") { PackContractChecks.CheckEmbeddedSchema(); return; }
+if(args.Length==1 && args[0]=="--pack-contracts-only") { PackContractChecks.Run(); return; }
 
 if(args.Length==3&&args[0]=="--check-loading-indicator")
 {
@@ -126,6 +138,7 @@ if (args.Length == 1 && args[0] == "--content-only")
     ChassisPackChecks.Run();
     SkinPackChecks.Run();
     PackStorageChecks.Run();
+    PackContractChecks.Run();
     EnvironmentPackChecks.Run();
     MusicPackChecks.Run();
     ArtworkCinematicChecks.Run();
@@ -429,6 +442,7 @@ if (args.Length > 0 && args[0].StartsWith("--", StringComparison.Ordinal) && arg
 if (!profilesOnly)
 {
 PackStorageChecks.Run();
+PackContractChecks.Run();
 UniversalLauncherChecks.Run();
 SteamShortcutChecks.Run();
 OnlineUpdateChecks.Run();

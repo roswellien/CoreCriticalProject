@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using System.Text;
 using System.Runtime.InteropServices;
@@ -99,19 +100,99 @@ public static class PackStorage
         }
     }
 
+    // These fields were unknown to legacy readers. Keep ignoring them in schema 1/2,
+    // even when their values would be invalid for the new schema 3 types.
+    private static readonly JsonSerializerOptions LegacyManifestOptions = new()
+    {
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver
+        {
+            Modifiers =
+            {
+                type =>
+                {
+                    var ignored = Array.Empty<string>();
+                    if (type.Type == typeof(PackManifest))
+                        ignored = new[] { "gameplay", "visuals" };
+                    else if (type.Type == typeof(PackProvides))
+                        ignored = new[] { "weapons", "skins", "maps", "missions", "campaigns" };
+                    foreach (var property in type.Properties.Where(property => ignored.Contains(property.Name)).ToArray())
+                        type.Properties.Remove(property);
+                }
+            }
+        }
+    };
+
+    // Identify the new contract before parsing the entire document, so a truncated
+    // schema 3 manifest still receives its problem code. Legacy parse errors stay unchanged.
+    private static bool HasSchema3Header(string json)
+    {
+        var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(json),
+            new JsonReaderOptions { MaxDepth = 1024 });
+        try
+        {
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.PropertyName && reader.CurrentDepth == 1 &&
+                    reader.ValueTextEquals("schema_version") && reader.Read())
+                    return reader.TokenType == JsonTokenType.Number &&
+                        reader.TryGetDouble(out var version) && version == 3;
+            }
+        }
+        catch (JsonException) { } // The normal parser supplies the actual error below.
+        return false;
+    }
+
+    private static readonly JsonSerializerOptions Schema3ManifestOptions = new() { MaxDepth = 1024 };
+
     public static PackManifest ReadManifest(string file)
     {
         EnsureNoLinks(file);
         if (new FileInfo(file).Length > MaxJsonBytes) throw new InvalidDataException("Pack manifest is too large.");
         var json = File.ReadAllText(file);
-        using (var document = JsonDocument.Parse(json)) ValidateUniqueProperties(document.RootElement);
-        var manifest = JsonSerializer.Deserialize<PackManifest>(json)
-            ?? throw new InvalidDataException("Empty pack manifest.");
+        var isSchema3 = HasSchema3Header(json);
+        JsonDocument parsedDocument;
+        try
+        {
+            if (isSchema3)
+                json = new UTF8Encoding(false, true).GetString(File.ReadAllBytes(file));
+            parsedDocument = JsonDocument.Parse(json,
+                new JsonDocumentOptions { MaxDepth = isSchema3 ? 1024 : 64 });
+        }
+        catch (Exception error) when (isSchema3 && error is JsonException or DecoderFallbackException)
+        {
+            throw new InvalidDataException("manifest-invalid: " + error.Message, error);
+        }
+        using (var document = parsedDocument)
+        {
+            var root = document.RootElement;
+            if (isSchema3)
+            {
+                try { ValidateUniqueProperties(root); }
+                catch (InvalidDataException error)
+                {
+                    throw new InvalidDataException("manifest-invalid: " + error.Message, error);
+                }
+                var problems = PackCheck.CheckManifest(root);
+                if (problems.Count > 0) throw new InvalidDataException(problems[0].Line);
+            }
+            else ValidateUniqueProperties(root);
+        }
+        PackManifest manifest;
+        try
+        {
+            manifest = JsonSerializer.Deserialize<PackManifest>(json,
+                isSchema3 ? Schema3ManifestOptions : LegacyManifestOptions)
+                ?? throw new InvalidDataException("Empty pack manifest.");
+        }
+        catch (JsonException error) when (isSchema3)
+        {
+            throw new InvalidDataException("manifest-invalid: " + error.Message, error);
+        }
         ValidateId(manifest.Id);
         GameCatalog.Get(manifest.GameId);
         if (manifest.GameId != GameCatalog.Mw3 && manifest.SchemaVersion == 2)
             throw new InvalidDataException("Prepared content for this game is not supported yet.");
-        if (manifest.SchemaVersion != 1 && manifest.SchemaVersion != 2)
+        if (manifest.SchemaVersion != 1 && manifest.SchemaVersion != 2 && manifest.SchemaVersion != 3)
             throw new InvalidDataException("Unsupported pack schema.");
         if (manifest.SchemaVersion == 2)
         {
@@ -154,7 +235,10 @@ public static class PackStorage
             }
         }
         else if (value.ValueKind == JsonValueKind.Array)
-            foreach (var item in value.EnumerateArray()) ValidateUniqueProperties(item);
+        {
+            foreach (var element in value.EnumerateArray())
+                ValidateUniqueProperties(element);
+        }
     }
 
     public static FileStream Lock(string root)
@@ -311,7 +395,13 @@ public static class PackStorage
             {
                 var directory = entry.FullName.EndsWith('/');
                 var path = directory ? entry.FullName[..^1] : entry.FullName;
-                ValidatePath(path);
+                if (manifest.SchemaVersion == 3 && !PackCheck.PathIsSafe(path))
+                    throw new InvalidDataException("path-unsafe: " + path);
+                try { ValidatePath(path); }
+                catch (InvalidDataException error) when (manifest.SchemaVersion == 3)
+                {
+                    throw new InvalidDataException("path-unsafe: " + error.Message, error);
+                }
                 if (!seen.Add(path) || ((entry.ExternalAttributes >> 16) & 0xF000) == 0xA000 ||
                     (entry.ExternalAttributes & (int)FileAttributes.ReparsePoint) != 0)
                     throw new InvalidDataException("Duplicate or linked archive member.");
@@ -397,6 +487,14 @@ public static class PackStorage
                     foreach (var role in sharedMechs ? new[] { "authored_manifest" } : new[] { "effects", "authored_manifest", "world_manifest" }) Declared(data.GetProperty(role).GetString()!);
                     if (!sharedMechs)
                         foreach (var detail in data.GetProperty("detail").EnumerateObject()) Declared(detail.Value.GetString()!);
+                }
+            }
+            if (manifest.SchemaVersion == 3)
+            {
+                var problems = PackCheck.CheckPack(stage);
+                if (problems.Count > 0)
+                {
+                    throw new InvalidDataException($"{problems[0].Code}: {problems[0].Message}");
                 }
             }
             ReportProgress("Activating assets", force: true);

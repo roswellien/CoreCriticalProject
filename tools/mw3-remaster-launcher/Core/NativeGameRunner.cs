@@ -234,6 +234,45 @@ public sealed class NativeGameRunner
         return arguments;
     }
 
+    /// <summary>
+    /// Checks whether any installed pack in the library contains a schema 3 gameplay payload.
+    /// When at least one such pack is installed, the launcher passes --pack-library &lt;folder&gt;
+    /// to the native runtime (#646).
+    /// </summary>
+    public static bool HasInstalledGameplayPack(string dataRoot, out string modsFolder)
+    {
+        modsFolder = Path.GetFullPath(Path.Combine(GameCatalog.PackBase(dataRoot, GameCatalog.Mw3), "mods"));
+        if (!Directory.Exists(modsFolder)) return false;
+
+        foreach (var dir in Directory.GetDirectories(modsFolder))
+        {
+            if (Path.GetFileName(dir).StartsWith('.')) continue;
+            var manifestFile = Path.Combine(dir, "pack.json");
+            if (!File.Exists(manifestFile)) continue;
+            try
+            {
+                var manifest = PackStorage.ReadManifest(manifestFile);
+                if (manifest.SchemaVersion == 3 && manifest.Gameplay != null &&
+                    string.Equals(Path.GetFileName(dir), manifest.Id, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // Broken or unreadable manifests do not qualify
+            }
+        }
+        return false;
+    }
+
+    public static IReadOnlyList<string> PackLibraryArguments(string dataRoot)
+    {
+        if (HasInstalledGameplayPack(dataRoot, out var folder))
+            return new[] { "--pack-library", folder };
+        return Array.Empty<string>();
+    }
+
     /// <summary>Project saved choices and prepared inputs; the planner applies shadow dependencies.</summary>
     public static Mw3RePlanningOptions PlanningOptionsForSettings(LauncherSettings settings,
         Mw3ReRuntimeContract contract, int drawDistance, IReadOnlyList<string> models,
@@ -480,6 +519,12 @@ public sealed class NativeGameRunner
         {
             log("Music pack not used for this launch: " + error.Message);
         }
+
+        var packLibraryArguments = PackLibraryArguments(_dataRoot);
+        argv.AddRange(packLibraryArguments);
+        if (packLibraryArguments.Count > 0)
+            log("Pack library enabled for schema 3 gameplay packs: " + packLibraryArguments[1]);
+
         var start = new ProcessStartInfo(argv[0])
         {
             WorkingDirectory = plan.RootElement.GetProperty("working_directory").GetString()!,
