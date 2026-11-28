@@ -23,6 +23,7 @@
     <EmbeddedResource Include="Core\SupportedMedia.json" />
     <EmbeddedResource Include="Core\Mw3ControlActions.json" />
     <EmbeddedResource Include="../remaster-launcher/legacy_content_capabilities.json" Link="Core/legacy_content_capabilities.json" LogicalName="MW3RemasterLauncher.Core.legacy_content_capabilities.json" />
+    <EmbeddedResource Include="../../docs/packs/schemas/pack-manifest-v3.schema.json" Link="Core/pack-manifest-v3.schema.json" LogicalName="MW3RemasterLauncher.Core.pack-manifest-v3.schema.json" />
     <Resource Include="Assets\Fonts\*.ttf" />
     <Resource Include="Assets\Plates\*.png" />
     <Resource Include="Assets\app-icon.ico" />

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace MW3RemasterLauncher.Core
@@ -20,11 +21,63 @@ namespace MW3RemasterLauncher.Core
         [JsonPropertyName("required_formats")] public List<string> RequiredFormats { get; set; } = new();
         [JsonPropertyName("required_capabilities")] public Dictionary<string, int> RequiredCapabilities { get; set; } = new();
     }
+
+    /// <summary>
+    /// Schema 3 gameplay payload description.
+    /// </summary>
+    public class PackGameplay
+    {
+        [JsonPropertyName("root")]
+        public string Root { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Schema 3 visual dressing description for mechs, worlds, or missions.
+    /// </summary>
+    public class PackVisual
+    {
+        [JsonPropertyName("target")]
+        public string Target { get; set; } = string.Empty;
+
+        [JsonPropertyName("kind")]
+        public string Kind { get; set; } = string.Empty;
+
+        [JsonPropertyName("lod")]
+        public int? Lod { get; set; }
+
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("needs_gameplay")]
+        public bool NeedsGameplay { get; set; }
+
+        [JsonPropertyName("files")]
+        public Dictionary<string, string> Files { get; set; } = new(StringComparer.Ordinal);
+
+        [JsonPropertyName("options")]
+        public JsonObject? Options { get; set; }
+    }
+
     /// <summary>Declared payload capabilities; these flags do not prove that files exist.</summary>
     public class PackProvides
     {
         [JsonPropertyName("mechs")]
         public List<string>? Mechs { get; set; }
+
+        [JsonPropertyName("weapons")]
+        public List<string>? Weapons { get; set; }
+
+        [JsonPropertyName("skins")]
+        public List<string>? Skins { get; set; }
+
+        [JsonPropertyName("maps")]
+        public List<string>? Maps { get; set; }
+
+        [JsonPropertyName("missions")]
+        public List<string>? Missions { get; set; }
+
+        [JsonPropertyName("campaigns")]
+        public List<string>? Campaigns { get; set; }
 
         [JsonPropertyName("world_models")]
         public List<string>? WorldModels { get; set; }
@@ -73,6 +126,12 @@ namespace MW3RemasterLauncher.Core
         [JsonPropertyName("native_payload")]
         public NativePackPayload? NativePayload { get; set; }
 
+        [JsonPropertyName("gameplay")]
+        public PackGameplay? Gameplay { get; set; }
+
+        [JsonPropertyName("visuals")]
+        public List<PackVisual>? Visuals { get; set; }
+
         [JsonPropertyName("files")]
         public Dictionary<string, PackFile>? Files { get; set; }
 
@@ -110,13 +169,83 @@ namespace MW3RemasterLauncher.Core
         public PackProvides? Provides { get; set; }
 
         [JsonIgnore]
-        public string RuntimeLabel => SchemaVersion == 2 ?
-            (NativePayload?.Profile == ChassisPack.Profile ? "Additional mechs — choose in Mech Lab" :
-             NativePayload?.Profile == SkinPack.Profile ? "Additional skins — choose in Mech Lab" :
-             NativePayload?.Profile == CinematicPack.Profile ? "Cinematics — AVI replacements or launcher movie library" :
-             NativePayload?.Profile == UiPack.Profile ? "HUD/menu artwork — original layout and input" :
-             NativePayload?.Profile == MusicPack.Profile ? "Soundtrack — original game music controls" :
-             NativePayload?.Profile == "prepared-environment-v1" ? "Environment textures, normals and lighting — playtest pending" : "Native mech candidates — gameplay validation pending") : "";
+        public string? UpdateSource { get; set; }
+
+        /// <summary>
+        /// Summarizes the items or payloads provided by this pack.
+        /// </summary>
+        [JsonIgnore]
+        public string ProvidesSummary
+        {
+            get
+            {
+                var items = new List<string>();
+                if (Provides != null)
+                {
+                    if (Provides.Mechs != null && Provides.Mechs.Count > 0)
+                        items.Add($"Mechs: {string.Join(", ", Provides.Mechs)}");
+                    if (Provides.Weapons != null && Provides.Weapons.Count > 0)
+                        items.Add($"Weapons: {string.Join(", ", Provides.Weapons)}");
+                    if (Provides.Skins != null && Provides.Skins.Count > 0)
+                        items.Add($"Skins: {string.Join(", ", Provides.Skins)}");
+                    if (Provides.Maps != null && Provides.Maps.Count > 0)
+                        items.Add($"Maps: {string.Join(", ", Provides.Maps)}");
+                    if (Provides.Missions != null && Provides.Missions.Count > 0)
+                        items.Add($"Missions: {string.Join(", ", Provides.Missions)}");
+                    if (Provides.Campaigns != null && Provides.Campaigns.Count > 0)
+                        items.Add($"Campaigns: {string.Join(", ", Provides.Campaigns)}");
+                    if (Provides.WorldModels != null && Provides.WorldModels.Count > 0)
+                        items.Add($"World models: {string.Join(", ", Provides.WorldModels)}");
+                    if (Provides.Textures)
+                        items.Add("Textures");
+                    if (Provides.NormalMaps)
+                        items.Add("Normal maps");
+                    if (Provides.Audio)
+                        items.Add("Audio");
+                    if (Provides.CdMusic)
+                        items.Add("CD music");
+                }
+
+                if (items.Count == 0)
+                {
+                    if (Gameplay != null && Visuals != null && Visuals.Count > 0)
+                        items.Add("Gameplay and visuals");
+                    else if (Gameplay != null)
+                        items.Add("Gameplay");
+                    else if (Visuals != null && Visuals.Count > 0)
+                        items.Add("Visuals");
+                    else
+                        items.Add("Content");
+                }
+
+                return string.Join(" • ", items);
+            }
+        }
+
+        [JsonIgnore]
+        public string RuntimeLabel
+        {
+            get
+            {
+                if (SchemaVersion == 3)
+                {
+                    var summary = ProvidesSummary;
+                    var updateSource = string.IsNullOrWhiteSpace(UpdateSource) ? "no update source" : UpdateSource;
+                    return $"{summary} — {updateSource}";
+                }
+                if (SchemaVersion == 2)
+                {
+                    return NativePayload?.Profile == ChassisPack.Profile ? "Additional mechs — choose in Mech Lab" :
+                           NativePayload?.Profile == SkinPack.Profile ? "Additional skins — choose in Mech Lab" :
+                           NativePayload?.Profile == CinematicPack.Profile ? "Cinematics — AVI replacements or launcher movie library" :
+                           NativePayload?.Profile == UiPack.Profile ? "HUD/menu artwork — original layout and input" :
+                           NativePayload?.Profile == MusicPack.Profile ? "Soundtrack — original game music controls" :
+                           NativePayload?.Profile == "prepared-environment-v1" ? "Environment textures, normals and lighting — playtest pending" :
+                           "Native mech candidates — gameplay validation pending";
+                }
+                return "";
+            }
+        }
 
         // Local state
         [JsonIgnore]
