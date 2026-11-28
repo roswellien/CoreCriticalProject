@@ -202,6 +202,29 @@ Sources for the audit include [AI contacts](../runtime/mw3-re/src/mech3/zai_brai
 
 The process has one MSVCRT seed. A visual HUD effect can advance the same sequence that later decides weapon spread. Fixed seed alone cannot make a race deterministic. Preserve the exact sequence and conditional consumption of random draws, floating-point control state, resource lifetimes and list mutation order. A future threading experiment must replay identical input and simulation time with jobs enabled and disabled, compare state after every tick, and report the first divergent tick. Compare positions, damage, AI decisions, pending events and RNG state over a long run. [RNG implementation](../runtime/mw3-re/src/crt/msvc_rand.cpp) · [HUD consumers](../runtime/mw3-re/src/mech3/hud.cpp)
 
+## Arena benchmark and hidden-match simulation cost (2026-11-27)
+
+The merged arena benchmark separates the two halves of this plan. Its scored scenes replay a recorded match: in a 3D replay no entity updates and the log poses every mech, so `run.py` measures rendering, geometry submission and presentation with no AI, movement, collision or weapon work. [Replay update skip](../runtime/mw3-re/src/mech3/app_mech.cpp) · [Benchmark](../tools/benchmark/README.md)
+
+Simulation cost is measured instead by the hidden match that `freeze.py` records. With `--hidden` and no screenshots the mission skips `zcls::render_world`, steps the clock by exactly 33 ms per tick and shuffles the bot update order from the seed. [Hidden draw skip](../runtime/mw3-re/src/mech3/app_mission.cpp) · [Arena repeatability](../runtime/mw3-re/docs/arena.md)
+
+The table times the suite's own recipes on one Release build from `develop` at `ee3560f3`, recorded twice per recipe as `freeze.py` requires. The window runs from the Core State mark to the post-match Fade State mark in each process log. It includes match setup and about 0.5 s of teardown, so the per-tick figure is an upper bound. Every pair of logs was byte identical, and each log matched the digest qualified in `suite-benchmark.json`.
+
+| Recipe | Mechs | Ticks (game time) | Wall time, first / second | Upper bound per tick |
+| --- | ---: | ---: | ---: | ---: |
+| scene1-c1mp1-2v2 | 4 | 2,838 (93.7 s) | 3.44 s / 2.61 s | 1.21 / 0.92 ms |
+| scene4-c4mp2-8v8 | 16 | 5,607 (185.0 s) | 20.11 s / 18.66 s | 3.59 / 3.33 ms |
+
+The 16-mech match spends at most about 3.5 ms of main-thread time per 33 ms tick, averaged over a match in which mechs are destroyed along the way. That is half of a 144 Hz frame budget. It is consistent with the 1.8 to 3.0 ms/frame that the ETW traces above attribute to navigation grid construction alone. Simulation is therefore a real share of a dense arena frame, but most of it sits in the AI query and grid work that the ownership table keeps on main.
+
+Hidden-match determinism adds three constraints to the candidate jobs above:
+
+- **The render walk feeds the simulation.** Issue #294 remains open: one drawn frame changes a later steering decision hundreds of ticks afterwards. Until that dependency is found, a render-side job must not read or write anything that `render_world` touches during simulation, and a simulation job must not move relative to the render walk.
+- **The update order is part of the match.** The per-frame shuffle uses its own seeded generator and a fixed container order. A job must commit results in that shuffled order, not in completion order.
+- **The equality test already exists.** `freeze.py` records the same recipe twice and requires byte-identical logs that match the qualified digest. A threading experiment must pass that test with jobs enabled on all four suite recipes before the throughput cohort is measured.
+
+The graphics A-B-B-A at draw distances 800 and 3200 on the 16-mech scene has not been scored yet. Two attempts on 2026-11-27 failed before scoring: one scene lost window focus, and others stopped at renderer start with `buffer memory failed (-2)`. At the time, dwm.exe held about 22 GB of dedicated video memory and a local model server up to 9.8 GB. That run needs a restarted machine. This section therefore makes no claim about geometry frame time.
+
 ## Interpreting the geometry results
 
 The first geometry candidate is the stock model submission cache in FrameRenderer::submit_model_geometry. When a stock model is accepted, the main thread scans native_geometry_ for expired weak references before looking up that model by identity. The loop runs again for the next accepted model in the same frame. Each additional accepted model triggers another scan. The four samples quantify its cost under the scripted workload. The table reports samples whose instruction pointer lands in the loop. The larger handoff row also includes material lookup, instance construction, allocations and other work. [Stock adapter](../runtime/mw3-re/src/frontend/core_critical/geometry_frame_adapter.inc) · [Resource identity](../runtime/mw3-re/src/frontend/core_critical/renderer/geometry/resource.cpp)
