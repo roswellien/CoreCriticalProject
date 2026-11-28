@@ -16,6 +16,7 @@
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/geometry/resource.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
