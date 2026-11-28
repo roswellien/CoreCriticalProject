@@ -107,6 +107,20 @@
 #include <cstdio>
 #include <map>
 
+// The subprocess restart tests below are POSIX-only; argument preservation also runs on Windows.
+TEST(sdl_restart_keeps_pack_library) {
+  using Arguments = std::vector<std::string>;
+  const Arguments start = {"--pack-library", "C:/my packs/library", "--entry", "ia", "--entry-ia"};
+  sdlfe::RestartTo out;
+  out.open_mods = true;
+  const Arguments back = sdlfe::restart_args(start, out);
+  EXPECT((back == Arguments{"--pack-library", "C:/my packs/library", "--open-mods", "--restarted"}));
+  sdlfe::RestartTo ia;
+  ia.entry = "ia", ia.screen = sdlfe::RestartTo::kInstantAction;
+  EXPECT((sdlfe::restart_args(back, ia) ==
+          Arguments{"--pack-library", "C:/my packs/library", "--entry", "ia", "--entry-ia", "--restarted"}));
+}
+
 // A benchmark scene's look never outlives the scene, also when it ends by an exception.
 TEST(arena_look_scope_restores_previous_look) {
   platform::arena_lighting_mission() = "c3m1";

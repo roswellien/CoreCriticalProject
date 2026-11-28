@@ -5,7 +5,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta
             name="description"
-            content="Visual tour and walkthrough of the MechWarrior 3 Visual 3D Mod Studio redesigned interface, featuring the Scene Outliner, CSS Grid Inspector, Terrain Sculptor, Atmosphere studio, and MechLab."
+            content="A visual tour of the early Mod Studio preview for MechWarrior 3 map and mission authors: map editor, scene outliner, property inspector, terrain sculptor, atmosphere controls and MechLab."
         />
         <meta name="theme-color" content="#141717" />
         <title>Mod Studio Interface Tour — Core Critical</title>
@@ -259,25 +259,24 @@
 
         <main id="main">
             <section class="tour-hero">
-                <div class="tour-pill">Development Preview • Live Engine Screenshots</div>
+                <div class="tour-pill">Early preview · untested</div>
                 <h1 class="tour-title">
                     MechWarrior 3 Mod Studio<br /><span style="color: #00f0ff"
                         >Interface Tour &amp; Walkthrough</span
                     >
                 </h1>
                 <p class="tour-subtitle">
-                    A comprehensive visual walkthrough of the overhauled user interface for the
-                    visual 3D mission and map studio, featuring the newly integrated Scene Outliner,
-                    non-overlapping CSS Grid Property Inspector, real-time Terrain Sculpting
-                    brushes, dynamic Atmosphere studio, MechLab, and Mission Objectives authoring
-                    suites.
+                    A visual walkthrough of the Mod Studio preview for map and mission authors: the
+                    scene outliner, property inspector, terrain sculpting brushes, atmosphere
+                    controls, MechLab and mission objectives. Mod Studio is an early preview that
+                    has not been tested in the game yet, so expect rough edges and changes.
                 </p>
 
                 <nav class="tour-nav-chips" aria-label="Quick jump">
                     <a class="tour-chip" href="#view-new-mission">New Mission</a>
                     <a class="tour-chip" href="#view-map">Map Editor</a>
                     <a class="tour-chip" href="#view-outliner">Scene Outliner</a>
-                    <a class="tour-chip" href="#view-inspector">CSS Grid Inspector</a>
+                    <a class="tour-chip" href="#view-inspector">Property Inspector</a>
                     <a class="tour-chip" href="#view-sculptor">Terrain Sculptor</a>
                     <a class="tour-chip" href="#view-atmosphere">Atmosphere Studio</a>
                     <a class="tour-chip" href="#view-mechlab">MechLab Loadout</a>
@@ -413,8 +412,8 @@
                                     <polyline points="20 6 9 17 4 12"></polyline>
                                 </svg>
                                 <span
-                                    ><strong>Floating Glassmorphic HUD</strong>: Quick-toggle
-                                    between 3D Orbit, 2D Tactical, Isometric, Selection Focus, and
+                                    ><strong>Floating camera toolbar</strong>: Quick-toggle between
+                                    3D Orbit, 2D Tactical, Isometric, Selection Focus, and
                                     Sculpting.</span
                                 >
                             </li>
@@ -503,8 +502,8 @@
                 <!-- Section 3: Property Inspector -->
                 <article class="tour-card" id="view-inspector">
                     <div class="tour-card-header">
-                        <h2>Non-Overlapping CSS Grid Property Inspector</h2>
-                        <span class="tour-tag">Layout Redesign</span>
+                        <h2>Property Inspector</h2>
+                        <span class="tour-tag">Layout</span>
                     </div>
                     <a
                         class="tour-card-img-wrap"
@@ -515,16 +514,15 @@
                     >
                         <img
                             src="assets/plates/studio/mod-studio-inspector-v2.webp?v=20261126"
-                            alt="Property Inspector with strict CSS grid layout"
+                            alt="Property Inspector with labels and controls in two aligned columns"
                             loading="lazy"
                         />
                     </a>
                     <div class="tour-card-body">
                         <p>
-                            The Property Inspector has been completely refactored with a strict
-                            two-column CSS Grid layout (<code>105px 1fr</code>). Labels, inputs, and
-                            sliders are cleanly aligned with no overlapping fields, clipped text, or
-                            squished elements.
+                            The Property Inspector lays out every setting in two aligned columns.
+                            Labels, inputs, and sliders are cleanly aligned with no overlapping
+                            fields, clipped text, or squished elements.
                         </p>
                         <ul class="tour-features-list">
                             <li>
@@ -532,9 +530,8 @@
                                     <polyline points="20 6 9 17 4 12"></polyline>
                                 </svg>
                                 <span
-                                    ><strong>Strict CSS Grid Structure</strong>: Eliminates text
-                                    collisions across high-DPI displays and variable sidebar
-                                    widths.</span
+                                    ><strong>Aligned layout</strong>: Text stays readable on
+                                    high-DPI displays and at any sidebar width.</span
                                 >
                             </li>
                             <li>

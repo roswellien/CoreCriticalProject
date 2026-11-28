@@ -426,7 +426,8 @@ std::vector<std::string> mod_copy_sentences(const CopyChanges& c) {
   out.push_back(sentence("It is a copy saved from the campaign " + base));
   if (!c.missing.empty())
     out.push_back(sentence("The campaign " + (c.missing == c.base ? std::string("it was saved from") : "\"" + c.missing + "\" under it") +
-                           " is not in the mods folder, so what it changed there cannot be told"));
+                                 (mods_pack_library().empty() ? " is not in the mods folder, so what it changed there cannot be told"
+                                                             : " is no longer installed, so what it changed there cannot be told")));
   if (!c.replaced.empty())
     out.push_back(sentence("It replaces " + counted(static_cast<int>(c.replaced.size()), "file", "files") + " of that campaign: " + some(c.replaced)));
   // With part of the chain gone, a file or row nothing above the gap has may be that campaign's: not said.
