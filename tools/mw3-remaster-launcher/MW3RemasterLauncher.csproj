@@ -4,6 +4,9 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- Every restore records the win-x64 section that the documented self-contained publish
+         needs, so publishing leaves packages.lock.json unchanged (#206). -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
