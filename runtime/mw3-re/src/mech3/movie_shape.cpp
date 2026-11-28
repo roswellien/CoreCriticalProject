@@ -180,6 +180,24 @@ int32_t number(const std::string& s) {
 }
 }  // namespace
 
+bool movie_shape_key_parts(const std::string& key, MovieShapeKeyParts* parts) {
+  // "intro/2737/640x480": name / frames / width x height.
+  const size_t first_slash = key.find('/');
+  if (first_slash == 0 || first_slash == std::string::npos) return false;
+  const size_t second_slash = key.find('/', first_slash + 1);
+  if (second_slash == std::string::npos) return false;
+  const std::string size = key.substr(second_slash + 1);
+  const size_t times = size.find('x');
+  if (times == std::string::npos) return false;
+  const int32_t frames = number(key.substr(first_slash + 1, second_slash - first_slash - 1));
+  const int32_t width = number(size.substr(0, times));
+  const int32_t height = number(size.substr(times + 1));
+  if (frames < 0 || width < 0 || height < 0) return false;
+  parts->name = key.substr(0, first_slash);
+  parts->frames = frames, parts->width = width, parts->height = height;
+  return true;
+}
+
 bool movie_shape_parse(const std::string& line, std::string* key, std::vector<MovieShapeRun>* runs) {
   std::istringstream in(line);
   if (!(in >> *key)) return false;

@@ -10,8 +10,8 @@
         <meta name="theme-color" content="#141717" />
         <title>Core Critical — MW3</title>
         <link rel="icon" href="assets/plates/brand-mark-64.png" type="image/png" />
-        <link rel="stylesheet" href="styles.css?v=20261129" />
-        <script src="site.js?v=20261128" defer></script>
+        <link rel="stylesheet" href="styles.css?v=20261130" />
+        <script src="site.js?v=20261130" defer></script>
         <link
             rel="preload"
             href="assets/fonts/Orbitron.woff2"
@@ -46,12 +46,25 @@
                 </svg>
             </button>
             <nav class="primary-nav" id="primary-nav" aria-label="Main navigation">
-                <a href="projects.html">Projects</a><a href="news.html">News</a
-                ><a href="media.html">Media</a><a href="studio-tour.html">Mod Studio</a
-                ><a href="about.html">About</a
-                ><a href="https://discord.gg/NRkkmPa6ay" target="_blank" rel="noopener noreferrer"
+                <a href="index.html" aria-current="page">Home</a>
+                <a href="native.html">Native Recompilation</a>
+                <a href="vulkan.html">Vulkan Graphics</a>
+                <a href="tools.html">Launcher &amp; Tools</a>
+                <a href="studio-tour.html">Mod Studio</a>
+                <a href="news.html">News</a>
+                <a href="media.html">Media</a>
+                <a href="index.html#projects">More Projects</a>
+                <a href="about.html">About</a>
+                <a
+                    class="nav-external"
+                    href="https://discord.gg/NRkkmPa6ay"
+                    target="_blank"
+                    rel="noopener noreferrer"
                     >Discord</a
-                ><a href="https://github.com/roswellien/CoreCriticalProject">GitHub</a>
+                >
+                <a class="nav-external" href="https://github.com/roswellien/CoreCriticalProject"
+                    >GitHub</a
+                >
             </nav>
         </header>
         <main id="main">
@@ -350,7 +363,7 @@
                     ></a>
                 </div>
             </section>
-            <section class="more-projects section-shell" aria-labelledby="more-title">
+            <section class="more-projects section-shell" id="projects" aria-labelledby="more-title">
                 <div class="section-heading">
                     <h2 id="more-title">More Projects</h2>
                     <a class="text-link" href="projects.html"

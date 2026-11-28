@@ -11,6 +11,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -156,8 +157,19 @@ inline void configure_skin_catalog(const std::string &path) {
     }
 }
 
-inline std::size_t base_skin_count(const std::string &chassis) {
-    return chassis.find(':') == std::string::npos ? 8 : 1;
+// Catalogue identities are host-only and negative, separate from native skin
+// rows (including explicit --cc-model-skin indices). A mech's saved selection
+// remains its row in the Lab, even when it has fewer or more original skins.
+// Reserve -1 for an invalid selection. Stable catalogue order gives both the
+// Lab and renderer the same identity without knowing each other's row counts.
+template <typename Visitor>
+inline void for_each_model_skin(const SkinCatalog &catalog, std::string_view model_name,
+                                Visitor &&visit) {
+    for (std::size_t index = 0; index < catalog.size(); ++index) {
+        const auto &skin = catalog[index];
+        if (skin.chassis == model_name)
+            visit(skin, -2 - static_cast<int32_t>(index));
+    }
 }
 
 } // namespace platform::prepared

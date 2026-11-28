@@ -1242,6 +1242,7 @@ namespace MW3RemasterLauncher
                 PerformanceMonitor = settings.PerformanceMonitor,
                 RenderThread = settings.RenderThread,
                 Vsync = settings.Vsync,
+                UpscaledCutscenes = settings.UpscaledCutscenes,
                 D7VkResolution = settings.D7VkResolution,
                 D7VkAntiAliasing = settings.D7VkAntiAliasing,
                 D7VkAnisotropicFiltering = settings.D7VkAnisotropicFiltering,

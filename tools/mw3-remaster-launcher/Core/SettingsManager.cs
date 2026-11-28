@@ -27,6 +27,8 @@ namespace MW3RemasterLauncher.Core
         // Off until the RX 9070 benchmark shows the same gain as the RTX 5070 (issue #252).
         public bool RenderThread { get; set; } = false;
         public bool Vsync { get; set; } = false;
+        // On by default: it does nothing until an enabled cinematics pack supplies an HD clip (#625).
+        public bool UpscaledCutscenes { get; set; } = true;
         public bool Headlights { get; set; } = false;
         public bool DynamicLighting { get; set; } = false;
         public bool Shadows { get; set; } = false;

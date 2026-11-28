@@ -66,22 +66,35 @@ struct FakeHost : zfmv::Host {
 // The frames the sound gives over 20 s of 10 ms device steps (220.5 samples,
 // 882 bytes each; 200 steps a lap of the 176400-byte buffer, so every wrap
 // lands on 0), and how far the frame ever went back.
-int worst_drop(bool bugs) {
+// `seconds_mismatches` counts the steps where sound_seconds() (#559), asked
+// before sound_frame() refills and again after, disagrees with its frame.
+int worst_drop(bool bugs, int* seconds_mismatches = nullptr) {
   const bool keep = zfix::all();
   zfix::set_all(bugs);
   FakeHost host;
   zfmv::set_host(&host);
   int drop = 0;
+  int mismatches = 0;
   {
     zfmv::Stream s("intro.avi", true);
     EXPECT(s.audio_ok && s.video_ok && s.half == 88200 && s.fps == 15);
+    EXPECT(s.sound_seconds() == -1.0);  // the sound not started yet
     s.frame(0);  // the sound starts
     int last = 0;
     uint64_t played = 0;
     for (int step = 0; step < 2000; ++step) {
       played += 882;
       host.cursor = static_cast<uint32_t>(played % (2 * 88200));
+      const double seconds_before_refill = s.sound_seconds();
       const int f = s.sound_frame();
+      const double seconds_after_refill = s.sound_seconds();
+      // A whole frame's time (k / 15 s) can come out a hair under k in
+      // double; the nudge is far below one sample (1 / 22050 s).
+      constexpr double kNudge = 1e-9;
+      const int frame_before = static_cast<int>(seconds_before_refill * 15 + kNudge);
+      const int frame_after = static_cast<int>(seconds_after_refill * 15 + kNudge);
+      const bool frame_in_movie = f >= 0 && f < s.length;
+      if (frame_in_movie && (frame_before != f || frame_after != f)) ++mismatches;
       if (f < last && last - f > drop) drop = last - f;
       if (f > last) last = f;
     }
@@ -89,6 +102,7 @@ int worst_drop(bool bugs) {
   }
   zfmv::set_host(nullptr);
   zfix::set_all(keep);
+  if (seconds_mismatches) *seconds_mismatches = mismatches;
   return drop;
 }
 }  // namespace
@@ -98,4 +112,14 @@ TEST(fmv_sound_cursor_at_zero_after_a_wrap_keeps_the_frame) {
   std::printf("  the frame went back at most %d (the exe's reading: %d, a whole buffer)\n", fixed, original);
   EXPECT(fixed == 0);
   EXPECT(original >= 29);  // the exe's: back to the buffer's start, 2 s at 15 frames a second
+}
+
+// #559: the HD picture's clock agrees with the frame the sound gives, both
+// before a due refill (counted as done) and after it, bug fixes on or off.
+TEST(fmv_sound_seconds_matches_the_sound_frame) {
+  int fixed_mismatches = -1, original_mismatches = -1;
+  worst_drop(true, &fixed_mismatches);
+  worst_drop(false, &original_mismatches);
+  EXPECT(fixed_mismatches == 0);
+  EXPECT(original_mismatches == 0);
 }

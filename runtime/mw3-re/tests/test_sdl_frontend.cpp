@@ -107,6 +107,45 @@
 #include <cstdio>
 #include <map>
 
+// The subprocess restart tests below are POSIX-only; argument preservation also runs on Windows.
+TEST(sdl_restart_keeps_pack_library) {
+  using Arguments = std::vector<std::string>;
+  const Arguments start = {"--pack-library", "C:/my packs/library", "--entry", "ia", "--entry-ia"};
+  sdlfe::RestartTo out;
+  out.open_mods = true;
+  const Arguments back = sdlfe::restart_args(start, out);
+  EXPECT((back == Arguments{"--pack-library", "C:/my packs/library", "--open-mods", "--restarted"}));
+  sdlfe::RestartTo ia;
+  ia.entry = "ia", ia.screen = sdlfe::RestartTo::kInstantAction;
+  EXPECT((sdlfe::restart_args(back, ia) ==
+          Arguments{"--pack-library", "C:/my packs/library", "--entry", "ia", "--entry-ia", "--restarted"}));
+}
+
+// A benchmark scene's look never outlives the scene, also when it ends by an exception.
+TEST(arena_look_scope_restores_previous_look) {
+  platform::arena_lighting_mission() = "c3m1";
+  platform::arena_weather().clear();
+  platform::arena_headlights() = false;
+  {
+    platform::ArenaLookScope scene("c1m3", "rain", true);
+    EXPECT(platform::arena_lighting_mission() == "c1m3");
+    EXPECT(platform::arena_weather() == "rain");
+    EXPECT(platform::arena_headlights());
+  }
+  EXPECT(platform::arena_lighting_mission() == "c3m1");
+  EXPECT(platform::arena_weather().empty());
+  EXPECT(!platform::arena_headlights());
+  try {
+    platform::ArenaLookScope failing("t1m1", "rain", true);
+    throw std::runtime_error("scene failed");
+  } catch (const std::runtime_error&) {
+  }
+  EXPECT(platform::arena_lighting_mission() == "c3m1");
+  EXPECT(platform::arena_weather().empty());
+  EXPECT(!platform::arena_headlights());
+  platform::arena_lighting_mission().clear();
+}
+
 TEST(crash_report_rva_requires_address_inside_image) {
   uintptr_t rva = 99;
   EXPECT(sdlfe::crash_report_address_rva(0x1000, 0x200, 0x1000, &rva));

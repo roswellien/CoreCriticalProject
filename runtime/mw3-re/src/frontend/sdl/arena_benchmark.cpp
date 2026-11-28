@@ -298,6 +298,16 @@ Definition load_definition(const std::filesystem::path &path) {
                 *scene.start_seconds + scene.end() <= *scene.start_seconds)
                 throw std::runtime_error("invalid start_seconds");
         }
+        // The names match mech3::arena::kTimesOfDay.
+        scene.time_of_day = record.value("time_of_day", std::string());
+        if (!scene.time_of_day.empty() && scene.time_of_day != "dawn" &&
+            scene.time_of_day != "day" && scene.time_of_day != "dusk" &&
+            scene.time_of_day != "night")
+            throw std::runtime_error("time_of_day must be dawn, day, dusk or night");
+        scene.weather = record.value("weather", std::string());
+        if (!scene.weather.empty() && scene.weather != "rain")
+            throw std::runtime_error("weather must be rain or absent");
+        scene.headlights = record.value("headlights", false);
         scene.log = fixture(path, record.at("log"), scene.log_sha256);
         const auto &camera = record.at("camera");
         const auto mode = camera.value("mode", std::string("sequence"));
@@ -534,7 +544,10 @@ Run::Run(Scene selected, double log_start, int window_width, int window_height,
     settings = {{"scene", scene.id},
                 {"map", scene.map},
                 {"seed", std::to_string(scene.seed)},
-                {"log_sha256", scene.log_sha256}};
+                {"log_sha256", scene.log_sha256},
+                {"time_of_day", scene.time_of_day.empty() ? "map" : scene.time_of_day},
+                {"weather", scene.weather.empty() ? "map" : scene.weather},
+                {"scene_headlights", scene.headlights ? "on" : "off"}};
 }
 
 void Run::record_present(FrameTag frame, const PresentReceipt &receipt) {

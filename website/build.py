@@ -1,5 +1,6 @@
 """Copy the portable site into dist; keep design notes and tools private."""
 from pathlib import Path
+import re
 import shutil
 from tools.render_mechlab import render_site
 from tools.render_media import render_media
@@ -23,7 +24,10 @@ studio_dir = OUT / "studio"
 studio_dir.mkdir(exist_ok=True)
 tour_file = OUT / "studio-tour.html"
 if tour_file.is_file():
-    shutil.copy2(tour_file, studio_dir / "index.html")
+    # The copy sits one folder deeper, so its relative links and assets need a "../" prefix.
+    tour_html = tour_file.read_text(encoding="utf-8")
+    tour_html = re.sub(r'(href|src)="(?!https?://|#|/|mailto:)([^"]+)"', r'\1="../\2"', tour_html)
+    (studio_dir / "index.html").write_text(tour_html, encoding="utf-8")
 tagged_pages = add_social_tags(OUT)
 print(f"Added link-preview tags to {tagged_pages} pages")
 print(f"Static preview ready: {OUT}")

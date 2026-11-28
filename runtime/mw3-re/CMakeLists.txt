@@ -331,6 +331,7 @@ add_library(mw3core STATIC
   src/mech3/force_feedback.cpp
   src/mech3/app_fmv.cpp
   src/mech3/app_movie.cpp
+  src/mech3/hd_movie.cpp
   src/mech3/load_watch.cpp
   src/mech3/movie_shape.cpp
   src/mech3/movie_shape_table.cpp
@@ -403,6 +404,11 @@ target_include_directories(mw3core PUBLIC src)
 target_link_libraries(mw3core PUBLIC cc_geometry_resources)
 if(WIN32)
   target_link_libraries(mw3core PRIVATE ole32 windowscodecs)
+  # The HD movies' decoder (#559, docs/fmv.md section 9): Windows' own Media
+  # Foundation, nothing bundled; elsewhere hd_movie.cpp reports none.
+  target_sources(mw3core PRIVATE src/mech3/hd_movie_mf.cpp)
+  target_compile_definitions(mw3core PRIVATE MW3_HD_MOVIE_MF=1)
+  target_link_libraries(mw3core PRIVATE mfplat mfreadwrite mfuuid)
 endif()
 if(MSVC)
   target_compile_options(mw3core PRIVATE /EHsc)
@@ -719,7 +725,9 @@ add_executable(mw3tests
   tests/test_load_watch.cpp
   tests/test_movie_shape.cpp
   tests/test_fmv_stream.cpp
+  tests/test_hd_movie.cpp
   tests/test_mods.cpp
+  src/upgrades/mods/tests/test_pack_library.cpp
   tests/test_mod_install.cpp
   tests/test_import_folder.cpp
   tests/test_found_worlds.cpp
@@ -750,7 +758,7 @@ if(WIN32)
   target_sources(mw3tests PRIVATE tools/windows/utf8.manifest)
 endif()
 target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export Threads::Threads)
-target_include_directories(mw3tests PRIVATE third_party)  # nlohmann-json, among others the arena log's records (#287)
+target_include_directories(mw3tests PRIVATE third_party tests)  # nlohmann-json and the shared test runner
 # Tests that read the player's install skip themselves when it is not there.
 target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
                                           MW3_TEST_TMP_ROOT="${CMAKE_BINARY_DIR}"
@@ -762,6 +770,17 @@ if(MSVC)
   target_compile_options(mw3geometry_checks PRIVATE /EHsc)
 endif()
 add_test(NAME mw3geometry_checks COMMAND mw3geometry_checks)
+# The HD movie decoder on a clip it makes itself (#559); 77, CTest's skip,
+# when this Windows can't encode H.264/AAC.
+if(WIN32)
+  add_executable(mw3hd_movie_checks tests/test_hd_movie_mf.cpp)
+  target_link_libraries(mw3hd_movie_checks PRIVATE mw3core ole32 mfplat mfreadwrite mfuuid)
+  if(MSVC)
+    target_compile_options(mw3hd_movie_checks PRIVATE /EHsc)
+  endif()
+  add_test(NAME mw3hd_movie_checks COMMAND mw3hd_movie_checks)
+  set_tests_properties(mw3hd_movie_checks PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 
 # The SDL3 front end and the programs on it.
 option(MW3_CORE_CRITICAL_VULKAN "Build the experimental Core Critical Vulkan/DXGI renderer" OFF)

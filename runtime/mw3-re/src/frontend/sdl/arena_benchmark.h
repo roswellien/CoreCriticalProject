@@ -47,6 +47,11 @@ struct Scene {
     CameraTrack track;
     std::vector<CameraShot> shots;
     std::optional<double> start_seconds;
+    // Visual only (the log is the same either way): an arena time of day
+    // ("dawn", "day", "dusk", "night"; empty for the map's own lighting),
+    // weather added to the map ("rain" or empty) and every mech's headlights.
+    std::string time_of_day, weather;
+    bool headlights{};
 
     double end() const { return warmup + measured; }
 };
