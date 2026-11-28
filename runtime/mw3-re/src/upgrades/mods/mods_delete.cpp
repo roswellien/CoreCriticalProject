@@ -73,6 +73,12 @@ DeletePlan delete_plan_for_entry(const std::string& write_dir, const std::string
     p.question = "Delete what is left of " + name + "? " + goes_with(write_dir, e->id, "");
     return p;
   }
+  for (const ModInfo& mod : mods_found(write_dir))
+    if (mod.folder == e->mod && mod.from_pack) {
+      p.entry.clear();
+      p.refused = name + " comes from a pack: uninstall it in the launcher.";
+      return p;
+    }
   // A campaign with its mod: nothing another campaign is built on.
   for (const CampaignEntry& o : all)
     if (o.id != e->id && !o.missing && (o.base == e->id || (!o.mod.empty() && o.mod != e->mod && o.base == e->mod)))
@@ -104,6 +110,10 @@ DeletePlan delete_plan_for_mod(const std::string& write_dir, const std::string& 
     if (m.folder == folder) info = m, found = true;
   if (!found) return p.refused = "Choose a mod.", p;
   const std::string name = info.name.empty() ? folder : info.name;
+  if (info.from_pack) {
+    p.refused = name + " comes from a pack: uninstall it in the launcher.";
+    return p;
+  }
   const fs::path dir = fs::path(write_dir) / "mods" / folder;
   const std::vector<CampaignEntry> all = campaign_entries(write_dir);
   for (const CampaignEntry& o : all)

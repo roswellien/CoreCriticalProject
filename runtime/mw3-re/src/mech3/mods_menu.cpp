@@ -66,7 +66,7 @@ std::vector<ModsCampaignRow> mods_entry_rows(const std::string& write_dir) {
 std::string mods_row_text(const ModsListEntry& m) {
   const std::string& name = m.info.name.empty() ? m.info.folder : m.info.name;
   const bool flagged = !m.info.error.empty() || !m.conflicts_with.empty() || (m.on && !m.needs.empty());
-  return std::string(m.on ? "[x] " : "[ ] ") + name + (flagged ? " !" : "");
+  return std::string(m.on ? "[x] " : "[ ] ") + (m.info.from_pack ? "[pack] " : "") + name + (flagged ? " !" : "");
 }
 
 std::string mods_row_note(const ModsListEntry& m, const std::vector<ModsListEntry>& all) {

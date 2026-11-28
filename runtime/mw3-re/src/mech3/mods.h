@@ -6,17 +6,18 @@
 #include <vector>
 
 // Mods (ours, docs/modding.md; Owen, 2026-11-01): folders of game data in
-// the write dir's mods\, each laid out like the install with a mod.txt,
-// mounted in front of the 1.2 patch and the install in the order mw3.cfg's
-// mod= lines give (the first wins), behind the write dir (the player's own
+// the write dir's mods\ and optional pack gameplay roots, each laid out like
+// the install with a mod.txt, mounted in front of the 1.2 patch and the install
+// in the entry's tick order (the first wins), behind the write dir (the player's own
 // files win). A mod never serves the player's own files (zutl::mod_may_serve)
 // and nothing is written into it or the install. With no mods enabled
 // nothing is mounted and nothing changes.
 namespace mech3 {
 
 struct ModInfo {
-  std::string folder;       // its folder's name under mods\ (what mod= names)
+  std::string folder;       // the player's folder name or pack id (what mod= names)
   std::string path;         // the folder
+  bool from_pack = false;   // launcher-owned payload: never delete or edit it in the runtime
   std::string name, version, author, game, description;  // mod.txt's
   std::string error;        // why it cannot be used, "" when it can
   std::vector<std::string> worlds;  // world=<folder>: a new world (M2), its files in zbd\<folder>\, its <folder>.gs
@@ -49,8 +50,11 @@ bool mod_parse(const std::string& text, ModInfo* out);
 // The game a mod's for= must name (its first word): "mw3" here; the launcher's MODS sets "mw3pm" while it works on
 // Pirate's Moon's folder (branch pm's own default).
 std::string& mods_game();
-// Every folder under <write dir>/mods, by folder name; each one's mod.txt read.
-std::vector<ModInfo> mods_found(const std::string& write_dir);
+// Empty preserves player-mod-only discovery. The frontend sets this from --pack-library.
+std::string& mods_pack_library();
+// Player folders and schema 3 gameplay roots, by mod id; each one's mod.txt read.
+// Broken packs are skipped. Diagnostics go to `log`, or stderr when it is not supplied.
+std::vector<ModInfo> mods_found(const std::string& write_dir, std::vector<std::string>* log = nullptr);
 
 // The enabled mods (folder names, in order) mounted (zutl::mount_mod) after
 // whatever is mounted now and before `later` (the patch and the install,

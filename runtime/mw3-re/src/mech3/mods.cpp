@@ -1,6 +1,7 @@
 #include "upgrades/mods/salvage_chance.h"
 #include "upgrades/mods/entry_archives.h"
 #include "upgrades/mods/mp_mods.h"
+#include "upgrades/mods/marked_remove.h"
 #include "mech3/mods.h"
 #include "mech3/mod_install.h"
 
@@ -36,6 +37,7 @@
 #include "gamez/zsiscript/si_script.h"
 #include "gamez/zsound/zsnd.h"
 #include "gamez/zutil/zutl_path.h"
+#include "gamez/zutil/zutl_json.h"
 #include "gamez/zutil/zutl_zar.h"
 #include "crt/msvc_string.h"
 #include "mech3/mech_names.h"
@@ -139,25 +141,165 @@ bool mod_parse(const std::string& text, ModInfo* out) {
   return out->error.empty();
 }
 
-std::vector<ModInfo> mods_found(const std::string& write_dir) {
+std::string& mods_pack_library() {
+  static std::string library;
+  return library;
+}
+
+namespace {
+// Installed packs have already passed the launcher's file-table validation. Recheck
+// identity and containment here because a hand-edited manifest must not mount elsewhere.
+bool pack_id_valid(const std::string& id) {
+  if (id.empty() || id.size() > 40) return false;
+  const auto alphanumeric = [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+  };
+  if (!alphanumeric(id.front())) return false;
+  return std::all_of(id.begin(), id.end(), [&](char c) {
+    return alphanumeric(c) || c == '_' || c == '-';
+  });
+}
+
+bool pack_root_valid(const std::string& root) {
+  if (root.empty() || root.size() > 240) return false;
+  size_t start = 0;
+  while (start < root.size()) {
+    const size_t slash = root.find('/', start);
+    const std::string part = root.substr(start, slash == std::string::npos ? slash : slash - start);
+    if (part.empty() || part == "." || part == ".." || part.back() == '.' || part.back() == ' ')
+      return false;
+    for (unsigned char c : part)
+      if (c < 32 || c == 127 || std::strchr("\\<>:\"|?*", c)) return false;
+    const std::string device = lower(part.substr(0, part.find('.')));
+    if (device == "con" || device == "prn" || device == "aux" || device == "nul" ||
+        (device.size() == 4 && (device.substr(0, 3) == "com" || device.substr(0, 3) == "lpt") &&
+         device[3] >= '1' && device[3] <= '9')) return false;
+    if (slash == std::string::npos) return true;
+    start = slash + 1;
+  }
+  return false;  // a trailing slash leaves an empty path component
+}
+
+bool pack_keys_unique(const zutl_json::Value& value) {
+  std::set<std::string> keys;
+  for (const auto& member : value.members)
+    if (!keys.insert(member.first).second || !pack_keys_unique(member.second)) return false;
+  for (const auto& item : value.items)
+    if (!pack_keys_unique(item)) return false;
+  return true;
+}
+
+void find_pack_mods(std::vector<ModInfo>& mods, std::vector<std::string>* log) {
+  if (mods_pack_library().empty()) return;
+  const auto problem = [&](const fs::path& folder, const char* code, const std::string& why) {
+    const std::string line = "pack " + folder.generic_string() + ": " + code + ": " + why + ", left out";
+    if (log) log->push_back(line);
+    else std::fprintf(stderr, "mw3: %s\n", line.c_str());
+  };
+  std::error_code ec;
+  std::vector<fs::path> folders;
+  for (fs::directory_iterator it(mods_pack_library(), ec), end; !ec && it != end; it.increment(ec)) {
+    if (it->is_directory(ec)) folders.push_back(it->path());
+  }
+  if (ec) problem(mods_pack_library(), "manifest-invalid", "cannot read pack library: " + ec.message());
+  std::sort(folders.begin(), folders.end());
+  for (const fs::path& folder : folders) {
+    if (path_is_link(folder.string()) || path_is_link((folder / "pack.json").string())) {
+      problem(folder, "path-unsafe", "pack folder or manifest is a link");
+      continue;
+    }
+    std::ifstream manifest(folder / "pack.json", std::ios::binary);
+    std::stringstream text;
+    text << manifest.rdbuf();
+    if (!manifest || manifest.bad()) {
+      problem(folder, "manifest-invalid", "missing or unreadable pack.json");
+      continue;
+    }
+    zutl_json::Value document;
+    std::string why;
+    if (!zutl_json::parse(text.str(), &document, &why) || !pack_keys_unique(document)) {
+      problem(folder, "manifest-invalid", why.empty() ? "repeated manifest key" : why);
+      continue;
+    }
+    const auto* schema = document.get("schema_version");
+    if (!schema || schema->kind != zutl_json::Value::Number) {
+      problem(folder, "manifest-invalid", "pack.json has no numeric schema_version");
+      continue;
+    }
+    if (schema->text != "3") continue;  // legacy and future payloads use other readers
+    const auto* gameplay = document.get("gameplay");
+    if (!gameplay) continue;
+    const auto* id = document.get("id");
+    const auto* game = document.get("game_id");
+    const auto* root = gameplay->get("root");
+    if (!id || id->kind != zutl_json::Value::String || !pack_id_valid(id->text) ||
+        !game || game->kind != zutl_json::Value::String || game->text != "mw3") {
+      problem(folder, "manifest-invalid", "gameplay pack needs a valid id and game_id mw3");
+      continue;
+    }
+    if (!root || root->kind != zutl_json::Value::String || !pack_root_valid(root->text)) {
+      problem(folder, "gameplay-root-invalid", "gameplay.root is not a safe relative folder");
+      continue;
+    }
+    const auto clash = std::find_if(mods.begin(), mods.end(), [&](const ModInfo& mod) {
+      return lower(mod.folder) == id->text;
+    });
+    if (clash != mods.end()) {
+      problem(folder, "pack-id-clash", id->text + " is already supplied by " + clash->path);
+      continue;
+    }
+    fs::path payload = folder;
+    bool linked = false;
+    for (const auto& part : fs::path(root->text)) {
+      payload /= part;
+      linked = linked || path_is_link(payload.string());
+    }
+    if (linked || path_is_link((payload / "mod.txt").string())) {
+      problem(folder, "path-unsafe", "gameplay root or mod.txt is a link");
+      continue;
+    }
+    std::ifstream mod_file(payload / "mod.txt", std::ios::binary);
+    std::stringstream mod_text;
+    mod_text << mod_file.rdbuf();
+    if (!mod_file || mod_file.bad()) {
+      problem(folder, "gameplay-root-invalid", "gameplay root has no readable mod.txt");
+      continue;
+    }
+    ModInfo mod;
+    mod.folder = id->text;
+    mod.path = payload.generic_string();
+    mod.from_pack = true;
+    if (!mod_parse(mod_text.str(), &mod)) {
+      problem(folder, "gameplay-root-invalid", mod.error);
+      continue;
+    }
+    mods.push_back(std::move(mod));
+  }
+}
+}  // namespace
+
+std::vector<ModInfo> mods_found(const std::string& write_dir, std::vector<std::string>* log) {
   std::vector<ModInfo> out;
   std::error_code ec;
-  if (write_dir.empty()) return out;
-  for (fs::directory_iterator it(fs::path(write_dir) / "mods", ec), end; !ec && it != end; it.increment(ec)) {
-    if (!it->is_directory(ec)) continue;
-    ModInfo m;
-    m.folder = it->path().filename().string();
-    m.path = it->path().generic_string();  // zutl's / (its joins and the mods' prefixes)
-    std::ifstream f(it->path() / "mod.txt");
-    if (!f) {
-      m.error = "no mod.txt";
-    } else {
-      std::stringstream ss;
-      ss << f.rdbuf();
-      mod_parse(ss.str(), &m);
+  if (write_dir.empty() && mods_pack_library().empty()) return out;
+  if (!write_dir.empty()) {
+    for (fs::directory_iterator it(fs::path(write_dir) / "mods", ec), end; !ec && it != end; it.increment(ec)) {
+      if (!it->is_directory(ec)) continue;
+      ModInfo m;
+      m.folder = it->path().filename().string();
+      m.path = it->path().generic_string();  // zutl's / (its joins and the mods' prefixes)
+      std::ifstream f(it->path() / "mod.txt");
+      if (!f) {
+        m.error = "no mod.txt";
+      } else {
+        std::stringstream ss;
+        ss << f.rdbuf();
+        mod_parse(ss.str(), &m);
+      }
+      out.push_back(m);
     }
-    out.push_back(m);
   }
+  find_pack_mods(out, log);
   std::sort(out.begin(), out.end(), [](const ModInfo& a, const ModInfo& b) { return a.folder < b.folder; });
   return out;
 }
@@ -219,7 +361,7 @@ std::vector<std::string> mods_mount(const std::string& write_dir, const std::vec
   mods_left_out().clear();
   const auto left = [](const std::string& mod, const std::string& what_why) { mods_left_out()[mod].push_back(what_why); };
   std::vector<std::pair<std::string, ModIaWorld>> ia;  // the mod's name, the entry
-  const std::vector<ModInfo> found = mods_found(write_dir);
+  const std::vector<ModInfo> found = mods_found(write_dir, &log);
   // A remount starts from the exe's tables (the mods' rows and their cached definitions gone).
   free_dfns_above(kBuiltinMechs);
   mech_rows_clear();
@@ -244,7 +386,8 @@ std::vector<std::string> mods_mount(const std::string& write_dir, const std::vec
     }
     zutl::mount_mod(it->path);
     salvage_rules_take(*it);
-    log.push_back("mod " + want + " (" + it->name + (it->version.empty() ? "" : " " + it->version) + ") mounted");
+    log.push_back("mod " + want + " (" + it->name + (it->version.empty() ? "" : " " + it->version) + ") mounted" +
+                  (it->from_pack ? " [pack]" : ""));
     // Its new worlds: a folder no world has yet, with its files in the mod.
     for (const std::string& w : it->worlds) {
       std::error_code wec;
