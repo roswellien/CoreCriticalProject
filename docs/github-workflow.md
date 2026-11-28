@@ -405,7 +405,11 @@ steps on the same Release checklist issue.
 1. Before promoting the feed, prepare one GitHub Release draft for the
    exact release version, against the reviewed source SHA recorded in the
    build receipt. Check that the source commit contains the
-   [Discord release observer](../.github/workflows/discord-release-detect.yml).
+   [Discord release observer](../.github/workflows/discord-release-detect.yml),
+   and that the sender is activated (`DISCORD_RELEASE_ACTIVATION` set as in
+   [Verify and activate](../tools/github/discord-release-announcement.md#verify-and-activate));
+   a release published while the sender is inactive is skipped and cannot be
+   announced later.
    For a preview, use the matching `vX.Y.Z-preview` tag and prerelease flag;
    for a stable build, use `vX.Y.Z`. Check whether the tag or release already
    exists. If a tag exists, resolve it to its commit (peel an annotated tag)

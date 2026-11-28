@@ -8,11 +8,18 @@ inputs and release artifacts outside Git.
 
 ## Launcher release
 
-For an MW3-RE runtime-only update, skip launcher build and installer steps
-that do not apply. Reuse the approved signed launcher `.ccupdate` and matching
-ZIP in `build_catalog.py`, which still requires both packages. Add only the
-new runtime object paths to `PUBLIC_OBJECTS` and retain all existing
-entries. Verify the protected Setup listing only if it changed.
+For an MW3-RE runtime-only update with no new launcher or installer:
+
+- Skip the launcher dependency, publish and installer steps (3 and 4) and
+  installer publication in step 7.
+- In step 5, test the signed runtime update and rollback on an existing
+  supported install instead of a new installer.
+- In step 6, reuse the approved signed launcher `.ccupdate` and matching ZIP;
+  `build_catalog.py` still requires both packages.
+- In step 7, upload only the new runtime objects; confirm the reused launcher
+  objects already exist with the same size and SHA-256. Add only the new
+  runtime paths to `PUBLIC_OBJECTS` and retain all existing entries.
+- Verify the protected Setup listing (step 10) only if it changed.
 
 1. **Start from reviewed source.** Merge the release PR from `develop` to
    `main`, then make a fresh clone of the repository and check out that exact
@@ -34,7 +41,7 @@ entries. Verify the protected Setup listing only if it changed.
 
    If the MW3-RE runtime changes and existing players need an update, package
    it with the committed `tools/native-preparation/build_precompiled_update.py`,
-   using the same runtime directory, reviewed `InstallNativeRuntime.exe`,
+   using the same runtime directory, reviewed `InstallPrecompiledRuntime.exe`,
    original-file input directory (read-only), and a fresh output directory:
 
    ```powershell
@@ -161,9 +168,10 @@ entries. Verify the protected Setup listing only if it changed.
    `core-critical-updates`, with R2 binding `UPDATES`; its public base URL is
    `https://core-critical-updates.jcblackwell84.workers.dev`. Use the
    maintainer's authenticated Wrangler session. For each entry in the
-   `objects` array in `publication.json`, upload its exact local file to the listed key, first
-   confirming that an existing immutable key is either absent or already has
-   the same size and SHA-256. The catalog builder names update objects under
+   `objects` array in `publication.json`, upload its exact local file to the
+   listed key unless that immutable key already exists with the same size and
+   SHA-256 (as for a reused, unchanged package). Never upload to an existing
+   key whose size or SHA-256 differs. The catalog builder names update objects under
    `online-updates/launcher/<version>/` and
    `online-updates/mw3/<version>/`. Never overwrite a versioned key with
    different bytes.
