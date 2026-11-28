@@ -1,0 +1,43 @@
+{
+  "schema_version": 3,
+  "game_id": "mw3",
+  "id": "example-broken",
+  "name": "Example: two close models for one mech",
+  "version": "1.0.0",
+  "author": "Core Critical examples",
+  "description": "Two model bindings for mech-model:thor at lod 0, which contract 4 allows only once per pack.",
+  "visuals": [
+    {
+      "target": "mech-model:thor",
+      "kind": "model",
+      "lod": 0,
+      "files": {
+        "mesh": "visuals/close_a.bwmesh",
+        "textures": "visuals/thor.bwtex"
+      }
+    },
+    {
+      "target": "mech-model:thor",
+      "kind": "model",
+      "lod": 0,
+      "files": {
+        "mesh": "visuals/close_b.bwmesh",
+        "textures": "visuals/thor.bwtex"
+      }
+    }
+  ],
+  "files": {
+    "visuals/close_a.bwmesh": {
+      "sha256": "c59deac13af53eca47dfef12c13c343c9c24e66602f2a9854c5cff9c6317b99b",
+      "bytes": 86
+    },
+    "visuals/close_b.bwmesh": {
+      "sha256": "c59deac13af53eca47dfef12c13c343c9c24e66602f2a9854c5cff9c6317b99b",
+      "bytes": 86
+    },
+    "visuals/thor.bwtex": {
+      "sha256": "c59deac13af53eca47dfef12c13c343c9c24e66602f2a9854c5cff9c6317b99b",
+      "bytes": 86
+    }
+  }
+}

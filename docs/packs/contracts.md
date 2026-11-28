@@ -9,14 +9,15 @@ changes: [Changing a contract](workstreams.md#changing-a-contract).
 
 | Contract | Version | Fixes | Relied on by |
 | --- | --- | --- | --- |
-| [1. Pack manifest](#1-pack-manifest) | 1.0 | The fields of `pack.json` | Everyone |
+| [1. Pack manifest](#1-pack-manifest) | 1.1 | The fields of `pack.json` | Everyone |
 | [2. Installed layout](#2-installed-layout) | 1.0 | Where payloads sit on disk and how ticks are stored | Runtime, launcher |
 | [3. Runtime content report](#3-runtime-content-report) | 1.0 | What the runtime says it found | Launcher, Mod Studio |
-| [4. Visual binding rules](#4-visual-binding-rules) | 1.0 | How visuals find the thing they dress | Runtime, mod tools, pack authors |
+| [4. Visual binding rules](#4-visual-binding-rules) | 1.1 | How visuals find the thing they dress | Runtime, mod tools, pack authors |
 | [5. Feed format](#5-feed-format) | 0 (draft) | The catalogue a launcher downloads | Launcher, pack publishers |
 
-Version 1.0 means the contract is fixed enough to build against. It does not mean
-anything is implemented: on 2026-11-27 only the checker for contract 1 exists.
+A version of 1.x means the contract is fixed enough to build against. It does not mean
+anything is implemented: on 2026-11-27 the pack check covers contract 1 and contract 4's
+kind table, and nothing else is implemented.
 
 **Shared material**
 
@@ -44,6 +45,11 @@ launcher use the same codes, so a pack author sees the same word everywhere.
 | `visual-target-invalid` | A visual's `target` does not follow the target grammar | Pack check |
 | `visual-file-undeclared` | A visual names a file that is not in `files` | Pack check |
 | `visual-needs-gameplay` | A visual says it needs the pack's gameplay payload and there is none | Pack check |
+| `visual-kind-target-mismatch` | A visual's `kind` is not allowed for its target's kind | Pack check |
+| `visual-role-missing` | A role the kind requires is absent from the visual's `files` | Pack check |
+| `visual-role-unknown` | A role the kind's row in contract 4 does not list | Pack check |
+| `visual-field-missing` | A `model` without `lod`, or a `skin` without `name` | Pack check |
+| `visual-duplicate-binding` | Two bindings in one pack share a target, kind and `lod` (models), or a target and `name` (skins) | Pack check |
 | `visual-target-unknown` | Nothing enabled provides the visual's target | Runtime |
 | `pack-id-clash` | A pack's `id` is also a folder in the player's `mods\` | Runtime |
 | `pack-dependency-missing` | A pack this one depends on is absent, off or too old | Runtime |
@@ -80,7 +86,9 @@ This contract defines schema version 3:
   optionally `lod`, `name`, `needs_gameplay` and `options`.
 - **`provides`:** a summary for display (`mechs`, `weapons`, `skins`, `maps`,
   `missions`, `campaigns`), written by the pack tool. Nothing may decide behaviour from
-  it.
+  it. A `maps` entry is the name shown to the player, as the `ia_world=` row gives it,
+  and a `missions` entry has the form `<world>/<n>`, matching the `mission:<world>/<n>`
+  target; this is what `games/mw3/mod-tools/pack_builder.py` writes.
 
 Schema 2's `native_payload` is not part of schema 3. Its registries become `visuals`
 bindings.
@@ -99,6 +107,9 @@ bindings.
 - **An unknown field is an error.** A pack author finds a typing mistake at build time,
   not in the game.
 - **A repeated key is an error.**
+- **`NaN`, `Infinity` and `-Infinity` are not JSON.** A `pack.json` holding one is
+  `manifest-invalid`. Python's `json.load` accepts them unless told not to, so the
+  checker passes `parse_constant` and refuses them.
 - **Multiplayer.** A pack with a `gameplay` section counts toward the multiplayer match
   check. A pack with only `visuals` never does.
 
@@ -108,6 +119,8 @@ bindings.
   editor already read and write it, and a second form would have to be kept in step.
 - A visual that dresses something its own pack adds sets `needs_gameplay: true`. The
   runtime then uses it only where the pack's gameplay payload is ticked.
+- A `campaign=` row that names a file the pack does not hold stays a runtime `mod-`
+  warning; the pack check does not read `mod.txt`.
 
 ## 2. Installed layout
 
@@ -241,8 +254,13 @@ A name is lowercase letters, digits, `_` and `-`, at most 32 characters.
 - `registry` is the existing registry file for that kind of payload. Those four kinds
   keep their present inner format; giving each typed fields is later work in workstream C.
 
-The pack check enforces the target grammar today. Checking a kind against its allowed
-targets and roles is a follow-up to this contract's first version.
+The pack check enforces the target grammar and this whole table, so a pack author finds
+a malformed binding at build time, not in the game: a kind used with a target kind the
+table does not allow is `visual-kind-target-mismatch`; a required role absent from the
+visual's `files` is `visual-role-missing`; a role the table does not list for that kind
+is `visual-role-unknown`; a `model` without `lod` or a `skin` without `name` is
+`visual-field-missing`; and two bindings in one pack for the same target, kind and `lod`
+(models) or the same target and `name` (skins) are `visual-duplicate-binding`.
 
 ### Rules
 
@@ -265,6 +283,9 @@ targets and roles is a follow-up to this contract's first version.
   `pack-dependency-missing` or `visual-target-unknown`.
 - **Two packs that give the same model and `lod`:** the launcher's pack order decides,
   first wins, and the report names both.
+- **Within one pack, one binding per key.** A pack holds at most one model per target
+  and `lod`, and at most one skin per target and `name`; the pack check reports a repeat
+  as `visual-duplicate-binding`.
 
 ## 5. Feed format
 

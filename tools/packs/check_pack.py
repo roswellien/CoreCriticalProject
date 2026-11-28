@@ -1,4 +1,4 @@
-"""Check an unpacked content pack against contract 1 (docs/packs/contracts.md).
+"""Check an unpacked content pack against contracts 1 and 4 (docs/packs/contracts.md).
 
 Usage, from the repository root:
     python tools/packs/check_pack.py <pack folder>
@@ -43,6 +43,52 @@ TARGET_PATTERNS = (
 
 
 @dataclass(frozen=True)
+class VisualKind:
+    """One row of contract 4's "Kinds and their files" table."""
+
+    # The target kinds ("<target kind>:<name>") a visual of this kind may dress.
+    allowed_target_kinds: frozenset[str]
+    # The roles the visual's files must hold, and the extra ones it may hold.
+    required_roles: frozenset[str]
+    optional_roles: frozenset[str]
+    # Fields the visual must have besides target, kind and files ("lod", "name").
+    required_fields: frozenset[str]
+
+
+# Contract 4, "Kinds and their files". The manifest schema's kind enum must list
+# exactly these kinds; test_example_packs.py checks that the two stay in step.
+_GAME_REGISTRY_KIND = VisualKind(
+    allowed_target_kinds=frozenset({"game"}),
+    required_roles=frozenset({"registry"}),
+    optional_roles=frozenset(),
+    required_fields=frozenset(),
+)
+VISUAL_KINDS: dict[str, VisualKind] = {
+    "model": VisualKind(
+        allowed_target_kinds=frozenset({"mech-model"}),
+        required_roles=frozenset({"mesh", "textures"}),
+        optional_roles=frozenset({"normals", "materials"}),
+        required_fields=frozenset({"lod"}),
+    ),
+    "skin": VisualKind(
+        allowed_target_kinds=frozenset({"mech-model"}),
+        required_roles=frozenset({"textures"}),
+        optional_roles=frozenset({"normals"}),
+        required_fields=frozenset({"name"}),
+    ),
+    "environment": VisualKind(
+        allowed_target_kinds=frozenset({"world", "mission"}),
+        required_roles=frozenset({"registry"}),
+        optional_roles=frozenset(),
+        required_fields=frozenset(),
+    ),
+    "ui": _GAME_REGISTRY_KIND,
+    "music": _GAME_REGISTRY_KIND,
+    "cinematic": _GAME_REGISTRY_KIND,
+}
+
+
+@dataclass(frozen=True)
 class Problem:
     code: str
     message: str
@@ -64,6 +110,13 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise DuplicateKeyError(f"the key {key!r} appears twice")
         result[key] = value
     return result
+
+
+def _reject_non_json_constant(name: str) -> Any:
+    # json.loads accepts NaN, Infinity and -Infinity unless told not to, but they
+    # are not JSON: a reader in another language refuses the same file, so the pack
+    # check refuses it too (contract 1, manifest rules).
+    raise ValueError(f"{name} is not a JSON value")
 
 
 def path_is_safe(path: str) -> bool:
@@ -149,14 +202,56 @@ def _gameplay_problems(manifest: dict[str, Any], file_table: dict[str, Any]) -> 
 def _visual_problems(manifest: dict[str, Any], file_table: dict[str, Any]) -> list[Problem]:
     problems = []
     has_gameplay = "gameplay" in manifest
+    # Contract 4: inside one pack a model is keyed by target and lod, a skin by
+    # target and name; a second binding with the same key is a duplicate.
+    seen_model_keys: set[tuple[str, Any]] = set()
+    seen_skin_keys: set[tuple[str, Any]] = set()
     for index, visual in enumerate(manifest.get("visuals", [])):
         target = visual["target"]
-        if not target_is_well_formed(target):
+        kind = visual["kind"]
+        # The schema's kind enum and VISUAL_KINDS name the same kinds (a test checks
+        # it) and the schema check has already run, so this lookup cannot fail.
+        kind_rule = VISUAL_KINDS[kind]
+        well_formed = target_is_well_formed(target)
+        if not well_formed:
             problems.append(Problem("visual-target-invalid", f"visual {index}: {target}"))
         if visual.get("needs_gameplay") and not has_gameplay:
             message = f"visual {index} needs a gameplay payload this pack does not have"
             problems.append(Problem("visual-needs-gameplay", message))
-        for role, path in sorted(visual["files"].items()):
+        # The kind-against-target rule needs a well-formed target: a malformed one
+        # is already reported as visual-target-invalid, not piled on.
+        if well_formed:
+            target_kind = target.split(":", 1)[0]
+            if target_kind not in kind_rule.allowed_target_kinds:
+                message = f"visual {index}: a {kind} cannot dress {target}"
+                problems.append(Problem("visual-kind-target-mismatch", message))
+        files = visual["files"]
+        for role in sorted(kind_rule.required_roles - set(files)):
+            message = f"visual {index}: a {kind} needs a {role} file"
+            problems.append(Problem("visual-role-missing", message))
+        for role in sorted(files):
+            if role not in kind_rule.required_roles | kind_rule.optional_roles:
+                message = f"visual {index}: {role} is not a file role of a {kind}"
+                problems.append(Problem("visual-role-unknown", message))
+        for field in sorted(kind_rule.required_fields):
+            if field not in visual:
+                message = f"visual {index}: a {kind} needs a {field}"
+                problems.append(Problem("visual-field-missing", message))
+        if kind == "model":
+            key = (target, visual.get("lod"))
+            if key in seen_model_keys:
+                lod = visual.get("lod")
+                message = f"visual {index}: {target} already has a model with lod {lod}"
+                problems.append(Problem("visual-duplicate-binding", message))
+            seen_model_keys.add(key)
+        elif kind == "skin":
+            key = (target, visual.get("name"))
+            if key in seen_skin_keys:
+                name = visual.get("name")
+                message = f"visual {index}: {target} already has a skin named {name!r}"
+                problems.append(Problem("visual-duplicate-binding", message))
+            seen_skin_keys.add(key)
+        for role, path in sorted(files.items()):
             if path not in file_table:
                 message = f"visual {index}, {role}: {path} is not listed in files"
                 problems.append(Problem("visual-file-undeclared", message))
@@ -164,13 +259,17 @@ def _visual_problems(manifest: dict[str, Any], file_table: dict[str, Any]) -> li
 
 
 def check_pack(pack_folder: Path) -> list[Problem]:
-    """Every contract 1 problem in an unpacked pack; an empty list means it is valid."""
+    """Every contract 1 and contract 4 problem in a pack; an empty list means valid."""
     manifest_path = pack_folder / MANIFEST_NAME
     if not manifest_path.is_file():
         return [Problem("manifest-invalid", f"no {MANIFEST_NAME}")]
     try:
         text = manifest_path.read_text(encoding="utf-8")
-        manifest = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+        manifest = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_non_json_constant,
+        )
     except (ValueError, UnicodeDecodeError) as error:
         return [Problem("manifest-invalid", str(error))]
 

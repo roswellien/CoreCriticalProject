@@ -10,8 +10,9 @@ This folder is the starting point for anyone working on that system.
 - [Workstreams](workstreams.md): who owns which folders, what depends on what, and the
   rules for changing a contract.
 
-Status on 2026-11-27: contracts 1 to 4 are at version 1.0, with schema files, example
-packs and a check for contract 1. Nothing else is implemented beyond what "What exists
+Status on 2026-11-27: contracts 1 and 4 are at version 1.1 and contracts 2 and 3 at
+version 1.0, with schema files, example packs and a pack check for contract 1 and
+contract 4's kind table. Nothing else is implemented beyond what "What exists
 today" below describes.
 
 ## Decisions

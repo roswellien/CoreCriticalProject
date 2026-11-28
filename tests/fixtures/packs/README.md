@@ -10,7 +10,8 @@ archive holds once extracted.
 - `valid/`: one pack of each shape. `gameplay-only`, `visuals-only`,
   `gameplay-and-visuals`.
 - `broken/`: one pack per rule. Each folder is named for the problem code it must
-  produce, and breaks that rule only.
+  produce — with a suffix when one code has more than one example, as
+  `manifest-invalid-nan` — and breaks that rule only.
 - `expected.json`: which packs are valid, and for each broken pack its code and who finds
   it. `pack-check` means `tools/packs/check_pack.py` finds it from the pack alone.
   `runtime` means only the runtime can find it, so the pack checker must call that pack

@@ -164,6 +164,97 @@ namespace MW3RemasterLauncherTests
             finally { temporary.Delete(recursive: true); }
         }
 
+        private static void CheckVisualKindRules()
+        {
+            var temporary = Directory.CreateTempSubdirectory("MW3VisualKindChecks-");
+            try
+            {
+                File.WriteAllBytes(Path.Combine(temporary.FullName, "visual.txt"), Array.Empty<byte>());
+                var fileTable = new Dictionary<string, object>
+                {
+                    ["visual.txt"] = new
+                    {
+                        bytes = 0,
+                        sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                            Array.Empty<byte>())).ToLowerInvariant()
+                    }
+                };
+                Dictionary<string, object> Visual(string kind, string target, params string[] roles)
+                {
+                    var visual = new Dictionary<string, object>
+                    {
+                        ["kind"] = kind,
+                        ["target"] = target,
+                        ["files"] = roles.ToDictionary(role => role, _ => "visual.txt")
+                    };
+                    if (kind == "model") visual["lod"] = 0;
+                    if (kind == "skin") visual["name"] = "Test skin";
+                    return visual;
+                }
+                void Check(Dictionary<string, object>[] visuals, params string[] expectedCodes)
+                {
+                    var manifest = new
+                    {
+                        schema_version = 3,
+                        game_id = "mw3",
+                        id = "visual-kind-test",
+                        name = "Visual kind test",
+                        version = "1.0.0",
+                        files = fileTable,
+                        visuals
+                    };
+                    File.WriteAllText(Path.Combine(temporary.FullName, "pack.json"),
+                        JsonSerializer.Serialize(manifest));
+                    var actual = PackCheck.CheckPack(temporary.FullName).Select(problem => problem.Code).ToArray();
+                    Assert(actual.SequenceEqual(expectedCodes),
+                        $"Visual kind check expected [{string.Join(", ", expectedCodes)}], got [{string.Join(", ", actual)}].");
+                }
+
+                Check(new[] { Visual("model", "mech-model:thor", "mesh", "textures", "normals", "materials") });
+                Check(new[] { Visual("skin", "mech-model:thor", "textures", "normals") });
+                foreach (var target in new[] { "world:c1", "mission:c1/2" })
+                    Check(new[] { Visual("environment", target, "registry") });
+                foreach (var kind in new[] { "ui", "music", "cinematic" })
+                    Check(new[] { Visual(kind, "game:mw3", "registry") });
+
+                Check(new[] { Visual("skin", "world:c1", "textures") }, "visual-kind-target-mismatch");
+                Check(new[] { Visual("skin", "world:INVALID", "textures") }, "visual-target-invalid");
+                Check(new[] { Visual("model", "mech-model:thor", "textures") }, "visual-role-missing");
+                Check(new[] { Visual("skin", "mech-model:thor", "textures", "mesh") }, "visual-role-unknown");
+                foreach (var kind in new[] { "model", "skin" })
+                {
+                    var roles = kind == "model" ? new[] { "mesh", "textures" } : new[] { "textures" };
+                    var field = kind == "model" ? "lod" : "name";
+                    var first = Visual(kind, "mech-model:thor", roles);
+                    var second = Visual(kind, "mech-model:thor", roles);
+                    Check(new[] { first, second }, "visual-duplicate-binding");
+                    second[field] = kind == "model" ? (object)1 : "Other skin";
+                    Check(new[] { first, second });
+                    second["target"] = "mech-model:atlas";
+                    second[field] = first[field];
+                    Check(new[] { first, second });
+                    first.Remove(field);
+                    Check(new[] { first }, "visual-field-missing");
+                    second["target"] = first["target"];
+                    second.Remove(field);
+                    Check(new[] { first, second },
+                        "visual-field-missing", "visual-field-missing", "visual-duplicate-binding");
+                }
+
+                var manifestPath = Path.Combine(temporary.FullName, "pack.json");
+                var validJson = File.ReadAllText(manifestPath);
+                foreach (var constant in new[] { "NaN", "Infinity", "-Infinity" })
+                {
+                    File.WriteAllText(manifestPath, validJson.Replace("\"schema_version\":3",
+                        $"\"schema_version\":{constant}", StringComparison.Ordinal));
+                    Assert(PackCheck.CheckPack(temporary.FullName).Select(problem => problem.Code)
+                        .SequenceEqual(new[] { "manifest-invalid" }),
+                        $"Non-JSON constant {constant} did not report manifest-invalid.");
+                }
+            }
+            finally { temporary.Delete(recursive: true); }
+        }
+
         public static void Run()
         {
             Console.WriteLine("Running schema 3 pack contract and lifecycle checks...");
@@ -232,6 +323,7 @@ namespace MW3RemasterLauncherTests
 
             CheckEmbeddedSchema();
             CheckSchemaSubset();
+            CheckVisualKindRules();
             CheckLegacyManifestBehavior();
 
             // 3. Test pack installation, UI display, staging cleanup, and uninstallation
@@ -290,6 +382,8 @@ namespace MW3RemasterLauncherTests
                     }
                     else if (foundBy == "pack-check")
                     {
+                        var directoriesBefore = Directory.GetDirectories(packManager.ModsRoot)
+                            .OrderBy(path => path, StringComparer.Ordinal).ToArray();
                         bool rejected = false;
                         string rejectedMessage = "";
                         try
@@ -306,11 +400,12 @@ namespace MW3RemasterLauncherTests
                         Assert(rejectedMessage.Contains(expectedCode),
                             $"Broken pack '{name}' rejection message '{rejectedMessage}' did not contain expected code '{expectedCode}'.");
 
-                        // Verify pack is never present under its final directory name
-                        using var brokenManifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(packDir, "pack.json")));
-                        var finalDir = Path.Combine(packManager.ModsRoot, brokenManifest.RootElement.GetProperty("id").GetString()!);
-                        Assert(!Directory.Exists(finalDir),
-                            $"Broken pack '{name}' left final directory after failed installation: {finalDir}");
+                        // Invalid JSON cannot supply an id; compare directories instead
+                        // so syntax failures also prove that no installation was left behind.
+                        var directoriesAfter = Directory.GetDirectories(packManager.ModsRoot)
+                            .OrderBy(path => path, StringComparer.Ordinal).ToArray();
+                        Assert(directoriesAfter.SequenceEqual(directoriesBefore),
+                            $"Broken pack '{name}' changed library directories after failed installation.");
 
                         // Verify staging directory cleanup: no .staging-* folders remain
                         var stagingFolders = Directory.GetDirectories(packManager.ModsRoot, ".staging-*");

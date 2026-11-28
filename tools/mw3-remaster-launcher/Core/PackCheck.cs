@@ -10,7 +10,7 @@ using System.Text.RegularExpressions;
 namespace MW3RemasterLauncher.Core
 {
     /// <summary>
-    /// One problem found by Contract 1 pack checks.
+    /// One problem found by Contract 1 and 4 pack checks.
     /// Code is one of the standard problem codes (e.g. "manifest-invalid", "file-undeclared").
     /// </summary>
     public sealed record PackProblem(string Code, string Message)
@@ -19,7 +19,7 @@ namespace MW3RemasterLauncher.Core
     }
 
     /// <summary>
-    /// Checks an unpacked content pack against Contract 1 (docs/packs/contracts.md).
+    /// Checks an unpacked content pack against Contracts 1 and 4 (docs/packs/contracts.md).
     /// Faithfully mirrors tools/packs/check_pack.py.
     /// </summary>
     public static class PackCheck
@@ -46,6 +46,30 @@ namespace MW3RemasterLauncher.Core
             new(@"\A(mech-model|world):[a-z0-9][a-z0-9_-]{0,31}\z", RegexOptions.CultureInvariant),
             new(@"\Amission:[a-z0-9][a-z0-9_-]{0,31}/[0-9]{1,2}\z", RegexOptions.CultureInvariant),
             new(@"\Agame:mw3\z", RegexOptions.CultureInvariant)
+        };
+
+        private sealed record VisualKindRule(
+            string[] AllowedTargetKinds,
+            string[] RequiredRoles,
+            string[] OptionalRoles,
+            string[] RequiredFields);
+
+        // Keep this table aligned with contract 4 and the Python pack checker so
+        // installation and authoring reject the same visual bindings.
+        private static readonly Dictionary<string, VisualKindRule> VisualKinds = new(StringComparer.Ordinal)
+        {
+            ["model"] = new(new[] { "mech-model" }, new[] { "mesh", "textures" },
+                new[] { "normals", "materials" }, new[] { "lod" }),
+            ["skin"] = new(new[] { "mech-model" }, new[] { "textures" },
+                new[] { "normals" }, new[] { "name" }),
+            ["environment"] = new(new[] { "world", "mission" }, new[] { "registry" },
+                Array.Empty<string>(), Array.Empty<string>()),
+            ["ui"] = new(new[] { "game" }, new[] { "registry" },
+                Array.Empty<string>(), Array.Empty<string>()),
+            ["music"] = new(new[] { "game" }, new[] { "registry" },
+                Array.Empty<string>(), Array.Empty<string>()),
+            ["cinematic"] = new(new[] { "game" }, new[] { "registry" },
+                Array.Empty<string>(), Array.Empty<string>())
         };
 
         /// <summary>
@@ -105,7 +129,7 @@ namespace MW3RemasterLauncher.Core
         }
 
         /// <summary>
-        /// Runs all Contract 1 checks against an unpacked pack folder.
+        /// Runs Contract 1 and Contract 4 kind-table checks against an unpacked pack folder.
         /// Returns an empty list if the pack is completely valid.
         /// </summary>
         public static List<PackProblem> CheckPack(string packFolder)
@@ -237,13 +261,18 @@ namespace MW3RemasterLauncher.Core
 
             // 4. Visuals payload checks
             bool hasGameplay = root.TryGetProperty("gameplay", out var gp) && gp.ValueKind == JsonValueKind.Object;
+            var seenModelKeys = new HashSet<(string Target, int? Lod)>();
+            var seenSkinKeys = new HashSet<(string Target, string? Name)>();
             if (root.TryGetProperty("visuals", out var visualsElem) && visualsElem.ValueKind == JsonValueKind.Array)
             {
                 int index = 0;
                 foreach (var visual in visualsElem.EnumerateArray())
                 {
                     var target = visual.TryGetProperty("target", out var t) ? t.GetString() ?? "" : "";
-                    if (!TargetIsWellFormed(target))
+                    var kind = visual.GetProperty("kind").GetString()!;
+                    var kindRule = VisualKinds[kind];
+                    bool targetIsWellFormed = TargetIsWellFormed(target);
+                    if (!targetIsWellFormed)
                     {
                         problems.Add(new PackProblem("visual-target-invalid", $"visual {index}: {target}"));
                     }
@@ -253,7 +282,64 @@ namespace MW3RemasterLauncher.Core
                         problems.Add(new PackProblem("visual-needs-gameplay", $"visual {index} needs a gameplay payload this pack does not have"));
                     }
 
-                    if (visual.TryGetProperty("files", out var visualFiles) && visualFiles.ValueKind == JsonValueKind.Object)
+                    // A malformed target already has its own problem; its prefix
+                    // cannot establish a kind/target mismatch.
+                    if (targetIsWellFormed && !kindRule.AllowedTargetKinds.Contains(target.Split(':')[0]))
+                    {
+                        problems.Add(new PackProblem("visual-kind-target-mismatch",
+                            $"visual {index}: a {kind} cannot dress {target}"));
+                    }
+
+                    var visualFiles = visual.GetProperty("files");
+                    foreach (var role in kindRule.RequiredRoles.OrderBy(role => role, StringComparer.Ordinal))
+                    {
+                        if (!visualFiles.TryGetProperty(role, out _))
+                        {
+                            problems.Add(new PackProblem("visual-role-missing",
+                                $"visual {index}: a {kind} needs a {role} file"));
+                        }
+                    }
+
+                    foreach (var role in visualFiles.EnumerateObject().OrderBy(role => role.Name, StringComparer.Ordinal))
+                    {
+                        if (!kindRule.RequiredRoles.Contains(role.Name) && !kindRule.OptionalRoles.Contains(role.Name))
+                        {
+                            problems.Add(new PackProblem("visual-role-unknown",
+                                $"visual {index}: {role.Name} is not a file role of a {kind}"));
+                        }
+                    }
+
+                    foreach (var field in kindRule.RequiredFields.OrderBy(field => field, StringComparer.Ordinal))
+                    {
+                        if (!visual.TryGetProperty(field, out _))
+                        {
+                            problems.Add(new PackProblem("visual-field-missing",
+                                $"visual {index}: a {kind} needs a {field}"));
+                        }
+                    }
+
+                    // Missing lod/name still participates in duplicate detection,
+                    // matching Python's (target, None) key after schema validation.
+                    if (kind == "model")
+                    {
+                        int? lod = visual.TryGetProperty("lod", out var lodValue) ? lodValue.GetInt32() : null;
+                        if (!seenModelKeys.Add((target, lod)))
+                        {
+                            problems.Add(new PackProblem("visual-duplicate-binding",
+                                $"visual {index}: {target} already has a model with lod {lod}"));
+                        }
+                    }
+                    else if (kind == "skin")
+                    {
+                        var name = visual.TryGetProperty("name", out var nameValue) ? nameValue.GetString() : null;
+                        if (!seenSkinKeys.Add((target, name)))
+                        {
+                            problems.Add(new PackProblem("visual-duplicate-binding",
+                                $"visual {index}: {target} already has a skin named {name}"));
+                        }
+                    }
+
+                    if (visualFiles.ValueKind == JsonValueKind.Object)
                     {
                         foreach (var prop in visualFiles.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
                         {

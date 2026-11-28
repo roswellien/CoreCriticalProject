@@ -1,0 +1,25 @@
+{
+  "schema_version": 3,
+  "game_id": "mw3",
+  "id": "example-broken",
+  "name": "Example: a model with no mesh",
+  "version": "1.0.0",
+  "author": "Core Critical examples",
+  "description": "An HD model whose files hold no mesh, a role contract 4 requires of a model.",
+  "visuals": [
+    {
+      "target": "mech-model:thor",
+      "kind": "model",
+      "lod": 0,
+      "files": {
+        "textures": "visuals/thor.bwtex"
+      }
+    }
+  ],
+  "files": {
+    "visuals/thor.bwtex": {
+      "sha256": "c59deac13af53eca47dfef12c13c343c9c24e66602f2a9854c5cff9c6317b99b",
+      "bytes": 86
+    }
+  }
+}
