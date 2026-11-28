@@ -11,7 +11,7 @@ inputs and release artifacts outside Git.
 For an MW3-RE runtime-only update, skip launcher build and installer steps
 that do not apply. Reuse the approved signed launcher `.ccupdate` and matching
 ZIP in `build_catalog.py`, which still requires both packages. Add only the
-two new runtime object paths to `PUBLIC_OBJECTS` and retain all existing
+new runtime object paths to `PUBLIC_OBJECTS` and retain all existing
 entries. Verify the protected Setup listing only if it changed.
 
 1. **Start from reviewed source.** Merge the release PR from `develop` to
@@ -33,7 +33,7 @@ entries. Verify the protected Setup listing only if it changed.
    credentials, or token.
 
    If the MW3-RE runtime changes and existing players need an update, package
-   it with the committed `tools/native-preparation/build_native_update.py`,
+   it with the committed `tools/native-preparation/build_precompiled_update.py`,
    using the same runtime directory, reviewed `InstallNativeRuntime.exe`,
    original-file input directory (read-only), and a fresh output directory:
 
@@ -136,7 +136,10 @@ entries. Verify the protected Setup listing only if it changed.
    the current approved signed runtime metadata/package (or the new runtime
    package when it changes). It requires version-matched `.ccupdate`/`.mw3update`
    files and companion ZIPs, the installed `update-trust.json`, the external
-   update signing key, key ID, approved origin and a new catalog sequence:
+   update signing key, key ID, approved origin and a new catalog sequence.
+   For a launcher release, `--launcher` is the fresh `.ccupdate`; for a
+   runtime-only release, it is the approved signed launcher `.ccupdate` (with
+   its companion ZIP beside it) and `--runtime` is the new `.mw3update`:
 
    ```powershell
    python tools/update-service/build_catalog.py `
@@ -183,9 +186,20 @@ entries. Verify the protected Setup listing only if it changed.
      --file '<fresh-readback-file>' --remote
    ```
 
-   Compare readback byte count and SHA-256 to the local receipt. For public
-   update objects, download them through the Worker and verify full SHA-256,
-   byte count and a resumed Range request as well.
+   Compare readback byte count and SHA-256 to the local receipt.
+
+   Then extend the existing Worker's `PUBLIC_OBJECTS` allowlist with the new
+   update metadata/package paths and exact byte counts from `publication.json`,
+   retaining every existing entry. In the Cloudflare dashboard, open Workers &
+   Pages → `core-critical-updates` → Settings → Variables and Secrets. Copy the
+   current `PUBLIC_OBJECTS` JSON object, add one entry for each new object
+   listed in `publication.json` using `public_path` as the property name and
+   `key` and `bytes` as the value, then save and deploy. Keep the `UPDATES` R2
+   binding connected to `core-critical-playtests`; never replace the allowlist
+   with only the new release. The Worker source is tracked at
+   `tools/update-service/worker.mjs`. The Worker returns 404 for unlisted
+   paths, so only now download each new update object through the Worker and
+   verify full SHA-256, byte count and a resumed Range request.
 
 8. **Prepare the GitHub Release draft.** Draft the release for the exact
    version against the recorded source SHA. Check for an existing tag or
@@ -195,17 +209,8 @@ entries. Verify the protected Setup listing only if it changed.
    [launcher publication gate](github-workflow.md#launcher-publication-gate)
    for tag, preview and marker rules.
 
-9. **Promote the signed feed.** Extend the existing Worker's `PUBLIC_OBJECTS`
-   allowlist with the new update metadata/package paths and exact byte
-   counts from `publication.json`, retaining every existing entry. In the
-   Cloudflare dashboard, open Workers & Pages → `core-critical-updates` →
-   Settings → Variables and Secrets. Copy the current `PUBLIC_OBJECTS` JSON
-   object, add one entry for each new object listed in `publication.json` using
-   `public_path` as the property name and `key` and `bytes` as the value, then
-   save and deploy.
-   Keep the `UPDATES` R2 binding connected to `core-critical-playtests`;
-   never replace the allowlist with only the new release. The Worker source is
-   tracked at `tools/update-service/worker.mjs`. Upload the signed catalog first
+9. **Promote the signed feed.** With the allowlisted objects verified in
+   step 7, upload the signed catalog first
    to its sequence archive key
    `online-updates/catalogs/playtest/<sequence>.json`, then to the live feed
    object `online-updates/catalogs/playtest/catalog.json`. This live object is
