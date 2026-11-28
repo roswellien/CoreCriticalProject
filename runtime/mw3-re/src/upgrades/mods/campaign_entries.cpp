@@ -126,7 +126,9 @@ std::vector<CampaignEntry> campaign_entries(const std::string& write_dir) {
     e.kind = CampaignEntry::kImported, e.id = id, e.missing = true;
     const size_t t = id.find('~');
     e.mod = id.substr(0, t), e.campaign = t == std::string::npos ? std::string() : id.substr(t + 1);
-    e.name = id, e.error = "its mod is not in the mods folder";
+    e.name = id;
+    e.error = mods_pack_library().empty() ? "its mod is not in the mods folder"
+                                        : "its mod is not installed in the mods folder or pack library";
     out.push_back(e);
   }
   return out;

@@ -76,7 +76,7 @@ DeletePlan delete_plan_for_entry(const std::string& write_dir, const std::string
   for (const ModInfo& mod : mods_found(write_dir))
     if (mod.folder == e->mod && mod.from_pack) {
       p.entry.clear();
-      p.refused = name + " comes from a pack: uninstall it in the launcher.";
+      p.refused = kPackReadOnlyMessage;
       return p;
     }
   // A campaign with its mod: nothing another campaign is built on.
@@ -111,7 +111,7 @@ DeletePlan delete_plan_for_mod(const std::string& write_dir, const std::string& 
   if (!found) return p.refused = "Choose a mod.", p;
   const std::string name = info.name.empty() ? folder : info.name;
   if (info.from_pack) {
-    p.refused = name + " comes from a pack: uninstall it in the launcher.";
+    p.refused = kPackReadOnlyMessage;
     return p;
   }
   const fs::path dir = fs::path(write_dir) / "mods" / folder;

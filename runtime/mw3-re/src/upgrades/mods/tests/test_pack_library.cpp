@@ -12,6 +12,10 @@
 #include "gamez/zutil/zutl_path.h"
 #include "mech3/mods.h"
 #include "mech3/mods_tables.h"
+#include "mech3/mods_menu.h"
+#include "upgrades/mods/mod_export.h"
+#include "upgrades/mods/mod_report.h"
+#include "upgrades/editor/save_as.h"
 #include "upgrades/mods/campaign_entries.h"
 #include "upgrades/mods/mods_delete.h"
 
@@ -20,7 +24,7 @@ namespace fs = std::filesystem;
 
 struct PackTest {
   const std::string library_before = mech3::mods_pack_library();
-  const zutl::Mounts mounts_before = zutl::mounts();
+  const zutl::Mounts mounts_before = zutl::mounts();  // includes the global write directory
   const fs::path root = fs::path(MW3_TEST_TMP) / "pack-library";
   const fs::path library = root / "library";
   const std::string write = (root / "write").generic_string();
@@ -71,11 +75,25 @@ void manifest(const fs::path& folder, const std::string& id, const std::string& 
 fs::path example_pack(PackTest& test) {
   const fs::path fixture = fs::path(MW3_SOURCE_DIR).parent_path().parent_path() /
                            "tests/fixtures/packs/valid/gameplay-only";
-  const fs::path pack = test.library / "gameplay-only";
+  const fs::path pack = test.library / "example-gameplay";
   fs::copy(fixture, pack, fs::copy_options::recursive);
   return pack;
 }
 }  // namespace
+
+TEST(pack_library_fixture_restores_write_directory) {
+  struct RestoreMounts {
+    const zutl::Mounts before = zutl::mounts();
+    ~RestoreMounts() { zutl::mounts() = before; }
+  } restore;
+  const std::string previous_write = (fs::path(MW3_TEST_TMP) / "previous-write").generic_string();
+  zutl::set_write_dir(previous_write);
+  {
+    PackTest test;
+    EXPECT(zutl::mounts().write == test.write);
+  }
+  EXPECT(zutl::mounts().write == previous_write);
+}
 
 TEST(pack_library_fixture_lists_mounts_ticks_and_hashes_like_player_mod) {
   PackTest test;
@@ -130,9 +148,9 @@ TEST(pack_library_player_folder_clash_wins_even_without_mod_txt) {
 
 TEST(pack_library_tick_order_and_player_write_directory_take_precedence) {
   PackTest test;
-  manifest(test.library / "pack", "example-pack");
-  put(test.library / "pack/mod/mod.txt", "name=Pack\n");
-  put(test.library / "pack/mod/zbd/order.zrd", "pack");
+  manifest(test.library / "example-pack", "example-pack");
+  put(test.library / "example-pack/mod/mod.txt", "name=Pack\n");
+  put(test.library / "example-pack/mod/zbd/order.zrd", "pack");
   put(fs::path(test.write) / "mods/player/mod.txt", "name=Player\n");
   put(fs::path(test.write) / "mods/player/zbd/order.zrd", "player");
   const auto entries = mech3::official_entries();
@@ -155,10 +173,10 @@ TEST(pack_library_tick_order_and_player_write_directory_take_precedence) {
 
 TEST(pack_library_read_only_deletion_and_game_writes) {
   PackTest test;
-  manifest(test.library / "pack", "example-pack");
-  put(test.library / "pack/mod/mod.txt", "name=Pack\ncampaign=story.txt\n");
-  put(test.library / "pack/mod/story.txt", "id=story\nname=Story\nmission=c1 1\n");
-  put(test.library / "pack/mod/zbd/test.zrd", "pack data");
+  manifest(test.library / "example-pack", "example-pack");
+  put(test.library / "example-pack/mod/mod.txt", "name=Pack\ncampaign=story.txt\n");
+  put(test.library / "example-pack/mod/story.txt", "id=story\nname=Story\nmission=c1 1\n");
+  put(test.library / "example-pack/mod/zbd/test.zrd", "pack data");
   const auto before = snapshot(test.library);
   const auto plan = mech3::delete_plan_for_mod(test.write, "example-pack");
   EXPECT(plan.kind == mech3::DeletePlan::kNone && plan.refused.find("launcher") != std::string::npos);
@@ -204,14 +222,143 @@ TEST(pack_library_broken_and_legacy_sources_are_skipped_without_stopping_discove
 
 TEST(pack_library_unsafe_roots_and_missing_library_are_reported) {
   PackTest test;
-  for (const char* root : {"../outside", "/outside", "mod//data", "mod/", "mod.", "mod ", "NUL"}) {
+  std::vector<std::string> roots = {"../outside", "/outside", "mod//data", "mod/", "mod.", "mod "};
+  std::vector<std::string> devices = {"CON", "CONIN$", "CONOUT$", "PRN", "AUX", "NUL"};
+  for (int i = 0; i <= 9; ++i) {
+    devices.push_back("COM" + std::to_string(i));
+    devices.push_back("LPT" + std::to_string(i));
+  }
+  for (const std::string& device : devices) {
+    roots.push_back(device);
+    roots.push_back("nested/" + device + ".data");
+  }
+  for (const std::string& root : roots) {
     manifest(test.library / "unsafe", "unsafe", root);
     std::vector<std::string> log;
     EXPECT(mech3::mods_found(test.write, &log).empty());
-    EXPECT(contains(log, "gameplay-root-invalid"));
+    EXPECT(contains(log, "path-unsafe"));
   }
   mech3::mods_pack_library() = (test.root / "missing-library").generic_string();
   std::vector<std::string> log;
   EXPECT(mech3::mods_found(test.write, &log).empty());
   EXPECT(contains(log, "cannot read pack library"));
+}
+
+TEST(pack_library_folder_must_match_manifest_id) {
+  PackTest test;
+  example_pack(test);
+  for (const char* name : {"folder-a", "folder-b"}) {
+    manifest(test.library / name, "same-id");
+    put(test.library / name / "mod/mod.txt", "name=Same\n");
+  }
+  std::vector<std::string> log;
+  EXPECT(mech3::mods_found(test.write, &log).size() == 1);
+  EXPECT(log.size() == 2 && contains(log, "folder-a") && contains(log, "folder-b"));
+  EXPECT(contains(log, "manifest-invalid") && !contains(log, "pack-id-clash"));
+  fs::remove_all(test.library / "example-gameplay");
+  const auto missing = mech3::mods_mount(test.write, {"example-gameplay"}, {});
+  EXPECT(contains(missing, (test.library / "example-gameplay").generic_string()));
+}
+
+TEST(pack_library_unusable_mods_remain_listed_like_player_mods) {
+  PackTest test;
+  manifest(test.library / "unusable", "unusable");
+  for (const char* contents : {"name=Wrong game\nfor=mw3pm\n", "description=No name\n"}) {
+    put(test.library / "unusable/mod/mod.txt", contents);
+    put(fs::path(test.write) / "mods/player/mod.txt", contents);
+    std::vector<std::string> log;
+    const auto found = mech3::mods_found(test.write, &log);
+    EXPECT(found.size() == 2);
+    if (found.size() != 2) return;
+    EXPECT(!found[0].error.empty() && found[0].error == found[1].error);
+    EXPECT(found[1].from_pack && contains(log, "mod unusable"));
+    EXPECT(!contains(log, "gameplay-root-invalid"));
+    const auto mounted = mech3::mods_mount(test.write, {"unusable"}, {});
+    EXPECT(contains(mounted, found[1].error) && zutl::mounts().mods.empty());
+  }
+}
+
+TEST(pack_library_metadata_bom_and_size_limits) {
+  PackTest test;
+  const fs::path pack = example_pack(test);
+  put(pack / "pack.json", "\xef\xbb\xbf" + read(pack / "pack.json"));
+  put(pack / "mod/mod.txt", "\xef\xbb\xbf" + read(pack / "mod/mod.txt"));
+  std::vector<std::string> log;
+  auto found = mech3::mods_found(test.write, &log);
+  EXPECT(found.size() == 1 && log.empty() && found[0].error.empty());
+  fs::resize_file(pack / "pack.json", 4 * 1024 * 1024 + 1);
+  log.clear();
+  EXPECT(mech3::mods_found(test.write, &log).empty());
+  EXPECT(contains(log, "manifest-invalid") && contains(log, "pack.json exceeds 4194304 bytes"));
+  manifest(pack, "example-gameplay");
+  fs::resize_file(pack / "mod/mod.txt", 1024 * 1024 + 1);
+  log.clear();
+  found = mech3::mods_found(test.write, &log);
+  EXPECT(found.size() == 1 && !found[0].error.empty());
+  EXPECT(contains(log, "mod.txt exceeds 1048576 bytes") && !contains(log, "gameplay-root-invalid"));
+  int errors = 0;
+  EXPECT(contains(mech3::mod_check((pack / "mod").string(), "", &errors), "exceeds 1048576 bytes"));
+  EXPECT(errors > 0);
+  const auto exported = mech3::mod_export((pack / "mod").string(), (test.root / "large.zip").string());
+  EXPECT(!exported.ok && exported.message.find("exceeds 1048576 bytes") != std::string::npos);
+}
+
+TEST(pack_library_mods_screen_uses_real_paths_and_refuses_library_writes) {
+  PackTest test;
+  const fs::path payload = test.library / "example-pack/mod";
+  manifest(payload.parent_path(), "example-pack");
+  put(payload / "mod.txt", "name=Pack\ncampaign=story.txt\n");
+  put(payload / "story.txt", "name=Story\nmission=c1 1\n");
+  const auto before = snapshot(test.library);
+  const auto old_platform = mech3::mods_menu_platform();
+  const auto old_write = mech3::mods_menu_write_dir();
+  struct RestoreMenu {
+    mech3::ModsMenuPlatform platform;
+    std::string write;
+    ~RestoreMenu() { mech3::mods_menu_platform() = platform; mech3::mods_menu_write_dir() = write; }
+  } restore{old_platform, old_write};
+  mech3::mods_menu_write_dir() = test.write;
+  struct MenuEngine : mech3::Engine {
+    int32_t fast_menu() override { return 1; }
+  } engine;
+  mech3::ModsScreen screen(engine, 0);
+  screen.entry = "example-pack~story";
+  screen.refill();
+  std::string opened;
+  mech3::mods_menu_platform().open_folder = [&](const std::string& path) { opened = path; return true; };
+  screen.on_button(mech3::ModsScreen::kOpenFolder, 0, 0);
+  EXPECT(opened == payload.generic_string());
+  screen.report();
+  EXPECT(read(screen.report_file).find(payload.generic_string()) != std::string::npos);
+  EXPECT(read(screen.report_file).find("mods\\example-pack") == std::string::npos);
+  screen.on_button(mech3::ModsScreen::kOpenFolder, 0, 0);
+  EXPECT(opened == mech3::mod_reports_dir(test.write));
+  screen.export_folder = "example-pack";
+  const fs::path exported = test.root / "pack.zip";
+  screen.export_mod(exported.string());
+  const std::string note = std::string(screen.note.text ? screen.note.text : "") + " " +
+                           (screen.restart.text ? screen.restart.text : "");
+#if MW3_HAVE_LIBARCHIVE
+  EXPECT(fs::is_regular_file(exported) && note.find("Exported") != std::string::npos);
+#else
+  EXPECT(note.find("cannot write archives") != std::string::npos);
+#endif
+  for (const fs::path& target : {payload / "out.zip", payload.parent_path() / "out.zip", test.library / "out.zip"}) {
+    const auto result = mech3::mod_export(payload.string(), target.string());
+    EXPECT(!result.ok && result.message == mech3::kPackReadOnlyMessage);
+  }
+  EXPECT(!mech3::mods_path_in_pack_library((test.root / "library-other/out.zip").string()));
+  std::error_code link_error;
+  const fs::path alias = test.root / "library-link";
+  fs::create_directory_symlink(test.library, alias, link_error);
+  if (!link_error) {
+    const auto result = mech3::mod_export(payload.string(), (alias / "out.zip").string());
+    EXPECT(!result.ok && result.message == mech3::kPackReadOnlyMessage);
+  } else {
+    std::printf("not run: linked export destination (%s)\n", link_error.message().c_str());
+  }
+  std::string copy, why;
+  EXPECT(mech3::save_as_make_copy(test.write, "example-pack~story", "Player copy", &copy, &why));
+  EXPECT(fs::is_regular_file(fs::path(test.write) / "mods" / copy / "mod.txt"));
+  EXPECT(snapshot(test.library) == before);
 }

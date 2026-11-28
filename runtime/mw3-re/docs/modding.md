@@ -92,6 +92,13 @@ the pack is left out with `pack-id-clash` in the log. Broken packs are named
 and skipped. Pack files are read only: DELETE directs you to uninstall the
 pack in the launcher.
 
+Install each pack under its manifest ID: `DIR/<id>/pack.json`. A different
+folder name is refused. UTF-8 manifests may have a byte order mark. To keep
+repeated scans bounded, `pack.json` is limited to 4 MiB and `mod.txt` to
+1 MiB. An existing but unusable `mod.txt` stays listed with its error, like
+a player's unusable mod. INFO, EXPORT and OPEN FOLDER use the payload's real
+location; exports must go outside the pack library.
+
 **Where it sits.** The settings folder's own files first (what the game
 saved: a player's files always win), then the enabled mods in order, then
 the imported 1.2 patch (`patch12\`), then the install (`zutl::mount_mod`,

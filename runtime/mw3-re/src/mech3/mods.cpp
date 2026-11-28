@@ -146,9 +146,30 @@ std::string& mods_pack_library() {
   return library;
 }
 
+bool mods_path_in_pack_library(const std::string& path) {
+  if (mods_pack_library().empty()) return false;
+  std::error_code ec;
+  const fs::path library = fs::weakly_canonical(mods_pack_library(), ec);
+  if (ec) return true;
+  const fs::path destination = fs::weakly_canonical(path, ec);
+  if (ec) return true;
+  auto part = destination.begin();
+  for (const auto& directory : library) {
+    if (part == destination.end()) return false;
+#if defined(_WIN32)
+    if (lower(part->string()) != lower(directory.string())) return false;
+#else
+    if (*part != directory) return false;
+#endif
+    ++part;
+  }
+  return true;
+}
+
 namespace {
-// Installed packs have already passed the launcher's file-table validation. Recheck
-// identity and containment here because a hand-edited manifest must not mount elsewhere.
+// Recheck identity, relative root syntax and links at the pack folder, pack.json,
+// each gameplay-root component and mod.txt. The launcher rejects deeper payload
+// links at installation; as with player mods, discovery does not walk every payload file.
 bool pack_id_valid(const std::string& id) {
   if (id.empty() || id.size() > 40) return false;
   const auto alphanumeric = [](char c) {
@@ -171,9 +192,10 @@ bool pack_root_valid(const std::string& root) {
     for (unsigned char c : part)
       if (c < 32 || c == 127 || std::strchr("\\<>:\"|?*", c)) return false;
     const std::string device = lower(part.substr(0, part.find('.')));
-    if (device == "con" || device == "prn" || device == "aux" || device == "nul" ||
+    if (device == "con" || device == "conin$" || device == "conout$" ||
+        device == "prn" || device == "aux" || device == "nul" ||
         (device.size() == 4 && (device.substr(0, 3) == "com" || device.substr(0, 3) == "lpt") &&
-         device[3] >= '1' && device[3] <= '9')) return false;
+         device[3] >= '0' && device[3] <= '9')) return false;
     if (slash == std::string::npos) return true;
     start = slash + 1;
   }
@@ -186,6 +208,23 @@ bool pack_keys_unique(const zutl_json::Value& value) {
     if (!keys.insert(member.first).second || !pack_keys_unique(member.second)) return false;
   for (const auto& item : value.items)
     if (!pack_keys_unique(item)) return false;
+  return true;
+}
+
+bool pack_read_text(const fs::path& path, size_t limit, std::string* text, std::string* why) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) return *why = "cannot read " + path.filename().string(), false;
+  text->clear();
+  char buffer[8192];
+  while (file) {
+    const size_t wanted = std::min(sizeof buffer, limit - text->size() + 1);
+    file.read(buffer, static_cast<std::streamsize>(wanted));
+    text->append(buffer, static_cast<size_t>(file.gcount()));
+    if (text->size() > limit)
+      return *why = path.filename().string() + " exceeds " + std::to_string(limit) + " bytes", false;
+  }
+  if (file.bad()) return *why = "cannot read " + path.filename().string(), false;
+  if (text->compare(0, 3, "\xef\xbb\xbf") == 0) text->erase(0, 3);
   return true;
 }
 
@@ -208,16 +247,16 @@ void find_pack_mods(std::vector<ModInfo>& mods, std::vector<std::string>* log) {
       problem(folder, "path-unsafe", "pack folder or manifest is a link");
       continue;
     }
-    std::ifstream manifest(folder / "pack.json", std::ios::binary);
-    std::stringstream text;
-    text << manifest.rdbuf();
-    if (!manifest || manifest.bad()) {
-      problem(folder, "manifest-invalid", "missing or unreadable pack.json");
+    // Discovery runs again on UI refreshes. Bound both metadata reads so a corrupt
+    // installed file cannot repeatedly allocate gigabytes; manifests allow larger file tables.
+    constexpr size_t manifest_limit = 4 * 1024 * 1024;
+    std::string text, why;
+    if (!pack_read_text(folder / "pack.json", manifest_limit, &text, &why)) {
+      problem(folder, "manifest-invalid", why);
       continue;
     }
     zutl_json::Value document;
-    std::string why;
-    if (!zutl_json::parse(text.str(), &document, &why) || !pack_keys_unique(document)) {
+    if (!zutl_json::parse(text, &document, &why) || !pack_keys_unique(document)) {
       problem(folder, "manifest-invalid", why.empty() ? "repeated manifest key" : why);
       continue;
     }
@@ -237,12 +276,20 @@ void find_pack_mods(std::vector<ModInfo>& mods, std::vector<std::string>* log) {
       problem(folder, "manifest-invalid", "gameplay pack needs a valid id and game_id mw3");
       continue;
     }
-    if (!root || root->kind != zutl_json::Value::String || !pack_root_valid(root->text)) {
-      problem(folder, "gameplay-root-invalid", "gameplay.root is not a safe relative folder");
+    if (folder.filename().string() != id->text) {
+      problem(folder, "manifest-invalid", "folder name does not match pack id " + id->text);
+      continue;
+    }
+    if (!root || root->kind != zutl_json::Value::String) {
+      problem(folder, "manifest-invalid", "gameplay.root must be a relative folder string");
+      continue;
+    }
+    if (!pack_root_valid(root->text)) {
+      problem(folder, "path-unsafe", "gameplay.root is not a safe relative folder");
       continue;
     }
     const auto clash = std::find_if(mods.begin(), mods.end(), [&](const ModInfo& mod) {
-      return lower(mod.folder) == id->text;
+      return !mod.from_pack && lower(mod.folder) == id->text;
     });
     if (clash != mods.end()) {
       problem(folder, "pack-id-clash", id->text + " is already supplied by " + clash->path);
@@ -258,25 +305,33 @@ void find_pack_mods(std::vector<ModInfo>& mods, std::vector<std::string>* log) {
       problem(folder, "path-unsafe", "gameplay root or mod.txt is a link");
       continue;
     }
-    std::ifstream mod_file(payload / "mod.txt", std::ios::binary);
-    std::stringstream mod_text;
-    mod_text << mod_file.rdbuf();
-    if (!mod_file || mod_file.bad()) {
-      problem(folder, "gameplay-root-invalid", "gameplay root has no readable mod.txt");
+    std::error_code mod_status_error;
+    const fs::file_status mod_status = fs::status(payload / "mod.txt", mod_status_error);
+    if (mod_status.type() == fs::file_type::not_found || (!mod_status_error && !fs::is_regular_file(mod_status))) {
+      problem(folder, "gameplay-root-invalid", "gameplay root has no mod.txt");
       continue;
     }
     ModInfo mod;
     mod.folder = id->text;
     mod.path = payload.generic_string();
     mod.from_pack = true;
-    if (!mod_parse(mod_text.str(), &mod)) {
-      problem(folder, "gameplay-root-invalid", mod.error);
-      continue;
+    std::string mod_text;
+    if (mod_status_error) mod.error = "cannot inspect mod.txt: " + mod_status_error.message();
+    else if (mod_read_pack_text((payload / "mod.txt").string(), &mod_text, &mod.error)) mod_parse(mod_text, &mod);
+    if (!mod.error.empty()) {
+      const std::string line = "mod " + mod.folder + " (" + mod.path + "): " + mod.error + ", unusable";
+      if (log) log->push_back(line);
+      else std::fprintf(stderr, "mw3: %s\n", line.c_str());
     }
     mods.push_back(std::move(mod));
   }
 }
 }  // namespace
+
+bool mod_read_pack_text(const std::string& file, std::string* text, std::string* why) {
+  // Share the discovery limit with later readers so INFO and EXPORT cannot bypass it.
+  return pack_read_text(file, 1024 * 1024, text, why);
+}
 
 std::vector<ModInfo> mods_found(const std::string& write_dir, std::vector<std::string>* log) {
   std::vector<ModInfo> out;
@@ -375,8 +430,10 @@ std::vector<std::string> mods_mount(const std::string& write_dir, const std::vec
     done.push_back(want);
     const auto it = std::find_if(found.begin(), found.end(), [&](const ModInfo& m) { return m.folder == want; });
     if (it == found.end()) {
-      log.push_back("mod " + want + ": not in " + (fs::path(write_dir) / "mods").generic_string() + ", left out");
-      left(want, "the mod: it is not in " + (fs::path(write_dir) / "mods").generic_string());
+      std::string location = (fs::path(write_dir) / "mods").generic_string();
+      if (!mods_pack_library().empty()) location += " or pack library " + (fs::path(mods_pack_library()) / want).generic_string();
+      log.push_back("mod " + want + ": not in " + location + ", left out");
+      left(want, "the mod: it is not in " + location);
       continue;
     }
     if (!it->error.empty()) {
@@ -1071,9 +1128,19 @@ std::vector<std::string> mod_check(const std::string& dir, const std::string& in
     out.push_back("no mod.txt: checked as an install overlay");
     fx.overlay = true;
   } else {
-    std::stringstream ss;
-    ss << f.rdbuf();
-    if (mod_parse(ss.str(), &m)) out.push_back("mod.txt: " + m.name + (m.version.empty() ? "" : " " + m.version));
+    std::string text;
+    if (mods_path_in_pack_library(dir)) {
+      std::string why;
+      if (!mod_read_pack_text((fs::path(dir) / "mod.txt").string(), &text, &why)) {
+        error("mod.txt: " + why);
+        return out;
+      }
+    } else {
+      std::stringstream ss;
+      ss << f.rdbuf();
+      text = ss.str();
+    }
+    if (mod_parse(text, &m)) out.push_back("mod.txt: " + m.name + (m.version.empty() ? "" : " " + m.version));
     else error("mod.txt: " + m.error);
   }
   // Ours (found_worlds.h): the mod's world folders the game does not have, by their files.

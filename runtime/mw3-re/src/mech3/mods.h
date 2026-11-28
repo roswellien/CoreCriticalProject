@@ -52,6 +52,11 @@ bool mod_parse(const std::string& text, ModInfo* out);
 std::string& mods_game();
 // Empty preserves player-mod-only discovery. The frontend sets this from --pack-library.
 std::string& mods_pack_library();
+constexpr const char* kPackReadOnlyMessage = "Pack content is read only: uninstall it in the launcher.";
+// Includes destinations reached through links; uncertain containment refuses writes.
+bool mods_path_in_pack_library(const std::string& path);
+// Bounded, BOM-aware mod.txt read for discovery, INFO/check and EXPORT of pack payloads.
+bool mod_read_pack_text(const std::string& file, std::string* text, std::string* why);
 // Player folders and schema 3 gameplay roots, by mod id; each one's mod.txt read.
 // Broken packs are skipped. Diagnostics go to `log`, or stderr when it is not supplied.
 std::vector<ModInfo> mods_found(const std::string& write_dir, std::vector<std::string>* log = nullptr);
