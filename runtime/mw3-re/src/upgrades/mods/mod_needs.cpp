@@ -40,7 +40,9 @@ std::vector<std::string> mod_needs_warnings(const ModInfo& m, const std::vector<
   std::vector<std::string> out;
   for (const auto& [name, version] : m.needs) {
     const ModInfo* o = named(all, name);
-    if (!o) out.push_back("It needs the mod " + name + (version.empty() ? "" : " " + version) + ", which is not in the mods folder.");
+    if (!o) out.push_back("It needs the mod " + name + (version.empty() ? "" : " " + version) +
+                         (mods_pack_library().empty() ? ", which is not in the mods folder."
+                                                      : ", which is not installed in the mods folder or pack library."));
     else if (!o->error.empty()) out.push_back("It needs " + shown(*o) + ", which cannot be used: " + o->error + ".");
     else if (!is_on(enabled, *o)) out.push_back("It needs " + shown(*o) + ", which is off.");
     else if (!version.empty() && upgrades::update::compare_versions(o->version, version) < 0)

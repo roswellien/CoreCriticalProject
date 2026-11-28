@@ -229,6 +229,7 @@ struct Args {
   // Mods (ours, docs/modding.md): --mod NAME (repeatable, this run's list),
   // else mw3.cfg's mod= lines, in order; --no-mods none; --mods lists them.
   std::vector<std::string> mods, cfg_mods;
+  std::string pack_library;  // launcher-owned gameplay payloads, read as mods
   bool mods_given = false, no_mods = false, list_mods = false;
   // --entry ID (ours, upgrades/mods/campaign_entries.h): a MODS campaign entry's mods and pilots for this run.
   std::string entry;
@@ -367,6 +368,7 @@ void usage() {
       "    [--cc-vsync 0|1 (default 1)]\n"
       "    [--cc-controller FILE] (launcher-exported controller profile)\n"
       "    [--cc-input FILE] (launcher-exported extended mouse and combo bindings)\n"
+      "    [--pack-library DIR] (installed packs' read-only gameplay mods)\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--hd-movie NAME PATH]... [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [--benchmark DEF.json --benchmark-scene ID --benchmark-out DIR]\n"
       "    [--benchmark-strict [--benchmark-strict-capture TICK]]\n"
@@ -394,6 +396,13 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--indeo-codec" && next(1)) a.indeo_codec = argv[++i];
     else if (s == "--assets" && next(1)) a.assets.emplace_back(argv[++i]);
     else if (s == "--write-dir" && next(1)) a.write_dir = argv[++i];
+    else if (s == "--pack-library") {
+      if (!next(1) || !argv[i + 1][0] || std::string(argv[i + 1]).rfind("--", 0) == 0) {
+        std::fprintf(stderr, "mw3: --pack-library requires a folder\n");
+        return false;
+      }
+      a.pack_library = argv[++i];
+    }
     else if (s == "--mod" && next(1)) a.mods.emplace_back(argv[++i]), a.mods_given = true;
     else if (s == "--no-mods") a.no_mods = true;
     else if (s == "--entry" && next(1)) a.entry = argv[++i];
@@ -1167,6 +1176,7 @@ int program(int argc, char** argv) {
     std::fprintf(stderr, "mw3: benchmark: %s\n", error.what());
     return 2;
   }
+  mech3::mods_pack_library() = a.pack_library;
   if (a.cc_assets.skin_catalog.empty())
     if (const char* catalog = std::getenv("MW34_ADDITIONAL_SKINS"))
       a.cc_assets.skin_catalog = catalog;
@@ -1328,10 +1338,14 @@ int program(int argc, char** argv) {
   }
   if (a.list_mods) {
     const std::vector<mech3::ModInfo> found = mech3::mods_found(a.write_dir);
-    std::printf("mw3: mods in %s/mods: %zu\n", a.write_dir.c_str(), found.size());
+    if (a.pack_library.empty())
+      std::printf("mw3: mods in %s/mods: %zu\n", a.write_dir.c_str(), found.size());
+    else
+      std::printf("mw3: mods in %s/mods and pack library %s: %zu\n", a.write_dir.c_str(), a.pack_library.c_str(), found.size());
     for (const mech3::ModInfo& m : found) {
       const auto at = std::find(a.mods.begin(), a.mods.end(), m.folder);
-      std::printf("  %s: %s%s%s\n", m.folder.c_str(), m.error.empty() ? (m.name + " " + m.version).c_str() : m.error.c_str(),
+      std::printf("  %s: %s%s%s%s\n", m.folder.c_str(), m.error.empty() ? (m.name + " " + m.version).c_str() : m.error.c_str(),
+                  m.from_pack ? " [pack]" : "",
                   at == a.mods.end() ? "" : ", enabled #", at == a.mods.end() ? "" : std::to_string(at - a.mods.begin() + 1).c_str());
     }
     SDL_Quit();

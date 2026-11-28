@@ -118,6 +118,12 @@ std::string mod_export_file_name(const ModInfo& info) {
 
 ModExportResult mod_export(const std::string& mod_dir, const std::string& zip_path, const std::string& install, bool check) {
   ModExportResult r;
+  if (mods_path_in_pack_library(zip_path) || mods_path_in_pack_library(zip_path + ".saving"))
+    return r.message = kPackReadOnlyMessage, r;
+  const bool from_pack = mods_path_in_pack_library(mod_dir);
+  std::string pack_text, read_error;
+  if (from_pack && !mod_read_pack_text((fs::path(mod_dir) / "mod.txt").string(), &pack_text, &read_error))
+    return r.message = "Not exported: " + read_error + ".", r;
   std::error_code ec;
   const fs::path root(mod_dir), zip(zip_path);
   {
@@ -132,10 +138,13 @@ ModExportResult mod_export(const std::string& mod_dir, const std::string& zip_pa
 #else
   ModInfo info;
   {
-    std::ifstream f(root / "mod.txt", std::ios::binary);
-    std::stringstream ss;
-    ss << f.rdbuf();
-    mod_parse(ss.str(), &info);
+    if (from_pack) mod_parse(pack_text, &info);
+    else {
+      std::ifstream f(root / "mod.txt", std::ios::binary);
+      std::stringstream ss;
+      ss << f.rdbuf();
+      mod_parse(ss.str(), &info);
+    }
   }
   info.folder = root.filename().string();
   std::string top = mod_folder_name(info.name.empty() ? info.folder : info.name);
