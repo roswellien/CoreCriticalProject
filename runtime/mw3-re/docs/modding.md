@@ -79,6 +79,26 @@ At start the log names each enabled mod and every file it replaces or adds;
 a name that is no usable mod (no folder, no `mod.txt`, no `name`, another
 game) is said and left out.
 
+**Installed packs.** `--pack-library DIR` also lists each schema 3 pack's
+gameplay folder as a mod, marked `[pack]` in `--mods` and on the MODS screen.
+Use the pack's `id` in an entry's `mods.txt`, for example
+`mod=example-gameplay`. A ticked pack follows the same order as other mods;
+the write directory still wins. Nothing is copied into your `mods` folder.
+Without this argument only your own mods are listed. Visual-only packs and
+schema 1 and 2 packs are ignored here.
+
+If a pack ID is also a folder in your `mods` directory, your folder wins and
+the pack is left out with `pack-id-clash` in the log. Broken packs are named
+and skipped. Pack files are read only: DELETE directs you to uninstall the
+pack in the launcher.
+
+Install each pack under its manifest ID: `DIR/<id>/pack.json`. A different
+folder name is refused. UTF-8 manifests may have a byte order mark. To keep
+repeated scans bounded, `pack.json` is limited to 4 MiB and `mod.txt` to
+1 MiB. An existing but unusable `mod.txt` stays listed with its error, like
+a player's unusable mod. INFO, EXPORT and OPEN FOLDER use the payload's real
+location; exports must go outside the pack library.
+
 **Where it sits.** The settings folder's own files first (what the game
 saved: a player's files always win), then the enabled mods in order, then
 the imported 1.2 patch (`patch12\`), then the install (`zutl::mount_mod`,

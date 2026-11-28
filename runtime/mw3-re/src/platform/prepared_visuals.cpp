@@ -1,4 +1,5 @@
 #include "platform/prepared_visuals.h"
+#include "platform/loading.hpp"
 #include "frontend/core_critical/renderer/normal_codec.hpp"
 #include "frontend/core_critical/renderer/surface_materials.hpp"
 
@@ -34,6 +35,11 @@ class Reader {
         if (count > remaining_ || !input_.read(static_cast<char *>(target), std::streamsize(count)))
             fail("truncated payload");
         remaining_ -= count;
+        bytes_since_checkpoint_ += count;
+        if (bytes_since_checkpoint_ >= 65536) {
+            loading::checkpoint();
+            bytes_since_checkpoint_ = 0;
+        }
     }
     uint32_t u32() {
         uint8_t bytes_[4];
@@ -95,6 +101,7 @@ class Reader {
     }
 
   private:
+    size_t bytes_since_checkpoint_ = 0;
     std::istream &input_;
     uint64_t remaining_ = 0;
 };
@@ -148,13 +155,42 @@ Rig read_rig(Reader &reader) {
             Reader::fail("bone names an unknown source control");
     return rig;
 }
+mw34::orion_guard::Fit read_orion_guard_fit(Reader &reader) {
+    const auto count = reader.u32();
+    if (count < 4 || count > 4096)
+        Reader::fail("invalid Orion guard sample count");
+    mw34::orion_guard::Fit fit;
+    reader.need(24 + uint64_t(count) * 104);
+    for (auto &shift : fit.shifts)
+        for (auto &value : shift) {
+            value = reader.f32();
+            if (std::abs(value) > 0.5f)
+                Reader::fail("invalid Orion guard shift");
+        }
+    fit.samples.resize(count);
+    for (auto &sample : fit.samples) {
+        for (auto &feature : sample.key) {
+            feature = reader.f32();
+            if (std::abs(feature) > 16.0f)
+                Reader::fail("invalid Orion guard pose feature");
+        }
+        for (auto &weight : sample.weights) {
+            weight = reader.f32();
+            if (weight < 0.0f || weight > 1.0f)
+                Reader::fail("invalid Orion guard weight");
+        }
+    }
+    return fit;
+}
+
 } // namespace
 
 Mesh read_mesh(std::istream &input) {
+    loading::Measure timing(loading::Work::mesh);
     Reader reader(input);
     char magic[8];
     reader.bytes(magic, sizeof magic);
-    if (std::string_view(magic, 6) != "BWMESH" || magic[6] < '1' || magic[6] > '6' || magic[7])
+    if (std::string_view(magic, 6) != "BWMESH" || magic[6] < '1' || magic[6] > '7' || magic[7])
         Reader::fail("unsupported mesh format");
     Mesh mesh;
     mesh.version = unsigned(magic[6] - '0');
@@ -163,13 +199,28 @@ Mesh read_mesh(std::istream &input) {
         Reader::fail("invalid mesh batch count");
     if (mesh.version == 4)
         mesh.rig = read_rig(reader);
+    if (mesh.version == 7)
+        mesh.guard_fit = read_orion_guard_fit(reader);
+    std::array<bool, 2> seen_guards{};
     for (uint32_t i = 0; i < count; ++i) {
         Batch batch;
         batch.owner = reader.name();
-        batch.visibility = mesh.version == 1 ? batch.owner : reader.name(true);
-        if (mesh.version == 3 || mesh.version >= 5)
+        batch.visibility = mesh.version == 1 ? batch.owner : reader.name(mesh.version != 7);
+        if (mesh.guard_fit) {
+            batch.guard_side = reader.u32();
+            if (batch.guard_side > seen_guards.size())
+                Reader::fail("invalid Orion guard side");
+            if (batch.guard_side) {
+                auto &seen = seen_guards[batch.guard_side - 1];
+                if (seen || batch.owner != "hip" || batch.visibility != "hip_polys")
+                    Reader::fail("invalid Orion guard batch");
+                seen = true;
+            }
+        }
+        // BWMESH7 extends BWMESH2 with the two guard batches and a fit table.
+        if (mesh.version == 3 || mesh.version == 5 || mesh.version == 6)
             placement(reader, batch.placement_frame, batch.placement_offset);
-        if (mesh.version >= 5)
+        if (mesh.version == 5 || mesh.version == 6)
             placement(reader, batch.joint_frame, batch.joint_offset);
         if (mesh.version == 6) {
             placement(reader, batch.anchor_control, batch.anchor_position);
@@ -208,11 +259,14 @@ Mesh read_mesh(std::istream &input) {
         }
         mesh.batches.push_back(std::move(batch));
     }
+    if (mesh.guard_fit && !(seen_guards[0] && seen_guards[1]))
+        Reader::fail("missing Orion guard batch");
     reader.finish();
     return mesh;
 }
 
 Textures read_textures(std::istream &input) {
+    loading::Measure timing(loading::Work::bwtex);
     Reader reader(input);
     char magic[8];
     reader.bytes(magic, sizeof magic);
@@ -243,10 +297,11 @@ Textures read_textures(std::istream &input) {
         const size_t count = size_t(image.width) * image.height;
         reader.need(uint64_t(count) * 2);
         image.pixels.resize(count);
-        for (auto &pixel : image.pixels) {
-            uint8_t bytes[2];
-            reader.bytes(bytes, 2);
-            pixel = uint16_t(bytes[0]) | uint16_t(bytes[1]) << 8;
+        std::vector<uint8_t> bytes(count * 2);
+        reader.bytes(bytes.data(), bytes.size());
+        for (size_t pixel = 0; pixel < count; ++pixel) {
+            if (pixel % 65536 == 0) loading::checkpoint();
+            image.pixels[pixel] = uint16_t(bytes[pixel * 2]) | uint16_t(bytes[pixel * 2 + 1]) << 8;
         }
         textures.images.push_back(std::move(image));
     }

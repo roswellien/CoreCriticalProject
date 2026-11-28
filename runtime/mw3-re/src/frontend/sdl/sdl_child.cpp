@@ -1,4 +1,5 @@
 #include "frontend/sdl/sdl_child.h"
+#include "platform/loading.hpp"
 
 #include "frontend/sdl/log_start.h"
 
@@ -43,10 +44,18 @@ SDL_Process* start_child(const char* const* args) {
 namespace {
 std::string g_ready_file;
 bool g_ready = false;
+bool g_menu_ready = false;
+std::string g_last_status;
 }  // namespace
-void set_ready_file(const std::string& path) { g_ready_file = path, g_ready = false; }
+void set_ready_file(const std::string& path) {
+  g_ready_file = path;
+  g_ready = g_menu_ready = false;
+  g_last_status.clear();
+}
 void set_ready_status(const std::string& text) {
-  if (g_ready_file.empty()) return;
+  // Loads report many times a second; rewrite the file only when the text changes.
+  if (g_ready_file.empty() || (!text.empty() && text == g_last_status)) return;
+  g_last_status = text;
   const std::string path = g_ready_file + ".status";
   if (text.empty()) {
     std::remove(path.c_str());
@@ -58,6 +67,16 @@ void set_ready_status(const std::string& text) {
     std::fclose(f);
     std::remove(path.c_str());
     std::rename(tmp.c_str(), path.c_str());
+  }
+}
+void mark_menu_ready() {
+  if (g_menu_ready) return;
+  g_menu_ready = true;
+  std::printf("mw3: timing main menu presented at %lld ms since process start\n",
+              platform::loading::since_process_start_ms());
+  if (!g_ready_file.empty()) {
+    const std::string path = g_ready_file + ".menu";
+    if (std::FILE* file = std::fopen(path.c_str(), "wb")) std::fclose(file);
   }
 }
 void mark_ready() {

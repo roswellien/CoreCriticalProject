@@ -28,6 +28,7 @@ MAX_METADATA_BYTES = 2 * 1024 * 1024
 MAX_CLOSURE_BYTES = 4 * 1024**3
 MAX_MEMBERS = 20000
 ENVIRONMENT_POLICY = "mw3-re-explicit-windows-native-bootstrap-v2"
+_DEFAULT_CAPABILITIES = (("controller-profile", (1,)), ("input-bindings", (1,)), ("vsync", (1,)))
 _TOOL_NAMES = {"git": "git.exe", "cmake": "cmake.exe", "ninja": "ninja.exe",
                "clang_cl": "clang-cl.exe", "glslang": "glslangValidator.exe",
                "dxc": "dxc.exe", "dumpbin": "dumpbin.exe"}
@@ -242,6 +243,7 @@ class Inventory:
     source_commit: str
     builder: str
     build_id: str
+    capabilities: tuple[tuple[str, tuple[int, ...]], ...] = _DEFAULT_CAPABILITIES
 
 
 def _budget(members, generated=()):
@@ -554,17 +556,76 @@ def _pins(members, generated):
     return pins
 
 
-def _descriptor(pins, source_commit, builder, build_id):
+def _normalize_capabilities(capabilities):
+    if capabilities is None:
+        return _DEFAULT_CAPABILITIES
+    items = capabilities.items() if isinstance(capabilities, dict) else capabilities
+    return tuple((str(name), tuple(int(v) for v in versions)) for name, versions in items)
+
+
+def _file_contains_bytes(path, needle):
+    if not path.is_file():
+        return False
+    with _regular(path).open("rb") as stream:
+        overlap = bytes()
+        while chunk := stream.read(65536):
+            window = overlap + chunk
+            if needle in window:
+                return True
+            overlap = window[-(len(needle) - 1):] if len(needle) > 1 else bytes()
+    return False
+
+
+def _source_capabilities(source):
+    caps = [("controller-profile", (1,))]
+    main_source = source / "runtime/mw3-re/src/frontend/sdl/mw3_main.cpp"
+    # The header, --cc-input and the V2 headlight magic alone do not install the
+    # bindings; require the real startup call that feeds them to SdlInput.
+    if ((source / "runtime/mw3-re/src/frontend/sdl/input_bindings.h").is_file()
+            and _file_contains_bytes(main_source, b"--cc-input")
+            and _file_contains_bytes(main_source, b"input.set_input_bindings(")
+            and _file_contains_bytes(source / "runtime/mw3-re/src/platform/render3d.h", b"CC_MW3_HEADLIGHTS_V2")):
+        caps.append(("input-bindings", (1,)))
+    renderer_source = source / "runtime/mw3-re/src/frontend/core_critical/frame_renderer.cpp"
+    if (_file_contains_bytes(main_source, b"--cc-vsync")
+            and _file_contains_bytes(main_source, b"a.cc_assets.vsync =")
+            and _file_contains_bytes(renderer_source, b"config.vsync = assets.vsync;")):
+        caps.append(("vsync", (1,)))
+    reader = source / "runtime/mw3-re/src/platform/prepared_visuals.cpp"
+    binding = source / "runtime/mw3-re/src/frontend/core_critical/prepared_models.cpp"
+    planner = source / "tools/remaster-launcher/mw3_re_launch.py"
+    # Advertise the prepared bundle only when the reader, draw path and planner
+    # agree on the new format. Old descriptors deliberately have no such entry.
+    if (_file_contains_bytes(reader, b"mesh.guard_fit = read_orion_guard_fit(reader)")
+            and _file_contains_bytes(binding, b"shift_orion_guard(draw.world")
+            and _file_contains_bytes(planner, br'BWMESH7\0')):
+        caps.extend((("prepared-mechs", (1,)), ("mesh-payload", tuple(range(1, 8))),
+                     ("normal-map", (1, 2, 3)), ("surface-materials", (1,))))
+    environment_reader = source / "runtime/mw3-re/src/platform/prepared_environment.inc"
+    if (_file_contains_bytes(environment_reader, b"MW34-c1-height-stream-v1")
+            and _file_contains_bytes(renderer_source, b"void select_terrain_cell(")):
+        caps.extend((("environment-resources", (1,)), ("c1-height-stream", (1,))))
+    # The launcher's Upscaled cutscenes setting passes --hd-movie only when the runtime both parses
+    # it and has the Windows decoder that plays the clips (#559, #625).
+    if (_file_contains_bytes(main_source, b"--hd-movie")
+            and _file_contains_bytes(main_source, b"a.hd_movies[name] =")
+            and (source / "runtime/mw3-re/src/mech3/hd_movie_mf.cpp").is_file()):
+        caps.append(("hd-movie", (1,)))
+    return tuple(caps)
+
+
+def _descriptor(pins, source_commit, builder, build_id, *, capabilities=None):
     roles = dict(executable="bin/mw3.exe", profile="profile.json")
+    caps = {name: list(versions) for name, versions in _normalize_capabilities(capabilities)}
     return _json(dict(schema_version=2, engine="mw3-re", roles=roles,
         dependencies=sorted(set(pins) - set(roles.values())), files=pins,
-        capabilities={"controller-profile": [1]},
+        capabilities=caps,
         provenance=dict(source_commit=source_commit, build_id=build_id, builder=builder)))
 
 
 def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, components,
                    source_commit, builder, environment, observation=None, generated_files=(),
-                   additional_images=()):
+                   additional_images=(), capabilities=None):
     """Plan a bounded closure from explicit selected inputs; do not create or copy payloads."""
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit) or not _ID.fullmatch(builder) or builder.endswith("."):
         raise ValueError("Invalid observational source or builder identity")
@@ -676,7 +737,9 @@ def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, com
     # final inventory pins, or a size or path problem would only surface after hashing.
     provisional_generated = (*generated, *checked_generated)
     _budget(members, provisional_generated)
-    _descriptor(_pins(placeholder, provisional_generated), source_commit, builder, provisional_id)
+    normalized_capabilities = _normalize_capabilities(capabilities)
+    _descriptor(_pins(placeholder, provisional_generated), source_commit, builder, provisional_id,
+                capabilities=normalized_capabilities)
     pinned = []
     for member in members:
         digest = file_hash(member.source)
@@ -687,7 +750,8 @@ def make_inventory(*, executable, release_roots, crt_root, dumpbin, notices, com
                                     observation, checked_generated)
     generated = (*generated, *checked_generated)
     _budget(pinned, generated)
-    return Inventory(tuple(pinned), generated, (*roots, crt_root), source_commit, builder, build_id)
+    return Inventory(tuple(pinned), generated, (*roots, crt_root), source_commit, builder, build_id,
+                     capabilities=normalized_capabilities)
 
 
 def _copy_member(member, destination):
@@ -747,7 +811,8 @@ def stage_inventory(inventory, output):
             with destination.open("xb") as stream:
                 stream.write(data)
             pins[relative] = dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
-        descriptor = _descriptor(pins, inventory.source_commit, inventory.builder, inventory.build_id)
+        descriptor = _descriptor(pins, inventory.source_commit, inventory.builder, inventory.build_id,
+                                 capabilities=inventory.capabilities)
         if _physical(output) != set(pins) | {".incomplete"}:
             raise ValueError("Final physical inventory differs from the planned closure")
         # Recheck the exact bytes and sources immediately before the completion marker.
@@ -1735,7 +1800,8 @@ def produce(args):
             components=components, source_commit=args.commit, builder="mw3-re-recipe-v1",
             environment=environment, observation=observation,
             additional_images=((indeo_helper, "bin/mw3indeo.exe", "x86"),),
-            generated_files=(("resources/stock-headlights.bin", stock_headlight_catalog),))
+            generated_files=(("resources/stock-headlights.bin", stock_headlight_catalog),),
+            capabilities=_source_capabilities(paths["source"]))
         for member in inventory.members:
             basename = Path(member.relative).name.lower()
             if member.relative.startswith("bin/") and basename not in (

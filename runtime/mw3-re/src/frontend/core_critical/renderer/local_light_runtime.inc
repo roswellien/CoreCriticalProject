@@ -770,7 +770,11 @@ std::vector<mw34::headlights::StockProfile> headlight_catalog_;
 std::vector<mw34::effects::Candidate> headlight_candidates_;
 mw34::headlights::PlayerState headlight_player_;
 unsigned headlight_key_{};
+unsigned headlight_mouse_{};
+bool headlight_key_suppressed_latch_{};
+bool headlight_mouse_suppressed_latch_{};
 std::size_t headlight_peak_{};
+bool replay_headlights_warned_{};
 std::array<float, 6> local_projection_{};
 std::array<float, 12> local_camera_{};
 bool local_active_{};
@@ -826,22 +830,19 @@ void local_lights_load() {
     return;
   }
   std::ifstream bindings(std::filesystem::u8path(bridge_config_.headlight_bindings));
-  std::string magic, extra;
-  int button = -1;
-  if (!(bindings >> magic >> headlight_key_ >> button) ||
-      magic != "CC_MW3_HEADLIGHTS_V1" || headlight_key_ >= zin::kKeys ||
-      (headlight_key_ && !(headlight_key_ & 255)) || button < -1 || button > 25 ||
-      (bindings >> extra))
-    throw std::runtime_error("Headlights: invalid input binding");
-  const auto scan = headlight_key_ & 255;
-  if (scan == 0x43 || scan == 0x44 || scan == 0x57)
-    throw std::runtime_error("Headlights: key reserved for capture/replay");
-  if (!headlight_key_ || headlight_catalog_.empty())
-    fprintf(stderr, "[HEADLIGHTS] inactive: no keyboard binding or stock profile\n");
+  const auto binding = ::platform::HeadlightBinding::read(bindings, zin::kKeys);
+  headlight_key_ = binding.key;
+  headlight_mouse_ = binding.mouse;
+  if ((!headlight_key_ && !headlight_mouse_) || headlight_catalog_.empty())
+    fprintf(stderr, "[HEADLIGHTS] inactive: no keyboard or mouse binding, or no stock profile\n");
+}
+
+uint32_t headlight_wheel_mask() const override {
+  return ::platform::HeadlightBinding::wheel_mask(headlight_mouse_);
 }
 
 bool wants_player_headlight_ticks() const override {
-  return headlight_key_ && !headlight_catalog_.empty() && !current_mission_id_.empty();
+  return (headlight_key_ || headlight_mouse_) && !headlight_catalog_.empty() && !current_mission_id_.empty();
 }
 
 void player_headlight_tick(const ::platform::PlayerHeadlightTick &tick) override {
@@ -852,12 +853,29 @@ void player_headlight_tick(const ::platform::PlayerHeadlightTick &tick) override
   const auto *profile = asset ? mw34::headlights::match_original(
       headlight_catalog_, asset->name, asset->member_sha256) : nullptr;
   const auto &input = zin::state();
-  const auto key = zin::key_state(headlight_key_);
-  const bool pressed = (key & (zin::kPressed | zin::kHeld)) && !(key & zin::kReleased) &&
-                       input.modifiers == (headlight_key_ & 0x700);
+  const bool key_ready = headlight_key_ && input.kbd_ready;
+  const bool mouse_ready = headlight_mouse_ && input.mouse_ready && input.di;
+  const bool allowed = profile && tick.dt >= 0 && (key_ready || mouse_ready) && !input.char_callback;
+  if (!allowed || tick.shutdown || tick.generation != headlight_player_.owner.generation) {
+    headlight_key_suppressed_latch_ = false;
+    headlight_mouse_suppressed_latch_ = false;
+  }
+  bool pressed = false;
+  if (allowed && !tick.shutdown) {
+    const auto key = key_ready ? zin::key_state(headlight_key_) : 0;
+    const bool key_raw = (key & (zin::kPressed | zin::kHeld)) && !(key & zin::kReleased);
+    const bool key_down = ::platform::headlight_input_down(
+        key_raw, input.di && input.di->key_suppressed(headlight_key_ & 255),
+        headlight_key_suppressed_latch_) && input.modifiers == (headlight_key_ & 0x700);
+    const bool mouse_down = ::platform::headlight_input_down(
+        mouse_ready && input.di->mouse_input_down(headlight_mouse_),
+        mouse_ready && input.di->mouse_suppressed(headlight_mouse_),
+        headlight_mouse_suppressed_latch_);
+    pressed = key_down || mouse_down;
+  }
   headlight_player_.update(tick.generation, reinterpret_cast<std::uintptr_t>(node),
                            tick.tick, std::max(0.0f, tick.dt), tick.shutdown, pressed,
-                           profile && tick.dt >= 0 && input.kbd_ready && !input.char_callback);
+                           allowed);
   const auto intensity = headlight_player_.owner.envelope.current;
   if (!profile || intensity <= 0)
     return;
@@ -895,6 +913,57 @@ void player_headlight_tick(const ::platform::PlayerHeadlightTick &tick) override
   headlight_peak_ = std::max(headlight_peak_, headlight_candidates_.size());
 }
 
+void replay_headlights(const void *const *nodes, std::size_t count) override {
+  VisualFloatScope guard;
+  headlight_candidates_.clear();
+  // Unlike the player's lamps this needs no campaign mission id: arena maps have none.
+  if (headlight_catalog_.empty()) {
+    if (count && !replay_headlights_warned_) {
+      std::fprintf(stderr, "[HEADLIGHTS] replay: no stock headlight catalog loaded\n");
+      replay_headlights_warned_ = true;
+    }
+    return;
+  }
+  // Player lamps use ids from 1 << 63 + lamp; each replayed mech gets its own
+  // block of 64 so no two mechs' lamps share an id.
+  constexpr std::uint64_t kReplayLampBase = (1ULL << 63) + (1ULL << 32);
+  for (std::size_t mech = 0; mech < count; ++mech) {
+    const auto *node = static_cast<const zcls::Node *>(nodes[mech]);
+    if (!node)
+      continue;
+    const auto *asset = node->source_asset_root ? node->source_asset.get() : nullptr;
+    const auto *profile = asset ? mw34::headlights::match_original(
+        headlight_catalog_, asset->name, asset->member_sha256) : nullptr;
+    if (!profile)
+      continue;
+    zmth::Mat34 world;
+    zmth::push(&world);
+    zmth::load_identity();
+    const auto transformed = zcls::node_to_world(const_cast<zcls::Node *>(node), 1);
+    zmth::pop();
+    if (transformed)
+      continue;
+    ::platform::ModelDrawContext context{};
+    context.node = node;
+    context.model_to_world = world.m;
+    context.ordinary = true;
+    for (std::size_t i = 0; i < profile->lamps.size() && i < 64; ++i) {
+      const auto &lamp = profile->lamps[i];
+      std::optional<::platform::prepared::Matrix> pose;
+      if (lamp.space == "donor_bone")
+        pose = prepared_.donor_headlight_socket(context, lamp.attachment, nullptr);
+      else
+        pose = original_headlight_socket(context, lamp.attachment, nullptr);
+      if (!pose)
+        continue;
+      if (auto candidate =
+              mw34::headlights::spotlight(lamp, *pose, 1.0f, kReplayLampBase + mech * 64 + i))
+        headlight_candidates_.push_back(*candidate);
+    }
+  }
+  headlight_peak_ = std::max(headlight_peak_, headlight_candidates_.size());
+}
+
 void retire_headlight_node(std::uintptr_t node) override {
   headlight_player_.owner.retire_node(node, headlight_player_.owner.generation);
 }
@@ -904,6 +973,8 @@ void local_lights_clear() {
   fixture_view_.clear();
   local_fixture_sources_.clear();
   headlight_player_ = {};
+  headlight_key_suppressed_latch_ = false;
+  headlight_mouse_suppressed_latch_ = false;
   headlight_candidates_.clear();
   local_observed_.clear();
   local_native_.clear();
@@ -918,7 +989,15 @@ void local_lights_begin() {
   local_fixture_sources_.clear();
   local_active_ = false;
   local_native_.clear();
-  if (!bridge_config_.effect_lights || current_mission_id_.empty())
+  // The strict warm-up views populate render resources only. Their camera
+  // and wall-clock time must not seed the tick-zero lighting selection.
+  if (benchmark_run_ && benchmark_run_->strict() && !benchmark_run_->armed())
+    return;
+  // A multiplayer or IA map has no campaign profile. Admit its camera's
+  // world pass, since the preceding fade and tint passes have no projection.
+  if (!bridge_config_.effect_lights ||
+      (current_mission_id_.empty() &&
+       !(mission_world_loaded_ && zvid::capture_producer_view().present)))
     return;
   VisualFloatScope guard;
   const auto p = zmth::projection();
@@ -939,7 +1018,7 @@ void local_lights_begin() {
   for (float v : local_camera_)
     if (!std::isfinite(v))
       throw std::runtime_error("Local lights: invalid camera");
-  local_time_ = ztimer::state().total_scaled;
+  local_time_ = benchmark_time_.value_or(ztimer::state().total_scaled);
   if (!std::isfinite(local_time_) || local_time_ < 0.0)
     throw std::runtime_error("Local lights: invalid time");
   if (bridge_config_.fixture_lights) {
@@ -1009,6 +1088,11 @@ void local_lights_attach(vk::Scene &target) {
     }
   }
   target.effect_lights = mw34::effects::rank_frame_lights(sources, eye, 64, 16);
+  if (benchmark_run_ && benchmark_run_->armed()) {
+    // Use the weapon prefix, so steady fixture lights cannot mask a missing effect.
+    benchmark_effects_.lights = std::max(benchmark_effects_.lights,
+                                        static_cast<unsigned>(target.effect_lights.params[1]));
+  }
   local_packet_peak_ =
       std::max(local_packet_peak_,
                static_cast<std::uint64_t>(target.effect_lights.params[0]));

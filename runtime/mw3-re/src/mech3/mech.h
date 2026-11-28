@@ -202,7 +202,15 @@ struct Mech : Vehicle {
   uint32_t x624 = 0, x628 = 0, x62c = 0;  // +0x624..+0x62c
   int32_t hud_fall = 1;      // +0x638  0x0041ca30: the player's mech 0 while falling, others 1
   bool remote = false;       // vtable +0x5c: the network class's mechs (0x004d2a70), 0x0040bae0 here
-  bool invincible{};           // +0x630  the Invincible cheat (docs/damage.md)
+  // Ours (#287): an arena bot (not the host's mech). It is made like a local
+  // mech, so without this the network would send its state, shots and death
+  // as the host player's.
+  bool arena_bot = false;
+  // Ours (#289): the limping leg (0 or 1) while the walk/limp blend (slot 11)
+  // plays, else -1. The limp leaves anim_index at the step/walk slot, so the
+  // log reads the playing blend from here.
+  int limp_playing = -1;
+  bool invincible{};         // +0x630  the Invincible cheat (docs/damage.md)
   uint32_t x634 = 0;         // +0x634
   float x63c = 1.0f;         // +0x63c
   Vec3 x640{};               // +0x640
@@ -284,6 +292,15 @@ struct Mech : Vehicle {
   void ground_dust();                 // 0x004164f3.. / 0x00416d3a..: dust or a splash on the ground below
   void landing_pose();                // 0x0041660b..: landf from its start, its root kept
   void move(float dt, MechAnim* anim, float speed);  // 0x00417a80
+  // Ours (#289): the animate halves of the frame, split out of Move,
+  // ActionUpdate and Update so a replay puppet animates without simulating.
+  void advance_gait(float dt, MechAnim* anim);
+  void animate_gait(float dt, MechAnim* anim, int jets, const Vec3& saved);
+  void begin_action(MechAction* act, int kind);
+  void animate_action(float dt, MechAction* act, int kind);
+  void animate_torso_hip(float dt);
+  void animate_limbs(float dt);
+  void jet_effects(bool firing);  // JumpJets' sound, flame and force feedback
   // The pose on the parts (mech_pose.cpp, docs/movement-pose.md).
   float gait_blend(int jets) const;   // 0x00417c65..: the blend-in weight, -1 when none
   void pose_gait(MechAnim& a, int jets, const Vec3& saved);  // 0x00417bbc..0x0041818d in Move
@@ -371,6 +388,16 @@ struct World {
   float dt = 0.0f;                  // 0x0072c52c
   int32_t dead_updates = 0;         // 0x006099c0  frames a dead mech played its fall
   float move_volume_floor = 0.0f;   // 0x00605630  the movement sounds' volume at a standstill (0)
+  // Ours (#287, the arena's spectator seat): with no mission player, side
+  // A's team and enemy masks stand in for the player's where a shot is
+  // tagged hostile and where an AMS picks the shots it may engage, so each
+  // AMS judges hostile by its own mech's side. 0 outside an arena match,
+  // where the stock rules run unchanged.
+  uint32_t arena_side_a_team = 0;
+  uint32_t arena_side_a_enemies = 0;
+  // Ours (#287): an arena match is running with a spectator, not a player, so
+  // w.player is only the bot the view follows. Set by arena_start.
+  bool arena_spectating = false;
 };
 World& world();
 float& difficulty_scale();  // [0x00608e5c] the third of GameIntensity's floats: damage to your side (options.cpp)

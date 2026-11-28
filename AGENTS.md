@@ -82,6 +82,8 @@ making the repository public.
   after changing a skill.
 - `.githooks/`: commit and push checks, including formatting; turn them on once per
   clone with `git config core.hooksPath .githooks`.
+- `runtime/mw3-re/docs/arena.md`: the AI arena, for testing AI changes on bot
+  matches; `tools/arena-runner/run_batch.py` runs a batch with no window.
 - `docs/archive/claude-m4-continuation-handoff.md`: full continuation instructions.
 
 Agent rules live only in this file. `CLAUDE.md` and

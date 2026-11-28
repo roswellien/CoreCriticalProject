@@ -8,6 +8,9 @@
 // groups, the default bindings, the axis table and the controls file
 // (keys\<name>.zrd). Original file unknown: the code sits between
 // briefing.cpp and mech.cpp, after the options (named here after them).
+namespace platform {
+class Input;
+}  // namespace platform
 namespace zrdr { struct Node; }
 
 namespace mech3 {
@@ -90,7 +93,7 @@ void controls_save(const char* path);
 uint32_t controls_read_binding(zrdr::Node* entry, const char* key);  // 0x00412520
 // Ours (playtest W40): a saved map with no mouse button on TRIGGER1 and
 // mouse button 1 on nothing gets it back on TRIGGER1; true when it did.
-bool controls_repair_mouse_fire();
+bool controls_repair_mouse_fire(const platform::Input* di = nullptr);
 // Ours (W40, FIX (bug)): the map the settings save is the one kept here (at
 // the load and when the controls menus set it), never the live one.
 void controls_keep_saved();

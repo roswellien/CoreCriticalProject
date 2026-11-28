@@ -92,6 +92,9 @@ class Screen2D {
   virtual void begin_menu_observation(const uint16_t*, int, int, int) {}
   virtual void cancel_menu_observation() noexcept {}
   virtual void finish_menu_observation() noexcept {}
+  // Ours (#552): only a ready HD presenter may ask FastMenu to retain separate live layers.
+  // Native hosts keep the original bake; frame source/coverage validation still happens at present.
+  virtual bool hd_menu_background_ready() const { return false; }
   virtual void present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) = 0;
   // FIX (A): the back buffer locked over a Direct3D frame (0x00576d00 /
   // 0x00576d60): what the 2D code drew into the 16-bit layer goes over the
@@ -102,6 +105,20 @@ class Screen2D {
                           const uint8_t* alpha = nullptr, const uint16_t* colour = nullptr) {
     (void)pixels, (void)width, (void)height, (void)pitch, (void)rgb565, (void)key, (void)alpha, (void)colour;
   }
+  // Ours (#559, docs/fmv.md section 9): an HD movie's frame (32-bit RGBA,
+  // `pitch` bytes a row) shown over the whole window and presented, rows
+  // `src_top`..`src_bottom` of it (-1: all) kept in their shape as the 16-bit
+  // movies are on a wide screen (GameEngine::fmv_stretch). `serial` changes
+  // when the pixels do, so an unchanged frame isn't uploaded again. Rows
+  // must be packed (`pitch` == `width` * 4): the renderer uploads the
+  // buffer as it is, with no copy to strip padding. False when this screen
+  // can't show one, padded rows included (the movie's 16-bit buffer is shown).
+  virtual bool present_frame_rgba(const uint8_t* rgba, int width, int height, int pitch, uint64_t serial,
+                                  int src_top, int src_bottom) {
+    (void)rgba, (void)width, (void)height, (void)pitch, (void)serial, (void)src_top, (void)src_bottom;
+    return false;
+  }
+  virtual void release_frame_rgba() {}  // the frame's texture let go (the movie ended)
 };
 
 // Stands in for DirectInput as zInput uses it (DINPUT.dll's DirectInputCreateA,
@@ -150,6 +167,14 @@ class Input {
   // Additional profile buttons/triggers share the command state queried by
   // keyboard and joystick bindings. Most input backends have no overlay.
   virtual uint32_t command_state(int32_t) { return 0; }
+  // Snapshot extended inputs before the legacy reads consume buffered events.
+  virtual void begin_poll(bool /*text_entry*/, bool /*commands_enabled*/) {}
+  virtual bool key_suppressed(uint32_t /*key*/) const { return false; }
+  virtual bool mouse_suppressed(int32_t /*button*/) const { return false; }
+  virtual bool extended_command_pressed(int32_t /*command*/) const { return false; }
+  virtual bool mouse_input_down(int32_t /*mouse_id*/) const { return false; }
+  virtual void set_headlight_wheel(uint32_t /*mask*/) {}
+  virtual bool command_has_extended_binding(int32_t /*command*/) const { return false; }
 
   // SetCooperativeLevel's DISCL_ flags (1 exclusive, 2 non-exclusive, 4
   // foreground, 8 background): the keyboard 10, the mouse the game's input

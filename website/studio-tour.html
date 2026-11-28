@@ -5,13 +5,13 @@
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta
             name="description"
-            content="Visual tour and walkthrough of the MechWarrior 3 Visual 3D Mod Studio redesigned interface, featuring the Scene Outliner, CSS Grid Inspector, Terrain Sculptor, Atmosphere studio, and MechLab."
+            content="A visual tour of the early Mod Studio preview for MechWarrior 3 map and mission authors: map editor, scene outliner, property inspector, terrain sculptor, atmosphere controls and MechLab."
         />
         <meta name="theme-color" content="#141717" />
         <title>Mod Studio Interface Tour — Core Critical</title>
-        <link rel="icon" href="assets/plates/brand-mark.png" />
-        <link rel="stylesheet" href="styles.css" />
-        <script src="site.js" defer></script>
+        <link rel="icon" href="assets/plates/brand-mark-64.png" type="image/png" />
+        <link rel="stylesheet" href="styles.css?v=20261130" />
+        <script src="site.js?v=20261130" defer></script>
         <style>
             .tour-hero {
                 padding: 4rem 1.5rem 2rem;
@@ -219,18 +219,18 @@
     <body class="interior overview">
         <a class="skip-link" href="#main">Skip to content</a>
         <header class="site-header">
-            <a class="brand" href="index.html" aria-label="Core Critical home">
-                <img src="assets/plates/brand-mark.png" alt="" width="32" height="32" />
-                <span>CORE CRITICAL</span>
-            </a>
-            <button
+            <a class="brand" href="index.html" aria-label="Core Critical home"
+                ><img src="assets/plates/brand-mark-128.webp" alt="" width="32" height="32" /><span
+                    >CORE CRITICAL</span
+                ></a
+            ><button
                 class="menu-toggle"
                 type="button"
                 aria-expanded="false"
                 aria-controls="primary-nav"
             >
-                Menu
-                <svg viewBox="0 0 24 24" aria-hidden="true">
+                <span>Menu</span
+                ><svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M4 7h16M4 12h16M4 17h16" />
                 </svg>
             </button>
@@ -240,35 +240,43 @@
                 <a href="vulkan.html">Vulkan Graphics</a>
                 <a href="tools.html">Launcher &amp; Tools</a>
                 <a href="studio-tour.html" aria-current="page">Mod Studio</a>
+                <a href="news.html">News</a>
+                <a href="media.html">Media</a>
+                <a href="index.html#projects">More Projects</a>
                 <a href="about.html">About</a>
-                <a href="https://discord.gg/HK7pgngkD" target="_blank" rel="noopener noreferrer"
+                <a
+                    class="nav-external"
+                    href="https://discord.gg/NRkkmPa6ay"
+                    target="_blank"
+                    rel="noopener noreferrer"
                     >Discord</a
                 >
-                <a href="https://github.com/roswellien/CoreCriticalProject">GitHub</a>
+                <a class="nav-external" href="https://github.com/roswellien/CoreCriticalProject"
+                    >GitHub</a
+                >
             </nav>
         </header>
 
         <main id="main">
             <section class="tour-hero">
-                <div class="tour-pill">Development Preview • Live Engine Screenshots</div>
+                <div class="tour-pill">Early preview · untested</div>
                 <h1 class="tour-title">
                     MechWarrior 3 Mod Studio<br /><span style="color: #00f0ff"
                         >Interface Tour &amp; Walkthrough</span
                     >
                 </h1>
                 <p class="tour-subtitle">
-                    A comprehensive visual walkthrough of the overhauled user interface for the
-                    visual 3D mission and map studio, featuring the newly integrated Scene Outliner,
-                    non-overlapping CSS Grid Property Inspector, real-time Terrain Sculpting
-                    brushes, dynamic Atmosphere studio, MechLab, and Mission Objectives authoring
-                    suites.
+                    A visual walkthrough of the Mod Studio preview for map and mission authors: the
+                    scene outliner, property inspector, terrain sculpting brushes, atmosphere
+                    controls, MechLab and mission objectives. Mod Studio is an early preview that
+                    has not been tested in the game yet, so expect rough edges and changes.
                 </p>
 
                 <nav class="tour-nav-chips" aria-label="Quick jump">
                     <a class="tour-chip" href="#view-new-mission">New Mission</a>
                     <a class="tour-chip" href="#view-map">Map Editor</a>
                     <a class="tour-chip" href="#view-outliner">Scene Outliner</a>
-                    <a class="tour-chip" href="#view-inspector">CSS Grid Inspector</a>
+                    <a class="tour-chip" href="#view-inspector">Property Inspector</a>
                     <a class="tour-chip" href="#view-sculptor">Terrain Sculptor</a>
                     <a class="tour-chip" href="#view-atmosphere">Atmosphere Studio</a>
                     <a class="tour-chip" href="#view-mechlab">MechLab Loadout</a>
@@ -292,7 +300,7 @@
                         title="Click to view full resolution"
                     >
                         <img
-                            src="assets/plates/studio/mod-studio-new-mission-v2.png?v=20261103"
+                            src="assets/plates/studio/mod-studio-new-mission-v2.webp?v=20261126"
                             alt="Create New Mission and Project Wizard dialog"
                             loading="lazy"
                         />
@@ -365,7 +373,7 @@
                         title="Click to view full resolution"
                     >
                         <img
-                            src="assets/plates/studio/mod-studio-editor-v2.png?v=20261103"
+                            src="assets/plates/studio/mod-studio-editor-v2.webp?v=20261126"
                             alt="MechWarrior 3 Mod Studio Map Editor Workspace"
                             loading="lazy"
                         />
@@ -404,8 +412,8 @@
                                     <polyline points="20 6 9 17 4 12"></polyline>
                                 </svg>
                                 <span
-                                    ><strong>Floating Glassmorphic HUD</strong>: Quick-toggle
-                                    between 3D Orbit, 2D Tactical, Isometric, Selection Focus, and
+                                    ><strong>Floating camera toolbar</strong>: Quick-toggle between
+                                    3D Orbit, 2D Tactical, Isometric, Selection Focus, and
                                     Sculpting.</span
                                 >
                             </li>
@@ -436,7 +444,7 @@
                         title="Click to view full resolution"
                     >
                         <img
-                            src="assets/plates/studio/mod-studio-outliner-v2.png?v=20261103"
+                            src="assets/plates/studio/mod-studio-outliner-v2.webp?v=20261126"
                             alt="Scene Outliner tab with placed entities hierarchy"
                             loading="lazy"
                         />
@@ -494,8 +502,8 @@
                 <!-- Section 3: Property Inspector -->
                 <article class="tour-card" id="view-inspector">
                     <div class="tour-card-header">
-                        <h2>Non-Overlapping CSS Grid Property Inspector</h2>
-                        <span class="tour-tag">Layout Redesign</span>
+                        <h2>Property Inspector</h2>
+                        <span class="tour-tag">Layout</span>
                     </div>
                     <a
                         class="tour-card-img-wrap"
@@ -505,17 +513,16 @@
                         title="Click to view full resolution"
                     >
                         <img
-                            src="assets/plates/studio/mod-studio-inspector-v2.png?v=20261103"
-                            alt="Property Inspector with strict CSS grid layout"
+                            src="assets/plates/studio/mod-studio-inspector-v2.webp?v=20261126"
+                            alt="Property Inspector with labels and controls in two aligned columns"
                             loading="lazy"
                         />
                     </a>
                     <div class="tour-card-body">
                         <p>
-                            The Property Inspector has been completely refactored with a strict
-                            two-column CSS Grid layout (<code>105px 1fr</code>). Labels, inputs, and
-                            sliders are cleanly aligned with no overlapping fields, clipped text, or
-                            squished elements.
+                            The Property Inspector lays out every setting in two aligned columns.
+                            Labels, inputs, and sliders are cleanly aligned with no overlapping
+                            fields, clipped text, or squished elements.
                         </p>
                         <ul class="tour-features-list">
                             <li>
@@ -523,9 +530,8 @@
                                     <polyline points="20 6 9 17 4 12"></polyline>
                                 </svg>
                                 <span
-                                    ><strong>Strict CSS Grid Structure</strong>: Eliminates text
-                                    collisions across high-DPI displays and variable sidebar
-                                    widths.</span
+                                    ><strong>Aligned layout</strong>: Text stays readable on
+                                    high-DPI displays and at any sidebar width.</span
                                 >
                             </li>
                             <li>
@@ -576,7 +582,7 @@
                         title="Click to view full resolution"
                     >
                         <img
-                            src="assets/plates/studio/mod-studio-sculptor-v2.png?v=20261103"
+                            src="assets/plates/studio/mod-studio-sculptor-v2.webp?v=20261126"
                             alt="Terrain sculpting brushes and parameters"
                             loading="lazy"
                         />
@@ -644,7 +650,7 @@
                         title="Click to view full resolution"
                     >
                         <img
-                            src="assets/plates/studio/mod-studio-atmosphere-v2.png?v=20261103"
+                            src="assets/plates/studio/mod-studio-atmosphere-v2.webp?v=20261126"
                             alt="Atmosphere and weather configuration panel"
                             loading="lazy"
                         />
@@ -715,7 +721,7 @@
                         title="Click to view full resolution"
                     >
                         <img
-                            src="assets/plates/studio/mod-studio-mechlab-v2.png?v=20261103"
+                            src="assets/plates/studio/mod-studio-mechlab-v2.webp?v=20261126"
                             alt="MechLab chassis and loadout configurator modal"
                             loading="lazy"
                         />
@@ -785,7 +791,7 @@
                         title="Click to view full resolution"
                     >
                         <img
-                            src="assets/plates/studio/mod-studio-objectives-v2.png?v=20261103"
+                            src="assets/plates/studio/mod-studio-objectives-v2.webp?v=20261126"
                             alt="Mission objectives authoring modal"
                             loading="lazy"
                         />
@@ -855,7 +861,7 @@
                         title="Click to view full resolution"
                     >
                         <img
-                            src="assets/plates/studio/mod-studio-shortcuts-v2.png?v=20261103"
+                            src="assets/plates/studio/mod-studio-shortcuts-v2.webp?v=20261126"
                             alt="Interactive keyboard shortcuts reference dialog"
                             loading="lazy"
                         />

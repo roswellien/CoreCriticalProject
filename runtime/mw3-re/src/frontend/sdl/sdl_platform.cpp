@@ -1,3 +1,4 @@
+#include "gamez/zmodel/gmod_fog.h"
 #include "frontend/sdl/sdl_platform.h"
 #include "gamez/zclass/visual_distance.h"
 #include "upgrades/game_boxes.h"
@@ -25,6 +26,15 @@
 
 namespace sdlfe {
 
+bool SdlWindow::open_benchmark(int width, int height, bool fullscreen) {
+  fullscreen_ = fullscreen;
+  window_ = SDL_CreateWindow("MechWarrior 3 - Loading benchmark", width, height,
+                             SDL_WINDOW_HIDDEN | SDL_WINDOW_VULKAN);
+  if (!window_) return false;
+  show();
+  return true;
+}
+
 bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend backend,
                      const CoreCriticalQuality& quality, const CoreCriticalAssets& assets) {
   if (backend == RendererBackend::sdl && quality.draw_distance != 800)
@@ -32,6 +42,7 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
                         "mw3: --cc-draw-distance requires a Core Critical Vulkan backend\n"),
            false;
   zcls::set_visual_far_request(quality.draw_distance);
+  zmod::set_render_fog_distance(quality.fog_distance);
   if (backend == RendererBackend::sdl &&
       (quality.antialiasing != "off" || quality.anisotropy != "1" || !assets.empty()))
     return std::fprintf(stderr, "mw3: Core Critical quality requires a Core Critical Vulkan backend\n"), false;
@@ -41,7 +52,7 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
     if (adopt) return std::fprintf(stderr, "mw3: Core Critical Vulkan requires its own window\n"), false;
     auto flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;
     if (backend == RendererBackend::core_critical_wsi) flags |= SDL_WINDOW_VULKAN;
-    window_ = SDL_CreateWindow("MechWarrior 3", 1280, 960, flags);
+    if (!window_) window_ = SDL_CreateWindow("MechWarrior 3", 1280, 960, flags);
     if (!window_) return std::fprintf(stderr, "mw3: SDL_CreateWindow: %s\n", SDL_GetError()), false;
     try {
       render_ = cc_mw3_re::make_renderer(window_, backend, quality, assets);
@@ -78,6 +89,19 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
     std::printf("mw3 benchmark: backend=%s adapter=%s present=immediate\n",
                 SDL_GetGPUDeviceDriver(device_),
                 SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device_), SDL_PROP_GPU_DEVICE_NAME_STRING, "unknown"));
+  } else if (!hidden_ && !assets.vsync) {
+    SDL_GPUPresentMode mode = SDL_GPU_PRESENTMODE_VSYNC;
+    if (SDL_WindowSupportsGPUPresentMode(device_, window_, SDL_GPU_PRESENTMODE_IMMEDIATE)) {
+      mode = SDL_GPU_PRESENTMODE_IMMEDIATE;
+    } else if (SDL_WindowSupportsGPUPresentMode(device_, window_, SDL_GPU_PRESENTMODE_MAILBOX)) {
+      mode = SDL_GPU_PRESENTMODE_MAILBOX;
+    }
+    // VSync off is a preference, not a requirement: without a supported mode, or
+    // when the driver refuses it, SDL's default vsync swapchain stays.
+    if (mode == SDL_GPU_PRESENTMODE_VSYNC)
+      std::fprintf(stderr, "mw3: vsync off unavailable on this display, keeping vsync\n");
+    else if (!SDL_SetGPUSwapchainParameters(device_, window_, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
+      std::fprintf(stderr, "mw3: vsync off unavailable, keeping vsync: %s\n", SDL_GetError());
   }
   render_ = std::make_unique<SdlRender3D>(device_, window_);
   render_->set_shape(&shape_);
@@ -563,6 +587,67 @@ void SdlScreen2D::draw_layer(int width, int height, bool blend, bool sharp,
   render_->end_scene();
 }
 
+// Ours (#559, docs/fmv.md section 9): the HD movie frame drawn over the whole
+// window at its own resolution (never through the 16-bit buffer), its rows
+// kept in the shape the 16-bit movies have on a wide screen (movie_frame_fit).
+// A canvas scope with an unfitted shape makes the renderer's scene the whole
+// window (FrameRenderer sizes it by fit_rect), so the quad is in window pixels.
+bool SdlScreen2D::present_frame_rgba(const uint8_t* rgba, int width, int height, int pitch, uint64_t serial,
+                                     int src_top, int src_bottom) {
+  // create_texture and update_texture take packed rows, which the decoder
+  // gives (hd_movie_mf.cpp), so the frame is uploaded as it is, uncopied.
+  const bool packed_rows = pitch == width * 4;
+  if (!render_ || !rgba || width <= 0 || height <= 0 || !packed_rows) return false;
+  FloatScope float_scope;  // the renderer's calls leave the game's floating point as it was
+  if (serial != movie_serial_ || movie_texture_ < 0) {
+    if (movie_texture_ >= 0 && (movie_texture_w_ != width || movie_texture_h_ != height)) release_frame_rgba();
+    if (movie_texture_ < 0) {
+      movie_texture_ = render_->create_texture(width, height, rgba, 1);
+      movie_texture_w_ = width, movie_texture_h_ = height;
+    } else {
+      render_->update_texture(movie_texture_, width, height, rgba);
+    }
+    if (movie_texture_ < 0) return false;
+    movie_serial_ = serial;
+  }
+  int window_width = width, window_height = height;
+  if (hud_window_) SDL_GetWindowSizeInPixels(hud_window_, &window_width, &window_height);
+  window_width = std::max(1, window_width);  // a minimized window may report 0
+  window_height = std::max(1, window_height);
+  const FitRect fit = movie_frame_fit(float(window_width), float(window_height), width, height, src_top, src_bottom);
+  const bool has_rows = src_top >= 0 && src_bottom >= src_top && src_bottom < height;
+  const platform::MenuBackgroundUvRect uv =
+      has_rows ? platform::MenuBackgroundUvRect{0, float(src_top) / height, 1, float(src_bottom + 1) / height}
+               : platform::MenuBackgroundUvRect{0, 0, 1, 1};
+  platform::DrawState state;
+  state.texture = movie_texture_;
+  state.depth_write = false;
+  state.depth_always = state.sharp = true;
+  state.filter = platform::TextureFilter::kLinear;
+  int vx, vy, vw, vh;
+  render_->viewport(&vx, &vy, &vw, &vh);
+  render_->flush();
+  {
+    MenuCanvasScope canvas(*render_, hud_shape_, true);
+    render_->set_viewport(0, 0, window_width, window_height);
+    render_->clear(true, 0, 0, 0);
+    render_->begin_canvas_scene();
+    draw_menu_quad(*render_, {fit.x, fit.y, fit.w, fit.h}, uv, state);
+    render_->end_scene();
+    render_->present();
+  }
+  render_->set_viewport(vx, vy, vw, vh);
+  ++frames;
+  return true;
+}
+
+void SdlScreen2D::release_frame_rgba() {
+  if (movie_texture_ >= 0 && render_) render_->release_texture(movie_texture_);
+  movie_texture_ = -1;
+  movie_texture_w_ = movie_texture_h_ = 0;
+  movie_serial_ = 0;
+}
+
 void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) {
   if (menu_gpu_recording_) cancel_menu_observation();
   const bool sealed_menu = menu_gpu_sealed_;
@@ -636,6 +721,8 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
         if (!preflight_textures.empty()) {
           render_->prepare_canvas_textures(preflight_textures);
         }
+        if (hud_->has_menu_ripples())
+            render_->prepare_menu_ripple();
         live_replay_shown = true;
         if (live_hd_background_quad) {
           gpu_shown = true;
@@ -819,13 +906,28 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   render_->set_viewport(vx, vy, vw, vh);
 }
 
-bool SdlScreen2D::live_menu_gpu_enabled() const {
+// Ours (#552): constructors can run before the new menu becomes the app's current state.
+// Share the configuration gate, while recording/presentation still reject active Core gameplay.
+bool SdlScreen2D::menu_gpu_configured() const {
   if (!render_ || !hud_ || !menu_use_gpu_ || menu_observation_enabled_) return false;
+  return mw3_menu_gpu_env() == 1;
+}
+
+bool SdlScreen2D::live_menu_gpu_enabled() const {
+  if (!menu_gpu_configured()) return false;
   // The engine arms menu recording for every canvas, mission modes included. Gating here keeps
   // recording, the menu layout and present_16's menu canvas off for the whole mission.
   const bool mission_running = in_mission && in_mission();
-  if (mission_running) return false;
-  return mw3_menu_gpu_env() == 1;
+  return !mission_running;
+}
+
+// Ours (#552): the decision precedes the first menu frame, so use the presenter's readiness,
+// not last frame's blits. Live GPU frames need the uploaded HD texture. Disabling live replay
+// (or selecting CPU composition) still permits Stage C's HD compositor in present_16.
+bool SdlScreen2D::hd_menu_background_ready() const {
+  if (!render_ || !menu_background_) return false;
+  if (!menu_gpu_configured()) return true;
+  return menu_gpu_available_ && menu_hd_texture_ >= 0;
 }
 
 void SdlScreen2D::set_menu_layout_active(bool active) noexcept {
@@ -902,6 +1004,7 @@ SdlScreen2D::~SdlScreen2D() {
     if (texture >= 0) render_->release_texture(texture);
   if (menu_hd_texture_ >= 0) render_->release_texture(menu_hd_texture_);
   if (texture_ >= 0) render_->release_texture(texture_);
+  release_frame_rgba();
 }
 void SdlScreen2D::begin_overlay_16(const uint16_t* target, int width, int height, int pitch) {
   set_menu_layout_active(false);
@@ -1112,7 +1215,9 @@ void SdlPump::handle(const SDL_Event& e) {
     return;
   }
   const bool overlay_took = overlay_event && overlay_event(e);
-  if (input_ && !overlay_took) input_->on_event(e);
+  if (overlay_took) return;
+  if (intercept && intercept(e)) return;
+  if (input_) input_->on_event(e);
   switch (e.type) {
     case SDL_EVENT_QUIT:
       quit_ = true;

@@ -29,9 +29,13 @@ class OptionsState : public MenuState {
  public:
   enum Kind { kGame, kGfxAudio, kControls, kUpgrades };  // kUpgrades ours (options_menu.h)
   OptionsState(Kind k, Handle addr);  // the screen: 0x004379f0, 0x00438f60, 0x0042a590
+  ~OptionsState() override;           // ours: the backdrop dropped before the screen is deleted
   // 0x00438c90 (Game: the menus' screen mode 5 first), 0x0042da50 (the others).
+  // Ours on each: the page's backdrop as the menu background while it shows
+  // (Engine::menu_screen_backdrop, issue 519).
   bool enter() override;
-  void resume(uint32_t arg) override { ShellState::resume(arg); }  // 0x0042da70
+  void resume(uint32_t arg) override;   // 0x0042da70
+  void leave() override;                // ours
   Kind kind;
 };
 

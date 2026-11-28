@@ -1,0 +1,6 @@
+name=Example Thor B
+version=1.0
+author=Core Critical examples
+for=mw3 1.2
+description=An example mech row that borrows the Thor's models.
+mech=example_thor_b tech=clan mass=70 class=heavy model=thor title=Example Thor B

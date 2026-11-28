@@ -28,6 +28,9 @@ struct MoveCalls {
   void (*restore_camera)(Mech&) = nullptr;         // 0x00413b70
   void (*action_dust)(Mech&) = nullptr;            // test hook (0x00416d3a..0x00416e91): unset runs Mech::ground_dust
   void (*action_pose)(Mech&, MechAction&, const Vec3& hip, const float q[4]) = nullptr;  // test hook (0x00416fb8..0x00417293): unset runs Mech::pose_action
+  // Ours (#289): told when an action (action_name, mech_data.h) first starts, for
+  // the arena log. ActionUpdate calls it; a replay puppet's begin_action does not.
+  void (*action_started)(Mech&, int kind) = nullptr;
 };
 MoveCalls& move_calls();
 

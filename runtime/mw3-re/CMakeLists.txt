@@ -22,6 +22,8 @@ execute_process(COMMAND git describe --tags --match "v[0-9]*" --always --dirty W
                 OUTPUT_VARIABLE MW3_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 execute_process(COMMAND git rev-list --count HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                 OUTPUT_VARIABLE MW3_BUILD_NUMBER OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                OUTPUT_VARIABLE MW3_SOURCE_SHA OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 if(NOT MW3_VERSION)
   set(MW3_VERSION "unknown")
 endif()
@@ -44,6 +46,13 @@ if(MSVC)
   target_compile_options(cc_geometry_resources PRIVATE /EHsc)
 endif()
 add_library(mw3core STATIC
+  src/mech3/world_mesh.cpp  # ours: mw3view's world loader, shared with the replay viewer (#289)
+  src/frontend/sdl/arena_benchmark.cpp
+  src/mech3/replay_log.cpp  # ours (#289): an arena match log read for replay
+  src/mech3/replay_terrain.cpp  # ours (#289): an arena map seen from above
+  src/mech3/replay_puppet.cpp  # ours (#289): a logged mech posed by the game's own animation
+  src/mech3/replay_run.cpp  # ours (#289): mw3 --replay3d's log, map checks and session
+  src/mech3/replay_hooks.cpp  # ours (#289): what a 3D replay changes in the game's frame
   src/gamez/zmodel/gmod_geometry.cpp
   src/platform/prepared_visuals.cpp
   src/platform/prepared_hud.cpp
@@ -292,6 +301,12 @@ add_library(mw3core STATIC
   src/mech3/zai_firing.cpp
   src/mech3/zai_attack.cpp
   src/mech3/zai_nav.cpp
+  src/mech3/zai_hunt.cpp
+  src/mech3/arena_setup.cpp
+  src/mech3/arena_catalog.cpp
+  src/mech3/arena.cpp
+  src/mech3/arena_camera.cpp  # ours (#529): spectator camera motion
+  src/mech3/arena_log.cpp
   src/mech3/zai_repair.cpp
   src/mech3/zai_node.cpp
   src/mech3/zai_path.cpp
@@ -316,6 +331,7 @@ add_library(mw3core STATIC
   src/mech3/force_feedback.cpp
   src/mech3/app_fmv.cpp
   src/mech3/app_movie.cpp
+  src/mech3/hd_movie.cpp
   src/mech3/load_watch.cpp
   src/mech3/movie_shape.cpp
   src/mech3/movie_shape_table.cpp
@@ -386,6 +402,14 @@ add_library(mw3core STATIC
 )
 target_include_directories(mw3core PUBLIC src)
 target_link_libraries(mw3core PUBLIC cc_geometry_resources)
+if(WIN32)
+  target_link_libraries(mw3core PRIVATE ole32 windowscodecs)
+  # The HD movies' decoder (#559, docs/fmv.md section 9): Windows' own Media
+  # Foundation, nothing bundled; elsewhere hd_movie.cpp reports none.
+  target_sources(mw3core PRIVATE src/mech3/hd_movie_mf.cpp)
+  target_compile_definitions(mw3core PRIVATE MW3_HD_MOVIE_MF=1)
+  target_link_libraries(mw3core PRIVATE mfplat mfreadwrite mfuuid)
+endif()
 if(MSVC)
   target_compile_options(mw3core PRIVATE /EHsc)
 endif()
@@ -632,6 +656,14 @@ if(MSVC)
 endif()
 add_test(NAME mw3render_worker_checks COMMAND mw3render_worker_checks)
 set_tests_properties(mw3render_worker_checks PROPERTIES TIMEOUT 15)
+add_executable(mw3derived_cache_checks tests/test_derived_cache.cpp)
+target_include_directories(mw3derived_cache_checks PRIVATE src)
+target_link_libraries(mw3derived_cache_checks PRIVATE Threads::Threads)
+if(MSVC)
+  target_compile_options(mw3derived_cache_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3derived_cache_checks COMMAND mw3derived_cache_checks)
+set_tests_properties(mw3derived_cache_checks PROPERTIES TIMEOUT 30)
 add_executable(mw3prepared_checks tests/test_prepared_visuals.cpp)
 target_include_directories(mw3prepared_checks PRIVATE third_party)
 target_link_libraries(mw3prepared_checks PRIVATE mw3core)
@@ -672,6 +704,13 @@ add_executable(mw3tests
   tests/test_camera_visual_far.cpp
   tests/test_lance.cpp
   tests/test_nav.cpp
+  tests/test_hunt.cpp
+  tests/test_arena.cpp
+  tests/test_arena_camera.cpp
+  tests/test_arena_benchmark.cpp
+  tests/test_replay.cpp
+  tests/test_replay_game.cpp
+  tests/test_arena_game.cpp
   tests/test_setup_sources.cpp
   tests/test_update.cpp
   tests/test_data_folder.cpp
@@ -686,7 +725,9 @@ add_executable(mw3tests
   tests/test_load_watch.cpp
   tests/test_movie_shape.cpp
   tests/test_fmv_stream.cpp
+  tests/test_hd_movie.cpp
   tests/test_mods.cpp
+  src/upgrades/mods/tests/test_pack_library.cpp
   tests/test_mod_install.cpp
   tests/test_import_folder.cpp
   tests/test_found_worlds.cpp
@@ -716,8 +757,8 @@ add_executable(mw3tests
 if(WIN32)
   target_sources(mw3tests PRIVATE tools/windows/utf8.manifest)
 endif()
-target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export)
-target_include_directories(mw3tests PRIVATE third_party)
+target_link_libraries(mw3tests PRIVATE mw3core mw3ground_export Threads::Threads)
+target_include_directories(mw3tests PRIVATE third_party tests)  # nlohmann-json and the shared test runner
 # Tests that read the player's install skip themselves when it is not there.
 target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
                                           MW3_TEST_TMP_ROOT="${CMAKE_BINARY_DIR}"
@@ -729,6 +770,17 @@ if(MSVC)
   target_compile_options(mw3geometry_checks PRIVATE /EHsc)
 endif()
 add_test(NAME mw3geometry_checks COMMAND mw3geometry_checks)
+# The HD movie decoder on a clip it makes itself (#559); 77, CTest's skip,
+# when this Windows can't encode H.264/AAC.
+if(WIN32)
+  add_executable(mw3hd_movie_checks tests/test_hd_movie_mf.cpp)
+  target_link_libraries(mw3hd_movie_checks PRIVATE mw3core ole32 mfplat mfreadwrite mfuuid)
+  if(MSVC)
+    target_compile_options(mw3hd_movie_checks PRIVATE /EHsc)
+  endif()
+  add_test(NAME mw3hd_movie_checks COMMAND mw3hd_movie_checks)
+  set_tests_properties(mw3hd_movie_checks PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 
 # The SDL3 front end and the programs on it.
 option(MW3_CORE_CRITICAL_VULKAN "Build the experimental Core Critical Vulkan/DXGI renderer" OFF)
@@ -753,6 +805,7 @@ if(SDL3_FOUND)
     src/frontend/sdl/sdl_install.cpp
     src/frontend/sdl/sdl_music.cpp
     src/frontend/sdl/sdl_platform.cpp
+    src/frontend/sdl/sdl_loading.cpp
     src/frontend/sdl/gpu_hud.cpp
     src/frontend/sdl/gpu_hud_menu_sprites.cpp
     src/frontend/sdl/sdl_mods.cpp
@@ -877,6 +930,11 @@ if(SDL3_FOUND)
       src/frontend/sdl/campaign_chain.cpp
       src/frontend/sdl/modes_chain.cpp
       src/frontend/sdl/first_run_import.cpp
+      src/frontend/sdl/replay_view.cpp
+      src/frontend/sdl/replay_ui.cpp
+      src/frontend/sdl/replay3d_view.cpp
+      src/frontend/sdl/arena_camera_view.cpp  # ours (#529): the watched arena's spectator camera
+      src/frontend/sdl/watch_launch.cpp
     )
     target_link_libraries(mw3 PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
     if(MSVC)
@@ -902,7 +960,7 @@ if(SDL3_FOUND)
     if(MW3_CORE_CRITICAL_VULKAN)
       target_compile_definitions(mw3 PRIVATE CC_MW3_RE_ADAPTER=1)
     endif()
-    target_compile_definitions(mw3 PRIVATE MW3_VERSION="${MW3_VERSION}")
+    target_compile_definitions(mw3 PRIVATE MW3_SOURCE_SHA="${MW3_SOURCE_SHA}" MW3_VERSION="${MW3_VERSION}")
     # The launcher's art (assets/launcher) in a development build; a package
     # carries it beside the exe (tools/windows/package.cmd) or in the app's
     # Resources (tools/macos/make_app.sh), and keeps no path of this machine.
@@ -978,6 +1036,8 @@ if(SDL3_FOUND)
     add_executable(mw3sdltests
       tests/main.cpp
       tests/test_sdl_frontend.cpp
+      tests/test_input_bindings.cpp
+      tests/test_loading.cpp
       tests/test_sdl_new_world.cpp
       tests/test_win_cmdline.cpp
       tests/test_log_start.cpp
@@ -1040,9 +1100,8 @@ if(SDL3_FOUND)
     message(STATUS "SDL3_ttf not found: mw3 is not built (brew install sdl3_ttf)")
   endif()
   # Development tools (not part of the port): the world viewer.
-  add_executable(mw3view tools/viewer/viewer.cpp tools/viewer/scene.cpp)
+  add_executable(mw3view tools/viewer/viewer.cpp)
   target_link_libraries(mw3view PRIVATE mw3core mw3sdl SDL3::SDL3)
-  target_include_directories(mw3view PRIVATE tools/viewer)
   target_compile_definitions(mw3view PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}")
   # The importer's movies (docs/fmv.md, The imported movies): only with FFmpeg's
   # libraries (Indeo 5 decoding, the MPEG-1 encoder); not needed to build the game.

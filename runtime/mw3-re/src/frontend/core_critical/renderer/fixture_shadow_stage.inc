@@ -589,7 +589,7 @@ void drop_fixture_shadow() {
   if (fixtureShadowImage)
     f.vkDestroyImage(device, fixtureShadowImage, nullptr);
   if (fixtureShadowMemory)
-    f.vkFreeMemory(device, fixtureShadowMemory, nullptr);
+    release_memory(device, fixtureShadowMemory, nullptr);
   if (fixtureShadowVert)
     f.vkDestroyShaderModule(device, fixtureShadowVert, nullptr);
   if (fixtureShadowFrag)
@@ -597,5 +597,5 @@ void drop_fixture_shadow() {
   if (fixtureTlBuffer.buffer)
     f.vkDestroyBuffer(device, fixtureTlBuffer.buffer, nullptr);
   if (fixtureTlBuffer.memory)
-    f.vkFreeMemory(device, fixtureTlBuffer.memory, nullptr);
+    release_memory(device, fixtureTlBuffer.memory, nullptr);
 }

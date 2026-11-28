@@ -60,6 +60,7 @@
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zweapon/zweapon.h"
 #include "gamez/zentity/zent_init.h"
+#include "mech3/replay_hooks.h"
 #include "mech3/cheats.h"
 #include "mech3/cockpit_sound.h"
 #include "mech3/landmines.h"
@@ -106,6 +107,7 @@
 #include "mech3/mission_world.h"
 #include "gamez/zclass/cls_di.h"
 #include "mech3/options.h"
+#include "mech3/arena.h"
 #include "mech3/player.h"
 #include "mech3/sensors.h"
 #include "mech3/zai_brain.h"
@@ -114,6 +116,8 @@
 #include "mech3/zrdraiv.h"
 #include "mech3/zainetedit.h"
 #include "mech3/zrdrvalve.h"
+#include "mech3/spectator_seat.h"
+#include "platform/loading.hpp"
 #include "platform/render3d.h"
 #include "upgrades/mods/save_mods.h"
 
@@ -312,7 +316,12 @@ struct WiredPlayerHooks : PlayerHooks {
   GameEngine* e = nullptr;
   void tick_41e3f0(float dt) override { mech_dead_tick(dt); }  // 0x0041e3f0 on 0x00605510
   void tick_537f20(int32_t v) override { zmod::material_sweep(v); }  // 0x00537f20: the unused materials freed (IA, multiplayer)
-  std::map<Handle, int> controls;  // the AI controllers made: 1 a mech's, 2 a vehicle's
+  // The controllers made, by kind, so each is deleted and asked as what it is.
+  enum ControlsKind { kAiMech = 1, kAiVehicle = 2, kReplayMech = 3 };
+  std::map<Handle, ControlsKind> controls;
+  // Ours (#289): set while a replay puppet is made, so the AI mech path
+  // gives it ReplayControls instead of a pilot.
+  bool make_replay_controls = false;
   std::set<Handle> params;         // their brains' settings, as vt+0x90 gives them
   std::set<Handle> mechs;          // the AI mechs made
   std::set<Handle> vehicles;       // the basic vehicles made
@@ -471,14 +480,19 @@ struct WiredPlayerHooks : PlayerHooks {
   // The AI controllers: the port's, over the vehicle's compiled net and its
   // record (the blocks player.cpp allocates for them are not used).
   Handle ai_mech_controls(Handle, Handle net, const ai::AivRecord* rec) override {
+    if (make_replay_controls) {
+      const Handle h = e->handle_of(new ReplayControls());
+      controls[h] = kReplayMech;
+      return h;
+    }
     const Handle h = e->handle_of(new AiControls(nullptr, as<ai::AiNet>(net), *rec));
-    controls[h] = 1;
+    controls[h] = kAiMech;
     return h;
   }
   Handle alloc_4ac860(uint32_t size) override { return e->alloc_block(size); }
   Handle ai_vehicle_controls(Handle, Handle net, const ai::AivRecord* rec) override {
     const Handle h = e->handle_of(new ai::AiVehicleControls(nullptr, as<ai::AiNet>(net), *rec));
-    controls[h] = 2;
+    controls[h] = kAiVehicle;
     return h;
   }
   Handle controls_interface(Handle ctl) override { return ctl; }
@@ -493,16 +507,27 @@ struct WiredPlayerHooks : PlayerHooks {
       params.erase(e->handle_of(&b->params));
       e->forget_object(&b->params);
     };
-    if (it->second == 1) {
-      AiControls* c = as<AiControls>(ictl);
-      forget_params(c->brain.get());
-      e->forget_object(c);
-      delete c;
-    } else {
-      ai::AiVehicleControls* c = as<ai::AiVehicleControls>(ictl);
-      forget_params(c->brain.get());
-      e->forget_object(c);
-      delete c;
+    switch (it->second) {
+      case kAiMech: {
+        AiControls* c = as<AiControls>(ictl);
+        forget_params(c->brain.get());
+        e->forget_object(c);
+        delete c;
+        break;
+      }
+      case kAiVehicle: {
+        ai::AiVehicleControls* c = as<ai::AiVehicleControls>(ictl);
+        forget_params(c->brain.get());
+        e->forget_object(c);
+        delete c;
+        break;
+      }
+      case kReplayMech: {
+        ReplayControls* c = as<ReplayControls>(ictl);
+        e->forget_object(c);
+        delete c;
+        break;
+      }
     }
     controls.erase(it);
   }
@@ -519,7 +544,12 @@ struct WiredPlayerHooks : PlayerHooks {
       params.insert(h);
       return h;
     }
-    ai::Brain* b = it->second == 1 ? as<AiControls>(ictl)->brain.get() : as<ai::AiVehicleControls>(ictl)->brain.get();
+    ai::Brain* b = nullptr;
+    switch (it->second) {
+      case kAiMech: b = as<AiControls>(ictl)->brain.get(); break;
+      case kAiVehicle: b = as<ai::AiVehicleControls>(ictl)->brain.get(); break;
+      case kReplayMech: break;  // no pilot
+    }
     if (!b) return 0;
     const Handle h = e->handle_of(&b->params);
     params.insert(h);
@@ -528,8 +558,12 @@ struct WiredPlayerHooks : PlayerHooks {
   // The mech itself is the port's (mech3/mech_build) on the AI's controller.
   Handle mech_create(int32_t mech, Handle ctl, int32_t config, const char* name) override {
     void* c = e->object_of(ctl);
-    if (!c || controls.count(ctl) == 0 || controls[ctl] != 1) return PlayerHooks::mech_create(mech, ctl, config, name);
-    void* m = build_ai_mech(mech, static_cast<MechControls*>(static_cast<AiControls*>(c)), config, name);
+    const auto kind = controls.find(ctl);
+    if (!c || kind == controls.end() || kind->second == kAiVehicle)
+      return PlayerHooks::mech_create(mech, ctl, config, name);
+    MechControls* mc = kind->second == kAiMech ? static_cast<MechControls*>(static_cast<AiControls*>(c))
+                                                : static_cast<MechControls*>(static_cast<ReplayControls*>(c));
+    void* m = build_ai_mech(mech, mc, config, name);
     if (!m) return 0;
     g_ai_names.emplace_back(name ? name : "");
     g_ai_mechs.push_back({m, c, nullptr});
@@ -1596,6 +1630,9 @@ struct WiredMissionHooks : MissionHooks {
   void stations_update(Handle st, float dt, Handle vehicle) override {
     if (program_mcb_waynet() && st == e->handle_of(program_mcb_waynet())) return;
     if (void* w = e->object_of(st); w && program_is_nav_waynet(w)) {  // vt+0x6c 0x00479c50
+      // Ours (#287): a spectator (the arena's seat) has no vehicle to reach
+      // nav points with; the frame reads the vehicle's place.
+      if (!vehicle) return;
       program_nav_waynet_frame(w, e->object_of(vehicle));
       return;
     }
@@ -1750,6 +1787,7 @@ struct WiredMissionHooks : MissionHooks {
   void progress(float f) override {
     if (f == 0.0f) load_t0_ = std::chrono::steady_clock::now();  // a mission load begins (mission.cpp)
     program_briefing_progress(f);
+    platform::loading::report_percent(static_cast<int>(f * 100));
   }
   std::chrono::steady_clock::time_point load_t0_ = std::chrono::steady_clock::now();
   void fn_431800() override { mech3::mech_canned_nodes_free(); }  // the canned effects' node copies
@@ -1769,6 +1807,7 @@ struct WiredMissionHooks : MissionHooks {
   void progress_text(const char* s) override {
     program_briefing_line(s);
     LoadWatch::step(s);
+    platform::loading::report(s, platform::loading::progress.percent);
     if (s && *s && !e->quiet)
       std::printf("mw3: load: %s (%lld ms)\n", s,
                   static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2391,6 +2430,9 @@ void wire_mission_hooks(GameEngine* e) {
   keys.debug_camera = debug_camera;
   if (e) {
     keys.cycle_camera = [] {  // 0x0040aed0 on [0x005f4c8c]
+      // Ours (#287): in an arena match the key moves the spectator's view to
+      // the next standing bot instead.
+      if (arena::arena_view_next()) return;
       if (PlayerView* v = program_view()) v->cycle_camera();
     };
     keys.message_toggle = [] {  // 0x0040f070
@@ -2485,6 +2527,8 @@ void wire_mission_hooks(GameEngine* e) {
 // addition standing in for the briefing's Launch button) the Core state.
 void GameEngine::missions_start(uint32_t list) {
   if (list != 0x6098d0) return Engine::missions_start(list);
+  if (ReplayHooks* replay = replay_hooks()) replay->scene_load_enter();
+  platform::loading::Session loading("mission-load", "Loading mission");
   Missions& m = missions();
   // zEntity's list: emptied by the last cleanup (0x0049dc40) but for the
   // stealth object, which the cleanup puts back (the world's, kept when the
@@ -2512,7 +2556,8 @@ void GameEngine::missions_start(uint32_t list) {
       static_cast<int32_t>(launch_.number), !m.failed);
   zvid::producer_mission_changed(identity);
   if (auto *render = platform_parts().render) {
-    render->mission_changed(identity);
+    platform::loading::Phase phase("renderer-mission-preparation");
+    render->mission_scene_changed(identity, !m.failed);
   }
   zcls::Node* cam = mission_node(*this, camera_);
   if (launch_.active && launch_.have_pos && cam) {  // as the debug viewer places it (render.md section 0)
@@ -2533,7 +2578,10 @@ void GameEngine::missions_start(uint32_t list) {
     // (0x0046ceb0, briefing.cpp), then the player's mech (0x00491150).
     if (launch_.type == 3) multiplayer_launch_prep();
     LaunchedMech s;
-    if (!launch_player() || !launched_mech(&s)) {
+    const bool launched = launch_player();
+    if (launched && launch_.spectator) {
+      // Ours (#287): a spectator's seat makes no mech by design.
+    } else if (!launched || !launched_mech(&s)) {
       std::fprintf(stderr, "mw3: the launch made no mech\n");
     } else if (!quiet) {
       std::fprintf(stderr, "mw3: launched the %s: %d parts, %d weapons, %d heat sinks, %.1f m tall, %.1f m/s\n",
@@ -2667,6 +2715,7 @@ void GameEngine::missions_reset(uint32_t list) {
 void GameEngine::set_launch(const Launch& l) {
   launch_ = l;
   launch_.active = true;
+  set_launch_spectator(l.spectator);  // ours (#287)
   g_debug_campaign.reset();
   slot_ = 0;  // made again for this launch's mech: a mission unload frees the last one's types
   // The blocks are made once and reused; the chosen pilot's handle is kept.
@@ -2803,7 +2852,8 @@ uint32_t GameEngine::vcall(Handle obj, uint32_t slot, std::initializer_list<Arg>
     if (zcls::Node* cam = mission_node(*this, camera_)) {
       ++zcls::frames().frame;
       const zvid::ProducerPurposeScope producer_view(platform::ProducerPurpose::MainWorld);
-      zcls::render_world(cam, 0);
+      // Ours (#287): a hidden arena match draws nothing (arena.h, set_arena_headless).
+      if (!arena::arena_headless()) zcls::render_world(cam, 0);
       scene_drawn_ = true;
     }
     return 0;
@@ -2863,6 +2913,30 @@ Handle GameEngine::alloc_block(uint32_t size) {
 void hook_census_report(const char* key) {
   if (GameEngine* g = engine_of_hooks()) g->unported(key, {});
 }
+
+// Ours (#287): a bot made as player.cpp makes a mission's AI mech
+// (create_ai_mech), on `net` (an ai::AiNet) and `rec` (an ai::AivRecord).
+void* program_create_ai_mech(int32_t mech, const char* name, void* net, void* rec) {
+  GameEngine* e = g_player_hooks.e;
+  if (!e || !net || !rec) return nullptr;
+  const Handle m = create_ai_mech("arena", name, mech, static_cast<ai::AivRecord*>(rec),
+                                  e->handle_of(static_cast<ai::AiNet*>(net)));
+  return m ? e->object_of(m) : nullptr;
+}
+
+// Ours (#289): a replay puppet, made by the same path as an AI mech (skin,
+// team masks and placing are the game's own) but on ReplayControls, so no
+// pilot ever steers it. `net` only satisfies create_ai_mech; the replay
+// controls never read it.
+void* program_create_replay_mech(int32_t mech, const char* name, void* net, void* rec) {
+  g_player_hooks.make_replay_controls = true;
+  void* m = program_create_ai_mech(mech, name, net, rec);
+  g_player_hooks.make_replay_controls = false;
+  return m;
+}
+
+void GameEngine::arena_start() { arena::arena_start(); }
+void GameEngine::arena_tick() { arena::arena_tick(); }
 
 // Ours (W58, docs/lancemate-pathing.md): as play starts, the 3 x 3 tiles
 // round the player built when a pilot uses the grid (the lance starts by him).

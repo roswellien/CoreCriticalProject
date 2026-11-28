@@ -17,7 +17,6 @@ on:
       - "docs/**"
   pull_request:
     paths-ignore:
-      - "website/**"
       - "docs/**"
 
 permissions:
@@ -83,6 +82,8 @@ jobs:
         run: python tools/check.py --setup --only format-check
       - name: Build, CTest and C++ format check
         run: python tools/check.py --only build --only ctest --only format-check
+      - name: Content pack contracts check
+        run: python tools/check.py --only pack-contracts
       - name: Qualify authored Windows native staging and pinned planning (34 cases)
         if: runner.os == 'Windows'
         shell: pwsh

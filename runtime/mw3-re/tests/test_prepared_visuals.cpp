@@ -15,6 +15,7 @@
 
 #include "frontend/core_critical/renderer/material_normals.hpp"
 #include "frontend/core_critical/renderer/normal_codec.hpp"
+#include "frontend/core_critical/renderer/resource_timing.hpp"
 #include "frontend/core_critical/renderer/surface_materials.hpp"
 
 #include <atomic>
@@ -111,7 +112,8 @@ std::string build_bwsfm1(std::uint64_t mesh_hash, float height_amp, float max_di
                          std::uint32_t thick_img = mw34::materials::no_surface_image,
                          std::uint32_t tess_cap = 4U, float sss_part = 0.0f, float sss_rad = 0.0f,
                          float thick_scale = 0.0f, float roughness = 0.7f,
-                         float reflectivity = 0.04f, float metallic = 0.0f) {
+                         float reflectivity = 0.04f, float metallic = 0.0f,
+                         std::uint32_t version = 2U) {
     using namespace mw34::materials;
     const std::array<unsigned char, 16> h_pixels{
         32, 0, 0, 255, 96, 0, 0, 255, 160, 0, 0, 255, 224, 0, 0, 255,
@@ -121,7 +123,7 @@ std::string build_bwsfm1(std::uint64_t mesh_hash, float height_amp, float max_di
     };
 
     std::string out("BWSFM1\0\0", 8);
-    write_u32(out, 1U);        // version
+    write_u32(out, version);   // version
     write_u32(out, 2U);        // batch_count
     write_u32(out, 2U);        // record_count
     write_u32(out, 2U);        // image_count
@@ -194,16 +196,30 @@ std::string build_bwsfm1(std::uint64_t mesh_hash, float height_amp, float max_di
     write_u32(out, surface_role_height);
     write_u32(out, 2U);
     write_u32(out, 2U);
-    write_u64(out, normal_hash(h_pixels.data(), h_pixels.size()));
-    out.append(reinterpret_cast<const char *>(h_pixels.data()), h_pixels.size());
+    if (version == 1U) {
+        write_u64(out, normal_hash(h_pixels.data(), h_pixels.size()));
+        out.append(reinterpret_cast<const char *>(h_pixels.data()), h_pixels.size());
+    } else {
+        const std::array<unsigned char, 4> scalar{h_pixels[0], h_pixels[4], h_pixels[8],
+                                                  h_pixels[12]};
+        write_u64(out, normal_hash(scalar.data(), scalar.size()));
+        out.append(reinterpret_cast<const char *>(scalar.data()), scalar.size());
+    }
 
     // Image 1: thick_canopy
     write_str(out, "thick_canopy");
     write_u32(out, surface_role_thickness);
     write_u32(out, 2U);
     write_u32(out, 2U);
-    write_u64(out, normal_hash(t_pixels.data(), t_pixels.size()));
-    out.append(reinterpret_cast<const char *>(t_pixels.data()), t_pixels.size());
+    if (version == 1U) {
+        write_u64(out, normal_hash(t_pixels.data(), t_pixels.size()));
+        out.append(reinterpret_cast<const char *>(t_pixels.data()), t_pixels.size());
+    } else {
+        const std::array<unsigned char, 4> scalar{t_pixels[0], t_pixels[4], t_pixels[8],
+                                                  t_pixels[12]};
+        write_u64(out, normal_hash(scalar.data(), scalar.size()));
+        out.append(reinterpret_cast<const char *>(scalar.data()), scalar.size());
+    }
 
     return out;
 }
@@ -407,7 +423,37 @@ void check_surface_materials_contract() {
         require(pack.records[0]->roughness == 0.7f, "Default roughness mismatch");
         require(pack.records[0]->reflectivity == 0.04f, "Default reflectivity mismatch");
         require(pack.records[0]->metallic == 0.0f, "Default metallic mismatch");
-        require((pack.images[0].pixels[0] & 0xffU) == 32U, "Red channel scalar height mismatch");
+        require(pack.version == 2U, "Version-2 scalar sidecar was not accepted");
+        require(pack.images[0].pixels.size() == 4 && pack.images[0].pixels[0] == 32U,
+                "Grayscale scalar height mismatch");
+        std::istringstream exact(sidecar);
+        const auto bounded = read_surface_materials(exact, "bushwacker:close", mesh_hash,
+                                                    materials, sidecar.size(), 8);
+        require(bounded.images.size() == 2, "Exact file and decoded budgets rejected");
+        for (const auto limits : {std::make_pair(sidecar.size() - 1, std::size_t{8}),
+                                 std::make_pair(sidecar.size(), std::size_t{7})}) {
+            std::istringstream limited(sidecar);
+            bool rejected = false;
+            try {
+                (void)read_surface_materials(limited, "bushwacker:close", mesh_hash, materials,
+                                             limits.first, limits.second);
+            } catch (const std::runtime_error &) {
+                rejected = true;
+            }
+            require(rejected, "Sidecar exceeded its file or cumulative decoded budget");
+        }
+    }
+
+    // Existing version-1 RGBA sidecars remain readable and normalize to scalar bytes.
+    {
+        const auto sidecar = build_bwsfm1(mesh_hash, 1.0f, 1.0f, 0.5f, 0U,
+                                          no_surface_image, 4U, 0.0f, 0.0f, 0.0f,
+                                          0.7f, 0.04f, 0.0f, 1U);
+        std::istringstream iss(sidecar);
+        const auto pack = read_surface_materials(iss, "bushwacker:close", mesh_hash, materials);
+        require(pack.version == 1U && pack.images[0].pixels.size() == 4 &&
+                    pack.images[0].pixels[0] == 32U,
+                "Legacy RGBA height sidecar did not normalize to grayscale");
     }
 
     // B) Zero amplitude (0.0f) with max_displacement = 0.0f and no height image
@@ -694,6 +740,325 @@ void check_world_normals_lru_and_precedence() {
         require(cache_on.surface_normal_index(key0, true) >= 0,
                 "Per-call enabled lookup failed to return normal index");
     }
+
+    // 3. First-turn stutter fix: preload_surface at texture admission
+    {
+        const auto preload_dir = temp_dir / "preload_checks";
+        std::filesystem::create_directories(preload_dir);
+        const auto preload_p0 = preload_dir / "page-0.bin";
+        const auto preload_p1 = preload_dir / "page-1.bin";
+        const auto preload_p2 = preload_dir / "page-2.bin";
+        const auto write_preload_pages = [&]() {
+            std::ofstream(preload_p0, std::ios::binary) << make_page(0x1000ULL);
+            std::ofstream(preload_p1, std::ios::binary) << make_page(0x2000ULL);
+            std::ofstream(preload_p2, std::ios::binary) << make_page(0x3000ULL);
+        };
+        write_preload_pages();
+        const auto preload_manifest = preload_dir / "world.txt";
+        {
+            std::ofstream f(preload_manifest, std::ios::binary);
+            f << "MW34SNP1\npage-0.bin\npage-1.bin\npage-2.bin\n";
+        }
+
+        const SurfaceKey key0{1, 1, 1, 0x1000ULL};
+        const SurfaceKey key1{1, 1, 1, 0x2000ULL};
+        const SurfaceKey key2{1, 1, 1, 0x3000ULL};
+        const SurfaceKey unmatched_key{1, 1, 1, 0x9999ULL};
+
+        // A) Preload loads a matching page before first lookup, and repeat preload
+        // or subsequent lookup performs no disk IO even if the page file is removed.
+        {
+            WorldNormalCache cache(true);
+            cache.load_world_manifest(preload_manifest);
+            require(!cache.pages[0].loaded, "Page 0 loaded before preload_surface");
+
+            cache.preload_surface(unmatched_key);
+            require(!cache.pages[0].loaded && !cache.pages[1].loaded && !cache.pages[2].loaded,
+                    "Unmatched key preload should not load any world page");
+
+            cache.preload_surface(key0);
+            require(cache.pages[0].loaded, "preload_surface did not load matching page 0");
+            require(!cache.pages[1].loaded && !cache.pages[2].loaded,
+                    "preload_surface loaded non-matching pages");
+            require(cache.world_bytes == 4, "Preloaded page resident bytes mismatch");
+            const auto clock_after_first_preload = cache.world_clock;
+
+            // Remove the page file from disk after preload: repeat preload and first
+            // surface_normal_index lookup must succeed from resident memory without IO.
+            std::filesystem::remove(preload_p0);
+            cache.preload_surface(key0);
+            require(cache.pages[0].loaded && cache.world_bytes == 4,
+                    "Repeat preload_surface altered resident page state");
+            require(cache.pages[0].last_use > clock_after_first_preload,
+                    "Repeat preload_surface did not refresh LRU use stamp");
+
+            const int index0 = cache.surface_normal_index(key0);
+            require(index0 == 0, "Lookup after preload_surface returned unexpected index");
+            require(cache.textures.at(static_cast<std::size_t>(index0)).pixels32.size() == 1,
+                    "Preloaded normal texture pixels missing on lookup");
+            write_preload_pages();
+        }
+
+        // B) Authored exclusion and authored binding prevent world page preload.
+        {
+            WorldNormalCache cache(true);
+            cache.register_authored(key0, -1); // explicit exclusion (no_normal)
+            cache.register_authored(key1, 77); // authored normal index
+            cache.load_world_manifest(preload_manifest);
+
+            cache.preload_surface(key0);
+            cache.preload_surface(key1);
+            require(!cache.pages[0].loaded,
+                    "Authored exclusion failed to prevent world page 0 preload");
+            require(!cache.pages[1].loaded,
+                    "Authored binding failed to prevent world page 1 preload");
+            require(cache.surface_normal_index(key0) == -1,
+                    "Authored exclusion index changed after preload_surface");
+            require(cache.surface_normal_index(key1) == 77,
+                    "Authored binding index changed after preload_surface");
+        }
+
+        // C) Disabled preload does nothing (both per-instance and per-call).
+        {
+            WorldNormalCache cache_disabled(false);
+            cache_disabled.load_world_manifest(preload_manifest);
+            cache_disabled.preload_surface(key0);
+            require(!cache_disabled.pages[0].loaded && cache_disabled.world_bytes == 0,
+                    "Disabled WorldNormalCache preloaded a page");
+
+            WorldNormalCache cache_enabled(true);
+            cache_enabled.load_world_manifest(preload_manifest);
+            cache_enabled.preload_surface(key0, false);
+            require(!cache_enabled.pages[0].loaded && cache_enabled.world_bytes == 0,
+                    "Per-call disabled preload_surface loaded a page");
+        }
+
+        // D) Small-budget boundary/eviction via optional pixel_budget parameter,
+        // and repeat preload after eviction reloads cleanly with stable indices.
+        {
+            WorldNormalCache cache(true);
+            cache.load_world_manifest(preload_manifest);
+            const std::uint64_t eight_byte_budget = 8; // fits at most 2 pages (4 bytes each)
+
+            cache.preload_surface(key0, true, eight_byte_budget);
+            cache.preload_surface(key1, true, eight_byte_budget);
+            require(cache.pages[0].loaded && cache.pages[1].loaded && cache.world_bytes == 8,
+                    "Two pages should fit inside 8-byte preload budget");
+            const int initial_index0 = cache.surface_normal_index(key0);
+
+            // Touching key0 above makes page 1 the least-recently-used page.
+            cache.preload_surface(key2, true, eight_byte_budget);
+            require(cache.pages[0].loaded && !cache.pages[1].loaded && cache.pages[2].loaded,
+                    "preload_surface with 8-byte budget did not evict LRU page 1");
+            require(cache.world_bytes == 8, "Resident bytes exceeded 8-byte preload budget");
+
+            // Evict page 0 by touching page 2 and preloading page 1 under the 8-byte budget.
+            cache.preload_surface(key2, true, eight_byte_budget);
+            cache.preload_surface(key1, true, eight_byte_budget);
+            require(!cache.pages[0].loaded && cache.pages[1].loaded && cache.pages[2].loaded,
+                    "Page 0 was not evicted when page 1 was preloaded");
+            require(cache.textures.at(static_cast<std::size_t>(initial_index0)).pixels32.empty(),
+                    "Evicted page 0 retained decoded pixels");
+
+            // Preloading key0 again reloads page 0 and preserves its normal index.
+            cache.preload_surface(key0, true, eight_byte_budget);
+            require(cache.pages[0].loaded && cache.surface_normal_index(key0) == initial_index0,
+                    "Reloaded page 0 via preload_surface changed its normal index");
+        }
+
+        // E) Issue 461: an evicted page's index and identity are readable without
+        // reading the page again; a never-read page is read exactly once.
+        {
+            WorldNormalCache cache(true);
+            cache.load_world_manifest(preload_manifest);
+            const std::uint64_t one_page_budget = 4;
+            const int index0 = cache.resident_normal_index(key0);
+            require(index0 >= 0 && cache.page_loads == 1,
+                    "First resident lookup did not read its never-read page once");
+            const auto hash0 = cache.normal_record(index0).hash;
+            cache.load_page(1, one_page_budget);
+            require(!cache.pages[0].loaded && cache.page_loads == 2,
+                    "Page 0 was not evicted under a one-page budget");
+            require(cache.resident_normal_index(key0) == index0 && cache.page_loads == 2,
+                    "Resident lookup reloaded an evicted page");
+            require(cache.normal_record(index0).hash == hash0 &&
+                        cache.normal_record(index0).width == 1 && cache.page_loads == 2,
+                    "Normal record identity needed its evicted page");
+        }
+
+        // G) Issue 461: chunked normal_hash keeps the FNV-1a result, including
+        // across its 4 MiB checkpoint boundary.
+        {
+            std::vector<unsigned char> buffer((4u << 20) + 3);
+            for (std::size_t i = 0; i < buffer.size(); ++i)
+                buffer[i] = static_cast<unsigned char>(i * 31u + 7u);
+            std::uint64_t expected = 0xcbf29ce484222325ULL;
+            for (const auto byte : buffer) {
+                expected ^= byte;
+                expected *= 0x100000001b3ULL;
+            }
+            require(normal_hash(buffer.data(), buffer.size()) == expected,
+                    "Chunked normal_hash changed the FNV-1a result");
+            require(normal_hash(buffer.data(), 0) == 0xcbf29ce484222325ULL,
+                    "normal_hash of no bytes changed");
+        }
+
+        // F) Issue 461: grouped preload reads each page once even when keys
+        // alternate between pages under a one-page budget, and every key's
+        // pixels are resident when its callback runs.
+        {
+            const std::vector<SurfaceKey> mixed{key0, key1, key0, key2, key1};
+            const std::uint64_t one_page_budget = 4;
+
+            WorldNormalCache ungrouped(true);
+            ungrouped.load_world_manifest(preload_manifest);
+            for (const auto &key : mixed)
+                ungrouped.preload_surface(key, true, one_page_budget);
+            require(ungrouped.page_loads == 5,
+                    "Baseline arrival-order preload no longer re-reads pages");
+
+            WorldNormalCache grouped(true);
+            grouped.load_world_manifest(preload_manifest);
+            std::vector<int> resolved;
+            bool pixels_resident = true;
+            grouped.preload_keys_grouped(
+                mixed,
+                [&](int index) {
+                    resolved.push_back(index);
+                    pixels_resident = pixels_resident &&
+                                      !grouped.normal_record(index).pixels32.empty();
+                },
+                [] { return false; }, one_page_budget);
+            require(grouped.page_loads == 3, "Grouped preload read a page more than once");
+            require(resolved.size() == mixed.size() && pixels_resident,
+                    "Grouped preload resolved a key without its page resident");
+
+            // A stopped preload reads no further pages.
+            WorldNormalCache stopped(true);
+            stopped.load_world_manifest(preload_manifest);
+            stopped.preload_keys_grouped(
+                mixed, [](int) {}, [&] { return stopped.page_loads >= 1; }, one_page_budget);
+            require(stopped.page_loads == 1, "Stopped grouped preload kept reading pages");
+        }
+    }
+}
+
+void check_resource_timing_and_rate_limit() {
+    using namespace mw34::timing;
+
+    // 1. Disabled timing does not report or accumulate via target pointers.
+    {
+        ProducerResourceTiming producer_disabled(false);
+        GpuResourceTiming gpu_disabled(false);
+        require(producer_disabled.page_decode_target() == nullptr &&
+                    producer_disabled.page_upload_target() == nullptr,
+                "Disabled producer timing returned non-null timer target");
+        require(gpu_disabled.pipeline_target() == nullptr &&
+                    gpu_disabled.texture_upload_target() == nullptr,
+                "Disabled GPU timing returned non-null timer target");
+        producer_disabled.page_decode_nanoseconds = 25000000ULL;
+        gpu_disabled.pipeline_nanoseconds = 25000000ULL;
+        require(!producer_disabled.finish_present(nullptr),
+                "Disabled producer timing logged a report");
+        require(!gpu_disabled.finish_present(nullptr),
+                "Disabled GPU timing logged a report");
+        require(producer_disabled.page_decode_nanoseconds == 0 &&
+                    gpu_disabled.pipeline_nanoseconds == 0,
+                "finish_present did not reset accumulated nanoseconds on disabled owner");
+    }
+
+    // 2. Enabled producer and GPU timing: sub-8ms frames stay silent, first >8ms
+    // qualifying frame logs immediately, rate limit suppresses until 60 presented
+    // frames have elapsed, and multi-packet GPU accumulation resets per present.
+    {
+        ProducerResourceTiming producer(true);
+        GpuResourceTiming gpu(true);
+
+        // Frame 1: exactly 8.0 ms (not > 8 ms) must not report.
+        producer.page_decode_nanoseconds = hitch_threshold_nanoseconds;
+        gpu.pipeline_nanoseconds = hitch_threshold_nanoseconds;
+        require(!producer.finish_present(nullptr),
+                "Producer reported at 8.0 ms boundary instead of strictly > 8 ms");
+        require(!gpu.finish_present(nullptr),
+                "GPU reported at 8.0 ms boundary instead of strictly > 8 ms");
+        require(producer.presented_frame_sequence == 1 && gpu.presented_frame_sequence == 1,
+                "Present counter did not increment on frame 1");
+
+        // Frame 2: first qualifying frame (> 8 ms) MUST log immediately.
+        producer.page_decode_nanoseconds = 9500000ULL;
+        producer.page_upload_nanoseconds = 1200000ULL;
+        require(producer.finish_present(nullptr),
+                "First qualifying producer hitch frame failed to report");
+        require(producer.page_decode_nanoseconds == 0 && producer.page_upload_nanoseconds == 0,
+                "Producer counters did not reset after reporting");
+
+        // Simulate multiple render packets within GPU presented frame 2 whose sum exceeds 8 ms.
+        gpu.pipeline_nanoseconds += 3000000ULL;
+        gpu.texture_upload_nanoseconds += 4500000ULL; // packet 1
+        gpu.texture_upload_nanoseconds += 4000000ULL; // packet 2 -> 8.5 ms total texture_upload
+        require(gpu.finish_present(nullptr),
+                "Aggregated multi-packet GPU hitch frame failed to report");
+        require(gpu.pipeline_nanoseconds == 0 && gpu.texture_upload_nanoseconds == 0,
+                "GPU counters did not reset after reporting");
+
+        // Frames 3..61 (59 frames after frame 2): > 8 ms hitches are suppressed by ~60-frame limit,
+        // while counters still reset every presented frame.
+        for (std::uint64_t frame = 3; frame < 62; ++frame) {
+            producer.page_upload_nanoseconds = 12000000ULL;
+            gpu.pipeline_nanoseconds = 15000000ULL;
+            require(!producer.finish_present(nullptr),
+                    "Producer reported before 60 presented frames elapsed");
+            require(!gpu.finish_present(nullptr),
+                    "GPU reported before 60 presented frames elapsed");
+            require(producer.page_upload_nanoseconds == 0 && gpu.pipeline_nanoseconds == 0,
+                    "Rate-limited frame did not reset its per-frame durations");
+        }
+
+        // Frame 62 (60 frames after frame 2): qualifying hitch reports again.
+        producer.page_decode_nanoseconds = 10000000ULL;
+        gpu.texture_upload_nanoseconds = 11000000ULL;
+        require(producer.finish_present(nullptr),
+                "Producer failed to report once 60-frame interval elapsed");
+        require(gpu.finish_present(nullptr),
+                "GPU failed to report once 60-frame interval elapsed");
+
+        // Early return scope helper still increments present sequence and resets counters.
+        {
+            producer.page_decode_nanoseconds = 5000000ULL;
+            PresentBoundaryScope<ProducerResourceTiming> scope(producer, nullptr);
+        }
+        require(producer.presented_frame_sequence == 63 &&
+                    producer.page_decode_nanoseconds == 0,
+                "PresentBoundaryScope did not reset producer counters on scope exit");
+    }
+    // Timing diagnostics must preserve guest rounding and sticky exceptions.
+    for (const bool gpu_owner : {false, true}) {
+        std::FILE *stream = std::tmpfile();
+        require(stream != nullptr, "Cannot create timing diagnostic fixture");
+        std::fenv_t saved_environment;
+        require(std::fegetenv(&saved_environment) == 0,
+                "Cannot save timing diagnostic FP environment");
+        std::feclearexcept(FE_ALL_EXCEPT);
+        std::fesetround(FE_DOWNWARD);
+        std::feraiseexcept(FE_DIVBYZERO);
+        const auto expected_flags = std::fetestexcept(FE_ALL_EXCEPT);
+        const auto expected_rounding = std::fegetround();
+        volatile std::uint64_t elapsed_nanoseconds = 9500001ULL;
+        ProducerResourceTiming producer(true);
+        GpuResourceTiming gpu(true);
+        producer.page_decode_nanoseconds = elapsed_nanoseconds;
+        gpu.pipeline_nanoseconds = elapsed_nanoseconds;
+        const bool reported = gpu_owner ? gpu.finish_present(stream)
+                                        : producer.finish_present(stream);
+        const auto actual_flags = std::fetestexcept(FE_ALL_EXCEPT);
+        const auto actual_rounding = std::fegetround();
+        std::fesetenv(&saved_environment);
+        std::fclose(stream);
+        require(reported && actual_flags == expected_flags &&
+                    actual_rounding == expected_rounding,
+                "Resource timing log changed native floating-point state");
+    }
+
 }
 
 #include "prepared_environment_checks.inc"
@@ -892,6 +1257,7 @@ int main(int argc, char **argv) {
         check_bwnrm_formats();
         check_surface_materials_contract();
         check_world_normals_lru_and_precedence();
+        check_resource_timing_and_rate_limit();
         check_producer_unwind();
         std::printf(
             "All prepared visual, normal, and surface material contract "

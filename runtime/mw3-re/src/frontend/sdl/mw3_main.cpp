@@ -42,6 +42,9 @@
 //   --window WxH         window size (default 1280x960; with any_resolution the
 //                        frame's shape, and a given size pillarboxes the frame)
 //   --nosound            no audio device (a silent DirectSound stand-in)
+//   --hd-movie NAME PATH an HD MP4 played in place of the movie NAME (intro, ...),
+//                        repeatable; the original plays if it can't stand in
+//                        (ours, #559, docs/fmv.md section 9; Windows' decoder only)
 //   --hidden             keep the window hidden
 //   --windowed           a window, not fullscreen (also --window, or windowed=1 in mw3.cfg)
 //   --cc-vulkan          experimental Windows Vulkan/DXGI backend
@@ -57,9 +60,15 @@
 #include "light_invariance.h"
 #include "platform/prepared_visuals.h"
 #include "platform/prepared_skins.h"
+#include "platform/derived_cache.hpp"
+#include "platform/loading.hpp"
+#include "frontend/sdl/sdl_loading.h"
+#include <set>
+#include <charconv>
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <deque>
@@ -93,6 +102,7 @@
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/sdl_focus.h"
 #include "frontend/sdl/launcher.h"
+#include "frontend/sdl/watch_launch.h"
 #include "frontend/sdl/sdl_install.h"
 #include "upgrades/editor/help.h"
 #include "upgrades/mods/anim_defs.h"
@@ -141,6 +151,9 @@ extern "C" const char mw3_version_tag[] = "MW3-PROGRAM-VERSION:" MW3_VERSION;
 #include "frontend/sdl/sdl_mods.h"
 #include "mech3/app_engine.h"
 #include "mech3/app_hud.h"
+#include "mech3/arena.h"
+#include "platform/render3d.h"
+#include "mech3/options.h"
 #include "mech3/app_keys.h"
 #include "mech3/pilot.h"
 #include "mech3/app_mech.h"
@@ -208,6 +221,7 @@ struct Args {
   std::string cfg_mw1_game;  // mw3.cfg's mw1_game= (ours: the launcher's MechWarrior 1989 folder)
   std::string cfg_joystick, cfg_joystick_axes;  // mw3.cfg's joystick=, joystick_axes= (ours, W54: sdl_input.h)
   std::string controller_profile;  // --cc-controller FILE (launcher-exported CC_MW3_CONTROLLER_V1)
+  std::string input_bindings;
   bool cfg_joystick_disabled = false;
   int wide_menus = -1, cfg_wide_menus = -1;  // --wide-menus / --no-wide-menus, mw3.cfg's widemenus= (ours)
   bool debug_camera = false;  // --debug-camera (ours, docs/editor.md S4): the game editor anywhere; developers only
@@ -215,6 +229,7 @@ struct Args {
   // Mods (ours, docs/modding.md): --mod NAME (repeatable, this run's list),
   // else mw3.cfg's mod= lines, in order; --no-mods none; --mods lists them.
   std::vector<std::string> mods, cfg_mods;
+  std::string pack_library;  // launcher-owned gameplay payloads, read as mods
   bool mods_given = false, no_mods = false, list_mods = false;
   // --entry ID (ours, upgrades/mods/campaign_entries.h): a MODS campaign entry's mods and pilots for this run.
   std::string entry;
@@ -243,6 +258,7 @@ struct Args {
   bool play_original = false;
   sdlfe::HudOptions hud;
   bool hud_mode_given = false, hud_artwork_given = false, hud_text_given = false;
+  bool cfg_hud_mode = false;  // mw3.cfg named cc_hud=
   upgrades::Config cfg_upgrades;
   int cfg_throttle_reverse = 1;  // mw3.cfg's throttle_reverse= (ours, W56: zfix.h)
   bool first_start = false;   // the install found by the search, not mw3.cfg's (ours: the first start's notes)
@@ -264,12 +280,15 @@ struct Args {
   std::string ready_file;     // --ready-file F (ours, sdl_child.h): written at the first frame shown, for mw3launcher
   std::string other_write_dir, other_install;  // --other-write-dir, --other-install (ours, W15): the other game's, from mw3launcher
   std::string vfw_helper;     // --vfw-helper EXE (ours, sdl_vfw.h): the movies' Video for Windows helper; "-" none
+  std::map<std::string, std::string> hd_movies;  // --hd-movie NAME PATH (ours, #559): name (lower case) to MP4
   std::string patch;          // --patch PATH (ours, patch_import.h): the official 1.2 patch into the write dir's overlay
   std::string install_from, install_to;  // --install-from PATH, --install-to DIR (ours, disc_install.h)
   bool windowed = false;      // --windowed (or windowed=1 in mw3.cfg): not fullscreen
+  bool window_valid = false, seed_valid = false;
   bool window_given = false;  // --window: kept, the frame pillarboxed in it (else the frame's shape)
   std::string chain;          // --campaign-chain new:N / resume:N (ours, campaign_chain.h)
   std::string modes;          // --action-chain all / c2 / c2:4 (ours, modes_chain.h)
+  bool arena_record_every_update = false;
   int frame_ms = 0;           // --frame-ms N: each frame shown N ms on the game's clock (ours)
   int64_t seed = -1;          // --seed N: rand seeded with N wherever the game seeds it from the clock (ours)
   int win = 0;  // --win N (ours): the mission won N frames in, by its Exit Mission
@@ -321,6 +340,7 @@ struct Args {
   std::string net_upnp;
   bool net_soak = false;
   bool shot_any = false;
+  sdlfe::WatchArgs watch;  // ours (#287, #289): --arena and --replay (watch_launch.h)
 };
 
 void usage() {
@@ -342,11 +362,17 @@ void usage() {
       "    [--cc-menu-background FILE] [--cc-menu-background-renderer cpu|gpu (default gpu)]\n"
       "    [--cc-menu-observe]\n"
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
-      "    [--cc-render-thread 0|1] [--cc-pom 0|1 (default 0; requires Core Critical Vulkan and --cc-lighting normal)]\n"
+      "    [--cc-render-thread 0|1] [--cc-pom off|low|high|0|1 (default off; requires Core Critical Vulkan and --cc-lighting normal)]\n"
       "    [--cc-draw-distance 800|1200|1600|2400|3200 (default 800)]\n"
       "    [--cc-flare-style modern|original (default modern)]\n"
+      "    [--cc-vsync 0|1 (default 1)]\n"
       "    [--cc-controller FILE] (launcher-exported controller profile)\n"
-      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
+      "    [--cc-input FILE] (launcher-exported extended mouse and combo bindings)\n"
+      "    [--pack-library DIR] (installed packs' read-only gameplay mods)\n"
+      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--hd-movie NAME PATH]... [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
+      "    [--benchmark DEF.json --benchmark-scene ID --benchmark-out DIR]\n"
+      "    [--benchmark-strict [--benchmark-strict-capture TICK]]\n"
+      "    [--arena SETUP.json --seed N --frame-ms N [--arena-record-every-update]] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
 }
@@ -361,6 +387,7 @@ bool parse(int argc, char** argv, Args& a) {
     // the next restart (sdl_restart.h keeps it and drops what stood before).
     if (s == "--then") { later = true; continue; }
     if (later && (s == "--click-at" || s == "--tap" || s == "--mouse-at") && next(1)) { ++i; continue; }
+    bool parsed_common_option = true;
     if (s == "--version") {  // ours: the build, and (on Windows) that every DLL it needs loaded
       std::printf("mw3 (MechWarrior 3 rebuild) %s\n", mw3_version_tag + 20);
       std::exit(0);
@@ -369,6 +396,13 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--indeo-codec" && next(1)) a.indeo_codec = argv[++i];
     else if (s == "--assets" && next(1)) a.assets.emplace_back(argv[++i]);
     else if (s == "--write-dir" && next(1)) a.write_dir = argv[++i];
+    else if (s == "--pack-library") {
+      if (!next(1) || !argv[i + 1][0] || std::string(argv[i + 1]).rfind("--", 0) == 0) {
+        std::fprintf(stderr, "mw3: --pack-library requires a folder\n");
+        return false;
+      }
+      a.pack_library = argv[++i];
+    }
     else if (s == "--mod" && next(1)) a.mods.emplace_back(argv[++i]), a.mods_given = true;
     else if (s == "--no-mods") a.no_mods = true;
     else if (s == "--entry" && next(1)) a.entry = argv[++i];
@@ -427,6 +461,11 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--net-walk" && next(1)) std::sscanf(argv[++i], "%d,%d", &a.net_walk[0], &a.net_walk[1]);
     else if (s == "--net-drive" && next(1)) a.net_drive = std::strtoll(argv[++i], nullptr, 10);
     else if (s == "--net-soak") a.net_soak = true;
+    else parsed_common_option = false;
+    // Split at the arena options to stay below MSVC's else-if nesting limit.
+    if (parsed_common_option) continue;
+    if (s == "--arena-record-every-update") a.arena_record_every_update = true;
+    else if (sdlfe::parse_watch_option(a.watch, argc, argv, &i)) continue;
     else if (s == "--net-staged" && next(1)) a.net_staged = std::atoi(argv[++i]) != 0;
     else if (s == "--net-ahead" && next(1)) a.net_ahead = std::strtof(argv[++i], nullptr);
     else if (s == "--net-discovery" && next(1)) a.net_discovery = std::atoi(argv[++i]);
@@ -440,8 +479,24 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--campaign-chain" && next(1)) a.chain = argv[++i];
     else if (s == "--action-chain" && next(1)) a.modes = argv[++i];
     else if (s == "--frame-ms" && next(1)) a.frame_ms = std::atoi(argv[++i]);
-    else if (s == "--seed" && next(1)) a.seed = std::strtoll(argv[++i], nullptr, 10);
-    else if (s == "--window" && next(1)) std::sscanf(argv[++i], "%dx%d", &a.win_w, &a.win_h), a.window_given = true;
+    else if (s == "--seed" && next(1)) {
+      const char* value = argv[++i];
+      char* end = nullptr;
+      a.seed = std::strtoll(value, &end, 10);
+      a.seed_valid = end != value && !*end;
+    } else if (s == "--window" && next(1)) {
+      const std::string_view value = argv[++i];
+      const auto* end = value.data() + value.size();
+      const auto [separator, width_error] = std::from_chars(value.data(), end, a.win_w);
+      if (width_error == std::errc{} && separator != end && *separator == 'x') {
+        const auto [height_end, height_error] = std::from_chars(separator + 1, end, a.win_h);
+        a.window_valid = height_error == std::errc{} && height_end == end &&
+                         a.win_w > 0 && a.win_h > 0;
+      } else {
+        a.window_valid = false;
+      }
+      a.window_given = true;
+    }
     else if (s == "--nosound") a.nosound = true;
     else if (s == "--walk") a.walk = true;
     else if (s == "--briefing" && next(1)) a.briefing = argv[++i];
@@ -518,6 +573,13 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-vulkan-wsi") a.backend = sdlfe::RendererBackend::core_critical_wsi, a.no_launcher = true;
     else if (s == "--cc-controller" && next(1)) a.controller_profile = argv[++i];
     else if (s == "--cc-controller") return false;
+    else if (s == "--cc-input") {
+      if (!next(1) || !argv[i + 1][0] || std::string_view(argv[i + 1]).substr(0, 2) == "--") {
+        std::fprintf(stderr, "mw3: --cc-input requires a file path\n");
+        return false;
+      }
+      a.input_bindings = argv[++i];
+    }
     else if (s == "--cc-aa" && next(1)) a.quality.antialiasing = argv[++i];
     else if (s == "--cc-af" && next(1)) a.quality.anisotropy = argv[++i];
     else if (s == "--cc-flare-style" && next(1)) {
@@ -541,15 +603,33 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-lighting" && next(1)) a.cc_assets.lighting = argv[++i];
     else if (s == "--cc-pom") {
       if (!next(1)) {
-        std::fprintf(stderr, "--cc-pom requires 0 or 1\n");
+        std::fprintf(stderr, "--cc-pom requires off, low, high, 0, or 1\n");
         return false;
       }
       const std::string value = argv[++i];
-      if (value != "0" && value != "1") {
-        std::fprintf(stderr, "--cc-pom supports 0 or 1\n");
+      if (value == "0" || value == "off") {
+        a.cc_assets.pom = false;
+        a.cc_assets.pom_quality = 0;
+      } else if (value == "low") {
+        a.cc_assets.pom = true;
+        a.cc_assets.pom_quality = 1;
+      } else if (value == "1" || value == "high") {
+        a.cc_assets.pom = true;
+        a.cc_assets.pom_quality = 2;
+      } else {
+        std::fprintf(stderr, "--cc-pom supports off, low, high, 0, or 1\n");
         return false;
       }
-      a.cc_assets.pom = value == "1";
+    }
+    else if (s == "--cc-fog-distance" && next(1)) {
+      const std::string_view value = argv[++i];
+      const auto parsed = std::from_chars(value.data(), value.data() + value.size(),
+                                          a.quality.fog_distance);
+      if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+          a.quality.fog_distance > 3200) {
+        std::fprintf(stderr, "mw3: --cc-fog-distance expects 0..3200\n");
+        return false;
+      }
     }
     else if (s == "--cc-render-thread" && next(1)) {
       const std::string value = argv[++i];
@@ -586,6 +666,14 @@ bool parse(int argc, char** argv, Args& a) {
       }
       a.cc_assets.sun_shadows_explicit = true;
       a.cc_assets.sun_shadows = value == "1";
+    } else if (s == "--cc-vsync" && next(1)) {
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") {
+        std::fprintf(stderr, "--cc-vsync supports 0 or 1\n");
+        return false;
+      }
+      a.cc_assets.vsync_explicit = true;
+      a.cc_assets.vsync = value == "1";
     } else if (s == "--cc-water-detail" && next(1)) {
       const std::string value = argv[++i];
       if (value != "0" && value != "1") {
@@ -640,14 +728,21 @@ bool parse(int argc, char** argv, Args& a) {
       const bool index_is_digits =
           !index.empty() && index.size() <= 3 && index.find_first_not_of("0123456789") == std::string::npos;
       if (!index_is_digits) {
-        std::fprintf(stderr, "Invalid --cc-model-skin index\n");
+        std::fprintf(stderr, "Invalid --cc-model-skin index: expected an integer from 1 to 7 "
+                             "(retail B-H)\n");
         return false;
       }
       binding.index = std::atoi(index.c_str());
-      // 1-7 are retail B-H; catalog skins follow. Index 0 is the primary set already
-      // given by --cc-model, so it is never a separate binding.
-      if (binding.index < 1 || binding.index > 135 || (binding.lod != "0" && binding.lod != "1")) {
-        std::fprintf(stderr, "Invalid --cc-model-skin index/LOD\n");
+      // Explicit bindings cover retail B-H (1-7), as in the compact binding index.
+      // The primary set (0) comes from --cc-model; catalogue identities are negative
+      // and come from --cc-skin-catalog, independently of the original skin rows.
+      if (binding.index < 1 || binding.index > 7) {
+        std::fprintf(stderr, "Invalid --cc-model-skin index: expected 1-7 (retail B-H); "
+                             "use --cc-skin-catalog for catalogue skins\n");
+        return false;
+      }
+      if (binding.lod != "0" && binding.lod != "1") {
+        std::fprintf(stderr, "Invalid --cc-model-skin LOD: expected 0 or 1\n");
         return false;
       }
       binding.path = argv[++i];
@@ -681,6 +776,12 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--install-to" && next(1)) a.install_to = argv[++i];
     else if (s == "--vfw-helper" && next(1)) a.vfw_helper = argv[++i];
     else if (s == "--no-vfw-helper") a.vfw_helper = "-";
+    else if (s == "--hd-movie" && next(2)) {
+      std::string name = argv[++i];
+      std::transform(name.begin(), name.end(), name.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      a.hd_movies[name] = argv[++i];
+    }
     else if (s == "--verbose") a.verbose = true;
     else if (s == "--pos" && next(3)) {
       for (float& v : a.pos) v = std::strtof(argv[++i], nullptr);
@@ -707,6 +808,26 @@ bool parse(int argc, char** argv, Args& a) {
       return usage(), false;
     }
   }
+  // --replay and --arena (ours, #287, #289): the other options given, for
+  // what each refuses (exit 2 before anything starts; watch_launch.h).
+  mech3::replay::ReplayFlags replay;
+  replay.arena = !a.watch.arena_path.empty(), replay.host = a.net_host, replay.join = !a.net_join.empty();
+  replay.net_upnp = !a.net_upnp.empty(), replay.mission = !a.mission.empty(), replay.fly = a.fly;
+  replay.replay = !a.watch.replay_path.empty(), replay.replay3d = !a.watch.replay3d_path.empty();
+  replay.play_original = a.play_original;
+  if (a.arena_record_every_update && a.watch.arena_path.empty()) {
+    std::fprintf(stderr, "mw3: --arena-record-every-update requires --arena\n");
+    return false;
+  }
+  mech3::arena::Flags arena;
+  arena.record_every_update = a.arena_record_every_update;
+  arena.host = a.net_host, arena.join = !a.net_join.empty(), arena.net_upnp = !a.net_upnp.empty();
+  arena.original = a.play_original, arena.mission = !a.mission.empty();
+  arena.net_minutes = a.net_minutes > 0, arena.net_soak = a.net_soak, arena.net_drive = a.net_drive >= 0;
+  arena.frames = a.frames > 0, arena.seed = a.seed >= 0, arena.frame_ms = a.frame_ms > 0;
+  arena.fire = a.fire > 0, arena.net_walk = a.net_walk[1] > 0, arena.net_ahead = a.net_ahead > 0;
+  arena.briefing = !a.briefing.empty(), arena.lab_mech = a.lab_mech >= 0;
+  if (!sdlfe::check_watch_options(a.watch, replay, arena, &a.mission, &a.nosound)) return false;
   // --lab-mech alone (ours): the lab is reached from c1m2's briefing (MECHLAB,
   // which Op 1 Mission 1 greys), so it takes that route and clicks MECHLAB.
   if (a.lab_mech >= 0 && a.briefing.empty() && a.mission.empty()) {
@@ -725,7 +846,7 @@ void read_config(const std::string& dir, Args& a) {
     if (line.rfind("install=", 0) == 0) a.cfg_install = zutl::path_from_config(line.substr(8));
     else if (line.rfind("mw1_game=", 0) == 0) a.cfg_mw1_game = zutl::path_from_config(line.substr(9));
     else if (line.rfind("assets=", 0) == 0) a.assets.push_back(line.substr(7));
-    else if (line.rfind("cc_hud=", 0) == 0 && !a.hud_mode_given) a.hud.mode = line.substr(7);
+    else if (line.rfind("cc_hud=", 0) == 0 && !a.hud_mode_given) a.hud.mode = line.substr(7), a.cfg_hud_mode = true;
     else if (line.rfind("cc_hud_artwork=", 0) == 0 && !a.hud_artwork_given) a.hud.artwork.emplace_back(line.substr(15));
     else if (line == "cc_hud_text=0" && !a.hud_text_given) a.hud.text = false;
     else if (line == "cc_hud_text=1" && !a.hud_text_given) a.hud.text = true;
@@ -759,6 +880,9 @@ void split_mission(const std::string& name, std::string& dir, std::string& varia
 }
 
 int run(const Args& a, platform::VideoForWindows* vfw);
+// The startup loading session: begun in program() once SDL is up, ended in run() when the
+// app's instance is initialised (the intro or the menu then draws for itself).
+std::unique_ptr<platform::loading::Session> startup_loading;
 
 // The network's log until the lobby screens are ported (ours, piece 4): its
 // local messages as lines, a chat's text, and the per-pass work.
@@ -913,6 +1037,104 @@ std::string flat(const std::string& s) {
   return out;
 }
 
+void prepare_benchmark(Args& a, std::optional<double> process_epoch) {
+  auto& watch = a.watch;
+  if (watch.benchmark_strict_capture && !watch.benchmark_strict)
+    throw std::runtime_error("--benchmark-strict-capture requires --benchmark-strict");
+  if (watch.benchmark_path.empty() && watch.benchmark_scene.empty() && watch.benchmark_output.empty() &&
+      !watch.benchmark_strict)
+    return;
+  if (watch.benchmark_path.empty() || watch.benchmark_scene.empty() || watch.benchmark_output.empty())
+    throw std::runtime_error("--benchmark, --benchmark-scene and --benchmark-out are required together");
+  if (a.backend != sdlfe::RendererBackend::core_critical_wsi || !a.cc_assets.render_thread ||
+      (a.window_given && !a.window_valid) || a.hidden || a.frames || a.frame_ms || a.frame_times ||
+      !a.shot.empty() || a.shot_series || a.shot_any || std::getenv("MW3_BENCHMARK_TIMESTAMPS"))
+    throw std::runtime_error("benchmark requires visible --cc-vulkan-wsi --cc-render-thread 1 "
+                             "with no fixed step, frame limit or capture");
+  if (!watch.replay3d_path.empty() || !watch.replay_path.empty() || !watch.replay_script.empty() ||
+      !watch.arena_path.empty() || !watch.catalog_dir.empty() || !a.mission.empty() ||
+      a.net_host || !a.net_join.empty() || !a.net_upnp.empty() || a.fly || a.play_original ||
+      !a.entry.empty() || !a.chain.empty() || !a.modes.empty() ||
+      !a.dialog_file.empty() || !a.movie.empty() || !a.briefing.empty() ||
+      a.open_mods || a.open_ia || a.open_mp || a.debug_camera || a.fire || a.win || a.lose ||
+      a.net_drive >= 0 || a.net_ahead || a.net_soak || a.net_minutes || a.net_wait ||
+      a.walk || !a.taps.empty() || !a.clicks_at.empty() || !a.mouse_at.empty() ||
+      !a.install_from.empty() || !a.check_mod.empty() || !a.mod_report.empty() ||
+      !a.build_anim.empty() || !a.reference.empty() || !a.editor_guide.empty() ||
+      !a.make_starter.empty() || a.list_mods)
+    throw std::runtime_error("benchmark must be the only launch mode");
+
+  if (!platform::derived_cache::is_disk_cache_disabled_by_env())
+    throw std::runtime_error("benchmark requires MW3_DISK_CACHE=0");
+  if (a.no_mods)
+    throw std::runtime_error("benchmark uses Play's active packs");
+  const auto size = sdlfe::benchmark::parse_resolution(watch.benchmark_resolution);
+  sdlfe::benchmark::require_window_mode(watch.benchmark_window_mode, a.windowed || a.window_given,
+                                       a.window_given, size, {a.win_w, a.win_h});
+  a.win_w = size.width;
+  a.win_h = size.height;
+  auto definition = sdlfe::benchmark::load_definition(watch.benchmark_path);
+  const auto scene = std::find_if(definition.scenes.begin(), definition.scenes.end(),
+                                  [&](const auto& item) { return item.id == watch.benchmark_scene; });
+  if (scene == definition.scenes.end()) throw std::runtime_error("unknown benchmark scene");
+  if (!a.seed_valid || a.seed != scene->seed)
+    throw std::runtime_error("--seed must match the benchmark definition");
+
+  sdlfe::benchmark::require_empty_output(watch.benchmark_output);
+  watch.replay3d_path = scene->log.string();
+  watch.replay3d = std::make_shared<mech3::replay::ReplayRun>();
+  std::string error;
+  if (!watch.replay3d->load_log(watch.replay3d_path, &error)) throw std::runtime_error(error);
+  const auto& log = watch.replay3d->log();
+  if (log.map() != scene->map) throw std::runtime_error("benchmark log map mismatch");
+  const auto first_state = log.first_state_time();
+  const double start = scene->start_seconds.value_or(first_state.value_or(0));
+  if (!first_state || !log.covers(start, start + scene->end()))
+    throw std::runtime_error("benchmark log needs a terminal end record and ordered states "
+                             "covering the selected warm-up and measurement");
+  for (const auto& shot : scene->shots)
+    if (!log.mech_alive_during(shot.mech, start + shot.start, start + shot.start + shot.duration))
+      throw std::runtime_error("benchmark camera subject missing or destroyed during shot: " +
+                               std::to_string(shot.mech));
+  // The scene's look, set before the mission loads (platform/render3d.h). Every
+  // field is written, so a scene without one never inherits an earlier value, and
+  // the scope puts the old values back when the run's watch arguments are destroyed.
+  std::string lighting;
+  if (!scene->time_of_day.empty()) {
+    const char* borrowed = mech3::arena::time_of_day_lighting(scene->time_of_day);
+    if (!borrowed) throw std::runtime_error("unknown benchmark time_of_day");
+    lighting = borrowed;
+  }
+  watch.benchmark_look =
+      std::make_shared<platform::ArenaLookScope>(lighting, scene->weather, scene->headlights);
+
+  watch.benchmark_run = std::make_shared<sdlfe::benchmark::Run>(
+      std::move(*scene), start, size.width, size.height, watch.benchmark_output,
+      process_epoch);
+  if (watch.benchmark_strict)
+    watch.benchmark_run->enable_strict(log.state_times(start, start + watch.benchmark_run->scene.end()),
+                                       watch.benchmark_strict_capture);
+  a.cc_assets.benchmark_run = watch.benchmark_run.get();
+  a.nosound = a.no_import = a.no_launcher = true;
+  a.original += " -nofmv";
+  a.force_import = false;
+  watch.benchmark_run->settings["fog_distance"] = std::to_string(a.quality.fog_distance);
+  watch.benchmark_run->settings["window_mode_requested"] = watch.benchmark_window_mode;
+  a.hud.text = false;
+  a.hud_text_given = true;
+  if (a.write_dir.empty()) {
+    auto output = std::filesystem::absolute(watch.benchmark_output).lexically_normal();
+    if (output.filename().empty()) output = output.parent_path();
+    a.write_dir = output.string() + "-profile";
+  }
+  crt::rand_fixed_seed() = static_cast<uint32_t>(a.seed);
+  crt::msvc_srand(static_cast<uint32_t>(a.seed));
+}
+
+// A watched arena match (ours, #516): one with a window. It runs on the wall
+// clock; a hidden one steps by --frame-ms so its log repeats.
+bool watched_arena(const Args& a) { return !a.watch.arena_path.empty() && !a.hidden; }
+
 }  // namespace
 
 namespace {
@@ -937,6 +1159,7 @@ int main(int argc, char** argv) {
 
 namespace {
 int program(int argc, char** argv) {
+  const auto process_epoch = sdlfe::benchmark::process_creation_epoch();
   if (sdlfe::crash_box_main(argc, argv)) return 0;
   // In order with the log on stderr. Windows' CRT has no line buffering (and takes size 0 as
   // an invalid argument): unbuffered there.
@@ -946,7 +1169,14 @@ int program(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IOLBF, 0);
 #endif
   Args a;
-  if (!parse(argc, argv, a)) return 2;
+  try {
+    if (!parse(argc, argv, a)) return 2;
+    prepare_benchmark(a, process_epoch);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "mw3: benchmark: %s\n", error.what());
+    return 2;
+  }
+  mech3::mods_pack_library() = a.pack_library;
   if (a.cc_assets.skin_catalog.empty())
     if (const char* catalog = std::getenv("MW34_ADDITIONAL_SKINS"))
       a.cc_assets.skin_catalog = catalog;
@@ -975,10 +1205,28 @@ int program(int argc, char** argv) {
   }
   if (!a.shot.empty()) a.hidden = true;
   mech3::mods_program_version() = MW3_VERSION;  // game_version= in mod.txt (upgrades/mods/mod_needs.h)
-  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK)) {
+  // Ours (#287): a hidden arena run has no player, so it opens no controllers.
+  // DirectInput's start with a force feedback wheel's driver attached (a
+  // Logitech G920) deadlocked one hidden run in seven while starting up.
+  const bool hidden_arena = a.hidden && !a.watch.arena_path.empty();
+  const SDL_InitFlags controllers = hidden_arena || a.watch.benchmark_run ? 0 : SDL_INIT_JOYSTICK;
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | controllers)) {
     sdlfe::fatal_box(std::string("MechWarrior 3 cannot start: ") + SDL_GetError(), a.hidden);
     return 1;
   }
+  platform::loading::observer = [](const auto& progress) {
+    sdlfe::pump_loading_events();
+    sdlfe::set_ready_status(progress.active ? progress.text : "");
+  };
+  // Keep the callback from outliving SDL on every early return.
+  struct LoadingObserverOff {
+    ~LoadingObserverOff() {
+      startup_loading.reset();
+      platform::loading::observer = {};
+    }
+  } observer_off;
+  startup_loading = std::make_unique<platform::loading::Session>("native-startup", "Starting MechWarrior 3...");
+  if (!a.ready_file.empty()) sdlfe::set_ready_file(a.ready_file);
   // The write dir: saves and settings, outside the install (assets-layer.md).
   // --write-dir wins; else the usual folder, or the one its pointer names (data_folder.h).
   const bool write_dir_given = !a.write_dir.empty();
@@ -1002,9 +1250,60 @@ int program(int argc, char** argv) {
     std::printf("mw3 (MechWarrior 3 rebuild) %s: %s\n", MW3_VERSION, argc > 1 ? "started with arguments" : "started");
   else if (!a.write_dir.empty() && run_log.open(a.write_dir))
     std::printf("mw3 (MechWarrior 3 rebuild) %s, log %s\n", MW3_VERSION, run_log.path().c_str());
+  std::printf("mw3: timing log-open at %lld ms since process start\n",
+              platform::loading::since_process_start_ms());
+  // The derived cache holds remembered environment pack hashes
+  // (platform/verified_digest.hpp). The write directory isolates profiles and
+  // the running binary's hash invalidates everything when the game updates.
+  try {
+    platform::loading::Phase phase("cache-identity");
+    if (!platform::derived_cache::is_disk_cache_disabled_by_env()) {
+      const auto cache_write_directory = std::filesystem::u8path(a.write_dir);
+      if (!cache_write_directory.is_absolute())
+        throw std::runtime_error("the user write directory is not absolute");
+      // The program's real file. argv[0] can be a bare name found through PATH or another
+      // program's path, so without the real file the cache stays off (fail closed).
+      const std::string own_path = sdlfe::restart_own_path();
+      if (own_path.empty())
+        throw std::runtime_error("the program's own file could not be found");
+      const auto executable = std::filesystem::u8path(own_path);
+      platform::derived_cache::configure_producer_identity(
+          platform::integrity::sha256_file(executable));
+      platform::derived_cache::configure_write_directory(cache_write_directory);
+      std::printf("mw3: disk cache enabled (%llu MiB limit)\n",
+          static_cast<unsigned long long>(platform::derived_cache::default_cache().cap() >> 20));
+    } else {
+      std::printf("mw3: disk cache disabled by MW3_DISK_CACHE\n");
+      // Pack digests only (derived_cache.hpp, digest_cache): no decoded asset is reused.
+      const auto digests = platform::derived_cache::digest_cache_dir_from_env();
+      if (!digests.empty()) {
+        platform::derived_cache::digest_cache().reconfigure(digests, 64ull << 20, true);
+        std::printf("mw3: pack digest cache at %s\n", digests.u8string().c_str());
+      }
+    }
+  } catch (const std::exception& error) {
+    platform::derived_cache::default_cache().reconfigure({}, 0, false);
+    platform::derived_cache::digest_cache().reconfigure({}, 0, false);
+    std::fprintf(stderr, "mw3: disk cache unavailable: %s; decoding normally\n", error.what());
+  }
   zutl::repair_old_names(a.write_dir);
   if (!a.hidden && !a.write_dir.empty()) sdlfe::crash_report_install("mw3", a.write_dir + "/mw3.log", true);
   if (!a.write_dir.empty()) read_config(a.write_dir, a);
+  if (auto& benchmark = a.watch.benchmark_run) {
+    benchmark->settings["sound"] = "off";
+    benchmark->settings["disk_cache"] =
+        platform::derived_cache::default_cache().is_enabled() ? "enabled" : "disabled";
+    benchmark->source_sha = MW3_SOURCE_SHA;
+    try {
+      benchmark->executable_sha256 =
+          platform::integrity::sha256_file(std::filesystem::u8path(sdlfe::restart_own_path()));
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "mw3: benchmark identity: %s\n", error.what());
+      SDL_Quit();
+      return 2;
+    }
+  }
+  sdlfe::watch_default_hud(a.watch, a.hud_mode_given || a.cfg_hud_mode, &a.hud);  // --replay3d (ours, #289)
   // Ours (docs/mods-campaigns-plan.md): a plain start mounts no mods, the main menu plays the original;
   // mw3.cfg's mod= lines are only moved to the campaign entries (entries_migrate), mods mount for --entry
   // (and --mod NAME, for checks and modders).
@@ -1039,10 +1338,14 @@ int program(int argc, char** argv) {
   }
   if (a.list_mods) {
     const std::vector<mech3::ModInfo> found = mech3::mods_found(a.write_dir);
-    std::printf("mw3: mods in %s/mods: %zu\n", a.write_dir.c_str(), found.size());
+    if (a.pack_library.empty())
+      std::printf("mw3: mods in %s/mods: %zu\n", a.write_dir.c_str(), found.size());
+    else
+      std::printf("mw3: mods in %s/mods and pack library %s: %zu\n", a.write_dir.c_str(), a.pack_library.c_str(), found.size());
     for (const mech3::ModInfo& m : found) {
       const auto at = std::find(a.mods.begin(), a.mods.end(), m.folder);
-      std::printf("  %s: %s%s%s\n", m.folder.c_str(), m.error.empty() ? (m.name + " " + m.version).c_str() : m.error.c_str(),
+      std::printf("  %s: %s%s%s%s\n", m.folder.c_str(), m.error.empty() ? (m.name + " " + m.version).c_str() : m.error.c_str(),
+                  m.from_pack ? " [pack]" : "",
                   at == a.mods.end() ? "" : ", enabled #", at == a.mods.end() ? "" : std::to_string(at - a.mods.begin() + 1).c_str());
     }
     SDL_Quit();
@@ -1094,6 +1397,10 @@ int program(int argc, char** argv) {
   // always-on fixes stay: zfix.h's `fixed`, docs/upgrades-sort.md). 1.0.x's
   // bugfixes= becomes the five keys at once.
   sdlfe::apply_upgrades_config(a.write_dir, a.cfg_upgrades, a.play_original);
+  // Ours (#287): an arena match always walks the grid (zai_hunt.cpp), whatever
+  // this machine's mw3.cfg says, so a setup and seed give the same match on
+  // every machine. The arena refuses --original.
+  if (!a.watch.arena_path.empty()) zfix::options().improved_ai = true;
   // Tests only (not a player's switch): MW3_EXE_PATHS=1 runs the exe's own
   // path everywhere, the always-on fixes too, for the tests that compare a
   // child mw3 with the original (zfix.h's `fixed`).
@@ -1120,10 +1427,10 @@ int program(int argc, char** argv) {
   // one (the launcher's main screen is mw3launcher's). Checks, shots, debug starts and a
   // named install or source go straight on.
   const bool player_start = !a.hidden && a.frames == 0 && a.shot.empty() && a.chain.empty() && a.modes.empty() &&
-                            a.mission.empty() && !a.fly && a.dialog_file.empty() && a.movie.empty() && a.install.empty() &&
+                            a.mission.empty() && !a.fly && a.dialog_file.empty() && a.movie.empty() &&
+                            a.watch.replay_path.empty() && a.watch.replay3d_path.empty() && a.install.empty() &&
                             a.install_from.empty() && a.patch.empty() && a.original.find("-nofmv") == std::string::npos;
   bool setup_only = false;
-  if (!a.ready_file.empty()) sdlfe::set_ready_file(a.ready_file);
   mech3::mods_other_game() = {a.other_write_dir, a.other_install};  // W15: a mod for the other game goes there
   if (player_start && !a.no_launcher) {
     std::vector<std::string> more;
@@ -1219,6 +1526,12 @@ int program(int argc, char** argv) {
   // W15: mods the other game's IMPORT handed over, added now with this game's own check.
   if (!a.write_dir.empty() && !a.install.empty())
     for (const std::string& line : mech3::mods_take_incoming(a.write_dir, a.install)) std::printf("mw3: %s\n", line.c_str());
+  // --replay and --arena (ours, #287, #289): with the install mounted, the
+  // replay viewer alone, or the match's game files and log (watch_launch.h).
+  if (const int code = sdlfe::watch_after_mount(a.watch, a.seed, &a.mission); code >= 0) {
+    SDL_Quit();
+    return code;
+  }
   const mech3::DataVersion data = mech3::detect_data_version();
   std::printf("mw3: %s\n", data.describe().c_str());  // ours: assets.md, Data versions
   // The movies on a first run (ours, FIX (A): first_run_import.h): on a
@@ -1291,13 +1604,121 @@ int program(int argc, char** argv) {
       };
     }
   }
+  // --arena (ours, #287): a lone host's session on the in-process hub, never
+  // the ENet transport above (refused with --host and --join).
+  // A watched match runs on the wall clock (below), so its log says 0: no fixed step.
+  const int arena_log_frame_ms = watched_arena(a) ? 0 : a.frame_ms;
+  if (!sdlfe::open_watch_session(a.watch, a.seed, arena_log_frame_ms, a.hidden && a.shot.empty())) {
+    SDL_Quit();
+    return 1;
+  }
   int result = 1;
   try {
+    if (auto& benchmark = a.watch.benchmark_run) {
+      const auto fingerprint = [&](const std::string& name, const std::string& path) {
+        if (!path.empty())
+          benchmark->settings[name] =
+              sdlfe::benchmark::content_sha256(std::filesystem::u8path(path));
+      };
+      benchmark->settings["game_dir"] = a.install;
+      fingerprint("base_assets_sha256", a.install);
+      const auto ordered = [&](const std::string& name, const std::vector<std::string>& paths) {
+        for (size_t index = 0; index < paths.size(); ++index)
+          fingerprint(name + "." + std::to_string(index), paths[index]);
+      };
+      const auto& mounts = zutl::mounts();
+      std::vector<std::string> overrides;
+      for (const auto& path : mounts.read)
+        if (path != a.install) overrides.push_back(path);
+      ordered("override_sha256", overrides);
+      const auto is_in_pack = [](const std::string& asset, const std::filesystem::path& pack) {
+        const auto path = std::filesystem::u8path(asset).lexically_normal();
+        const auto relative = path.lexically_relative(pack);
+        return !relative.empty() && *relative.begin() != "..";
+      };
+      std::set<std::string> pack_ids;
+      std::vector<std::string> environment_packs;
+      for (const auto& directory : a.watch.benchmark_packs) {
+        const auto root = std::filesystem::u8path(directory).lexically_normal();
+        auto pack = sdlfe::benchmark::read_pack(root);
+        if (!pack_ids.insert(pack.id).second)
+          throw std::runtime_error("duplicate benchmark pack ID: " + pack.id);
+        std::set<std::string> chassis;
+        for (const auto& model : a.cc_assets.models)
+          if (is_in_pack(model.mesh, root) && is_in_pack(model.textures, root))
+            chassis.insert(model.chassis);
+        pack.model_chassis = chassis.size();
+        if (pack.profile == "prepared-environment-v1")
+          environment_packs.push_back(directory);
+        benchmark->packs.push_back(std::move(pack));
+      }
+      for (const auto& pack : benchmark->packs) {
+        const bool installed_model = pack.id == "com.mw3remaster.mw5-mechs" ||
+                                     pack.id == "com.mw3remaster.updated-mw3-mechs";
+        if (installed_model && !pack.model_chassis)
+          throw std::runtime_error("active benchmark model pack has no bindings: " + pack.id);
+      }
+      benchmark->expected_model_lods = a.cc_assets.models.size();
+      // The pack digests above already cover the selected environment files.
+      auto available_environment = environment_packs.begin();
+      for (const auto& active : a.cc_assets.environment_packs) {
+        available_environment = std::find(available_environment, environment_packs.end(), active);
+        if (available_environment == environment_packs.end())
+          throw std::runtime_error("benchmark environment pack order differs from Play plan");
+        ++available_environment;
+      }
+      benchmark->settings["hud"] = a.hud.mode;
+      benchmark->settings["hud_text"] = std::to_string(a.hud.text);
+      ordered("hud_artwork_sha256", a.hud.artwork);
+      fingerprint("menu_background_sha256", a.hud.menu_background);
+      fingerprint("effects_catalog_sha256", a.cc_assets.effect_light_catalog);
+      fingerprint("headlight_catalog_sha256", a.cc_assets.stock_headlights);
+      fingerprint("headlight_bindings_sha256", a.cc_assets.headlight_bindings);
+      fingerprint("prepared_textures_sha256", a.cc_assets.textures);
+      fingerprint("skin_catalog_sha256", a.cc_assets.skin_catalog);
+      for (size_t index = 0; index < a.cc_assets.models.size(); ++index) {
+        const auto& model = a.cc_assets.models[index];
+        const auto key = "prepared_model." + std::to_string(index);
+        benchmark->settings[key + ".binding"] = model.chassis + "/" + model.lod;
+        fingerprint(key + ".mesh", model.mesh);
+        fingerprint(key + ".textures", model.textures);
+      }
+      for (size_t index = 0; index < a.cc_assets.materials.size(); ++index) {
+        const auto& material = a.cc_assets.materials[index];
+        const auto key = "prepared_material." + std::to_string(index);
+        benchmark->settings[key + ".binding"] = material.chassis + "/" + material.lod;
+        fingerprint(key + ".content", material.path);
+      }
+      for (size_t index = 0; index < a.cc_assets.normals.size(); ++index) {
+        const auto& normal = a.cc_assets.normals[index];
+        const auto key = "prepared_normal." + std::to_string(index);
+        benchmark->settings[key + ".binding"] = normal.chassis + "/" + normal.lod;
+        fingerprint(key + ".content", normal.path);
+      }
+      for (size_t index = 0; index < a.cc_assets.skins.size(); ++index) {
+        const auto& skin = a.cc_assets.skins[index];
+        const auto key = "prepared_skin." + std::to_string(index);
+        benchmark->settings[key + ".binding"] =
+            skin.chassis + "/" + skin.lod + "/" + std::to_string(skin.index);
+        fingerprint(key + ".content", skin.path);
+      }
+    }
     result = run(a, vfw.get());
     std::printf("mw3: closed, result %d\n", result);
   } catch (const std::exception& error) {
     std::fprintf(stderr, "mw3: rendering failed: %s\n", error.what());
+    if (a.watch.benchmark_run) a.watch.benchmark_run->invalidate({}, error.what());
   }
+  if (auto& benchmark = a.watch.benchmark_run) {
+    if (result != 0) benchmark->invalidate({}, "game exited with an error");
+    try {
+      if (!benchmark->write_results()) result = 1;
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "mw3: benchmark output failed: %s\n", error.what());
+      result = 1;
+    }
+  }
+  sdlfe::close_watch(a.watch);  // the arena's hooks off and its session shut, before SDL goes
   g_net_pass = nullptr;
   vfw.reset();
   SDL_Quit();  // after every SDL object above is gone
@@ -1309,9 +1730,16 @@ namespace {
 
 int run(const Args& a, platform::VideoForWindows* vfw) {
   sdlfe::SdlWindow window;
+  if (a.watch.benchmark_run &&
+      !window.open_benchmark(a.win_w, a.win_h, a.watch.benchmark_window_mode != "windowed"))
+    throw std::runtime_error(std::string("could not open benchmark window: ") + SDL_GetError());
   if (a.backend == sdlfe::RendererBackend::sdl &&
       (a.quality.antialiasing != "off" || a.quality.anisotropy != "1" || !a.cc_assets.empty()))
     return std::fprintf(stderr, "mw3: Core Critical options require a Core Critical Vulkan backend\n"), 1;
+  if (a.watch.benchmark_run)
+    std::printf("mw3: benchmark window shown at %lld ms since process start\n",
+                platform::loading::since_process_start_ms());
+  auto environment_phase = std::make_unique<platform::loading::Phase>("environment-pack-registration");
   auto selected_assets = a.cc_assets;
   if (!selected_assets.environment_packs.empty())
     std::fprintf(stderr, "Environment packs requested: %zu\n",
@@ -1336,16 +1764,28 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       selected_assets.environment ? std::make_shared<const zutl::BankOverrides>(
                                         selected_assets.environment->banks)
                                   : nullptr)};
-  if (!window.init(a.hidden, a.launcher_window, a.backend, a.quality,
-                   selected_assets)) {
-    // The reason is in the line before this (SdlWindow::init).
-    sdlfe::fatal_box(std::string("MechWarrior 3 could not open its window or graphics (Vulkan on Linux): ") + SDL_GetError(), a.hidden);
-    return 1;
-  }
+  environment_phase.reset();
   sdlfe::SdlInput input;
   input.joystick_disabled = a.cfg_joystick_disabled;
   input.joystick_want = a.cfg_joystick, input.joystick_axes = a.cfg_joystick_axes;
   input.controller_profile_path = a.controller_profile;
+  if (!a.input_bindings.empty()) {
+    size_t count = 0;
+    input.set_input_bindings(a.input_bindings, &count);
+    std::printf("mw3: input bindings: loaded %zu extended bindings\n", count);
+  }
+  auto renderer_phase = std::make_unique<platform::loading::Phase>("window-renderer-init");
+  if (!window.init(a.hidden, a.launcher_window, a.backend, a.quality,
+                   selected_assets)) {
+    if (a.watch.benchmark_run)
+      throw std::runtime_error("could not initialize the benchmark window or Vulkan renderer");
+    // The reason is in the line before this (SdlWindow::init).
+    sdlfe::fatal_box(std::string("MechWarrior 3 could not open its window or graphics (Vulkan on Linux): ") + SDL_GetError(), a.hidden);
+    return 1;
+  }
+  renderer_phase.reset();
+  if (auto* r = window.render()) input.set_headlight_wheel(r->headlight_wheel_mask());
+  sdlfe::LoadingDisplay loading_display(window.sdl(), &input, a.hidden);
   sdlfe::SdlForceDevice force([&input] { return input.joystick(); });  // FIX (A): IFORCE2 as rumble (sdl_force.h)
   input.window = window.sdl();
   int focus_at = 0, focus_passes = 0;  // MW3_FOCUS_AT (checks)
@@ -1387,23 +1827,33 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   window.set_auto_size(!a.window_given);
   // Fullscreen by default (ours): the desktop's size, the frame fitted in it
   // (sdl_fit.h). Checks and shots stay in a window.
-  window.set_fullscreen(!a.windowed && !a.window_given && !a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty());
+  window.set_fullscreen(a.watch.benchmark_run
+      ? a.watch.benchmark_window_mode != "windowed"
+      : !a.windowed && !a.window_given && !a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty());
   // FIX (B): a first start's mission at the desktop's size; checks and shots keep 640x480.
   // MW3_FIRST_START=1 keeps it on in a check (sdl_first_start_takes_the_desktop).
   const bool play_run_size = (!a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty()) ||
                              std::getenv("MW3_FIRST_START") != nullptr;
-  window.set_first_start_desktop(play_run_size);
+  // The 3D replay, scripted ones too, plays at the screen's shape (options.cpp, ours #289).
+  const bool replay3d = !a.watch.replay3d_path.empty();
+  mech3::set_replay_screen(replay3d);
+  window.set_first_start_desktop(play_run_size || replay3d);
   // FIX (B): the launcher passes its resolution as --window WxH; a play run's frame (the menus'
   // canvas and the mission) follows it rather than a saved or desktop size (resolution.md).
-  if (play_run_size && a.window_given && a.win_w > 0 && a.win_h > 0)
+  if ((a.watch.benchmark_run || (play_run_size && a.window_given)) && a.win_w > 0 && a.win_h > 0)
     window.set_launch_size(a.win_w, a.win_h);
   sdlfe::SdlZinHost zin_host(&input);
   sdlfe::FrontendInputLifetime input_lifetime(zin_host);
   sdlfe::SdlClock clock;
-  clock.frame_ms = static_cast<uint32_t>(a.frame_ms);
+  // A watched arena match (ours, #516) keeps the wall clock, as Play and
+  // Training do: the game steps by the real time between frames, so it plays
+  // at real speed whatever the frame rate. With the fixed --frame-ms step a
+  // slow window was slow motion and a fast one fast-forward. A hidden match
+  // keeps the fixed step, so its log repeats byte for byte.
+  clock.frame_ms = watched_arena(a) ? 0u : static_cast<uint32_t>(a.frame_ms);
   // A network run's frames keep the wall clock too: the peers' packets come in
   // real time, and a build that draws fast ran its game clock far ahead of them.
-  clock.paced = a.frame_ms > 0 && (a.net_host || !a.net_join.empty() || a.net_port >= 0 || !a.net_lan.empty() || a.net_soak);
+  clock.paced = clock.frame_ms > 0 && (a.net_host || !a.net_join.empty() || a.net_port >= 0 || !a.net_lan.empty() || a.net_soak);
   // --seed: every srand(time()) takes N instead (with --frame-ms a run repeats).
   if (a.seed >= 0) {
     crt::rand_fixed_seed() = static_cast<uint32_t>(a.seed);
@@ -1435,6 +1885,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
 
   mech3::Platform p;
   p.window = &window, p.alert = &alert, p.clock = &clock, p.input = &input, p.force = &force, p.vfw = vfw, p.sound = sound.get();
+  p.hd_movies = a.hd_movies;
   if (stepped) p.movie_clock = &movie_clock;
   p.music = &music, p.files = &files, p.render = window.render(), p.screen = &screen;
   p.window_width = a.win_w, p.window_height = a.win_h;
@@ -1523,7 +1974,12 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     // Through input: FrontendAppLifetime clears input.in_mission before the app is destroyed,
     // and input outlives the screen.
     screen.in_mission = [&input] { return input.in_mission && input.in_mission(); };
-    input.pointer_free = [] { return mech3::editor_state().active != 0; };
+    // Ours (#289): the 3D replay's mouse is the viewer's (clicks pick mechs,
+    // the seek bar), never the mission's, so it is left free as the editor's.
+    // Ours (#529): a watched arena match's too, for its spectator camera.
+    input.pointer_free = [replay = !a.watch.replay3d_path.empty() || watched_arena(a)] {
+      return replay || mech3::editor_state().active != 0;
+    };
     // FIX (A), playtest W4 (sdl_focus.h): a shown window's real focus; the mouse is held only when it is ours.
     // MW3_FOCUS_AT=N (checks, a hidden run): the window without the focus until the pump's Nth pass.
     if (const char* f = SDL_getenv("MW3_FOCUS_AT")) {
@@ -1601,6 +2057,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         multi_game = std::make_unique<mech3::MultiplayerGame>(nullptr);
         multi_game->x70 = 1 << 30;  // the kills to win (+0x70)
         l.type = 3, l.multi = multi_game.get();
+        sdlfe::watch_seat(a.watch, multi_game.get(), &l);  // --arena (ours, #287): the spectator's seat
         mech3::program_net_debug_lobby();
       } else {
         split_mission(a.mission, dir, variant, l.number);
@@ -1662,7 +2119,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         if (l_type3 && app.current() == &mech3::states().core && !net_core) {
           net_core = true;
           s_drive_from = SDL_GetTicks() / 1000.0;
-          if (a.net_minutes > 0) mech3::missions().clock = a.net_minutes * 60.0f, mech3::missions().clock_down = 1;
+          sdlfe::start_watch_clock(a.watch, a.net_minutes);  // --net-minutes, or --arena's (ours, #287)
         }
         // --net-drive: a kill staged on the pilot every two minutes, from a
         // minute in, staggered by the seed (the scores' traffic, the respawn).
@@ -1692,6 +2149,9 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
             std::printf("mw3: soak game over, scores %s\n", mech3::program_net_scores().c_str());
           }
         }
+        // --arena (ours, #287): the run ends once the match is decided and its
+        // fade has left the mission, as the soak test's does.
+        if (net_core && !net_over && sdlfe::watch_run_over(a.watch, app.current())) net_over = launch_done = true;
         // --valve-map DIR (ours, upgrades/valve_map): at the mission's first Core frame, its valve map
         // written as DIR/<mission>.md, then the run ends.
         if (!a.valve_map.empty() && !launch_done && app.current() == &mech3::states().core) {
@@ -1708,9 +2168,15 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         }
         // --verbose (ours): each state the app moves to, by name, as the menus' driver prints them.
         static const zgame::State* launch_state = nullptr;
-        if (a.verbose && app.current() != launch_state) {
+        if (app.current() != launch_state) {
           launch_state = app.current();
-          if (auto* st = dynamic_cast<const mech3::State*>(launch_state)) std::printf("mw3: state %s (frame %d)\n", st->name(), shots);
+          if (auto* st = dynamic_cast<const mech3::State*>(launch_state)) {
+            if (a.verbose) std::printf("mw3: state %s (frame %d)\n", st->name(), shots);
+            // Startup timing (launcher -> game -> intro -> menu -> Core), on its own line so
+            // tools that compare the state lines above are unaffected.
+            std::printf("mw3: timing state %s at %lld ms since process start\n", st->name(),
+                        platform::loading::since_process_start_ms());
+          }
         }
         // Counted from the first frame with the scene: then every frame shown
         // (the pause and end screens draw none, and --frames must still end the run).
@@ -1936,6 +2402,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     if (!debug && !launch)
       engine.on_present = [&](int) {
         ++menu_frames;
+        if (app.current() == &mech3::states().main) sdlfe::mark_menu_ready();
         record_frame_time(menu_frames);
         if (chain) chain->frame();
         if (modes) modes->frame();
@@ -2144,10 +2611,13 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         if (!a.shot.empty() && menu_frames == a.shot_frame) std::printf("mw3: wrote %s (frame %d)\n", a.shot.c_str(), menu_frames);
         // --verbose (ours): each state the app moves to, by name.
         static const zgame::State* last_state = nullptr;
-        if (a.verbose && app.current() != last_state) {
+        if (app.current() != last_state) {
           last_state = app.current();
-          if (auto* st = dynamic_cast<const mech3::State*>(last_state))
-            std::printf("mw3: state %s (frame %d)\n", st->name(), menu_frames);
+          if (auto* st = dynamic_cast<const mech3::State*>(last_state)) {
+            if (a.verbose) std::printf("mw3: state %s (frame %d)\n", st->name(), menu_frames);
+            std::printf("mw3: timing state %s at %lld ms since process start\n", st->name(),
+                        platform::loading::since_process_start_ms());
+          }
         }
         // --lab-mech N (ours, for checking the lab's 3D view): once the lab is
         // up its view is handed chassis N (0..18), as the slot switch hands it
@@ -2197,7 +2667,11 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         }
       };
 
-    if (app.init_instance()) {
+    auto app_phase = std::make_unique<platform::loading::Phase>("app-init-instance");
+    const bool initialized = app.init_instance();
+    app_phase.reset();
+    startup_loading.reset();
+    if (initialized) {
       // The state after the intro (the app's +0x1dc): the debug start takes
       // the place the lobby launch gives the Load state.
       if (debug) app.post_intro_ = debug.get();
@@ -2336,10 +2810,10 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
             std::_Exit(3);
           }
         }
-      } overlay_off{window.render()};
-      if (window.render()) window.render()->attach_editor(&editor_source);
+      } overlay_off{a.watch.benchmark_run ? nullptr : window.render()};
+      if (overlay_off.r) overlay_off.r->attach_editor(&editor_source);
       sdlfe::SdlPump pump(&input, &app);
-      pump.overlay_event = [&](const SDL_Event& e) {
+      if (!a.watch.benchmark_run) pump.overlay_event = [&](const SDL_Event& e) {
         if (auto* editor = editor_source.acquire_if_active()) return editor->event(e);
         return false;
       };
@@ -2349,14 +2823,14 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
           if (g_net_pass) g_net_pass();
         };
       // Ours: Alt+Enter, and the game's sounds silent while the window is away.
-      pump.toggle_fullscreen = [&] { window.switch_fullscreen(!window.fullscreen()); };
+      if (!a.watch.benchmark_run) pump.toggle_fullscreen = [&] { window.switch_fullscreen(!window.fullscreen()); };
       if (auto* s = dynamic_cast<sdlfe::SdlSoundOutput*>(sound.get())) pump.focus_changed = [s](bool on) { s->set_focused(on); };
       if (!debug && !launch && (a.frames > 0 || !a.shot.empty()))
         pump.should_quit = [&] { return (a.frames > 0 && menu_frames >= a.frames) || (!a.shot.empty() && menu_frames > a.shot_frame); };
       if (launch) pump.should_quit = [&] { return launch_done; };
       if (chain) pump.should_quit = [&] { return chain->done(); };
       if (modes) pump.should_quit = [&] { return modes->done(); };
-      pump.stays_active = a.frames > 0 || !a.shot.empty() || chain || modes;  // a check: no pause for focus
+      pump.stays_active = a.watch.benchmark_run || a.frames > 0 || !a.shot.empty() || chain || modes;  // a check: no pause for focus
       // MW3_FOCUS_LOST_AT=N (checks): the window's focus lost at the pump's
       // Nth pass, as when another app is in front.
       if (focus_at > 0) {
@@ -2397,15 +2871,49 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       // A quit outside the Exit state returns through ExitInstance, as the exe's WM_QUIT does,
       // and leaves the world to the process's end: stop_game after zSound's shutdown freed
       // the sounds the world's nodes still held (the exit's SIGTRAP, docs/program.md).
+      if (!sdlfe::watch_attach(a.watch, pump, window.render(), window.sdl(), a.hidden)) return 2;  // --replay3d's view (ours, #289), the arena's camera (#529)
+      struct WatchDetach {
+        sdlfe::SdlPump& pump;
+        ~WatchDetach() { sdlfe::watch_detach(pump); }
+      } watch_detach{pump};
+      auto* strict_run = a.watch.benchmark_run && a.watch.benchmark_run->strict()
+          ? a.watch.benchmark_run.get() : nullptr;
+      const auto wait_for_strict_shutdown = [&] {
+        if (!strict_run) return;
+        const auto frame = strict_run->next_frame(0);
+        try {
+          if (window.render()->wait_benchmark_idle()) return;
+          strict_run->invalidate(frame, "timed out draining strict worker on exit");
+        } catch (const std::exception& error) {
+          strict_run->invalidate(frame, error.what());
+        } catch (...) {
+          strict_run->invalidate(frame, "strict worker threw a non-standard exception on exit");
+        }
+        try {
+          strict_run->write_results();
+        } catch (const std::exception& error) {
+          std::fprintf(stderr, "mw3: benchmark output failed: %s\n", error.what());
+        }
+        // Cleanup could join a stuck worker or rethrow its stored failure.
+        // Leave renderer resources to process teardown.
+        std::fflush(stdout);
+        std::fflush(stderr);
+        std::_Exit(1);
+      };
       try {
         result = app.run(pump);
       } catch (...) {
         // Report before OverlayOff and the renderer owners unwind. Their
         // cleanup may encounter the same stored worker failure.
         log_loop_exception(std::current_exception());
+        wait_for_strict_shutdown();
         throw;
       }
-      window.render()->drain();
+      // An arena match that could not start exits 1 (arena.h, Result::failed).
+      if (result == 0 && !a.watch.arena_path.empty() && mech3::arena::arena_result().failed) result = 1;
+      if (strict_run) wait_for_strict_shutdown();
+      else window.render()->drain();
+      if (a.watch.benchmark_run) window.render()->benchmark_finish();
       if (!frame_ms.empty()) {  // --frame-times: the frames' wall times
         std::vector<double> s = frame_ms;
         std::sort(s.begin(), s.end());

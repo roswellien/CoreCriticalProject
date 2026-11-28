@@ -279,8 +279,16 @@ const std::vector<ScreenGroups>& screen_groups() {
 }
 }  // namespace
 
+// The extra width is the menus' own canvas (menu_vmode), the one the screen
+// is shown on, not the buffer it is made on: a mission makes its option
+// screens on its own wide canvas (the pause's OPTIONS), and with the owner's
+// 4:3 menus (PR #390, MW3_MENU_WIDE unset) shows them at 640x480, where a
+// spread for the mission's width put their right group off screen (issue 519).
 void GameEngine::widen_screen(MenuScreen* s, uint32_t ctor) {
-  const int32_t extra = buffer_width() - 640;
+  int32_t menu_canvas_width = 640, menu_canvas_height = 480;
+  const int32_t menus_mode = menu_vmode();
+  if (menus_mode != 5) vmode_canvas(menus_mode, &menu_canvas_width, &menu_canvas_height);
+  const int32_t extra = menu_canvas_width - 640;
   if (!s || extra <= 0 || !zfix::options().any_resolution || !zfix::options().wide_menus) return;
   const ScreenGroups* table = nullptr;
   for (const ScreenGroups& g : screen_groups())
@@ -415,6 +423,26 @@ void GameEngine::widen_screen(MenuScreen* s, uint32_t ctor) {
     l->internet_line.set_pos(s->origin_x + 207 + extra / 2, s->origin_y + 379);
     l->lan_line.set_pos(s->origin_x + 207 + extra / 2, s->origin_y + 389);
   }
+}
+
+// The live GPU menu draws the HD background only where a frame blits the
+// registered menu background source, and only the main menu registers one
+// (main_menu_background). In a mission there is no main menu, so an option
+// page reached from the pause registers its own backdrop while it shows
+// (issue 519). Each page binds its own copy of the dialog's BACKGROUND, so
+// the source follows the page on top: shown on enter and resume, dropped on
+// leave and deletion, and only when it is still this page's. With a main menu
+// nothing is done: its option pages borrow the main menu's own image
+// (MenuScreen::borrow_background), so dropping it would clear the main menu's
+// source, which only its screens' construction registers again.
+void GameEngine::menu_screen_backdrop(Handle screen, bool show) {
+  const bool main_menu_registers_its_own = main_menu() != nullptr;
+  if (main_menu_registers_its_own) return;
+  MenuScreen* page = screen_of(screen);
+  const zimg::Texture* backdrop = page ? page->background.image : nullptr;
+  if (!backdrop) return;
+  if (show) zrndr::set_menu_background_source(backdrop);
+  if (!show && zrndr::menu_background_source() == backdrop) zrndr::set_menu_background_source(nullptr);
 }
 
 // The screen being made is laid out wide before its bake: by the constructor construct() is in, or for the
@@ -660,6 +688,9 @@ void GameEngine::delete_screens() {
   delete quit_box_;
   quit_box_ = nullptr;
   quit_box_at_ = 0;
+  // An options page still on top at quit registered its backdrop as the menu background
+  // (menu_screen_backdrop); its texture goes with the screens below, so drop the source first.
+  zrndr::set_menu_background_source(nullptr);
   // The app may be gone: the screens go below, not through the states' destructors.
   while (!menu_states_.empty()) {
     MenuState* st = menu_states_.begin()->second;

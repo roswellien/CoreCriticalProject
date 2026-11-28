@@ -40,6 +40,8 @@ struct MountFiles : platform::Files {
   bool exists(const std::string& path) override;
 };
 
+class HdMovieSource;  // hd_movie.h
+
 struct Platform {
   platform::Window* window = nullptr;
   platform::Alert* alert = nullptr;
@@ -66,6 +68,12 @@ struct Platform {
   std::function<Engine::NetReach()> network_reach;
   std::function<void(bool hosting)> network_hosting;
   std::function<void(const char* text)> copy_text;
+  // Ours (#559): `mw3 --hd-movie NAME PATH`, the movie name (lower case, as
+  // hd_movie_name gives it) to its HD MP4; empty: every movie its original.
+  std::map<std::string, std::string> hd_movies;
+  // Their decoder; empty: the platform's own (default_hd_movie_factory,
+  // hd_movie.h). Tests give a fake one.
+  std::function<std::unique_ptr<HdMovieSource>()> hd_movie_factory;
 };
 
 class ActionGame;
@@ -77,6 +85,10 @@ class MenuState;
 void wire_mission_hooks(GameEngine* e);  // mech3/mission's hooks to the ports (app_mission.cpp)
 void wire_pilot_hooks(GameEngine* e);    // the pilot module's calls out (app_menus.cpp)
 void wire_fmv(GameEngine* e);            // zFMV's host (app_fmv.cpp)
+struct HdPresentFrame;
+// Ours (#559): the playing HD movie's frame for the sound played so far and
+// the rows of it to show (app_fmv.cpp); false when none is playing or ready.
+bool hd_movie_frame(HdPresentFrame* out);
 
 // The briefing screen open ([0x005f4c80]) hears the mission load's fraction
 // (0x004050d0) and lines (0x00405120); none open, nothing (app_menus.cpp).
@@ -88,6 +100,19 @@ uint32_t program_slot_count();  // the chosen pilot's campaign's slot count (0x0
 class GameEngine : public Engine {
  public:
   void nav_prebuild() override;  // ours (W58, app_mission.cpp)
+  void arena_start() override;   // ours (#287, app_mission.cpp -> mech3/arena)
+  void arena_tick() override;    // ours (#287, app_mission.cpp -> mech3/arena)
+  // Ours (#289): the 3D replay's frame, through replay_hooks() (replay_hooks.h).
+  bool replay_on() override;
+  bool replay_strict() override;
+  bool replay_advance_lists() override;
+  void replay_start() override;
+  bool replay_before_lists() override;
+  void replay_after_lists() override;
+  void replay_after_frame() override;
+  void replay_camera() override;
+  void spectator_camera() override;
+  void replay_draw() override;
   // A mission started from the command line (our addition, docs/program.md):
   // the pilot's game answers these, and the load goes on to the Core state.
   struct Launch {
@@ -117,6 +142,9 @@ class GameEngine : public Engine {
     // A network debug start's game (type 3, ours: the lobby is not ported):
     // its rules and totals; the pilot's own when it has one.
     MultiplayerGame* multi = nullptr;
+    // Ours (#287): a network start with no player mech, the arena's
+    // spectator seat (mission_launch.h, set_launch_spectator).
+    bool spectator = false;
   };
   void set_launch(const Launch& l);
   // The launch's mech, loadout and skin read again from the chosen pilot's
@@ -509,6 +537,7 @@ class GameEngine : public Engine {
   void camera_set_hse_test(int32_t on) override;  // 0x004f3550
   void update_shadows() override;  // 0x004814e0 on the program's entities (app_mech)
   // zInput (gamez/zinput, docs/input.md).
+  const platform::Input* platform_input() const { return p_.input; }
   void input_init(int32_t commands, const char* map) override;
   void input_start(uint32_t window, uint32_t cmd_show) override;
   void input_devices_shutdown() override;
@@ -598,6 +627,19 @@ class GameEngine : public Engine {
   // Ours (docs/fmv.md section 8): a movie's shape measured before its first
   // frame instead of beside it (the --movie debug start's, for its shots).
   bool movie_shape_first = false;
+  // Ours (#559, docs/fmv.md section 9): an HD movie playing in place of an
+  // original. The movie host says when one starts and ends (app_fmv.cpp);
+  // while one plays its frames are shown instead of the 16-bit buffer.
+  void hd_movie_started();
+  void hd_movie_ended();
+  // The HD frame for the sound played, shown when it is newer than the last
+  // one shown; `counted` for a flip (frames_presented, on_present), not for
+  // the extra shows between the script's 15 fps flips. False when nothing
+  // could be shown (the 16-bit buffer is shown instead).
+  bool present_hd_movie(bool counted);
+  bool hd_movie_active_ = false;
+  uint64_t hd_movie_serial_shown_ = 0;
+  bool hd_movie_no_presenter_logged_ = false;
   // The Direct3D frame: zvid's lock (0x00576d00 / 0x00576d60), scene nesting
   // (0x00579af0 / 0x00579b10), the quad ([0x0072f3ec]) and the finish (0x00558610).
   // 0x0040f8d0: the message panel's slide, then the view target's HUD data update.
@@ -624,6 +666,10 @@ class GameEngine : public Engine {
   int buffer_width() const { return width_; }
   void widen_screen(class MenuScreen* s, uint32_t ctor);  // ours: a menu screen spread over a wide canvas (app_menus.cpp)
   void widen_before_bake(class MenuScreen* s) override;   // ours: the same ahead of a FastMenu bake, by the screen being made
+  void menu_screen_backdrop(Handle screen, bool show) override;  // ours: register or drop a screen's backdrop (issue 519)
+  bool hd_menu_background_ready() const override {  // ours (#552): the presenter owns HD readiness
+    return p_.screen && p_.screen->hd_menu_background_ready();
+  }
   uint32_t making_ctor_ = 0;                              // the constructor construct() is in (0 none)
   int buffer_height() const { return height_; }
 

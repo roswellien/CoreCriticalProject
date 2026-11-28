@@ -18,6 +18,7 @@
 #include "gamez/zclass/cls_di.h"
 #include "gamez/zclass/cls_util.h"
 #include "gamez/zclass/cls_world.h"
+#include "gamez/zclass/cls_zbd.h"
 #include "gamez/zclass/list.h"
 #include "gamez/zclass/window.h"
 #include "gamez/zclass/object3d.h"
@@ -1237,6 +1238,8 @@ int pick_cells(Node* world, Camera* cam) {
   for (ScreenRing& r : g_walk.rings) r.count = 0;
   int32_t cx, cz;
   world_cell_clamped(world, &cx, cam->get<float>(0x2c), cam->get<float>(0x34), &cz);
+  if (auto *renderer = zvid::render3d())
+    renderer->select_terrain_cell(node_index_of(world), cx, cz);
   zmth::Mat34 local;
   zmth::push(&local);
   zmth::load_identity();
@@ -1276,6 +1279,8 @@ int pick_cells_virtual(Node* world, Camera* cam) {
   for (ScreenRing& r : g_walk.rings) r.count = 0;
   int32_t cx, cz, wx, wz, inside;
   world_cell_wrapped(world, &cx, cam->get<float>(0x2c), cam->get<float>(0x34), &cz, &wx, &wz, &inside);
+  if (auto *renderer = zvid::render3d())
+    renderer->select_terrain_cell(node_index_of(world), wx, wz);
   zmth::Mat34 local;
   zmth::push(&local);
   zmth::load_identity();
@@ -1495,9 +1500,26 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw) {
   return render_subtree(camera_node, node, hw, false);
 }
 
+// FIX (bug), ours (issue 467): a camera whose window has no area (the zoom
+// window, clamped at a screen edge for a frame) draws nothing. Drawing it would
+// write a zero focal length into the shared projection before any scene opens.
+// The check runs before the draw changes any state, so nothing needs undoing.
+static bool skip_camera_with_empty_window(Node* camera_node) {
+  // Not a usable camera: leave it to the draw's own handling, as before this check.
+  // Class 1 is the camera class (check_class(node, 1, ...) above), tested here
+  // without check_class's error report.
+  const bool is_camera = camera_node && camera_node->data && camera_node->cls() == 1;
+  if (!is_camera) return false;
+  int32_t width = 0, height = 0;
+  if (window_has_area(cam_of(camera_node)->nodes[1], &width, &height)) return false;
+  log_skipped_empty_window(width, height);
+  return true;
+}
+
 int render_subtree(Node* camera_node, Node* node, int32_t hw,
                    bool use_requested_producer_purpose) {
   if (!node || !camera_node) return 1;
+  if (skip_camera_with_empty_window(camera_node)) return 0;
   zvid::ProducerWorldScope producer_view(!use_requested_producer_purpose);
   struct EmissionScope {
     zvid::ProducerWorldScope* producer_view = nullptr;
@@ -1585,6 +1607,7 @@ int camera_draw_flares(Camera* cam, int32_t from) {
 // The Direct3D frame's 3D part: LoD scale, lights, camera, horizon,
 // viewport, zones, then the scene walk between BeginScene and EndScene.
 int render_world(Node* camera_node, int32_t after) {
+  if (skip_camera_with_empty_window(camera_node)) return 0;
   zvid::ProducerWorldScope producer_view;
   zmth::check_stack_at_frame();  // FIX (bug), ours (W59): one imbalance cannot carry
   zmth::Mat34 local;

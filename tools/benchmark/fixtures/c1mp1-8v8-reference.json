@@ -1,0 +1,155 @@
+{
+  "map": "c1mp1",
+  "minutes": 3,
+  "out": "local/benchmark/reference-16",
+  "sides": [
+    [
+      {
+        "mech": "madcat",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "thor",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "vulture",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "avatar",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "owens",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "strider",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "daishi",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "shadowcat",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      }
+    ],
+    [
+      {
+        "mech": "blackhawk",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "bushwacker",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "champion",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "cauldron",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "puma",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "sunder",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "supernova",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "orion",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      }
+    ]
+  ]
+}

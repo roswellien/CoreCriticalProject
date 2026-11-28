@@ -79,7 +79,7 @@ inputs and release artifacts outside Git.
    pwsh -NoProfile -File tools/mw3-remaster-launcher/build_launcher_release.ps1 `
      -Compiler '<path to ISCC.exe>' `
      -PublishDirectory 'local/launcher-release/Publish' `
-     -RuntimeDirectory '<validated local precompiled runtime directory>' `
+     -NativePreviewDirectory '<validated local precompiled runtime directory>' `
      -OutputDirectory 'local/launcher-release/Release' `
      -Version '<public-version-preview>' -Sequence <positive-sequence> `
      -SigningKey '<external update-signing PEM>' -KeyId '<trusted-key-id>' `
@@ -88,9 +88,18 @@ inputs and release artifacts outside Git.
      -SigningMetadata '<external Azure signing metadata>'
    ```
 
-   The orchestrator calls `build_installer.ps1`, `build_ccupdate.ps1`,
-   `sign_windows.ps1` and `sign_runtime_update.ps1`. Review
-   `Release/launcher-release.json` and each installer receipt. Publish the exact
+   The orchestrator pre-signs `NativePreview` once with
+   `sign_native_preview.ps1` (which signs unsigned PE binaries via
+   `sign_windows.ps1`, keeps `metadata/build-observation.json` immutable as the
+   pre-signing build witness, updates `runtime.json` pins and
+   `provenance.build_id`, and verifies the runtime contract before packaging),
+   then calls `build_installer.ps1`, `build_ccupdate.ps1`, `sign_windows.ps1`
+   and `sign_runtime_update.ps1`. External release scripts that invoke
+   `build_installer.ps1` separately for paired `UpgradeSetup` and `Setup`
+   installers should pre-sign `NativePreview` once with `sign_native_preview.ps1`
+   first so both installers ship byte-identical signed runtime binaries. Review
+   `Release/launcher-release.json`, `native-preview-signatures.json` and each
+   installer receipt. Publish the exact
    `setup_filename` from `installer-build.json`. The installer must keep its
    version in its filename, and the update files must be named
    `<version>.ccupdate` with the matching `<version>.zip`.
@@ -104,15 +113,17 @@ inputs and release artifacts outside Git.
    or either update file.
 
 5. **Review and test before upload.** Verify the source SHA and artifact hashes
-   in the receipts; verify every Windows signature and timestamp; inspect the
-   installer contents and confirm the original game media and signing material
-   are absent. On an isolated Windows test account or VM, install the signed
-   setup with user-supplied original game files, upgrade an existing supported
-   install using the signed `.ccupdate` and matching ZIP, confirm settings,
-   saves, packs and the precompiled runtime are preserved as expected, then
-   test runtime update/rollback when the release changes the runtime. Record
-   results and clean up only the isolated test installation. Do not publish
-   until these checks pass.
+   in the receipts; verify every Windows signature and timestamp across the
+   staged publication (including `NativePreview\`, `Tools\PlannerPython\` and
+   `Tools\Unshield\`, which `build_installer.ps1` enforces before invoking
+   `ISCC.exe`); inspect the installer contents and confirm the original game
+   media and signing material are absent. On an isolated Windows test account
+   or VM, install the signed setup with user-supplied original game files,
+   upgrade an existing supported install using the signed `.ccupdate` and
+   matching ZIP, confirm settings, saves, packs and the precompiled runtime are
+   preserved as expected, then test runtime update/rollback when the release
+   changes the runtime. Record results and clean up only the isolated test
+   installation. Do not publish until these checks pass.
 
 6. **Prepare the signed online catalog.** Use the committed
    `tools/update-service/build_catalog.py` with the new launcher metadata and

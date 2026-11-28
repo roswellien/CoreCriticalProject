@@ -108,6 +108,27 @@ class RenderWorker {
         wait(lock, [&] { return failure_ || statistics_.completed >= job_number; });
         check_failure();
     }
+    bool wait_for_job_until(std::size_t job_number,
+                            std::chrono::steady_clock::time_point deadline) {
+        if (std::this_thread::get_id() == thread_.get_id())
+            throw std::logic_error("Render worker cannot wait on itself");
+        std::unique_lock<std::mutex> lock(mutex_);
+        while (!failure_ && statistics_.completed < job_number) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline)
+                return false;
+            const auto wake =
+                wait_pump_ ? std::min(deadline, now + std::chrono::milliseconds(1)) : deadline;
+            changed_.wait_until(lock, wake);
+            if (wait_pump_) {
+                lock.unlock();
+                wait_pump_();
+                lock.lock();
+            }
+        }
+        check_failure();
+        return true;
+    }
     void drain() {
         if (std::this_thread::get_id() == thread_.get_id())
             throw std::logic_error("Render worker cannot wait on itself");

@@ -13,15 +13,33 @@ public static class NativeControls
         "[HKEY_CURRENT_USER\\SOFTWARE\\MicroProse\\MechWarrior 3\\1.0]";
     private const string DefaultMap = "DefaultCmdMap";
     private const string ActiveConfig = "ActiveCtlCfg";
+    private const string GameOptions = "GameOptions";
+    private const uint DefaultGameOptions = 0x49; // options.h: camera 1, heat and joystick.
+    private const uint JumpJetsBit = 0x80;
     private const string RestoreFile = "launcher-controls.restore.json";
 
     private sealed class RestoreState
     {
-        public int Version { get; set; } = 2;
+        public int Version { get; set; } = 3;
         public string[] DefaultMap { get; set; } = [];
         public string[] ActiveConfig { get; set; } = [];
         public string[] LastAppliedDefaultMap { get; set; } = [];
         public string[] LastAppliedActiveConfig { get; set; } = [];
+        public bool HasOriginalGameOptions { get; set; }
+        public uint? OriginalGameOptions { get; set; }
+        public uint? LastAppliedGameOptions { get; set; }
+        public PendingApplication? Pending { get; set; }
+    }
+
+    // The restore file and registry replace are separate writes. Keep both the previous and
+    // the intended projections until the settings write has completed.
+    private sealed class PendingApplication
+    {
+        public string[] DefaultMap { get; set; } = [];
+        public string[] ActiveConfig { get; set; } = [];
+        public bool WritesGameOptions { get; set; }
+        public bool KeepsGameOptionsOverride { get; set; }
+        public uint? GameOptions { get; set; }
     }
 
     public static string? ExportControllerProfile(string dataRoot, string profileDirectory, ControllerProfile profile)
@@ -43,29 +61,47 @@ public static class NativeControls
         return ["--cc-controller", path];
     }
 
-    public static void PrepareLaunch(string dataRoot, string writeDirectory, string gameDirectory,
-        LauncherSettings settings, Action<string> log)
+    internal static ControlProfile? LoadSelectedProfile(string dataRoot)
     {
         var controls = new ControlProfiles(dataRoot).LoadForLaunch();
-        var controllerProfile = new ControllerProfiles(dataRoot).Load();
+        return controls.Profiles.SingleOrDefault(profile => profile.Id == controls.ActiveId);
+    }
+
+    public static string? PrepareLaunch(string dataRoot, string writeDirectory, string gameDirectory,
+        LauncherSettings settings, Action<string> log) =>
+        PrepareLaunch(dataRoot, writeDirectory, gameDirectory, settings, LoadSelectedProfile(dataRoot),
+            new ControllerProfiles(dataRoot).Load(), log);
+
+    internal static string? PrepareLaunch(string dataRoot, string writeDirectory, string gameDirectory,
+        LauncherSettings settings, ControlProfile? profile, ControllerProfile controllerProfile, Action<string> log)
+    {
         var settingsPath = Path.Combine(writeDirectory, "settings.reg");
         var restorePath = Path.Combine(writeDirectory, RestoreFile);
         var settingsText = File.Exists(settingsPath) ? ReadSettings(settingsPath) : "";
         var lines = SplitLines(settingsText);
         var settingsEol = DetectLineEnding(settingsText);
-        var hasRestore = File.Exists(restorePath);
-        var restore = hasRestore ? ReadRestore(restorePath) : null;
-        if (restore != null && ReconcilePlayerEdits(lines, restore))
+        var restore = File.Exists(restorePath) ? ReadRestore(restorePath) : null;
+        var jumpJets = profile?.Mw2JumpJets;
+        var currentOptions = jumpJets.HasValue || restore?.HasOriginalGameOptions == true
+            ? ReadGameOptions(lines) : null;
+        if (restore != null)
         {
-            ControlProfiles.AtomicWrite(restorePath, JsonSerializer.Serialize(restore));
-            log("MW3-RE controls changed since the launcher applied its layout; preserved the latest in-game controls for restore.");
+            RecoverPendingApplication(lines, currentOptions, restore);
+            var controlsEdited = ReconcilePlayerEdits(lines, restore);
+            var optionsEdited = ReconcileGameOptions(currentOptions, restore);
+            if (controlsEdited || optionsEdited)
+                log("MW3-RE controls changed since the launcher applied its layout; preserved the latest in-game controls for restore.");
         }
 
-        if (controls.ActiveId == null && !controllerProfile.Enabled)
+        if (profile == null && !controllerProfile.Enabled)
         {
             if (restore != null)
             {
-                WriteSettings(settingsPath, ApplyValues(lines, restore.DefaultMap, restore.ActiveConfig), settingsEol);
+                var updated = ApplyValues(lines, restore.DefaultMap, restore.ActiveConfig);
+                if (restore.HasOriginalGameOptions) SetGameOptions(updated, restore.OriginalGameOptions);
+                // Reconciled baselines must survive a failure while replacing settings.reg.
+                SaveRestore(restorePath, restore);
+                WriteSettings(settingsPath, updated, settingsEol);
                 File.Delete(restorePath);
                 log("Restored MW3-RE's saved controls from before the launcher layout was applied.");
             }
@@ -76,18 +112,13 @@ public static class NativeControls
         }
         else
         {
-            var selected = controls.ActiveId == null
-                ? Mw3DefaultControls.Create()
-                : controls.Profiles.Single(profile => profile.Id == controls.ActiveId);
-            if (restore == null)
+            // Controller projection clears legacy joystick slots on a private copy.
+            var selected = profile == null ? Mw3DefaultControls.Create() : ControlProfiles.Clone(profile, profile.Name);
+            restore ??= new RestoreState
             {
-                restore = new RestoreState
-                {
-                    DefaultMap = FindValue(lines, DefaultMap),
-                    ActiveConfig = FindValue(lines, ActiveConfig)
-                };
-            }
-            ControlProfiles.AtomicWrite(restorePath, JsonSerializer.Serialize(restore));
+                DefaultMap = FindValue(lines, DefaultMap),
+                ActiveConfig = FindValue(lines, ActiveConfig)
+            };
 
             var activePreset = ReadActivePreset(writeDirectory, gameDirectory, restore.ActiveConfig);
             if (activePreset == null || !ReadAxisRows(activePreset).Any())
@@ -99,24 +130,84 @@ public static class NativeControls
                 _ = ExportControllerProfile(dataRoot, writeDirectory, controllerProfile);
                 log("Applied the full saved controller profile through MW3-RE's native controller input path.");
             }
-            var preset = controllerPreset == null
-                ? ControlProfiles.Preset(selected, activePreset)
-                : ControlProfiles.Preset(selected, controllerPreset);
+            var preset = ControlProfiles.Preset(selected, controllerPreset ?? activePreset);
             var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(preset)))[..20];
             var relative = @"keys\CC-" + hash + ".zrd";
             var target = Path.Combine(writeDirectory, "keys", "CC-" + hash + ".zrd");
             ControlProfiles.AtomicWrite(target, preset);
-            var appliedMap = FormatMap(selected);
-            var appliedConfig = FormatActiveConfig(relative);
-            var updated = ApplyValues(lines, appliedMap, appliedConfig);
+
+            var pending = new PendingApplication
+            {
+                DefaultMap = FormatMap(selected),
+                ActiveConfig = FormatActiveConfig(relative),
+                WritesGameOptions = jumpJets.HasValue || restore.HasOriginalGameOptions,
+                KeepsGameOptionsOverride = jumpJets.HasValue,
+                GameOptions = restore.OriginalGameOptions
+            };
+            if (jumpJets.HasValue)
+            {
+                if (!restore.HasOriginalGameOptions)
+                {
+                    restore.HasOriginalGameOptions = true;
+                    restore.OriginalGameOptions = currentOptions;
+                }
+                var options = currentOptions ?? DefaultGameOptions;
+                pending.GameOptions = jumpJets.Value ? options | JumpJetsBit : options & ~JumpJetsBit;
+            }
+            var updated = ApplyValues(lines, pending.DefaultMap, pending.ActiveConfig);
+            if (pending.WritesGameOptions) SetGameOptions(updated, pending.GameOptions);
+            restore.Pending = pending;
+            SaveRestore(restorePath, restore);
             WriteSettings(settingsPath, updated, settingsEol);
-            restore.LastAppliedDefaultMap = appliedMap;
-            restore.LastAppliedActiveConfig = appliedConfig;
-            ControlProfiles.AtomicWrite(restorePath, JsonSerializer.Serialize(restore));
+            CompleteApplication(restore, pending);
+            SaveRestore(restorePath, restore);
             log("Applied launcher key and mouse bindings to MW3-RE's per-profile controls files.");
         }
 
+        var inputPath = ExportInputBindings(writeDirectory, profile, out var bindingCount);
+        var jumpJetsState = jumpJets.HasValue ? (jumpJets.Value ? "enabled" : "disabled") : "use game setting";
+        log($"Applied {bindingCount} extended MW3-RE input binding(s). MW2JJets: {jumpJetsState}.");
         PrepareJoystickSelection(writeDirectory, settings, log);
+        return inputPath;
+    }
+
+    private static string? ExportInputBindings(string writeDirectory, ControlProfile? profile, out int count)
+    {
+        var path = Path.GetFullPath(Path.Combine(writeDirectory, "mw3-input.txt"));
+        count = 0;
+        if (profile == null || !ControlProfiles.UsesExtendedInputBindings(profile))
+        {
+            PackStorage.EnsureNoLinks(path);
+            PackStorage.EnsureNoLinks(path + ".previous");
+            if (File.Exists(path)) File.Delete(path);
+            if (File.Exists(path + ".previous")) File.Delete(path + ".previous");
+            return null;
+        }
+
+        var text = new StringBuilder("CC_MW3_INPUT_V1\n");
+        foreach (var action in ControlProfiles.Actions.OrderBy(action => action.Command))
+        {
+            var binding = profile.Bindings[action.Name];
+            if (binding.Mouse > 3)
+            {
+                text.Append(CultureInfo.InvariantCulture, $"MOUSE {action.Command} {binding.Mouse}\n");
+                count++;
+            }
+            var combos = (binding.Combos ?? []).Select(combo => new
+            {
+                combo.Suppress,
+                Count = combo.Inputs.Count,
+                Inputs = ControlProfiles.CanonicalCombo(combo)
+            }).OrderBy(combo => combo.Inputs, StringComparer.Ordinal);
+            foreach (var combo in combos)
+            {
+                var suppress = combo.Suppress ? 1 : 0;
+                text.Append(CultureInfo.InvariantCulture, $"COMBO {action.Command} {suppress} {combo.Count} {combo.Inputs}\n");
+                count++;
+            }
+        }
+        ControlProfiles.AtomicWrite(path, text.ToString());
+        return path;
     }
 
     private static void PrepareJoystickSelection(string writeDirectory, LauncherSettings settings, Action<string> log)
@@ -185,8 +276,9 @@ public static class NativeControls
             if (action.Command < 0 || action.Command >= 167)
                 throw new InvalidDataException($"MW3 control command id {action.Command} is outside DefaultCmdMap.");
             var binding = profile.Bindings[action.Name];
+            var legacyMouse = binding.Mouse <= 3 ? binding.Mouse : 0;
             uint packed = (uint)(binding.Primary | (binding.Secondary << 11) |
-                (binding.Joystick << 22) | (binding.Mouse << 26));
+                (binding.Joystick << 22) | (legacyMouse << 26));
             System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(action.Command * 4, 4), packed);
         }
         return ["\"DefaultCmdMap\"=" + FormatHex(bytes)];
@@ -348,22 +440,127 @@ public static class NativeControls
     private static bool StartsValue(string row, string name) =>
         row.StartsWith("\"" + name + "\"=", StringComparison.OrdinalIgnoreCase);
 
+    private static int FindGameOptionsRow(List<string> lines)
+    {
+        var inSection = false;
+        var index = -1;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var row = lines[i].Trim();
+            if (row.StartsWith('['))
+                inSection = row.Equals(RegistrySection, StringComparison.OrdinalIgnoreCase);
+            if (!inSection || !row.Split('=', 2)[0].TrimEnd().Equals(
+                    "\"GameOptions\"", StringComparison.OrdinalIgnoreCase)) continue;
+            if (index >= 0) throw new InvalidDataException("Duplicate HKCU GameOptions in MW3-RE settings.reg.");
+            index = i;
+        }
+        return index;
+    }
+
+    private static uint? ReadGameOptions(List<string> lines)
+    {
+        var index = FindGameOptionsRow(lines);
+        if (index < 0) return null;
+        var parts = lines[index].Split('=', 2);
+        var value = parts.Length == 2 ? parts[1].Trim() : "";
+        const string prefix = "dword:";
+        if (!value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) || value.Length != prefix.Length + 8 ||
+            !uint.TryParse(value.AsSpan(prefix.Length), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var options))
+            throw new InvalidDataException("HKCU GameOptions in MW3-RE settings.reg must be a DWORD.");
+        return options;
+    }
+
+    private static void SetGameOptions(List<string> lines, uint? value)
+    {
+        var index = FindGameOptionsRow(lines);
+        if (!value.HasValue)
+        {
+            if (index >= 0) lines.RemoveAt(index);
+            return;
+        }
+        var row = FormattableString.Invariant($"\"{GameOptions}\"=dword:{value.Value:x8}");
+        if (index >= 0) lines[index] = row;
+        else lines.Insert(lines.FindIndex(line => line.Equals(RegistrySection, StringComparison.OrdinalIgnoreCase)) + 1, row);
+    }
+
+    private static void SaveRestore(string path, RestoreState restore) =>
+        ControlProfiles.AtomicWrite(path, JsonSerializer.Serialize(restore));
+
+    private static void CompleteApplication(RestoreState restore, PendingApplication pending)
+    {
+        restore.LastAppliedDefaultMap = pending.DefaultMap;
+        restore.LastAppliedActiveConfig = pending.ActiveConfig;
+        CompleteGameOptions(restore, pending);
+        restore.Pending = null;
+    }
+
+    private static void CompleteGameOptions(RestoreState restore, PendingApplication pending)
+    {
+        if (!pending.WritesGameOptions) return;
+        restore.HasOriginalGameOptions = pending.KeepsGameOptionsOverride;
+        restore.LastAppliedGameOptions = pending.KeepsGameOptionsOverride ? pending.GameOptions : null;
+        if (!pending.KeepsGameOptionsOverride) restore.OriginalGameOptions = null;
+    }
+
+    private static void RecoverPendingApplication(List<string> lines, uint? currentOptions, RestoreState restore)
+    {
+        var pending = restore.Pending;
+        if (pending == null) return;
+        // An atomic settings replace may have completed before the final restore write.
+        // A value matching the intended projection is still launcher-owned.
+        if (EquivalentValue(FindValue(lines, DefaultMap), pending.DefaultMap))
+            restore.LastAppliedDefaultMap = pending.DefaultMap;
+        if (EquivalentValue(FindValue(lines, ActiveConfig), pending.ActiveConfig))
+            restore.LastAppliedActiveConfig = pending.ActiveConfig;
+        if (pending.WritesGameOptions && currentOptions == pending.GameOptions)
+            CompleteGameOptions(restore, pending);
+        restore.Pending = null;
+    }
+
+    private static bool ReconcileGameOptions(uint? current, RestoreState restore)
+    {
+        if (restore.OriginalGameOptions is not uint original || current is not uint live ||
+            restore.LastAppliedGameOptions == live) return false;
+        // If the player changed other options, retain the original jump-jet bit.
+        // A different jump-jet bit from the applied bit is itself a live edit.
+        var reconciled = live;
+        if (restore.LastAppliedGameOptions is uint applied && ((live ^ applied) & JumpJetsBit) == 0)
+            reconciled = (live & ~JumpJetsBit) | (original & JumpJetsBit);
+        restore.OriginalGameOptions = reconciled;
+        return reconciled != original;
+    }
+
     private static RestoreState ReadRestore(string path)
     {
         PackStorage.EnsureNoLinks(path);
-        if (new FileInfo(path).Length > 32768) throw new InvalidDataException("Native controls restore data is too large.");
+        if (new FileInfo(path).Length > 65536) throw new InvalidDataException("Native controls restore data is too large.");
         var state = JsonSerializer.Deserialize<RestoreState>(File.ReadAllText(path))
             ?? throw new InvalidDataException("Native controls restore data is empty.");
-        if (state.Version is < 1 or > 2 || state.DefaultMap == null || state.ActiveConfig == null ||
-            state.LastAppliedDefaultMap == null || state.LastAppliedActiveConfig == null ||
-            state.DefaultMap.Length > 64 || state.ActiveConfig.Length > 16 ||
-            state.LastAppliedDefaultMap.Length > 64 || state.LastAppliedActiveConfig.Length > 16 ||
-            state.DefaultMap.Concat(state.ActiveConfig).Concat(state.LastAppliedDefaultMap).Concat(state.LastAppliedActiveConfig)
-                .Any(row => row == null || row.Length > 8192 || row.StartsWith('[')))
+        if (state.Version is < 1 or > 3 || !ValidRestoreRows(state.DefaultMap, 64) ||
+            !ValidRestoreRows(state.ActiveConfig, 16) || !ValidRestoreRows(state.LastAppliedDefaultMap, 64) ||
+            !ValidRestoreRows(state.LastAppliedActiveConfig, 16))
             throw new InvalidDataException("Native controls restore data is invalid.");
-        if (state.Version == 1) state.Version = 2;
+        if (state.Version < 3)
+        {
+            state.Version = 3;
+            state.HasOriginalGameOptions = false;
+            state.OriginalGameOptions = null;
+            state.LastAppliedGameOptions = null;
+            state.Pending = null;
+        }
+        var pending = state.Pending;
+        if ((!state.HasOriginalGameOptions && (state.OriginalGameOptions.HasValue || state.LastAppliedGameOptions.HasValue)) ||
+            (pending != null && (!ValidRestoreRows(pending.DefaultMap, 64) ||
+                !ValidRestoreRows(pending.ActiveConfig, 16) ||
+                (pending.WritesGameOptions && !state.HasOriginalGameOptions) ||
+                (pending.KeepsGameOptionsOverride && (!pending.WritesGameOptions || !pending.GameOptions.HasValue)))))
+            throw new InvalidDataException("Native controls GameOptions restore data is invalid.");
         return state;
     }
+
+    private static bool ValidRestoreRows(string[]? rows, int limit) =>
+        rows != null && rows.Length <= limit &&
+        rows.All(row => row != null && row.Length <= 8192 && !row.StartsWith('['));
 
     private static string ReadSettings(string path)
     {

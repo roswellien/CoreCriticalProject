@@ -32,9 +32,34 @@ OptionsState::OptionsState(Kind k, Handle addr) : MenuState(name_of(k), addr), k
 bool OptionsState::enter() {
   Engine& en = e();
   if (kind == kGame) en.set_screen_mode(en.menu_vmode());  // 5 (ours: wide_menus)
+  // Ours: registered first, so the frames entering and resuming draw and flip
+  // (ShellState::resume flips its refreshed screen) already show the HD background.
+  en.menu_screen_backdrop(screen_, true);
   ShellState::enter();
   en.vcall(screen_, 0x10, {0});
   return true;
+}
+
+// Mech3.exe 1.2 @ 0x0042da70
+void OptionsState::resume(uint32_t arg) {
+  e().menu_screen_backdrop(screen_, true);  // ours: back on top, before the base's flip
+  ShellState::resume(arg);
+}
+
+// Ours: this page leaving takes its backdrop off the menu background; the
+// deleting destructor too, for a state freed without leaving (the screen's
+// texture goes with it). Not on suspend: a popup pushed above (the controls'
+// axis and load/save boxes) leaves this page drawn under it, and a page pushed
+// above registers its own.
+void OptionsState::leave() {
+  e().menu_screen_backdrop(screen_, false);
+  ShellState::leave();
+}
+
+// Only while the screen is still there, as MenuState::~MenuState frees it: a
+// state deleted after its screen went (the engine's teardown) has nothing to drop.
+OptionsState::~OptionsState() {
+  if (screen_) e().menu_screen_backdrop(screen_, false);
 }
 
 // Mech3.exe 1.2 @ 0x00429600

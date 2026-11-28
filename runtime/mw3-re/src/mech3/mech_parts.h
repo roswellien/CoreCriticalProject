@@ -130,6 +130,10 @@ using WeaponDef = zwep::WeaponDef;
 struct Collision {
   Handle x20 = nullptr;   // +0x20
   Handle node = nullptr;  // +0x24  the node hit
+  // Ours (#289): the world point hit, when the hit came from zWeapon (the
+  // arena log's "at"); other damage has none.
+  float point[3] = {};
+  bool has_point = false;
 };
 
 enum PartId : int32_t {
@@ -268,6 +272,7 @@ class Torso : public MechPart {
   bool init(const Config* cfg) override;                    // 0x004644b0
   bool setup() override;                                    // 0x00464290
   void update(float dt) override;                           // 0x00464e80
+  void refresh_turn();  // ours (#289): turn_q and front from yaw/pitch, for a replay puppet
   void node_changed() override;                             // 0x004659c0
   bool steer(float dt, float* yaw, float* pitch, const float* yaw_in, float* pitch_in);  // 0x00464ce0: true when clamped
   bool aim_angles(const Vec3& dir, float* pitch, float* yaw) const;  // 0x00465bc0: false when clamped

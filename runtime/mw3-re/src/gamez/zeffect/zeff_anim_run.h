@@ -65,6 +65,7 @@ int32_t anim_save_states(AnimDef* def);                // 0x00507fc0
 int32_t anim_restore_states(AnimDef* def);             // 0x00508090, AUTO_RESET defs only
 int32_t anim_reset_finish(AnimDef* def);               // 0x00508170
 int32_t anim_reset(AnimDef* def, zcls::Node* node, int32_t keep);  // 0x00508310
+bool anim_is_playing(AnimDef* def);
 int32_t anim_stop(AnimDef* def);                       // 0x00506ca0, the end of a run
 int32_t anim_lights_off(AnimDef* def);                 // 0x005069b0
 int32_t anim_puffers_off(AnimDef* def);                // 0x00506a20

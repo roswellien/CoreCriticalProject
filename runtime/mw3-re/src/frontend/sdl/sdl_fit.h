@@ -119,6 +119,28 @@ inline float menu_mickey_scale(float win_w, float win_h, const FrameShape& s, in
   return mickey_scale(win_w, win_h, menu_frame_shape(s, canvas_w, canvas_h));
 }
 
+// Ours (#559, docs/fmv.md section 9): where an HD movie's frame goes in the
+// window. The same rule GameEngine::fmv_stretch (app_fmv.cpp) gives the
+// 16-bit movies on a wide buffer, here on the window's pixels: on a window
+// wider than 4:3, the movie's rows `src_top`..`src_bottom` (its letterboxed
+// picture, movie_shape.h) fill the width, capped at the window's height;
+// otherwise, or with no rows (-1), the whole frame in the largest centred
+// 4:3 rectangle.
+inline FitRect movie_frame_fit(float win_w, float win_h, int clip_w, int clip_h, int src_top, int src_bottom) {
+  if (win_w <= 0 || win_h <= 0 || clip_w <= 0 || clip_h <= 0) return {0, 0, win_w, win_h};
+  const bool wider_than_4_3 = win_w * 3 > win_h * 4;
+  const bool has_rows = src_top >= 0 && src_bottom >= src_top && src_bottom < clip_h;
+  float w = 0, h = 0;
+  if (wider_than_4_3 && has_rows) {
+    const float rows = static_cast<float>(src_bottom - src_top + 1);
+    w = win_w, h = win_w * rows / clip_w;
+    if (h > win_h) h = win_h, w = win_h * clip_w / rows;
+  } else {
+    w = std::fmin(win_w, win_h * 4.0f / 3.0f), h = w * 3.0f / 4.0f;
+  }
+  return {(win_w - w) / 2.0f, (win_h - h) / 2.0f, w, h};
+}
+
 // The window a frame asks for when --window is not given: the frame itself,
 // doubled while it is under 1280 wide (640x480 opens at 1280x960, as before).
 inline void default_window(const FrameShape& s, int* w, int* h) {

@@ -1,0 +1,433 @@
+{
+  "version": 1,
+  "scenes": [
+    {
+      "id": "c1mp1",
+      "map": "c1mp1",
+      "log": "../../../local/benchmark/freeze/scene1-c1mp1-2v2/match-7.jsonl",
+      "log_sha256": "ed3bbde5034aa86808e36fd5bfad561b8a2c58d15d0295051e7addb04c3c72bd",
+      "camera": {
+        "mode": "sequence",
+        "subject": 1,
+        "shots": [
+          {
+            "type": "chase",
+            "mech": 1,
+            "duration_seconds": 10,
+            "distance": 60,
+            "height": 24
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 1,
+            "duration_seconds": 5
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 1,
+            "duration_seconds": 5
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 2,
+            "duration_seconds": 5
+          },
+          {
+            "type": "front",
+            "distance": 50,
+            "height": 14,
+            "mech": 2,
+            "duration_seconds": 5
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 0,
+            "duration_seconds": 5
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 0,
+            "duration_seconds": 5
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 3,
+            "duration_seconds": 5
+          },
+          {
+            "type": "high",
+            "distance": 68,
+            "height": 52,
+            "mech": 3,
+            "duration_seconds": 5
+          }
+        ]
+      },
+      "seed": 7,
+      "warmup_seconds": 10,
+      "measured_seconds": 40,
+      "stress": false,
+      "start_seconds": 36,
+      "time_of_day": "dawn",
+      "headlights": false,
+      "weather": "rain"
+    },
+    {
+      "id": "c2mp2",
+      "map": "c2mp2",
+      "log": "../../../local/benchmark/freeze/scene2-c2mp2-4v4/match-7.jsonl",
+      "log_sha256": "cad68fa66cad1c02d7ad8a1e893a4eb5adff3074885cae57a87f4c6cbec090b7",
+      "camera": {
+        "mode": "sequence",
+        "subject": 3,
+        "shots": [
+          {
+            "type": "chase",
+            "mech": 3,
+            "duration_seconds": 10,
+            "distance": 60,
+            "height": 24
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 3,
+            "duration_seconds": 10
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 3,
+            "duration_seconds": 5
+          },
+          {
+            "type": "front",
+            "distance": 50,
+            "height": 14,
+            "mech": 3,
+            "duration_seconds": 5
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 7,
+            "duration_seconds": 10
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 7,
+            "duration_seconds": 5
+          },
+          {
+            "type": "high",
+            "distance": 68,
+            "height": 52,
+            "mech": 7,
+            "duration_seconds": 5
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 2,
+            "duration_seconds": 10
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 2,
+            "duration_seconds": 5
+          },
+          {
+            "type": "front",
+            "distance": 50,
+            "height": 14,
+            "mech": 2,
+            "duration_seconds": 5
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 4,
+            "duration_seconds": 10
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 4,
+            "duration_seconds": 5
+          },
+          {
+            "type": "high",
+            "distance": 68,
+            "height": 52,
+            "mech": 4,
+            "duration_seconds": 5
+          }
+        ]
+      },
+      "seed": 7,
+      "warmup_seconds": 10,
+      "measured_seconds": 80,
+      "stress": false,
+      "start_seconds": 15,
+      "time_of_day": "day",
+      "headlights": false
+    },
+    {
+      "id": "c3mp1",
+      "map": "c3mp1",
+      "log": "../../../local/benchmark/freeze/scene3-c3mp1-6v6/match-7.jsonl",
+      "log_sha256": "af94084a8b6b63ca8ed7b08b11b239234b6becc87b1afe297e303197040381c6",
+      "camera": {
+        "mode": "sequence",
+        "subject": 5,
+        "shots": [
+          {
+            "type": "chase",
+            "mech": 5,
+            "duration_seconds": 10,
+            "distance": 60,
+            "height": 24
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 5,
+            "duration_seconds": 10
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 5,
+            "duration_seconds": 5
+          },
+          {
+            "type": "front",
+            "distance": 50,
+            "height": 14,
+            "mech": 5,
+            "duration_seconds": 5
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 6,
+            "duration_seconds": 10
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 6,
+            "duration_seconds": 5
+          },
+          {
+            "type": "high",
+            "distance": 68,
+            "height": 52,
+            "mech": 6,
+            "duration_seconds": 5
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 1,
+            "duration_seconds": 10
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 1,
+            "duration_seconds": 5
+          },
+          {
+            "type": "front",
+            "distance": 50,
+            "height": 14,
+            "mech": 1,
+            "duration_seconds": 5
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 7,
+            "duration_seconds": 10
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 7,
+            "duration_seconds": 5
+          },
+          {
+            "type": "high",
+            "distance": 68,
+            "height": 52,
+            "mech": 7,
+            "duration_seconds": 5
+          }
+        ]
+      },
+      "seed": 7,
+      "warmup_seconds": 10,
+      "measured_seconds": 80,
+      "stress": false,
+      "start_seconds": 4,
+      "time_of_day": "dawn",
+      "headlights": false
+    },
+    {
+      "id": "c4mp2",
+      "map": "c4mp2",
+      "log": "../../../local/benchmark/freeze/scene4-c4mp2-8v8/match-7.jsonl",
+      "log_sha256": "8e6143b1db68867afe3e6733cac91ee3eb238e2787f2755651ee402ef193f1a1",
+      "camera": {
+        "mode": "sequence",
+        "subject": 0,
+        "shots": [
+          {
+            "type": "chase",
+            "mech": 0,
+            "duration_seconds": 10,
+            "distance": 60,
+            "height": 24
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 0,
+            "duration_seconds": 5
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 0,
+            "duration_seconds": 5
+          },
+          {
+            "type": "front",
+            "distance": 50,
+            "height": 14,
+            "mech": 0,
+            "duration_seconds": 5
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 8,
+            "duration_seconds": 5
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 8,
+            "duration_seconds": 5
+          },
+          {
+            "type": "high",
+            "distance": 68,
+            "height": 52,
+            "mech": 8,
+            "duration_seconds": 5
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 2,
+            "duration_seconds": 5
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 2,
+            "duration_seconds": 5
+          },
+          {
+            "type": "front",
+            "distance": 50,
+            "height": 14,
+            "mech": 2,
+            "duration_seconds": 5
+          },
+          {
+            "type": "chase",
+            "distance": 45,
+            "height": 20,
+            "mech": 15,
+            "duration_seconds": 5
+          },
+          {
+            "type": "orbit",
+            "radius": 55,
+            "height": 16,
+            "degrees_per_second": 28,
+            "mech": 15,
+            "duration_seconds": 5
+          },
+          {
+            "type": "high",
+            "distance": 68,
+            "height": 52,
+            "mech": 15,
+            "duration_seconds": 5
+          }
+        ]
+      },
+      "seed": 7,
+      "warmup_seconds": 10,
+      "measured_seconds": 60,
+      "stress": true,
+      "start_seconds": 101,
+      "time_of_day": "night",
+      "headlights": true,
+      "weather": "rain"
+    }
+  ]
+}

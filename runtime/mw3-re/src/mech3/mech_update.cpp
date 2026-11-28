@@ -38,6 +38,22 @@ void Mech::hit_timeout() {
   if (last_hit_time - -1.0f < world().time) note_hit();  // 0x005bce0c
 }
 
+// Ours (#289): Update's torso and hip poses, from the controls' twist and pitch.
+void Mech::animate_torso_hip(float dt) {
+  torso->set_twist(controls->twist, controls->axis_30);
+  torso->set_pitch(controls->pitch, controls->axis_2c);
+  torso->update(dt);
+  hip->update(dt);
+}
+
+// Ours (#289): Update's leg and arm poses.
+void Mech::animate_limbs(float dt) {
+  legs[0]->update(dt);
+  legs[1]->update(dt);
+  arms[0]->update(dt);
+  arms[1]->update(dt);
+}
+
 // Mech3.exe 1.2 @ 0x00419fc0 (vtable +0x34). dt carries over the frames the
 // entity budget skipped. Each step's order is the original's; the hooks
 // stand in for what is not ported (docs/movement.md, The frame).
@@ -66,7 +82,9 @@ void Mech::update(float dt) {
     if (g_calls.add_dead) g_calls.add_dead(*this);
     return;
   }
-  const bool viewed = this == w.player;
+  // Ours (#287): an arena spectator's view key changes only the camera, never
+  // the watched bot's controls or torso.
+  const bool viewed = this == w.player && !arena_bot;
   if (viewed && g_calls.key && (g_calls.key(kViewKey) == 1 || (g_calls.key(kViewKey) & 4))) {
     const int mode = controls->view == 2 ? 3 : controls->view == 3 ? 2 : 0;
     if (mode) {
@@ -114,21 +132,13 @@ void Mech::update(float dt) {
     if (!acting) {
       if (g_calls.turn) g_calls.turn(*this, frame_dt);
       else turn(frame_dt);
-      torso->set_twist(controls->twist, controls->axis_30);
-      torso->set_pitch(controls->pitch, controls->axis_2c);
-      torso->update(frame_dt);
-      hip->update(frame_dt);
+      animate_torso_hip(frame_dt);
     }
     if (collides) {
       held = g_calls.collide ? g_calls.collide(*this) : collide();
       stopped = blocked[0] || blocked[1] || blocked[3];
     }
-    if (!acting) {
-      legs[0]->update(frame_dt);
-      legs[1]->update(frame_dt);
-      arms[0]->update(frame_dt);
-      arms[1]->update(frame_dt);
-    }
+    if (!acting) animate_limbs(frame_dt);
     if (powered_down) {
       vec_58 = {0, 0, 0};
       vec_3c = {0, 0, 0};

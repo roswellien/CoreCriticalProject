@@ -333,21 +333,30 @@ bool read_dfn(MechDfn& dfn) {
   HeadValues head;
   if (!read_head(dfn, &head)) return false;
   dfn.skins = read_skins(dfn.reader);
-  // Catalog skins are appended after the retail list; the prepared renderer numbers
-  // them from base_skin_count(), so only append when the retail count matches it.
-  const bool retail_count_matches =
-      dfn.skins && dfn.skins->skins.size() == platform::prepared::base_skin_count(mech_name(dfn.index));
-  if (retail_count_matches) {
-    for (const auto& skin : *platform::prepared::configured_skin_catalog()) {
-      if (skin.chassis != mech_name(dfn.index)) continue;
-      const Skin* primary = dfn.skins->skins.front();
-      auto* added = new Skin(skin.name.c_str(), static_cast<uint32_t>(primary->entries.size()));
-      // The native material slots retain their original resources. The prepared
-      // renderer consumes the appended index instead of inventing bank names.
-      for (SkinEntry* entry : primary->entries) added->push(entry, false);
-      dfn.skins->add(added);
-    }
-  }
+  // A mod row can borrow another mech's model while keeping its own skin list.
+  platform::prepared::for_each_model_skin(
+      *platform::prepared::configured_skin_catalog(), mech_model_name(dfn.index),
+      [&](const auto& skin, int32_t prepared_index) {
+        if (!dfn.skins || dfn.skins->skins.empty()) {
+          std::fprintf(stderr,
+                       "Prepared skin unavailable: mech %s model %s skin %s has no base skin\n",
+                       mech_name(dfn.index), mech_model_name(dfn.index), skin.id.c_str());
+          return;
+        }
+        const Skin* primary = dfn.skins->skins.front();
+        auto* added = new Skin(skin.name.c_str(), static_cast<uint32_t>(primary->entries.size()));
+        // The native material slots retain their original resources. The prepared
+        // renderer consumes the shared identity instead of inventing bank names.
+        for (SkinEntry* entry : primary->entries) added->push(entry, false);
+        added->prepared_skin_index = prepared_index;
+        // Catalogue display names are literal; "damage" is only special in the
+        // original definition and must not replace its damage mask here.
+        const auto row = dfn.skins->skins.size();
+        dfn.skins->skins.push_back(added);
+        std::fprintf(stderr, "Prepared skin registered: mech=%s model=%s row=%zu index=%d id=%s\n",
+                     mech_name(dfn.index), mech_model_name(dfn.index), row, prepared_index,
+                     skin.id.c_str());
+      });
   read_firepoints(dfn);
   read_part_slots(dfn);
   if (read_configurations(dfn, head) && g_load_saved) g_load_saved(dfn.configs);

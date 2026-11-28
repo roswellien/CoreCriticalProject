@@ -67,6 +67,36 @@ def _make_bwtex1(materials: tuple[str, ...] = ("armor_hull", "canopy_glass")) ->
     return bytes(out)
 
 
+def _legacy_v1_sidecar_from_v2(sidecar: bytes) -> bytes:
+    """Build a version-1 RGBA fixture from a writer-produced version-2 sidecar."""
+    version, batch_count, record_count, image_count, _ = struct.unpack_from("<IIIIQ", sidecar, 8)
+    if version != 2:
+        raise ValueError("Expected a version-2 sidecar")
+    cursor = 32 + batch_count * 4
+    for _ in range(record_count):
+        for _ in range(2):
+            size = struct.unpack_from("<I", sidecar, cursor)[0]
+            cursor += 4 + size
+        cursor += 100
+    legacy = bytearray(sidecar[:cursor])
+    struct.pack_into("<I", legacy, 8, 1)
+    for _ in range(image_count):
+        name_size = struct.unpack_from("<I", sidecar, cursor)[0]
+        name_entry = sidecar[cursor : cursor + 4 + name_size]
+        cursor += len(name_entry)
+        role, width, height, _ = struct.unpack_from("<IIIQ", sidecar, cursor)
+        cursor += 20
+        scalar = sidecar[cursor : cursor + width * height]
+        cursor += len(scalar)
+        rgba = bytes(channel for value in scalar for channel in (value, 0, 0, 255))
+        legacy.extend(name_entry)
+        legacy.extend(
+            struct.pack("<IIIQ", role, width, height, surface_materials.uncached_pixel_hash(rgba))
+        )
+        legacy.extend(rgba)
+    return bytes(legacy)
+
+
 class SurfaceMaterialsTest(unittest.TestCase):
     def _height_pixels(self) -> bytes:
         return bytes((32, 0, 0, 255, 96, 0, 0, 255, 160, 0, 0, 255, 224, 0, 0, 255))
@@ -205,10 +235,10 @@ class SurfaceMaterialsTest(unittest.TestCase):
             },
         )
 
-        # Independent manual construction of expected BWSFM1 bytes.
+        # Independent manual construction of the version-2 grayscale bytes.
         oracle = bytearray()
         oracle.extend(b"BWSFM1\0\0")
-        oracle.extend(struct.pack("<IIIIQ", 1, 2, 2, 2, mesh_hash))
+        oracle.extend(struct.pack("<IIIIQ", 2, 2, 2, 2, mesh_hash))
         # Batch 0 is canopy_glass (sorted record 1); Batch 1 is armor_hull (sorted record 0).
         oracle.extend(struct.pack("<II", 1, 0))
         # Record 0: ("bushwacker:close", "armor_hull")
@@ -285,10 +315,10 @@ class SurfaceMaterialsTest(unittest.TestCase):
                 1,
                 2,
                 2,
-                surface_materials.uncached_pixel_hash(h_pixels),
+                surface_materials.uncached_pixel_hash(h_pixels[0::4]),
             )
         )
-        oracle.extend(h_pixels)
+        oracle.extend(h_pixels[0::4])
         # Image 1: thick_canopy
         oracle.extend(struct.pack("<I", 12) + b"thick_canopy")
         oracle.extend(
@@ -297,10 +327,10 @@ class SurfaceMaterialsTest(unittest.TestCase):
                 2,
                 2,
                 2,
-                surface_materials.uncached_pixel_hash(t_pixels),
+                surface_materials.uncached_pixel_hash(t_pixels[0::4]),
             )
         )
-        oracle.extend(t_pixels)
+        oracle.extend(t_pixels[0::4])
 
         self.assertEqual(packed, bytes(oracle))
 
@@ -310,7 +340,7 @@ class SurfaceMaterialsTest(unittest.TestCase):
             expected_mesh_uv_hash=mesh_hash,
             expected_batch_materials=["canopy_glass", "armor_hull"],
         )
-        self.assertEqual(parsed["version"], 1)
+        self.assertEqual(parsed["version"], 2)
         self.assertEqual(parsed["mesh_uv_hash"], mesh_hash)
         self.assertEqual(parsed["bindings"], [1, 0])
         self.assertEqual(len(parsed["records"]), 2)
@@ -319,6 +349,13 @@ class SurfaceMaterialsTest(unittest.TestCase):
         self.assertEqual(parsed["records"][1]["material_name"], "canopy_glass")
         self.assertAlmostEqual(parsed["records"][1]["sss_participation"], 0.5)
         self.assertEqual(len(parsed["images"]), 2)
+        self.assertEqual(parsed["images"][0]["pixels"], h_pixels[0::4])
+        self.assertEqual(parsed["images"][0]["hash"], surface_materials.uncached_pixel_hash(h_pixels[0::4]))
+
+        legacy = _legacy_v1_sidecar_from_v2(packed)
+        legacy_parsed = surface_materials.read_surface_materials(legacy)
+        self.assertEqual(legacy_parsed["version"], 1)
+        self.assertEqual(legacy_parsed["images"][0]["pixels"], h_pixels[0::4])
 
         # Truncation at every byte offset must fail cleanly.
         for cutoff in range(len(packed)):
@@ -326,6 +363,36 @@ class SurfaceMaterialsTest(unittest.TestCase):
                 surface_materials.read_surface_materials(packed[:cutoff])
         with self.assertRaises(ValueError):
             surface_materials.read_surface_materials(packed + b"\0")
+
+    def test_height_payload_budget_is_512_mib(self) -> None:
+        self.assertEqual(surface_materials.MAX_SIDECAR_BYTES, 512 * 1024 * 1024)
+
+    def test_writer_accepts_grayscale_source_pixels(self) -> None:
+        args = dict(
+            asset_id="rock:close",
+            mesh_uv_hash=7,
+            batch_materials=["stone"],
+            records=[{
+                "asset_id": "rock:close",
+                "material_name": "stone",
+                "height_image": "cliff_height",
+                "height_amplitude": 0.25,
+                "max_displacement": 0.25,
+            }],
+            images={"cliff_height": (surface_materials.ROLE_HEIGHT, 2, 2, bytes((0, 48, 192, 255)))},
+        )
+        packed = surface_materials.pack_surface_materials(**args)
+        with patch.object(surface_materials, "MAX_SIDECAR_BYTES", len(packed)):
+            self.assertEqual(surface_materials.pack_surface_materials(**args), packed)
+        with patch.object(surface_materials, "MAX_SIDECAR_BYTES", len(packed) - 1):
+            with self.assertRaisesRegex(ValueError, "sidecar exceeds"):
+                surface_materials.pack_surface_materials(**args)
+        parsed = surface_materials.read_surface_materials(packed)
+        self.assertEqual(parsed["version"], 2)
+        self.assertEqual(parsed["images"][0]["pixels"], bytes((0, 48, 192, 255)))
+        self.assertEqual(surface_materials.read_surface_materials(packed, max_bytes=len(packed)), parsed)
+        with self.assertRaisesRegex(ValueError, "size budget"):
+            surface_materials.read_surface_materials(packed, max_bytes=len(packed) - 1)
 
     def test_neutral_absent_and_partial_bindings(self) -> None:
         packed = surface_materials.pack_surface_materials(

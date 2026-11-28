@@ -27,7 +27,8 @@ public partial class GameSetupWindow : Window
         ExistingPath.Text = existingPath ?? GameValidator.AutoDetectGameDirectory() ?? "";
         DestinationPath.Text = LauncherPaths.SuggestedGameDirectory();
         ShowStep(0);
-        if (NativeRuntimeLayout.HasPrecompiledRuntime(AppContext.BaseDirectory))
+        if (NativeGameRunner.UsesBundledMw3Re(AppContext.BaseDirectory) ||
+            NativeRuntimeLayout.HasPrecompiledRuntime(AppContext.BaseDirectory))
             PreparationNote.Text = "The native game is already installed. This step only installs or verifies your original game files; no game-code compilation is needed.";
         else if (BundledPreparation.IsAvailable(AppContext.BaseDirectory))
             PreparationNote.Text = "After verifying your files, setup prepares the native game. First-time preparation can take a while. You can cancel and resume it.";
@@ -97,7 +98,8 @@ public partial class GameSetupWindow : Window
             : "Verify existing installation: " + ExistingPath.Text.Trim();
         var windowMode = g.WindowMode switch { "fullscreen_windowed" => "Borderless fullscreen", "fullscreen" => "Fullscreen exclusive", _ => "Windowed" };
         var aa = g.AntiAliasing switch { "off" or "1" => "Off", "fxaa" => "FXAA", _ => g.AntiAliasing + "x SSAA" };
-        ReviewGraphics.Text = $"{g.Width} × {g.Height} · {windowMode}\nAA: {aa} · AF: {g.AnisotropicFiltering}x\nDraw distance: {g.DrawDistance}m\n{LensFlareStyleReviewText(g.FlareStyle)}\nDynamic Lighting: {(g.DynamicLighting ? "On" : "Off")} · Headlights: {(g.Headlights && g.DynamicLighting ? "On" : "Off")} · Shadows: {(g.Shadows && g.DynamicLighting ? "On" : "Off")}\nWater Detail: {(g.WaterDetail ? "On" : "Off")} · Cloud Detail: {(g.CloudDetail ? "On" : "Off")}";
+        var pom = g.PomQuality switch { "low" => "Low", "high" => "High", _ => "Off" };
+        ReviewGraphics.Text = $"{g.Width} × {g.Height} · {windowMode}\nAA: {aa} · AF: {g.AnisotropicFiltering}x\nDraw distance: {g.DrawDistance}m\n{LensFlareStyleReviewText(g.FlareStyle)}\nDynamic Lighting: {(g.DynamicLighting ? "On" : "Off")} · Headlights: {(g.Headlights && g.DynamicLighting ? "On" : "Off")} · Shadows: {(g.Shadows && g.DynamicLighting ? "On" : "Off")}\nWater Detail: {(g.WaterDetail ? "On" : "Off")} · Cloud Detail: {(g.CloudDetail ? "On" : "Off")} · POM: {pom}";
         ReviewPacks.Text = SelectedPacks.Length == 0 ? "None — start with stock content." : string.Join(Environment.NewLine, SelectedPacks.Select(Path.GetFileName));
         ContinueButton.Content = fromMedia ? "Install game" : "Verify and finish setup";
     }
@@ -216,7 +218,17 @@ public partial class GameSetupWindow : Window
             if (GameInstallation.FindSupportFiles(directory, _dataRoot) != null)
                 await Task.Run(() => GameInstallation.PrepareSupportFiles(directory, _dataRoot));
             _verifiedDirectory = Path.GetFullPath(directory);
-            if (NativeRuntimeLayout.HasPrecompiledRuntime(AppContext.BaseDirectory))
+            if (NativeGameRunner.UsesBundledMw3Re(AppContext.BaseDirectory))
+            {
+                Status.Text = "Checking the bundled MW3-RE runtime…";
+                var runner = new NativeGameRunner(AppContext.BaseDirectory, _dataRoot);
+                await Task.Run(() =>
+                {
+                    Mw3ReRuntimeContract.ReadStructure(runner.RequireBundledMw3Re());
+                    runner.FindPlannerPython();
+                });
+            }
+            else if (NativeRuntimeLayout.HasPrecompiledRuntime(AppContext.BaseDirectory))
             {
                 Status.Text = "Checking the installed native game…";
                 await Task.Run(() => RuntimeUpdates.ValidateGeneratedRuntime(

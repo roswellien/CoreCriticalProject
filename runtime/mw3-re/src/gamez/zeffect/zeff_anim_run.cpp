@@ -449,6 +449,11 @@ int32_t anim_reset(AnimDef* def, Node* node, int32_t keep) {
   return 0;
 }
 
+bool anim_is_playing(AnimDef* def) {
+  return def && (status(def) == 2 || status(def) == 6) && def->object &&
+         def->object->action == reinterpret_cast<void*>(anim_tick);
+}
+
 // Mech3.exe 1.2 @ 0x00506ca0. A run ends: with a reset time below 0 the def
 // rests at once (status 3, or 4 from 6); else it waits out the reset time
 // (+0xa4) from its tick, or resets now. Its callback hears 0.

@@ -1,0 +1,47 @@
+{
+  "map": "c1mp1",
+  "minutes": 3,
+  "out": "local/benchmark/scene1",
+  "sides": [
+    [
+      {
+        "mech": "madcat",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "shadowcat",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      }
+    ],
+    [
+      {
+        "mech": "thor",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      },
+      {
+        "mech": "bushwacker",
+        "loadout": 0,
+        "preset": {
+          "world": "c1",
+          "mission": "ia1",
+          "record": "Enemy_01"
+        }
+      }
+    ]
+  ]
+}

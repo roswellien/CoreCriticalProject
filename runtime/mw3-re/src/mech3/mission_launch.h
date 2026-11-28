@@ -3,6 +3,7 @@
 
 #include "gamez/zgame/unported.h"
 #include "mech3/mech.h"
+#include "mech3/spectator_seat.h"
 
 // C:\zipper\Mech3\mission.cpp 0x00491150: the launch, from the briefing's
 // Launch (0x0040500a): the player's controls and mech from the pilot's game

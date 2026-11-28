@@ -49,7 +49,9 @@ std::vector<ModsCampaignRow> mods_entry_rows(const std::string& write_dir) {
       std::getline(marker, line);
       const size_t q = line.find('"', 1);
       if (line.size() > 2 && line[0] == '"' && q != std::string::npos && q > 1) r.name = line.substr(1, q - 1);
-      r.error = "its mod is not in the mods folder any more (its pilots and saves are kept: import it again)";
+      r.error = mods_pack_library().empty()
+                    ? "its mod is not in the mods folder any more (its pilots and saves are kept: import it again)"
+                    : "its mod is no longer installed in the mods folder or pack library (its pilots and saves are kept: reinstall it)";
     }
     else if (!e.error.empty()) {
       r.error = e.error;
@@ -66,7 +68,7 @@ std::vector<ModsCampaignRow> mods_entry_rows(const std::string& write_dir) {
 std::string mods_row_text(const ModsListEntry& m) {
   const std::string& name = m.info.name.empty() ? m.info.folder : m.info.name;
   const bool flagged = !m.info.error.empty() || !m.conflicts_with.empty() || (m.on && !m.needs.empty());
-  return std::string(m.on ? "[x] " : "[ ] ") + name + (flagged ? " !" : "");
+  return std::string(m.on ? "[x] " : "[ ] ") + (m.info.from_pack ? "[pack] " : "") + name + (flagged ? " !" : "");
 }
 
 std::string mods_row_note(const ModsListEntry& m, const std::vector<ModsListEntry>& all) {
@@ -375,8 +377,9 @@ ModsScreen::ModsScreen(Engine& e, Handle s)
       enabled(ticks.ticks) {
   target_buffers(e);
   const bool moving = !e.fast_menu();
+  const bool bake_menu = bake_fast_menu();  // ours (#552): live layers only for ready HD presentation
   // Made when MODS is pressed, past the main menu's read: dialog.zrd read again.
-  if (load("dialog.zrd", "MODSDIALOG", moving)) {
+  if (load("dialog.zrd", "MODSDIALOG", moving || !bake_menu)) {
     zimg::Texture* img = nullptr;
     uint8_t bg_moving = 0;
     e.main_menu_background(&img, &bg_moving);
@@ -392,7 +395,7 @@ ModsScreen::ModsScreen(Engine& e, Handle s)
     if ((own_lines = campaign_lines(lines2.image))) lines2.set_image(own_lines);
     bind_button(&enter, "ENTER");
     bind_button(&back, "BACK");
-    if (!moving) {
+    if (bake_menu) {
       bake();
       remove(&background);
       remove(&lines);
@@ -591,14 +594,18 @@ void ModsScreen::on_button(int32_t id, int32_t a, int32_t) {
         tell(reporting ? "The game's own campaign has nothing to export." : "Choose a mod or a campaign to export.");
         return;
       }
-      if (!mods_menu_platform().save) {
-        tell("Exporting is not possible here: zip the mod's folder in the mods folder.");
-        return;
-      }
       ModInfo info;
       info.folder = folder;
       for (const ModInfo& i : mods_found(dir))
         if (i.folder == folder) info = i;
+      if (info.path.empty()) {
+        tell("Not exported: the mod is not there any more.");
+        return;
+      }
+      if (!mods_menu_platform().save) {
+        tell("Exporting is not possible here: zip " + info.path + ".");
+        return;
+      }
       tell("Choose where to save " + (info.name.empty() ? folder : info.name) + ".");
       export_folder = folder;
       mods_menu_platform().save(mod_export_file_name(info));
@@ -612,6 +619,18 @@ void ModsScreen::on_button(int32_t id, int32_t a, int32_t) {
         if (!mods_menu_platform().open_folder || !mods_menu_platform().open_folder(r)) tell("The reports folder: " + r);
         return;
       }
+      std::string folder = reporting ? report_mod : std::string();
+      if (!reporting && focus == kMods) {
+        if (const ModsListEntry* mod = chosen_mod()) folder = mod->info.folder;
+      } else if (!reporting) {
+        if (const ModsCampaignRow* campaign = chosen_row()) folder = campaign->mod;
+      }
+      for (const ModInfo& mod : mods_found(dir))
+        if (mod.folder == folder && mod.from_pack) {
+          if (!mods_menu_platform().open_folder || !mods_menu_platform().open_folder(mod.path))
+            tell("The pack mod folder: " + mod.path);
+          return;
+        }
       const std::filesystem::path m = std::filesystem::path(dir) / "mods";
       std::filesystem::create_directories(m, ec);
       if (!mods_menu_platform().open_folder || !mods_menu_platform().open_folder(m.generic_string()))
@@ -879,7 +898,12 @@ void ModsScreen::report() {
       campaign_list.selected < static_cast<int32_t>(tables.campaigns.size())) {
     const ModsCampaignRow& c = tables.campaigns[static_cast<size_t>(campaign_list.selected)];
     folder = c.mod, name = c.name;
-    about.push_back(c.mod.empty() ? name + " is the game's own campaign."
+    bool from_pack = false;
+    std::string location;
+    for (const ModInfo& mod : mods_found(mods_menu_write_dir()))
+      if (mod.folder == c.mod) from_pack = mod.from_pack, location = mod.path;
+    about.push_back(from_pack ? name + " is a campaign a pack adds (" + location + ")."
+                    : c.mod.empty() ? name + " is the game's own campaign."
                     : !c.copy_of.empty() ? name + " is your copy of " + c.copy_of + ", kept in mods\\" + c.mod + "."
                     : name + " is a campaign a mod adds (mods\\" + c.mod + ").");
     std::string on;
@@ -1187,8 +1211,12 @@ void ModsScreen::add_mod(const std::string& path) {
 void ModsScreen::export_mod(const std::string& zip) {
   std::string folder;
   folder.swap(export_folder);
-  const std::filesystem::path dir = std::filesystem::path(mods_menu_write_dir()) / "mods" / folder;
-  tell(mod_export(dir.string(), zip, mods_menu_install(), true).message);  // checked first (modder step 8)
+  for (const ModInfo& mod : mods_found(mods_menu_write_dir()))
+    if (mod.folder == folder) {
+      tell(mod_export(mod.path, zip, mods_menu_install(), true).message);
+      return;
+    }
+  tell("Not exported: the mod is not there any more.");
 }
 
 bool ModsState::enter() {

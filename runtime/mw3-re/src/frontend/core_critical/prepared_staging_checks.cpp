@@ -5,12 +5,18 @@
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
 #include "platform/prepared_skins.h"
+#include "gamez/zreader/zreader.h"
+#include "mech3/mech_names.h"
+#include "mech3/mech_reader.h"
+#include "mech3/mech_skin.h"
 #include "renderer/normal_codec.hpp"
 #include "renderer/fixture_observation_emission.hpp"
 #include "renderer/surface_materials.hpp"
+#include "renderer/streamed_height_cache.hpp"
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/geometry/resource.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
@@ -662,6 +668,11 @@ void check_prepared_models_surface_materials() {
                 "Catalog lost a namespaced added-chassis skin identity");
         cc_mw3_re::PreparedModels skins(skin_options, skin_options.materials);
         require(skins.skin_texture_loads() == 0, "Alternate textures loaded eagerly");
+        require(skins.skin_cache_budget() >= 1024ULL * 1024 * 1024,
+                "PreparedModels skin cache budget below default");
+        cc_mw3_re::PreparedSkinCache default_skin_cache;
+        require(default_skin_cache.budget() >= 1024ULL * 1024 * 1024,
+                "PreparedSkinCache budget below default");
         const auto primary = skins.draw(context).batches[0].texture;
         for (int lod = 0; lod != 2; ++lod) {
             asset->name = lod ? "mech_authored_1.flt" : "mech_authored.flt";
@@ -676,12 +687,33 @@ void check_prepared_models_surface_materials() {
                 const auto repeated = skins.draw(context);
                 require(repeated.batches[0].texture == selected.batches[0].texture,
                         "Repeated skin draw decoded a new texture set");
+                require(skins.skin_cache_evictions() == 0,
+                        "Skin cache evicted entries during reuse");
                 panel->prepared_skin_index = 0;
                 require(!skins.draw(context).batches[0].texture_owner,
                         "Skin selection leaked into the primary instance state");
             }
         }
         require(skins.skin_texture_loads() == 14, "Retail skin cache did not reuse decodes");
+        require(skins.skin_cache_evictions() == 0, "Retail skin cache had evictions during reuse");
+        {
+            std::ifstream norm_mesh_in(mesh_path, std::ios::binary);
+            const auto norm_mesh = platform::prepared::read_mesh(norm_mesh_in);
+            const auto canonical_path = tex_path.string();
+            const auto noncanonical_path = (tex_path.parent_path() / "." / tex_path.filename()).string();
+            require(cc_mw3_re::PreparedSkinCache::normalize_key(noncanonical_path) ==
+                        cc_mw3_re::PreparedSkinCache::normalize_key(canonical_path),
+                    "normalize_key produced unequal paths");
+            const auto first_res = default_skin_cache.resolve(noncanonical_path, norm_mesh);
+            const auto second_res = default_skin_cache.resolve_normalized(
+                cc_mw3_re::PreparedSkinCache::normalize_key(canonical_path), norm_mesh);
+            require(first_res == second_res,
+                    "normalize_key and resolve_normalized did not reuse shared_ptr");
+            require(default_skin_cache.loads() == 1,
+                    "Normalized skin cache resolution did not reuse existing load");
+            require(default_skin_cache.evictions() == 0,
+                    "Normalized skin cache resolution caused unexpected eviction");
+        }
         prepared_fixture::Bytes binding_index;
         binding_index.value = "BWSKIDX1";
         binding_index.u32(1);
@@ -721,12 +753,116 @@ void check_prepared_models_surface_materials() {
             require(rejected, "Compact binding index accepted malformed or duplicate metadata");
         }
         asset->name = "mech_authored_1.flt";
-        panel->prepared_skin_index = 8;
+        platform::prepared::for_each_model_skin(
+            *platform::prepared::configured_skin_catalog(), "authored",
+            [&](const auto &, int32_t index) { panel->prepared_skin_index = index; });
         const auto added_distance = skins.draw(context);
         asset->name = "mech_authored.flt";
         const auto added_close = skins.draw(context);
         require(added_distance.batches[0].texture_owner == added_close.batches[0].texture_owner,
                 "Catalog skin shared between LODs decoded twice");
+        require(added_close.batches[0].texture_owner != nullptr,
+                "Catalog skin did not select prepared textures");
+
+        // Exercise real definition loading and skin application, rather than
+        // recreating the Lab's matching or assuming eight native skin rows.
+        {
+            const auto saved_catalog = platform::prepared::configured_skin_catalog();
+            RestoreCatalog restore{saved_catalog};
+            require(mech3::mech_count() == mech3::kBuiltinMechs,
+                    "Skin fixture needs an unmodified roster");
+            struct ClearModRows {
+                ~ClearModRows() { mech3::mech_rows_clear(); }
+            } clear_rows;
+            std::string error;
+            for (const auto &line : {
+                     "thor_b tech=clan mass=70 class=heavy model=thor",
+                     "thor_c tech=clan mass=70 class=heavy model=thor"}) {
+                const bool added = mech3::mech_row_add_line(line, &error);
+                require(added, error.c_str());
+            }
+
+            platform::prepared::SkinCatalog model_catalog;
+            auto model_options = sdlfe::CoreCriticalAssets{};
+            for (int mech = 0; mech < mech3::kBuiltinMechs; ++mech) {
+                const std::string model = mech3::mech_model_name(mech);
+                for (const auto *suffix : {"a", "z"}) {
+                    const bool second_skin = suffix[0] == 'z';
+                    const auto close_path = second_skin ? temp_dir / "skin-1-0" : tex_path;
+                    const auto distance_path = temp_dir / (second_skin ? "skin-2-1" : "skin-1-1");
+                    // Display names must not turn catalogue skins into the
+                    // native definition's special damage-mask entry.
+                    const auto *name = second_skin ? "damage" : "a";
+                    model_catalog.push_back({model + ":" + suffix, name, model,
+                                             {close_path.string(), distance_path.string()}});
+                }
+                for (const auto *lod : {"0", "1"})
+                    model_options.models.push_back(
+                        {model, lod, mesh_path.string(), tex_path.string()});
+            }
+            // A skin aimed at the variant's own name must never attach when
+            // its base model is Thor. Interleave it with the matching records.
+            model_catalog.push_back({"thor_b:a", "Wrong model", "thor_b",
+                                     {tex_path.string(), tex_path.string()}});
+            std::sort(model_catalog.begin(), model_catalog.end(),
+                      [](const auto &a, const auto &b) { return a.id < b.id; });
+            platform::prepared::configured_skin_catalog() =
+                std::make_shared<const platform::prepared::SkinCatalog>(model_catalog);
+            cc_mw3_re::PreparedModels model_skins(model_options);
+
+            const auto check_mech = [&](int mech, int original_count) {
+                std::string definition = "[\"version\",2,\"skins\",[";
+                for (int row = 0; row < original_count; ++row) {
+                    if (row) definition += ',';
+                    definition += "\"Original " + std::to_string(row) + "\",[\"";
+                    definition += row ? "_" + std::to_string(row) : "body";
+                    definition += "\"]";
+                }
+                definition += "]]";
+                mech3::MechDfn dfn(mech, zrdr::parse_json(definition, &error));
+                require(dfn.reader && mech3::read_dfn(dfn),
+                        "Authored skin definition failed to load");
+                const auto &rows = dfn.skins->skins;
+                require(rows.size() == static_cast<size_t>(original_count + 2),
+                        "Model skins were not appended after the mech's original skins");
+                for (int row = 0; row < original_count; ++row) {
+                    const auto expected = "Original " + std::to_string(row);
+                    require(rows[row]->name == expected && rows[row]->prepared_skin_index == row,
+                            "Original skin order or identity changed");
+                }
+                require(std::strcmp(rows[original_count]->name, "a") == 0 &&
+                            std::strcmp(rows[original_count + 1]->name, "damage") == 0 &&
+                            !dfn.skins->damage,
+                        "Catalogue order or model matching changed");
+                for (int row = original_count; row < original_count + 2; ++row) {
+                    std::unique_ptr<mech3::Skin> applied(dfn.skins->mech_skin(row, panel));
+                    require(applied && panel->prepared_skin_index == rows[row]->prepared_skin_index,
+                            "Lab selection lost its catalogue identity during skin application");
+                    for (int lod = 0; lod < 2; ++lod) {
+                        asset->name = "mech_" + std::string(mech3::mech_model_name(mech)) +
+                                      (lod ? "_1.flt" : ".flt");
+                        const auto drawn = model_skins.draw(context);
+                        require(drawn.batches.size() == 1 && drawn.batches[0].texture_owner,
+                                "Lab catalogue selection did not reach the prepared draw");
+                        const auto expected_pixel = (lod ? 17U : 0U) + row - original_count;
+                        require((drawn.batches[0].texture->pixels[0] & 255) == expected_pixel,
+                                "Model skin selected the wrong LOD payload");
+                    }
+                }
+                return rows[original_count]->prepared_skin_index;
+            };
+            int32_t thor_skin = 0;
+            for (int mech = 0; mech < mech3::kBuiltinMechs; ++mech) {
+                const auto identity = check_mech(mech, 8);
+                if (std::strcmp(mech3::mech_name(mech), "thor") == 0) thor_skin = identity;
+            }
+            for (const auto count : {1, 3, 9}) {
+                require(check_mech(mech3::kFirstModMech, count) == thor_skin &&
+                            check_mech(mech3::kFirstModMech + 1, count) == thor_skin,
+                        "Two mod mechs sharing Thor's model did not share its skins");
+            }
+            asset->name = "mech_authored.flt";
+        }
         panel->prepared_skin_index = 999;
         require(skins.draw(context).batches[0].texture == primary,
                 "Unknown skin failed to fall back to primary");
@@ -754,12 +890,15 @@ void check_prepared_models_surface_materials() {
         auto owned = tiny_cache.resolve(tex_path.string(), mesh);
         std::weak_ptr<const platform::prepared::Textures> old = owned;
         tiny_cache.resolve((temp_dir / "skin-1-0").string(), mesh);
+        require(tiny_cache.evictions() == 1, "Tiny cache eviction count mismatch");
         require(!old.expired(), "Eviction invalidated a retained draw");
         owned.reset();
         require(old.expired(), "Eviction retained unused skin pixels");
         require(tiny_cache.loads() == 2, "Tiny cache decode accounting mismatch");
         tiny_cache.clear();
         require(tiny_cache.bytes() == 0, "Skin cache reset retained decoded bytes");
+        require(tiny_cache.loads() == 2 && tiny_cache.evictions() == 1,
+                "Skin cache clear did not preserve cumulative loads and evictions");
         for (const auto &bad : {catalog.value.substr(0, catalog.value.size() - 1), catalog.value + "x"}) {
             std::istringstream input(bad);
             bool rejected = false;
@@ -794,6 +933,15 @@ void check_prepared_models_surface_materials() {
             require(!off.height_binding && off.surface_parameters == baseline.surface_parameters &&
                         off.surface_eye == baseline.surface_eye,
                     "Height-Off changed the original normal-only material output");
+            auto without_normal = source;
+            without_normal.normal = nullptr;
+            without_normal.height_binding.reset();
+            mw34::vkscene::Draw without_parallax{};
+            cc_mw3_re::apply_surface_material(without_parallax, without_normal, true, true, 7, 11);
+            require(!without_parallax.height_binding &&
+                        without_parallax.surface_parameters == baseline.surface_parameters &&
+                        without_parallax.surface_eye == baseline.surface_eye,
+                    "Height data without a normal map changed ordinary material shading");
             cc_mw3_re::apply_surface_material(on, source, true, true, 7, 11);
             retained = on.height_binding;
             require(retained && retained->image == source.height_binding->image &&
@@ -803,11 +951,11 @@ void check_prepared_models_surface_materials() {
                         retained->mesh_uv_hash == mesh_uv_hash &&
                         retained->material.height_amplitude == -4.f,
                     "Owned draw lost its source/image/chart/epoch metadata");
-            require(mw34::materials::height_binding_bytes({retained, retained}, 16) == 16,
+            require(mw34::materials::height_binding_bytes({retained, retained}, 4) == 4,
                     "Repeated alias owner was charged once per draw instead of once per packet");
             bool rejected = false;
             try {
-                (void)mw34::materials::height_binding_bytes({retained}, 15);
+                (void)mw34::materials::height_binding_bytes({retained}, 3);
             } catch (const std::runtime_error &) {
                 rejected = true;
             }
@@ -816,11 +964,11 @@ void check_prepared_models_surface_materials() {
             replacement->image =
                 std::make_shared<const mw34::materials::SurfaceMaterialImage>(*retained->image);
             require(!mw34::materials::same_height_binding(retained, replacement) &&
-                        mw34::materials::height_binding_bytes({retained, replacement}, 32) == 32,
+                        mw34::materials::height_binding_bytes({retained, replacement}, 8) == 8,
                     "A replacement image inherited an older allocation owner");
             rejected = false;
             try {
-                (void)mw34::materials::height_binding_bytes({retained, replacement}, 31);
+                (void)mw34::materials::height_binding_bytes({retained, replacement}, 7);
             } catch (const std::runtime_error &) {
                 rejected = true;
             }
@@ -844,21 +992,21 @@ void check_prepared_models_surface_materials() {
             try {
                 (void)mw34::materials::read_surface_materials(
                     limited, "authored:close", mesh_uv_hash, {"authored"},
-                    mw34::materials::max_surface_sidecar_bytes, 15);
+                    mw34::materials::max_surface_sidecar_bytes, 3);
             } catch (const std::runtime_error &) {
                 rejected = true;
             }
             require(rejected, "Decoded limit was not enforced before the height image allocation");
         }
         require(retained && retained->image->pixels.size() == 4 &&
-                    retained->material.material_name == "authored" && retained_budget->used() == 16,
+                    retained->material.material_name == "authored" && retained_budget->used() == 4,
                 "Queued height image died with PreparedModels");
         retained.reset();
         require(retained_budget->used() == 0, "Final queued model image did not release its reservation");
         {
             auto selected_environment = std::make_shared<platform::prepared::EnvironmentSelection>();
             selected_environment->surface_budget =
-                std::make_shared<mw34::materials::SurfaceDecodedBudget>(16);
+                std::make_shared<mw34::materials::SurfaceDecodedBudget>(4);
             auto shared_options = owned_options;
             shared_options.environment = selected_environment;
             std::shared_ptr<const mw34::materials::HeightBinding> queued;
@@ -873,14 +1021,14 @@ void check_prepared_models_surface_materials() {
             } catch (const std::runtime_error &) {
                 refused = true;
             }
-            require(refused && selected_environment->surface_budget->used() == 16,
+            require(refused && selected_environment->surface_budget->used() == 4,
                     "Model reload allocated without charging its queued old owner");
             queued.reset();
             require(selected_environment->surface_budget->used() == 0,
                     "Model queue retirement did not release the shared selection budget");
             cc_mw3_re::PreparedModels replacement(shared_options,
                                                   mat_binding("authored", "0", mat_path));
-            require(selected_environment->surface_budget->used() == 16,
+            require(selected_environment->surface_budget->used() == 4,
                     "Model reload failed to reuse returned decoded capacity");
         }
 
@@ -1515,6 +1663,32 @@ struct NativeGroundFixture {
 };
 
 void check_native_ground_height_admission() {
+    {
+        NativeGroundFixture fixture;
+        fixture.target.pack.reset();
+        fixture.target.streamed_bindings.resize(2);
+        auto &table = zimg::textures();
+        const auto previous = table;
+        struct RestoreTextureTable {
+            zimg::TextureTable &table;
+            zimg::TextureTable previous;
+            ~RestoreTextureTable() { table = previous; }
+        } restore{table, previous};
+        std::strcpy(table.entries[0].name, "wave01");
+        table.count = 1;
+        auto &animated = fixture.materials[1];
+        zmod::Cycle cycle{};
+        animated.flags |= 4;
+        animated.cycle = &cycle;
+        animated.texture_index = 0;
+        fixture.target.polygon_materials[1] = "wave01";
+        require(!fixture.admit(), "Unbound cycle must keep its canonical source order");
+        animated.texture_index = 1;
+        bool rejected = false;
+        try { (void)fixture.admit(); }
+        catch (const std::runtime_error &) { rejected = true; }
+        require(rejected, "Out-of-range source texture index must reject");
+    }
     using namespace mw34::materials;
     namespace cc = cc_mw3_re;
     cc::NativeGroundFloatScope restore_test_fp;
@@ -1550,8 +1724,8 @@ void check_native_ground_height_admission() {
                     retained->normal_hash == 0x5678 && retained->normal_width == 2 &&
                     retained->normal_height == 2 && retained->material == *fixture.pack->records[0],
                 "Ground snapshot lost source, stamps, normal or full material values");
-        require(retained->image->pixels.size() == 4 && fixture.budget->used() == 16 &&
-                    height_binding_bytes({retained, fixture.admit()}) == 16,
+        require(retained->image->pixels.size() == 4 && fixture.budget->used() == 4 &&
+                    height_binding_bytes({retained, fixture.admit()}) == 4,
                 "Ground image alias was recharged or lost ownership");
         retained_budget = fixture.budget;
         passed("positive_triangle_quad_full_owned_snapshot_fp");
@@ -1562,7 +1736,7 @@ void check_native_ground_height_admission() {
         require(bool(fixture.admit()), "Agreeing immutable model copy was rejected");
         passed("agreeing_model_copy");
     }
-    require(retained && retained->image->pixels.size() == 4 && retained_budget->used() == 16,
+    require(retained && retained->image->pixels.size() == 4 && retained_budget->used() == 4,
             "Ground snapshot borrowed destroyed native source storage");
     passed("snapshot_survives_native_source_destruction");
     const std::vector<std::pair<const char *, std::function<void(NativeGroundFixture &)>>> rejects{
@@ -1798,7 +1972,7 @@ void check_native_ground_height_admission() {
                     admissions[0].height_binding->source_batch == 1 &&
                     admissions[1].height_binding->source_batch == 0 &&
                     height_binding_bytes({admissions[0].height_binding,
-                                          admissions[1].height_binding}) == 16,
+                                          admissions[1].height_binding}) == 4,
                 "Shared GPU/reference admission vector lost original polygon or alias");
         passed("gpu_reference_shared_original_polygon_vector");
         ranges[1].polygon = 2;
@@ -1892,12 +2066,94 @@ void check_native_ground_height_admission() {
 
 } // namespace
 
+void check_streamed_surface_budget() {
+    using namespace mw34::materials;
+    auto budget = std::make_shared<SurfaceDecodedBudget>();
+    {
+        SurfaceDecodedReservation first(budget);
+        first.grow(max_surface_sidecar_bytes - 1);
+        {
+            SurfaceDecodedReservation queued(budget);
+            require(queued.try_grow(1), "Exact decoded limit was rejected");
+            require(!queued.try_grow(1), "Decoded limit was exceeded");
+            require(budget->used() == max_surface_sidecar_bytes &&
+                        budget->peak() == max_surface_sidecar_bytes,
+                    "Incorrect decoded current or peak bytes");
+        }
+        require(budget->used() == max_surface_sidecar_bytes - 1 &&
+                    budget->peak() == max_surface_sidecar_bytes,
+                "Queued reservation did not retire independently of the peak");
+    }
+    require(budget->used() == 0, "Decoded reservations leaked");
+}
+
+void check_streamed_height_cache() {
+    using namespace mw34::materials;
+    const auto root = make_private_staging_dir("streamed-heights");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::error_code error; std::filesystem::remove_all(path, error); }
+    } cleanup{root};
+    const auto pin = [&](const char *name, std::uint32_t width, std::uint32_t height,
+                         char fill) {
+        const std::string pixels(std::size_t(width) * height, fill);
+        const auto path = root / name;
+        std::ofstream output(path, std::ios::binary);
+        output.write(pixels.data(), std::streamsize(pixels.size()));
+        output.close();
+        require(bool(output), "Failed to write streamed height fixture");
+        platform::integrity::Sha256 hash;
+        hash.update(pixels.data(), pixels.size());
+        return StreamedHeightPin{path, hash.hex(), width, height, pixels.size()};
+    };
+    const auto cliff = pin("cliff.r8", 4096, 2048, 127);
+    const auto next = pin("ground.r8", 2048, 4096, 93);
+    auto broken = pin("bad.r8", 2, 2, 15);
+    broken.sha256 = std::string(64, '0');
+    const auto budget = std::make_shared<SurfaceDecodedBudget>();
+    SurfaceDecodedReservation other_owners(budget);
+    const auto baseline = 500ULL * 1024 * 1024;
+    other_owners.grow(baseline);
+    StreamedHeightCache cache(budget, {cliff, cliff, next, broken});
+    cache.select({0, 1});
+    auto frame = cache.acquire(0);
+    require(frame && frame->width == cliff.width && frame->height == cliff.height &&
+                frame->pixels.size() == cliff.bytes && frame->pixels.front() == 127,
+            "Full-resolution streamed height bytes did not survive");
+    require(cache.acquire(1) == frame && budget->used() == baseline + cliff.bytes,
+            "Shared streamed height image charged twice");
+
+    cache.select({2});
+    require(!cache.acquire(2) && budget->used() == baseline + cliff.bytes,
+            "Subset replaced a height image still held by a queued frame");
+    cache.select({1});
+    require(cache.acquire(1) == frame && budget->used() == baseline + cliff.bytes,
+            "Revisiting a queued subset duplicated its image");
+    cache.select({2});
+    frame.reset();
+    require(budget->used() == baseline && cache.acquire(2) &&
+                budget->used() == baseline + next.bytes,
+            "Deferred subset did not load after the queued frame retired");
+
+    cache.select({3});
+    bool rejected = false;
+    try {
+        (void)cache.acquire(3);
+    } catch (const std::runtime_error &) {
+        rejected = true;
+    }
+    require(rejected && budget->used() == baseline && budget->peak() == baseline + cliff.bytes,
+            "Corrupt streamed image was published or leaked its reservation");
+}
+
 int main() {
     try {
         checks();
         check_prepared_models_surface_materials();
         check_prepared_models_donor_toe_admission();
         check_native_ground_height_admission();
+        check_streamed_surface_budget();
+        check_streamed_height_cache();
         std::puts("Prepared staging cache invalidation, bytes, ownership, "
                   "materials and budget checks passed");
         return 0;

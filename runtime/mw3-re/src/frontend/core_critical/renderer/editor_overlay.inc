@@ -141,7 +141,7 @@ private:
     if (!slot)
       return VK_ERROR_TOO_MANY_OBJECTS;
     VkDeviceMemory acquired = VK_NULL_HANDLE;
-    const VkResult result = allocate(selected_device, info, callbacks, &acquired);
+    const VkResult result = owner.allocate_memory(selected_device, info, callbacks, &acquired, allocate);
     if (result != VK_SUCCESS)
       return result; // Failed dirty/null/untouched outputs do not prove ownership.
     if (!acquired)
@@ -163,7 +163,7 @@ private:
       editor_fatal("invalid editor allocation owner", VK_ERROR_UNKNOWN, VK_RESULT_MAX_ENUM);
     for (auto &record : owner.editor_.memory)
       if (record.memory == allocation) {
-        free_memory(selected_device, allocation, callbacks);
+        owner.release_memory(selected_device, allocation, callbacks, free_memory);
         owner.editor_.statistics.bytes -= record.bytes;
         --owner.editor_.statistics.live_allocations;
         record = {};

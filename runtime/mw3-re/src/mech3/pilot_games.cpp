@@ -9,6 +9,7 @@
 #include "gamez/zutil/zutl_msg.h"
 #include "gamez/zutil/zutl_msgdll.h"
 #include "gamez/zutil/zutl_path.h"
+#include "platform/loading.hpp"
 #include "mech3/mech_config.h"
 #include "mech3/mech_names.h"
 #include "mech3/mod_rows_file.h"
@@ -755,6 +756,8 @@ bool CampaignGame::readable() { return zutl::exists(path()); }
 // Mission 4, whose file is there: zSave reads it (kind 2) into the world.
 bool CampaignGame::restore() {
   if (b0 || mission == 1 || (campaign == 4 && mission == 4) || !readable()) return false;
+  platform::loading::Phase phase("saved-game-restore");
+  platform::loading::Measure timing(platform::loading::Work::restore);
   return pilot_hooks().load_world(path(), 2);
 }
 

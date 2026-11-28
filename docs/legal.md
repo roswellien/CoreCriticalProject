@@ -4,6 +4,26 @@ MW34 RECOMP contains project-authored interoperability and research tooling.
 Users must supply their own legally obtained game installation or media.
 The project does not supply games or grant rights to their content.
 
+## Owner decision on distributing original game assets (November 21, 2026)
+
+The owner decided that distribution of the original game's assets, and of
+replacement or derived assets made from them, is allowed, but only to
+legitimate playtesters and for development purposes. It is not allowed to the
+general public and not through public channels.
+
+- A legitimate playtester is a person the owner has approved to take part in
+  the private playtest. Development purposes means building, testing, analysing
+  and improving this project.
+- The owner regards the original game as abandonware and states that no
+  copyright holder for the original artwork exists today. This section records
+  that as the owner's position. It is not a legal determination, and
+  "abandonware" is not itself a legal status. The conservative note below about
+  jurisdiction and lawfulness still applies.
+- This decision does not change where assets may live. Original and derived
+  assets still must not be committed to Git or CI, and public release,
+  public download and the public update endpoint stay limited to what the
+  scoped sections below already authorize.
+
 ## Owner-authorized private playtest delivery
 
 For issue #25 on October 27, 2026, the owner authorized committing reviewed

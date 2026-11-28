@@ -29,11 +29,11 @@ inline constexpr std::uint32_t surface_address_clamp = 3U;
 
 inline constexpr std::size_t max_surface_batches = 4096U;
 inline constexpr std::size_t max_surface_records = 4096U;
-inline constexpr std::size_t max_surface_images = 512U;
+inline constexpr std::size_t max_surface_images = 2048U;
 inline constexpr std::size_t max_surface_identifier_bytes = 4096U;
 inline constexpr std::size_t max_surface_material_name_bytes = 31U;
 inline constexpr std::uint32_t max_surface_dimension = 4096U;
-inline constexpr std::uint64_t max_surface_sidecar_bytes = 256ULL * 1024ULL * 1024ULL;
+inline constexpr std::uint64_t max_surface_sidecar_bytes = 512ULL * 1024ULL * 1024ULL;
 inline constexpr float max_surface_world_amplitude = 16.0f;
 inline constexpr float max_surface_uv_transform = 1024.0f;
 
@@ -48,21 +48,29 @@ class SurfaceDecodedBudget {
     }
     std::uint64_t used() const { return used_.load(std::memory_order_acquire); }
     std::uint64_t limit() const { return limit_; }
+    std::uint64_t peak() const { return peak_.load(std::memory_order_acquire); }
 
   private:
     friend class SurfaceDecodedReservation;
-    void acquire(std::uint64_t bytes) {
+    bool try_acquire(std::uint64_t bytes) {
         auto current = used_.load(std::memory_order_acquire);
         do {
             if (bytes > limit_ || current > limit_ - bytes)
-                throw std::runtime_error("Retained surface image owners exceed decoded budget");
+                return false;
         } while (!used_.compare_exchange_weak(current, current + bytes,
                                               std::memory_order_acq_rel,
                                               std::memory_order_acquire));
+        const auto admitted = current + bytes;
+        auto peak = peak_.load(std::memory_order_relaxed);
+        while (peak < admitted &&
+               !peak_.compare_exchange_weak(peak, admitted, std::memory_order_release,
+                                            std::memory_order_relaxed)) {
+        }
+        return true;
     }
     void release(std::uint64_t bytes) { used_.fetch_sub(bytes, std::memory_order_acq_rel); }
     const std::uint64_t limit_;
-    std::atomic<std::uint64_t> used_{};
+    std::atomic<std::uint64_t> used_{}, peak_{};
 };
 class SurfaceDecodedReservation {
   public:
@@ -75,8 +83,14 @@ class SurfaceDecodedReservation {
     SurfaceDecodedReservation &operator=(const SurfaceDecodedReservation &) = delete;
     ~SurfaceDecodedReservation() { budget_->release(bytes_); }
     void grow(std::uint64_t bytes) {
-        budget_->acquire(bytes);
+        if (!try_grow(bytes))
+            throw std::runtime_error("Retained surface image owners exceed decoded budget");
+    }
+    bool try_grow(std::uint64_t bytes) {
+        if (!budget_->try_acquire(bytes))
+            return false;
         bytes_ += bytes;
+        return true;
     }
     const std::shared_ptr<SurfaceDecodedBudget> &budget() const { return budget_; }
 
@@ -85,15 +99,14 @@ class SurfaceDecodedReservation {
     std::uint64_t bytes_{};
 };
 
-// Owns decoded linear RGBA8 pixels where the red channel carries scalar height
-// or thickness. Normal-map alpha is never modified or repurposed for these
-// channels.
+// Owns decoded linear 8-bit scalar height or thickness pixels. Normal-map alpha
+// is never modified or repurposed for these channels.
 struct SurfaceMaterialImage {
     std::string name;
     std::uint32_t role{};
     std::uint32_t width{}, height{};
     std::uint64_t hash{};
-    std::vector<std::uint32_t> pixels;
+    std::vector<std::uint8_t> pixels;
 };
 
 // Immutable validated surface-material parameters in native host world units.
@@ -183,6 +196,7 @@ struct HeightBinding {
     std::uint64_t normal_hash{};
     std::uint64_t retained_decoded_bytes{};
     std::uint32_t source_batch{};
+    bool streamed_image{};
 
     bool operator==(const HeightBinding &other) const {
         return material == other.material && image == other.image &&
@@ -193,7 +207,7 @@ struct HeightBinding {
                texture_version == other.texture_version && !(albedo < other.albedo) &&
                !(other.albedo < albedo) && normal_width == other.normal_width &&
                normal_height == other.normal_height && normal_hash == other.normal_hash &&
-               source_batch == other.source_batch &&
+               source_batch == other.source_batch && streamed_image == other.streamed_image &&
                retained_decoded_bytes == other.retained_decoded_bytes;
     }
 };
@@ -290,8 +304,44 @@ inline std::shared_ptr<const HeightBinding> resolve_height_binding(
     binding->normal_height = normal_height;
     binding->normal_hash = normal_hash;
     for (const auto &retained : pack->images)
-        binding->retained_decoded_bytes += std::uint64_t(retained.pixels.size()) * 4;
+        binding->retained_decoded_bytes += retained.pixels.size();
     binding->source_batch = std::uint32_t(batch);
+    return binding;
+}
+
+inline std::shared_ptr<const HeightBinding> resolve_catalog_height_binding(
+    const std::shared_ptr<const SurfaceMaterialPack> &pack, std::size_t record_index,
+    const std::string &sidecar_sha256, const SurfaceKey &albedo, std::uint32_t normal_width,
+    std::uint32_t normal_height, std::uint64_t normal_hash) {
+    if (!pack || record_index >= pack->records.size())
+        return {};
+    const auto &record = *pack->records[record_index];
+    if (record.height_image == no_surface_image || record.height_amplitude == 0.0f)
+        return {};
+    const auto &image = pack->images.at(record.height_image);
+    if (sidecar_sha256.size() != 64 ||
+        sidecar_sha256.find_first_not_of("0123456789abcdef") != std::string::npos ||
+        image.role != surface_role_height || !image.width || !image.height ||
+        image.pixels.size() != std::uint64_t(image.width) * image.height || normal_hash == 0 ||
+        !normal_width || !normal_height || !albedo.hash || !albedo.width || !albedo.height ||
+        albedo.format != 1U)
+        throw std::runtime_error("Catalog height binding requires complete source/image identity");
+    auto binding = std::make_shared<HeightBinding>();
+    binding->material = record;
+    binding->image = std::shared_ptr<const SurfaceMaterialImage>(pack, &image);
+    binding->source_sha256 = sidecar_sha256;
+    binding->sidecar_sha256 = sidecar_sha256;
+    // Use the height image's own content hash so multiple albedos sharing the
+    // same normal/height map share one GPU HeightImage allocation.
+    binding->mesh_uv_hash = image.hash ? image.hash : albedo.hash;
+    binding->image_version = pack->version;
+    binding->albedo = albedo;
+    binding->normal_width = normal_width;
+    binding->normal_height = normal_height;
+    binding->normal_hash = normal_hash;
+    for (const auto &retained : pack->images)
+        binding->retained_decoded_bytes += retained.pixels.size();
+    binding->source_batch = std::uint32_t(record_index);
     return binding;
 }
 
@@ -336,23 +386,27 @@ inline std::uint64_t compute_mesh_uv_hash(const BatchRange &batches, std::size_t
 }
 
 inline SurfaceMaterialPack
-read_surface_materials(std::istream &input, const std::string &expected_asset_id,
-                       std::uint64_t expected_mesh_uv_hash,
-                       const std::vector<std::string> &expected_batch_materials,
-                       std::uint64_t max_bytes = max_surface_sidecar_bytes,
-                       std::uint64_t max_decoded_bytes = max_surface_sidecar_bytes,
-                       std::shared_ptr<SurfaceDecodedBudget> budget = {}) {
+read_surface_materials_impl(std::istream &input, const std::string &expected_asset_id,
+                            std::uint64_t expected_mesh_uv_hash,
+                            const std::vector<std::string> *expected_batch_materials,
+                            std::uint64_t max_bytes, std::uint64_t max_decoded_bytes,
+                            std::shared_ptr<SurfaceDecodedBudget> budget) {
     auto fail = [] { throw std::runtime_error("Invalid surface-material sidecar"); };
     if (!max_bytes || max_bytes > max_surface_sidecar_bytes ||
-        max_decoded_bytes > max_surface_sidecar_bytes || expected_batch_materials.empty() ||
-        expected_batch_materials.size() > max_surface_batches)
+        max_decoded_bytes > max_surface_sidecar_bytes)
+        fail();
+    if (expected_batch_materials &&
+        (expected_batch_materials->empty() ||
+         expected_batch_materials->size() > max_surface_batches))
         fail();
     if (!expected_asset_id.empty() &&
         !valid_surface_identifier(expected_asset_id, max_surface_identifier_bytes, true))
         fail();
-    for (const auto &mat_name : expected_batch_materials) {
-        if (!valid_surface_identifier(mat_name, max_surface_material_name_bytes, false))
-            fail();
+    if (expected_batch_materials) {
+        for (const auto &mat_name : *expected_batch_materials) {
+            if (!valid_surface_identifier(mat_name, max_surface_material_name_bytes, false))
+                fail();
+        }
     }
 
     std::uint64_t consumed_bytes = 0;
@@ -407,7 +461,10 @@ read_surface_materials(std::istream &input, const std::string &expected_asset_id
     const auto image_count = u32();
     pack.mesh_uv_hash = u64();
 
-    if (pack.version != 1U || batch_count != expected_batch_materials.size() ||
+    const bool batch_count_valid =
+        expected_batch_materials ? (batch_count == expected_batch_materials->size())
+                                 : (batch_count >= 1U && batch_count <= max_surface_batches);
+    if ((pack.version != 1U && pack.version != 2U) || !batch_count_valid ||
         record_count > max_surface_records || image_count > max_surface_images ||
         pack.mesh_uv_hash != expected_mesh_uv_hash)
         fail();
@@ -460,7 +517,7 @@ read_surface_materials(std::istream &input, const std::string &expected_asset_id
 
         record.uv_scale[0] = f32(-max_surface_uv_transform, max_surface_uv_transform);
         record.uv_scale[1] = f32(-max_surface_uv_transform, max_surface_uv_transform);
-        if (record.uv_scale[0] == 0.0f || record.uv_scale[1] == 0.0f)
+        if (std::abs(record.uv_scale[0]) < 1e-6f || std::abs(record.uv_scale[1]) < 1e-6f)
             fail();
         record.uv_offset[0] = f32(-max_surface_uv_transform, max_surface_uv_transform);
         record.uv_offset[1] = f32(-max_surface_uv_transform, max_surface_uv_transform);
@@ -517,17 +574,29 @@ read_surface_materials(std::istream &input, const std::string &expected_asset_id
             image.height > max_surface_dimension)
             fail();
 
-        const auto pixel_bytes = std::uint64_t(image.width) * image.height * 4ULL;
-        if (pixel_bytes > max_bytes - decoded_image_bytes ||
-            pixel_bytes > max_decoded_bytes - decoded_image_bytes)
+        const auto pixel_count = std::uint64_t(image.width) * image.height;
+        const auto stored_pixel_bytes = pixel_count * (pack.version == 1U ? 4ULL : 1ULL);
+        if (stored_pixel_bytes > max_bytes - consumed_bytes ||
+            pixel_count > max_decoded_bytes - decoded_image_bytes)
             fail();
-        decoded_image_bytes += pixel_bytes;
+        decoded_image_bytes += pixel_count;
 
-        pack.decoded_reservation->grow(pixel_bytes);
-        image.pixels.resize(static_cast<std::size_t>(pixel_bytes / 4ULL));
-        bytes(image.pixels.data(), static_cast<std::size_t>(pixel_bytes));
-        if (normal_hash(image.pixels.data(), static_cast<std::size_t>(pixel_bytes)) != image.hash)
-            fail();
+        pack.decoded_reservation->grow(pixel_count);
+        if (pack.version == 1U) {
+            std::vector<std::uint8_t> rgba(static_cast<std::size_t>(stored_pixel_bytes));
+            bytes(rgba.data(), rgba.size());
+            if (normal_hash(rgba.data(), rgba.size()) != image.hash)
+                fail();
+            image.pixels.resize(static_cast<std::size_t>(pixel_count));
+            for (std::size_t pixel = 0; pixel < image.pixels.size(); ++pixel)
+                image.pixels[pixel] = rgba[pixel * 4];
+        } else {
+            image.pixels.resize(static_cast<std::size_t>(pixel_count));
+            bytes(image.pixels.data(), image.pixels.size());
+            if (normal_hash(image.pixels.data(), image.pixels.size()) != image.hash)
+                fail();
+        }
+        image.hash = normal_hash(image.pixels.data(), image.pixels.size());
         pack.images.push_back(std::move(image));
     }
 
@@ -544,15 +613,40 @@ read_surface_materials(std::istream &input, const std::string &expected_asset_id
             fail();
     }
 
-    for (std::uint32_t i = 0; i < batch_count; ++i) {
-        const auto rec_index = pack.bindings[i];
-        if (rec_index == no_surface_material)
-            continue;
-        if (pack.records[rec_index]->material_name != expected_batch_materials[i])
-            fail();
+    if (expected_batch_materials) {
+        for (std::uint32_t i = 0; i < batch_count; ++i) {
+            const auto rec_index = pack.bindings[i];
+            if (rec_index == no_surface_material)
+                continue;
+            if (pack.records[rec_index]->material_name != (*expected_batch_materials)[i])
+                fail();
+        }
     }
 
     return pack;
+}
+
+inline SurfaceMaterialPack
+read_surface_materials(std::istream &input, const std::string &expected_asset_id,
+                       std::uint64_t expected_mesh_uv_hash,
+                       const std::vector<std::string> &expected_batch_materials,
+                       std::uint64_t max_bytes = max_surface_sidecar_bytes,
+                       std::uint64_t max_decoded_bytes = max_surface_sidecar_bytes,
+                       std::shared_ptr<SurfaceDecodedBudget> budget = {}) {
+    return read_surface_materials_impl(input, expected_asset_id, expected_mesh_uv_hash,
+                                       &expected_batch_materials, max_bytes, max_decoded_bytes,
+                                       std::move(budget));
+}
+
+// Read a region-level BWSFM1 surface-material catalog (mesh_uv_hash == 0) whose
+// records bind to authenticated environment surfaces by material_name.
+inline SurfaceMaterialPack
+read_surface_material_catalog(std::istream &input, const std::string &expected_asset_id,
+                              std::uint64_t max_bytes = max_surface_sidecar_bytes,
+                              std::uint64_t max_decoded_bytes = max_surface_sidecar_bytes,
+                              std::shared_ptr<SurfaceDecodedBudget> budget = {}) {
+    return read_surface_materials_impl(input, expected_asset_id, 0ULL, nullptr, max_bytes,
+                                       max_decoded_bytes, std::move(budget));
 }
 
 } // namespace mw34::materials

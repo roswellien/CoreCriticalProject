@@ -6,7 +6,7 @@ submit_prepared_geometry(const ::platform::ModelDrawContext &context,
   if (geometry_mode_ == cc::geometry::Mode::legacy ||
       !prepared_.has_binding(context))
     return cc::geometry::Submission::unsupported;
-  const auto selected = prepared_.draw(context, true);
+  const auto selected = prepared_.draw(context, true, lab_preview_lighting_);
   if (!selected.replace)
     return cc::geometry::Submission::unsupported;
   ensure_geometry_scene();
@@ -104,6 +104,16 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
     instance->gpu_vertices = instance->sun_eligible = true;
     instance->camera = matrix_rows(source.camera);
     instance->sun_world = matrix_rows(source.world);
+    if (const auto *view = context.world_to_camera) {
+      for (unsigned i = 0; i < 12; ++i)
+        if (!std::isfinite(view[i]))
+          throw std::runtime_error("Nonfinite prepared camera transform");
+      const ::platform::prepared::Matrix camera{
+          view[0], view[3], view[6], view[9], view[1], view[4],
+          view[7], view[10], view[2], view[5], view[8], view[11], 0, 0, 0, 1};
+      instance->world_to_camera = matrix_rows(camera);
+      instance->has_world_to_camera = true;
+    }
     instance->sun_normal = mw34::sun::normal_matrix(source.world);
     instance->color = source.batch->color;
     instance->geometry_near = context.clip_near;

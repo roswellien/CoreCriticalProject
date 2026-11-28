@@ -468,6 +468,10 @@ class HudZoomWindow : public HudZoomView {
   void set_rect(int32_t px, int32_t py, int32_t w, int32_t h);  // 0x004438f0: scaled by the zoom, kept on screen
   void set_view_rect(int32_t* px, int32_t* py, int32_t* w, int32_t* h);  // 0x0043fa40: 2 pixels inside the display
   void follow(int32_t px, int32_t py);  // 0x00443660: centred on the reticle, when shown or scaled
+  // Ours (issue 467): false while the clamp has left the window 0 wide or high.
+  // Projecting through it then would mix its view with the last camera's
+  // projection, so the target marker uses the main view instead.
+  bool has_view_area() const { return rect.right > rect.left && rect.bottom > rect.top; }
   void toggle_lock();                // 0x00442e00: keypad 0, the window locked open or closed
   // 0x004436c0: the zoom camera at the player camera's place, turned to the
   // reticle's aim point, in its zone; the text (distance, the aimed object's

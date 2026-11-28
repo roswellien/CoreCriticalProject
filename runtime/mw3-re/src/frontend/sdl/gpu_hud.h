@@ -11,6 +11,12 @@
 
 namespace sdlfe {
 class FrameRenderer;
+struct MenuRippleCommand {
+    int32_t x{}, y{}, inner{}, outer{}, amplitude{};
+    float wavelength{}, phase{};
+    bool has_clip{};
+    int32_t clip[4]{};
+};
 struct HudOptions {
   std::string mode = "original";
   std::vector<std::string> artwork;
@@ -60,6 +66,7 @@ class GpuHud final : public zrndr::DrawObserver {
   bool submit_menu(const platform::MenuBackgroundLayerRect* destination = nullptr,
                    bool manage_scene = true);
   bool menu_sealed() const { return menu_sealed_; }
+  bool has_menu_ripples() const { return !menu_ripples_.empty(); }
   bool menu_empty() const { return commands_.empty(); }
   uint64_t menu_background_skipped() const { return menu_background_skipped_; }
   void set_resource_cache_limits(size_t max_resources, uint64_t max_bytes);
@@ -73,6 +80,8 @@ class GpuHud final : public zrndr::DrawObserver {
   void span(const uint16_t* destination, uint32_t count, uint16_t colour) override;
   void resolved_region(const uint16_t* destination, uint32_t width, uint32_t height,
                        uint32_t pitch_bytes, const char* operation) override;
+  bool ripple(const void *target, int32_t x, int32_t y, int32_t inner, int32_t outer,
+              int32_t amplitude, float wavelength, float phase, const int32_t *clip_rect) override;
   void framebuffer_write(const void* target, const char* operation) override;
 
   // HD menu stage D (gpu_hud_menu_sprites.cpp, menu_sprites.h). Called after a
@@ -127,6 +136,7 @@ class GpuHud final : public zrndr::DrawObserver {
     platform::Primitive primitive;
     bool sharp;
     platform::TextureFilter filter{platform::TextureFilter::kDefault};
+    int ripple_index{-1};
   };
   void begin_frame(const uint16_t* target, int width, int height, int pitch, int output_height,
                    bool observation_only, bool menu_mode = false,
@@ -150,6 +160,7 @@ class GpuHud final : public zrndr::DrawObserver {
   std::map<const zimg::Texture*, Source> sources_;
   std::vector<platform::TLVertex> vertices_;
   std::vector<Command> commands_;
+  std::vector<MenuRippleCommand> menu_ripples_;
   const uint16_t* target_{};
   int width_{}, height_{}, pitch_{};
   float density_{1};

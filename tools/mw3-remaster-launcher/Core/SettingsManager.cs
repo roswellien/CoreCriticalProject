@@ -26,6 +26,9 @@ namespace MW3RemasterLauncher.Core
         public bool PerformanceMonitor { get; set; } = false;
         // Off until the RX 9070 benchmark shows the same gain as the RTX 5070 (issue #252).
         public bool RenderThread { get; set; } = false;
+        public bool Vsync { get; set; } = false;
+        // On by default: it does nothing until an enabled cinematics pack supplies an HD clip (#625).
+        public bool UpscaledCutscenes { get; set; } = true;
         public bool Headlights { get; set; } = false;
         public bool DynamicLighting { get; set; } = false;
         public bool Shadows { get; set; } = false;
@@ -33,11 +36,17 @@ namespace MW3RemasterLauncher.Core
         // environment pack provides its validated role catalog.
         public bool WaterDetail { get; set; } = true;
         public bool CloudDetail { get; set; } = true;
+        // Opt-in parallax occlusion mapping quality ("off", "low", "high"). Default off until approved.
+        public string PomQuality { get; set; } = "off";
+        // Remembers full environment pack hashes under the profile's cache folder so the next
+        // launch skips re-hashing unchanged packs. Off (or MW3_DISK_CACHE=0) hashes every start.
+        public bool LoadCache { get; set; } = true;
         public string DirectInputJoystickInstanceGuid { get; set; } = string.Empty;
         public string DirectInputJoystickProductName { get; set; } = string.Empty;
         public bool DirectInputJoystickNone { get; set; }
         public bool InitialSetupCompleted { get; set; } = false;
         public bool AutomaticUpdateChecks { get; set; } = false;
+        public bool AutomaticAssetPackChecks { get; set; } = false;
         public bool AutomaticCrashReports { get; set; } = false;
         public int ReplayVideoSettingsVersion { get; set; } = 0;
         public List<string> ActivePacks { get; set; } = new();

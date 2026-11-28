@@ -1,8 +1,13 @@
 #pragma once
+#include <charconv>
 #include <cstdint>
 #include <cstring>
+#include <istream>
+#include <stdexcept>
+#include <string>
 #include <vector>
 #include <memory>
+#include <utility>
 #include "frontend/core_critical/renderer/geometry/resource.hpp"
 #include "platform/producer_view.h"
 
@@ -73,6 +78,8 @@ struct ModelDrawContext {
   const void* node = nullptr;
   const float* model_to_world = nullptr;
   const float* model_to_camera = nullptr;
+  // Optional canonical scene view, borrowed only for this synchronous scope.
+  const float* world_to_camera = nullptr;
   float near_z = 0, clip_near = 0, far_z = 0, fx_near = 0, fy_near = 0, cx = 0, cy = 0;
   float opacity = 1;
   float damage_tint_rgb[3] = {};
@@ -104,6 +111,46 @@ struct PlayerHeadlightTick {
   bool shutdown = true;
   uint64_t generation = 0;
 };
+
+struct HeadlightBinding {
+  unsigned key = 0;
+  int button = -1;
+  unsigned mouse = 0;
+
+  static HeadlightBinding read(std::istream& bindings, unsigned key_limit) {
+    auto number = [&bindings](auto& value) {
+      std::string field;
+      if (!(bindings >> field)) return false;
+      const auto end = field.data() + field.size();
+      const auto result = std::from_chars(field.data(), end, value);
+      return result.ec == std::errc{} && result.ptr == end;
+    };
+    HeadlightBinding binding;
+    std::string version, extra;
+    if (!(bindings >> version) ||
+        (version != "CC_MW3_HEADLIGHTS_V1" && version != "CC_MW3_HEADLIGHTS_V2") ||
+        !number(binding.key) || !number(binding.button) ||
+        (version == "CC_MW3_HEADLIGHTS_V2" && !number(binding.mouse)) ||
+        (bindings >> extra) || !bindings.eof() || bindings.bad() ||
+        binding.key >= key_limit || (binding.key && !(binding.key & 255)) ||
+        binding.button < -1 || binding.button > 25 || binding.mouse > 7)
+      throw std::runtime_error("Headlights: invalid input binding");
+    const auto scan = binding.key & 255;
+    if (scan == 0x43 || scan == 0x44 || scan == 0x57)
+      throw std::runtime_error("Headlights: key reserved for capture/replay");
+    return binding;
+  }
+
+  static uint32_t wheel_mask(unsigned mouse) {
+    return mouse == 6 ? 1u : mouse == 7 ? 2u : 0u;
+  }
+};
+
+// A held constituent stays suppressed until it is physically released.
+inline bool headlight_input_down(bool raw, bool suppressed, bool& suppressed_latch) {
+  suppressed_latch = raw && (suppressed || suppressed_latch);
+  return raw && !suppressed_latch;
+}
 
 // Synchronous receiver restoration only. This token never enters a queue/Scene.
 // Cookies belong to one receiver/reset generation; reset must make old tokens inert.
@@ -144,13 +191,22 @@ class Render3D {
   // Typed mission-change callback from the native missions object. The
   // default is a no-op so renderers that do not care are unaffected.
   virtual void mission_changed(const MissionIdentity &) {}
+  // Multiplayer and IA loads have a world even without a campaign identity.
+  virtual void mission_scene_changed(const MissionIdentity& identity, bool) {
+    mission_changed(identity);
+  }
   // The Mech Lab preview: a briefing loads its mission before the Lab opens, but the
   // chassis on the turntable is not part of that mission's scene. While this is on, a
   // renderer lights it with its configured stock lighting instead of the mission's
   // campaign profile (Operation 3's red sky tint made every paint look orange).
   virtual void set_lab_preview_lighting(bool) {}
+  virtual uint32_t headlight_wheel_mask() const { return 0; }
   virtual bool wants_player_headlight_ticks() const { return false; }
   virtual void player_headlight_tick(const PlayerHeadlightTick&) {}
+  // Ours (benchmark scenes, arena_headlights): these mech nodes' stock headlights
+  // lit at full strength this frame, replacing the last call's. Replay only: a
+  // replay has no player mech, so player_headlight_tick never runs.
+  virtual void replay_headlights(const void* const* /*nodes*/, std::size_t /*count*/) {}
   virtual void retire_headlight_node(std::uintptr_t /*node*/) {}
   virtual bool wants_material_context() const { return false; }
   virtual std::shared_ptr<const DeferredMaterialBinding>
@@ -167,6 +223,7 @@ class Render3D {
 
   virtual void begin_material_draw(const MaterialDrawContext &) {}
   virtual void end_material_draw() noexcept {}
+  virtual void select_terrain_cell(int32_t, int32_t, int32_t) {}
   virtual void begin_model_draw(const ModelDrawContext&) {}
   virtual void end_model_draw() noexcept {}
   virtual bool replaces_model_geometry() const { return false; }
@@ -234,6 +291,56 @@ class Render3D {
   virtual bool hold_frame() { return false; }
   virtual bool restore_frame() { return false; }
   virtual void drop_frame() {}
+};
+
+// Ours (#507): an AI arena match's chosen time of day, as the campaign mission
+// whose lighting profile it borrows ("t1m1" for dawn ...); empty for the map's
+// own lighting. Set by the arena before its mission loads and read by a
+// renderer when the mission changes. Purely visual: nothing in the simulation
+// reads it, so AI sight and the match log are the same at every time of day.
+inline std::string& arena_lighting_mission() {
+  static std::string id;
+  return id;
+}
+
+// Ours (benchmark scenes): weather added to a watched arena map that has none
+// of its own. "rain" or empty. Visual only, like arena_lighting_mission: set
+// before the mission loads and read where the mission's world params are.
+inline std::string& arena_weather() {
+  static std::string kind;
+  return kind;
+}
+
+// Ours (benchmark scenes): every replayed mech's stock headlights lit, not only
+// a player's. Set before the replay starts; read by the replay viewer.
+inline bool& arena_headlights() {
+  static bool on = false;
+  return on;
+}
+
+// Ours (benchmark scenes): sets the three arena look globals above for one scene
+// and puts back what was there when it is destroyed, also when the scene fails or
+// exits early by an exception, so nothing later in the process inherits them.
+class ArenaLookScope {
+ public:
+  ArenaLookScope(std::string lighting_mission, std::string weather, bool headlights)
+      : lighting_(arena_lighting_mission()), weather_(arena_weather()),
+        headlights_(arena_headlights()) {
+    arena_lighting_mission() = std::move(lighting_mission);
+    arena_weather() = std::move(weather);
+    arena_headlights() = headlights;
+  }
+  ~ArenaLookScope() {
+    arena_lighting_mission() = std::move(lighting_);
+    arena_weather() = std::move(weather_);
+    arena_headlights() = headlights_;
+  }
+  ArenaLookScope(const ArenaLookScope&) = delete;
+  ArenaLookScope& operator=(const ArenaLookScope&) = delete;
+
+ private:
+  std::string lighting_, weather_;
+  bool headlights_;
 };
 
 }  // namespace platform

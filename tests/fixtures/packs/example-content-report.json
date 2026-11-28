@@ -1,0 +1,89 @@
+{
+  "report_version": "1.0",
+  "game_id": "mw3",
+  "runtime_version": "0.0.0-example",
+  "sources": [
+    {
+      "id": "example-both",
+      "name": "Example: gameplay and visuals",
+      "version": "1.0.0",
+      "origin": "pack",
+      "location": "packs/example-both",
+      "used": true,
+      "counts_for_multiplayer": true,
+      "adds": {
+        "mechs": [
+          {
+            "name": "example_thor_b",
+            "title": "Example Thor B"
+          }
+        ],
+        "visuals": [
+          {
+            "name": "mech-model:thor/model/0",
+            "target": "mech-model:thor",
+            "kind": "model"
+          },
+          {
+            "name": "mech-model:thor/model/1",
+            "target": "mech-model:thor",
+            "kind": "model"
+          }
+        ]
+      },
+      "ticked_for": [
+        "ia",
+        "mp"
+      ],
+      "problems": []
+    },
+    {
+      "id": "example-broken",
+      "origin": "pack",
+      "location": "packs/example-broken",
+      "used": true,
+      "counts_for_multiplayer": false,
+      "adds": {
+        "skins": [
+          {
+            "name": "Example Stripe",
+            "target": "mech-model:no_such_model",
+            "used": false
+          }
+        ]
+      },
+      "ticked_for": [],
+      "problems": [
+        {
+          "code": "visual-target-unknown",
+          "severity": "error",
+          "message": "The skin Example Stripe is for the model no_such_model, which no enabled pack or the game provides.",
+          "file": "pack.json"
+        }
+      ]
+    },
+    {
+      "id": "hardrain",
+      "name": "Hard Rain",
+      "version": "1.0",
+      "origin": "player-mod",
+      "location": "mods/hardrain",
+      "used": true,
+      "counts_for_multiplayer": true,
+      "adds": {},
+      "ticked_for": [
+        "mw3"
+      ],
+      "problems": [
+        {
+          "code": "mod-needs-missing",
+          "severity": "warning",
+          "message": "It needs Base, which is not in the mods folder.",
+          "file": "mod.txt",
+          "line": 6
+        }
+      ]
+    }
+  ],
+  "problems": []
+}

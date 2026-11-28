@@ -3,6 +3,7 @@
 // link order).
 #include "mech3/mech_collide.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -32,6 +33,27 @@ constexpr float kWallNy = 0.78f;       // 0x005e24e4
 constexpr float kCrushVolume = 180.0f; // 0x005e24e8
 constexpr float kTurnProbes = 3.3f;    // 0x005bd380
 constexpr int kTopProbe = 10, kSoundBump = 0xd;
+
+// FIX (B): use ztimer's 0.125 s cap so budget-skipped frames cannot deliver
+// a multi-second hit (fixes.md, Frame rate).
+float collision_steps(float dt) {
+  if (!zfix::options().per_second) return 1.0f;
+  if (dt <= 0.0f) return 0.0f;
+  return zfix::frame_steps(std::min(dt, 0.125f));
+}
+
+double kept_per_step(double rate, float dt) {
+  if (!zfix::options().per_second) return rate;
+  return std::pow(rate, static_cast<double>(collision_steps(dt)));
+}
+
+X clamped_speed_ratio(const Vec3& v, float max_speed) {
+  if (!(max_speed > 0.0f)) return X(0.0f);
+  // Keep the x87 value through the damage multiply so it rounds once as in the
+  // exe. The cap bounds runaway speeds above MASC's 1.5625 squared-speed ratio.
+  const X ratio = (X(v.x) * v.x + X(v.z) * v.z) / (X(max_speed) * max_speed);
+  return ratio > X(2.0f) ? X(2.0f) : ratio;
+}
 
 const Vec3* position_of(Mech& m) { return skis_calls().position ? skis_calls().position(m) : nullptr; }
 
@@ -213,7 +235,13 @@ void Mech::wall_response(const CollisionHit& h) {
   Vec3 n{h.hit.normal[0], h.hit.normal[1], h.hit.normal[2]};
   if (n.x == 0.0f && n.z == 0.0f) return;
   const Vec3& lv = vec_3c;
-  const float speed = sqrt((X(lv.x) * lv.x + X(lv.y) * lv.y) + X(lv.z) * lv.z).f();
+  float speed;
+  if (zfix::options().per_second) {
+    // A vertical ski impulse should not feed the horizontal rebound.
+    speed = sqrt(X(lv.x) * lv.x + X(lv.z) * lv.z).f();
+  } else {
+    speed = sqrt((X(lv.x) * lv.x + X(lv.y) * lv.y) + X(lv.z) * lv.z).f();
+  }
   position_of(*this);
   const Vec3 p{h.hit.point[0], 0.0f, h.hit.point[2]};
   const Vec3 t{h.to.x, 0.0f, h.to.z};
@@ -240,18 +268,39 @@ void Mech::wall_response(const CollisionHit& h) {
   const Vec3 nv{(X(into.x) + along.x).f(), (X(into.y) + along.y).f(), (X(into.z) + along.z).f()};
   push = {(X(nv.x) - velocity.x).f(), 0.0f, (X(nv.z) - velocity.z).f()};
   const int32_t flips = g_calls.ai_reverses ? g_calls.ai_reverses(*this) : 0;
-  controls->throttle = flips ? -controls->throttle : crt::x87_mul_f24(controls->throttle, 0.1);  // 0x005bd378
+  if (flips) {
+    // Reversal is a collision event in 0x004231c0, not a decay rate. A time
+    // gate also skips responses at 30 fps and changes the next selected gait.
+    controls->throttle = -controls->throttle;
+  } else {
+    controls->throttle = crt::x87_mul_f24(controls->throttle, kept_per_step(0.1, frame_dt));  // 0x005bd378
+  }
   const float sign = (X(d.z) * rs.x - X(d.x) * rs.z) < X(0.0f) ? -1.0f : 1.0f;
-  vec_58.y = (X(sign) * speed * collider.yaw_kick + vec_58.y).f();
+  if (zfix::options().per_second) {
+    const float kick = (X(sign) * speed * collider.yaw_kick).f();
+    // Start with a full kick to clear Update's deadzone. Scale repeated kicks.
+    if (std::fabs(vec_58.y) < 0.05f) {
+      vec_58.y = kick;
+    } else {
+      vec_58.y = (X(kick) * collision_steps(frame_dt) + vec_58.y).f();
+    }
+  } else {
+    vec_58.y = (X(sign) * speed * collider.yaw_kick + vec_58.y).f();
+  }
   if (this == world().mission_player && world().force_feedback && g_calls.ff_jolt) {
     const float nf[3] = {n.x, n.y, n.z};
-    g_calls.ff_jolt(nf, speed / max_speed);
+    if (zfix::options().per_second) {
+      g_calls.ff_jolt(nf, max_speed > 0.0f ? std::min(2.0f, speed / max_speed) : 0.0f);
+    } else {
+      g_calls.ff_jolt(nf, speed / max_speed);
+    }
   }
 }
 
 // Mech3.exe 1.2 @ 0x00423600. Airborne: bounce down off it when rising, and a
 // knock on the head. On foot: damage by the volume of the box hit, and a crouch.
 void Mech::ceiling_response(const CollisionHit& h) {
+  const float steps = collision_steps(frame_dt);
   if (airborne()) {
     if (vec_3c.y > 0.0) {
       const Vec3 v = vec_3c;
@@ -265,20 +314,36 @@ void Mech::ceiling_response(const CollisionHit& h) {
         set_position(*this, q);
       }
     }
-    head->apply_damage(0.002f, 0);  // 0x3b03126f
+    if (zfix::options().per_second) {
+      if (steps != 0.0f) head->apply_damage(0.002f * steps, 0);
+    } else {
+      head->apply_damage(0.002f, 0);  // 0x3b03126f
+    }
     return;
   }
   const float* b = g_calls.hit_box ? g_calls.hit_box(h.hit.node) : nullptr;
   if (!b) return;
   const float v = ((X(b[4]) - b[1]) * (X(b[5]) - b[2]) * (X(b[3]) - b[0]) / kCrushVolume * 0.25f).f();
   if (v == 0.0f) return;
-  head->apply_damage(crt::x87_mul_f24(v, 0.1), 0);
-  torso->apply_damage(crt::x87_mul_f24(v, 0.4), 0);  // 0x005bd3a0
-  const float side = crt::x87_mul_f24(v, 0.25);      // 0x005bd3a8
-  torso->apply_damage(side, 1);
-  torso->apply_damage(side, 2);
-  if (g_calls.crouch) g_calls.crouch(*hip, v);
-  else hip->duck(v);
+  if (zfix::options().per_second) {
+    if (steps == 0.0f) return;
+    const X scaled_volume = X(v) * steps;
+    head->apply_damage(crt::x87_mul_f24(scaled_volume.v, 0.1), 0);
+    torso->apply_damage(crt::x87_mul_f24(scaled_volume.v, 0.4), 0);
+    const float side = crt::x87_mul_f24(scaled_volume.v, 0.25);
+    torso->apply_damage(side, 1);
+    torso->apply_damage(side, 2);
+    if (g_calls.crouch) g_calls.crouch(*hip, scaled_volume.f());
+    else hip->duck(scaled_volume.f());
+  } else {
+    head->apply_damage(crt::x87_mul_f24(v, 0.1), 0);
+    torso->apply_damage(crt::x87_mul_f24(v, 0.4), 0);  // 0x005bd3a0
+    const float side = crt::x87_mul_f24(v, 0.25);      // 0x005bd3a8
+    torso->apply_damage(side, 1);
+    torso->apply_damage(side, 2);
+    if (g_calls.crouch) g_calls.crouch(*hip, v);
+    else hip->duck(v);
+  }
 }
 
 // Mech3.exe 1.2 @ 0x004237c0. Each vehicle hit: a non-allied one takes damage
@@ -286,6 +351,7 @@ void Mech::ceiling_response(const CollisionHit& h) {
 // shoved. Dead units are ignored by the foot probes.
 void Mech::vehicle_response() {
   bool hit = false;
+  const float steps = collision_steps(frame_dt);
   // The list is walked from its head (the last sorted) as the exe's.
   for (auto it = collider.vehicles.rbegin(); it != collider.vehicles.rend(); ++it) {
     const CollisionHit& e = *it;
@@ -301,13 +367,24 @@ void Mech::vehicle_response() {
     const Vec3 v = velocity;
     const uint32_t team = g_calls.entity_team ? g_calls.entity_team(ent) : 0;
     if (!(team & allies)) {
-      const float dmg = ((X(v.x) * v.x + X(v.z) * v.z) / (X(max_speed) * max_speed) * 20.0f).f();  // 0x005bd3b0
-      if (g_calls.entity_damage && g_calls.entity_damage(target, dmg)) return;
+      if (zfix::options().per_second) {
+        const float dmg = (clamped_speed_ratio(v, max_speed) * 20.0f * steps).f();
+        if (dmg > 0.0f && g_calls.entity_damage && g_calls.entity_damage(target, dmg)) return;
+      } else {
+        const float dmg = ((X(v.x) * v.x + X(v.z) * v.z) / (X(max_speed) * max_speed) * 20.0f).f();  // 0x005bd3b0
+        if (g_calls.entity_damage && g_calls.entity_damage(target, dmg)) return;
+      }
     }
+    if (steps == 0.0f) continue;
     float* bv = g_calls.body_velocity ? g_calls.body_velocity(body) : nullptr;
     float* spin = g_calls.body_spin ? g_calls.body_spin(body) : nullptr;
     if (!bv || !spin) continue;
-    const X s = X(tonnage()) * (g_calls.body_mass ? g_calls.body_mass(body) : 0.0f) * 0.1f;  // 0x005bd3b4
+    X s(0.0f);
+    if (zfix::options().per_second) {
+      s = X(tonnage()) * (g_calls.body_mass ? g_calls.body_mass(body) : 0.0f) * 0.1f * steps;
+    } else {
+      s = X(tonnage()) * (g_calls.body_mass ? g_calls.body_mass(body) : 0.0f) * 0.1f;  // 0x005bd3b4
+    }
     const Vec3 sv{(s * v.x).f(), (s * v.y).f(), (s * v.z).f()};
     const float nv[3] = {(X(bv[0]) + sv.x).f(), (X(bv[1]) + sv.y).f(), (X(bv[2]) + sv.z).f()};
     std::memcpy(bv, nv, 12);
@@ -330,30 +407,46 @@ void Mech::mech_response() {
   const CollisionHit& e = collider.mechs.back();
   Mech* other = g_calls.node_mech ? g_calls.node_mech(e.hit.node) : nullptr;
   if (other && !(other->team & allies)) {
+    const float steps = collision_steps(frame_dt);
     const Vec3 v = velocity;
-    const float r = ((X(v.x) * v.x + X(v.z) * v.z) / (X(max_speed) * max_speed) * 0.02f).f();  // 0x005bd3b8
+    float r;
+    if (zfix::options().per_second) {
+      r = (clamped_speed_ratio(v, max_speed) * 0.02f * steps).f();
+    } else {
+      r = ((X(v.x) * v.x + X(v.z) * v.z) / (X(max_speed) * max_speed) * 0.02f).f();  // 0x005bd3b8
+    }
     const float t_other = other->tonnage();
     const float sum = (X(tonnage()) + t_other).f();
     attacker = other;
     const int32_t probe = e.probe;
-    if (probe < 6 || probe == kTopProbe) {
-      const float d = (X(other->tonnage()) * r / sum).f();
-      torso->apply_damage((X(d) * 0.5f).f(), 0);
-      const float side = (X(d) * 0.25f).f();
-      torso->apply_damage(side, 1);
-      torso->apply_damage(side, 2);
-    } else if (probe < 10) {
-      legs[probe & 1]->apply_damage((X(other->tonnage()) * r / sum).f(), 0);
+    if (steps != 0.0f) {
+      if (probe < 6 || probe == kTopProbe) {
+        const float d = (X(other->tonnage()) * r / sum).f();
+        torso->apply_damage((X(d) * 0.5f).f(), 0);
+        const float side = (X(d) * 0.25f).f();
+        torso->apply_damage(side, 1);
+        torso->apply_damage(side, 2);
+      } else if (probe < 10) {
+        legs[probe & 1]->apply_damage((X(other->tonnage()) * r / sum).f(), 0);
+      }
     }
     const float k = (X(tonnage()) / sum).f();
-    const float s = (X(collider.restitution) * k).f();
+    float s;
+    if (zfix::options().per_second) {
+      s = (X(collider.restitution) * k * steps).f();
+    } else {
+      s = (X(collider.restitution) * k).f();
+    }
     if (g_calls.remote && g_calls.remote(*other)) {
-      if (g_calls.net_shove) g_calls.net_shove(*this, *other, (X(k) * r).f(), (X(s) * v.x).f(), (X(s) * v.z).f());
+      if (steps != 0.0f && g_calls.net_shove)
+        g_calls.net_shove(*this, *other, (X(k) * r).f(), (X(s) * v.x).f(), (X(s) * v.z).f());
     } else {
       other->attacker = this;
-      other->torso->apply_damage((X(k) * r).f(), 0);
-      other->velocity.x = (X(s) * v.x + other->velocity.x).f();
-      other->velocity.z = (X(s) * v.z + other->velocity.z).f();
+      if (steps != 0.0f) {
+        other->torso->apply_damage((X(k) * r).f(), 0);
+        other->velocity.x = (X(s) * v.x + other->velocity.x).f();
+        other->velocity.z = (X(s) * v.z + other->velocity.z).f();
+      }
     }
   }
   blocked[1] = true;
@@ -422,7 +515,13 @@ bool Mech::collide() {
       if (const Vec3* at = position_of(*this))
         set_position(*this, {(X(at->x) + off.x).f(), (X(at->y) + off.y).f(), (X(at->z) + off.z).f()});
       const X k = abs(X(vec_3c.z)) * X(0.6000000238418579);  // 0x005bd368
-      const Vec3 shove{(k * away.x).f(), (k * away.y).f(), (k * away.z).f()};
+      Vec3 shove;
+      if (zfix::options().per_second) {
+        const X scaled = k * collision_steps(frame_dt);
+        shove = {(scaled * away.x).f(), (scaled * away.y).f(), (scaled * away.z).f()};
+      } else {
+        shove = {(k * away.x).f(), (k * away.y).f(), (k * away.z).f()};
+      }
       push = {(X(push.x) + shove.x).f(), (X(push.y) + shove.y).f(), (X(push.z) + shove.z).f()};
       const float dt = frame_dt;
       const Vec3 step{(X(push.x) * dt).f(), (X(push.y) * dt).f(), (X(push.z) * dt).f()};
@@ -437,7 +536,11 @@ bool Mech::collide() {
       // The exe's sign picks the constant; turn_rate_now's value is still on the x87.
       const X rate = (X(1.0) - abs(X(controls->throttle)) * 0.8f) * turn_rate;
       vec_58.y = (rate * sign * 1.8f).f();  // 0x005bd370
-      controls->throttle = crt::x87_mul_f24(controls->throttle, 0.1);
+      if (zfix::options().per_second) {
+        controls->throttle = crt::x87_mul_f24(controls->throttle, kept_per_step(0.1, frame_dt));
+      } else {
+        controls->throttle = crt::x87_mul_f24(controls->throttle, 0.1);
+      }
       blocked[1] = true;
       if (this == world().player && move_calls().pilot_sound)
         sounds[13] = move_calls().pilot_sound(*this, kSoundBump, 1.0f, -1.0f);

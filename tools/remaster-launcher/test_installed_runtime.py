@@ -36,6 +36,58 @@ class InstalledPreparationTests(unittest.TestCase):
             producer._pins([], generated), "a" * 40, "fixture", "build"))
         self.assertEqual(descriptor["files"]["resources/stock-headlights.bin"], pin)
         self.assertIn("resources/stock-headlights.bin", descriptor["dependencies"])
+        self.assertEqual(descriptor["capabilities"], {"controller-profile": [1], "input-bindings": [1], "vsync": [1]})
+
+    def test_source_capabilities_omit_input_bindings_for_older_sources(self):
+        import stage_mw3_re_runtime as producer
+
+        repo_caps = producer._source_capabilities(Path(__file__).resolve().parents[2])
+        self.assertEqual(repo_caps, producer._DEFAULT_CAPABILITIES + (
+            ("prepared-mechs", (1,)), ("mesh-payload", (1, 2, 3, 4, 5, 6, 7)),
+            ("normal-map", (1, 2, 3)), ("surface-materials", (1,)),
+            ("environment-resources", (1,)), ("c1-height-stream", (1,)), ("hd-movie", (1,)),
+        ))
+        with tempfile.TemporaryDirectory() as temporary:
+            old_source = Path(temporary)
+            (old_source / "runtime/mw3-re/src/frontend/sdl").mkdir(parents=True)
+            (old_source / "runtime/mw3-re/src/platform").mkdir(parents=True)
+            (old_source / "runtime/mw3-re/src/frontend/sdl/mw3_main.cpp").write_text("int main() {}", encoding="utf-8")
+            (old_source / "runtime/mw3-re/src/platform/render3d.h").write_text("CC_MW3_HEADLIGHTS_V1\n", encoding="utf-8")
+            old_caps = producer._source_capabilities(old_source)
+            self.assertEqual(old_caps, (("controller-profile", (1,)),))
+            descriptor = json.loads(producer._descriptor(producer._pins([], ()), "a" * 40, "fixture", "build", capabilities=old_caps))
+            self.assertEqual(descriptor["capabilities"], {"controller-profile": [1]})
+            (old_source / "runtime/mw3-re/src/frontend/sdl/input_bindings.h").write_text("// ok\n", encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(old_source), (("controller-profile", (1,)),))
+        with tempfile.TemporaryDirectory() as temporary:
+            capable_source = Path(temporary)
+            (capable_source / "runtime/mw3-re/src/frontend/sdl").mkdir(parents=True)
+            (capable_source / "runtime/mw3-re/src/platform").mkdir(parents=True)
+            main_source = capable_source / "runtime/mw3-re/src/frontend/sdl/mw3_main.cpp"
+            (capable_source / "runtime/mw3-re/src/frontend/sdl/input_bindings.h").write_text("// ok\n", encoding="utf-8")
+            (capable_source / "runtime/mw3-re/src/platform/render3d.h").write_text("CC_MW3_HEADLIGHTS_V2\n", encoding="utf-8")
+            main_source.write_text("--cc-input\n", encoding="utf-8")
+            # Header, CLI token and V2 magic without the SdlInput startup call stay controller-only.
+            self.assertEqual(producer._source_capabilities(capable_source), (("controller-profile", (1,)),))
+            main_source.write_text("--cc-input\ninput.set_input_bindings(a.input_bindings, &count);\n", encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(capable_source), (("controller-profile", (1,)), ("input-bindings", (1,))))
+            # VSync requires both CLI parser assignment in main and bridge wiring in frame_renderer.cpp.
+            main_source.write_text("--cc-input\ninput.set_input_bindings(a.input_bindings, &count);\n--cc-vsync\n", encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(capable_source), (("controller-profile", (1,)), ("input-bindings", (1,))))
+            main_source.write_text("--cc-input\ninput.set_input_bindings(a.input_bindings, &count);\n--cc-vsync\na.cc_assets.vsync =\n", encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(capable_source), (("controller-profile", (1,)), ("input-bindings", (1,))))
+            core_critical = capable_source / "runtime/mw3-re/src/frontend/core_critical"
+            core_critical.mkdir(parents=True)
+            (core_critical / "frame_renderer.cpp").write_text("config.vsync = assets.vsync;\n", encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(capable_source), producer._DEFAULT_CAPABILITIES)
+            # HD movies need the option, its parser assignment and the decoder source.
+            main_source.write_text(main_source.read_text(encoding="utf-8") + "--hd-movie\na.hd_movies[name] =\n",
+                                   encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(capable_source), producer._DEFAULT_CAPABILITIES)
+            (capable_source / "runtime/mw3-re/src/mech3").mkdir(parents=True)
+            (capable_source / "runtime/mw3-re/src/mech3/hd_movie_mf.cpp").write_text("// decoder\n", encoding="utf-8")
+            self.assertEqual(producer._source_capabilities(capable_source),
+                             producer._DEFAULT_CAPABILITIES + (("hd-movie", (1,)),))
 
     def test_sdl3_sound_recipe_pins_version_and_enables_selected_sdk(self):
         import stage_mw3_re_runtime as producer
@@ -234,7 +286,7 @@ def native_stage_tests(inputs):
             producer.stage_inventory(inventory, self.output)
             descriptor = json.loads((self.output / "runtime.json").read_text(encoding="utf-8"))
             self.assertEqual(descriptor["roles"], dict(executable="bin/mw3.exe", profile="profile.json"))
-            self.assertEqual(descriptor["capabilities"], {"controller-profile": [1]})
+            self.assertEqual(descriptor["capabilities"], {"controller-profile": [1], "input-bindings": [1], "vsync": [1]})
             self.assertIn("bin/mw34_normal_hash.dll", descriptor["dependencies"])
             self.assertTrue(any(name.lower().startswith("bin/vcruntime") for name in descriptor["files"]))
             physical = {path.relative_to(self.output).as_posix() for path in self.output.rglob("*") if path.is_file()}
@@ -262,11 +314,11 @@ def native_stage_tests(inputs):
                 argv=[str(self.output / "bin/mw3.exe"), "--install", str(game), "--write-dir", expected_write,
                       "--cc-vulkan-wsi", "--window", "1280x720", "--windowed", "--cc-aa", "fxaa",
                       "--cc-af", "16", "--cc-render-thread", "1", "--cc-lighting", "off",
-                      "--cc-flare-style", "modern"],
+                      "--cc-flare-style", "modern", "--cc-vsync", "0"],
                 skipped_features=[{
                     "feature": "Indeo movies",
                     "reason": "No original Ir50_32.dll passed the launcher's identity check; movie playback will use the existing imported-file fallback.",
-                }]))
+                }], environment={"MW3_DISK_CACHE": "1"}))
             profile_path = self.output / "profile.json"
             profile = json.loads(profile_path.read_text(encoding="utf-8"))
             profile["options"]["aa"] = "8"

@@ -44,19 +44,28 @@ try {
 } finally { $privateRsa.Dispose(); $publicRsa.Dispose() }
 
 New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
+$checksOutput = (Join-Path $OutputDirectory 'checks-bin') + '/'
+$signedNativePreview = Join-Path $OutputDirectory 'NativePreviewSigned'
+$global:LASTEXITCODE = 0
+& (Join-Path $PSScriptRoot 'sign_native_preview.ps1') -RuntimeDirectory $NativePreviewDirectory -OutputDirectory $signedNativePreview -WindowsSignTool $WindowsSignTool -SigningDlib $SigningDlib -SigningMetadata $SigningMetadata -ReceiptPath (Join-Path $OutputDirectory 'native-preview-signatures.json') -ChecksOutputDirectory $checksOutput
+if ($LASTEXITCODE) { throw 'MW3-RE native runtime signing failed' }
 $common = @{
     Compiler=$Compiler; PublishDirectory=$PublishDirectory; InstallerVersion=$Version
     WindowsSignTool=$WindowsSignTool; SigningDlib=$SigningDlib; SigningMetadata=$SigningMetadata
 }
 $launcherSetup = Join-Path $OutputDirectory 'LauncherSetup'
 $setupFilename = "corecriticalinstaller-$Version.exe"
-& (Join-Path $PSScriptRoot 'build_installer.ps1') @common -OutputDirectory $launcherSetup
+$launcherPublish = Join-Path $OutputDirectory 'LauncherPublish'
+Copy-Item -LiteralPath $PublishDirectory -Destination $launcherPublish -Recurse
+$launcherArguments = $common.Clone()
+$launcherArguments.PublishDirectory = $launcherPublish
+& (Join-Path $PSScriptRoot 'build_installer.ps1') @launcherArguments -OutputDirectory $launcherSetup
 $updateDirectory = Join-Path $OutputDirectory 'LauncherUpdate'
 & (Join-Path $PSScriptRoot 'build_ccupdate.ps1') -Installer (Join-Path $launcherSetup $setupFilename) `
     -InstallerReceipt (Join-Path $launcherSetup 'installer-build.json') -Version $numericVersion -Sequence $Sequence `
     -SigningKey $SigningKey -KeyId $KeyId -OutputDirectory $updateDirectory
 $fullSetup = Join-Path $OutputDirectory 'Setup'
-$fullArguments = @{ OutputDirectory=$fullSetup; NativePreviewDirectory=$NativePreviewDirectory }
+$fullArguments = @{ OutputDirectory=$fullSetup; NativePreviewDirectory=$signedNativePreview }
 & (Join-Path $PSScriptRoot 'build_installer.ps1') @common @fullArguments
 
 $artifacts = @{}

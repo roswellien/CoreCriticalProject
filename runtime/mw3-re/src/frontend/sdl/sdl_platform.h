@@ -55,6 +55,7 @@ class SdlWindow : public platform::Window {
   void frame_size(int width, int height, int canvas_w = 0, int canvas_h = 0) override;
   // --window not given: the window takes the frame's shape (sdl_fit.h).
   void set_auto_size(bool on) { auto_size_ = on; }
+  bool open_benchmark(int width, int height, bool fullscreen);
   void set_fullscreen(bool on) { fullscreen_ = on; }  // ours: borderless, the desktop's size
   // Ours (Alt+Enter): fullscreen or a window now, for this run only; the
   // window takes the frame's shape at the size it would open with, kept
@@ -100,6 +101,7 @@ class SdlScreen2D : public platform::Screen2D {
   void begin_menu_observation(const uint16_t*, int width, int height, int pitch) override;
   void cancel_menu_observation() noexcept override;
   void finish_menu_observation() noexcept override;
+  bool hd_menu_background_ready() const override;  // ours (#552): live or Stage C HD admission
   void present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) override;
   // A 16-bit pixel (565, else 555) as the layer's RGBA8, opaque.
   static uint32_t rgba(uint16_t pixel, bool rgb565);
@@ -107,6 +109,10 @@ class SdlScreen2D : public platform::Screen2D {
   static bool layer_empty(const uint16_t* pixels, int width, int height, int pitch, uint16_t key);
   void overlay_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, uint16_t key,
                   const uint8_t* alpha, const uint16_t* colour) override;
+  // Ours (#559): an HD movie's frame over the whole window (platform.h).
+  bool present_frame_rgba(const uint8_t* rgba, int width, int height, int pitch, uint64_t serial, int src_top,
+                          int src_bottom) override;
+  void release_frame_rgba() override;
   int frames = 0;  // frames shown
   // True while the mission's own state runs (not a menu or the pause); the same signal
   // SdlInput::in_mission uses. The live GPU menu and its 4:3 menu layout never apply then, so a
@@ -128,6 +134,11 @@ class SdlScreen2D : public platform::Screen2D {
   const FrameShape* hud_shape_{};
   int32_t texture_ = -1;
   int tw_ = 0, th_ = 0;
+  // Ours (#559): the HD movie frame's own texture (texture_ is shared with the
+  // menu background), its size and the frame uploaded.
+  int32_t movie_texture_ = -1;
+  int movie_texture_w_ = 0, movie_texture_h_ = 0;
+  uint64_t movie_serial_ = 0;
   std::vector<uint8_t> rgba_;
   // The compositor shares texture_; only a native upload can validate these cached bytes.
   bool native_texture_current_ = false;
@@ -162,6 +173,7 @@ class SdlScreen2D : public platform::Screen2D {
   uint64_t menu_report_frames_{}, menu_report_images_{}, menu_report_text_hits_{},
       menu_report_fallbacks_{};
   std::map<std::string, uint64_t> menu_report_shadow_reasons_;
+  bool menu_gpu_configured() const;  // ours (#552): also queried before a new menu becomes current
   bool live_menu_gpu_enabled() const;
   void set_menu_layout_active(bool active) noexcept;
 };
@@ -238,8 +250,12 @@ class SdlPump : public platform::MessagePump {
   // Ours: Alt+Enter, swallowed before the game sees the Enter.
   std::function<void()> toggle_fullscreen;
   // Ours: the game editor's ImGui sees each event first while it is up; true
-  // keeps the event from zInput (editor_imgui.h). Window events go on as ever.
+  // ends the event's handling there (editor_imgui.h). It answers true only
+  // for mouse, key and text events, so window and quit events go on as ever.
   std::function<bool(const SDL_Event&)> overlay_event;
+  // Ours (#289): a layer ahead of the game's input (mw3 --replay3d's
+  // controls), after the editor's; true when it took the event.
+  std::function<bool(const SDL_Event&)> intercept;
 
   void handle(const SDL_Event& e);  // public for the tests
 

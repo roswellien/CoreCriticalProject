@@ -1,4 +1,5 @@
 #include "frame_renderer.hpp"
+#include "prepared_models.hpp"
 
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/sdl_platform.h"
@@ -62,6 +63,7 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <random>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 
 namespace cc_mw3_re::checks {
 void check_scene_binding_slots();
@@ -108,6 +110,160 @@ void quad(platform::Render3D &renderer, float low, float high, float depth,
 }
 
 #include "local_light_gpu_checks.inc"
+
+void check_menu_ripple_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
+    auto renderer = make_check_renderer(window, backend);
+    require(renderer->supports_gpu_menu_ripple(), "Vulkan menu ripple capability missing");
+    renderer->prepare_menu_ripple(); // preflight before the first resident target exists
+    std::uint64_t passes = 0;
+    for (const auto size : {std::array{96, 80}, std::array{124, 96}}) {
+        require(SDL_SetWindowSize(window, size[0], size[1]) && SDL_SyncWindow(window),
+                SDL_GetError());
+        const int width = size[0], height = size[1];
+        // Nonzero viewport origin and unequal scales exercise adapter conversion.
+        constexpr float origin_x = 7, origin_y = 11, scale_x = 2, scale_y = 1.5f;
+        renderer->set_viewport(7, 11, width, height);
+        auto rectangle = [&](float left, float top, float right, float bottom, uint32_t colour) {
+            platform::DrawState state;
+            state.depth_always = true;
+            state.depth_write = false;
+            const platform::TLVertex vertices[]{
+                {left + origin_x, top + origin_y, 0, 1, colour, 0, 0, 0},
+                {right + origin_x, top + origin_y, 0, 1, colour, 0, 0, 0},
+                {right + origin_x, bottom + origin_y, 0, 1, colour, 0, 0, 0},
+                {left + origin_x, bottom + origin_y, 0, 1, colour, 0, 0, 0}};
+            renderer->draw(platform::Primitive::kFan, vertices, 4, state);
+        };
+        for (int scenario = 0; scenario < 3; ++scenario) {
+            const bool clipped = scenario != 0;
+            const bool inset = scenario == 2;
+            const int clip_left = inset ? 20 : 0;
+            int clip_top = clipped ? 17 : 0;
+            int clip_right = clipped ? 30 : width;
+            int clip_bottom = clipped ? 58 : height;
+            if (inset) {
+                clip_top = 16;
+                clip_right = 68;
+                clip_bottom = 60;
+            }
+            const float center_x = inset ? 22.5f : 3.5f;
+            for (bool read_before : {false, true}) {
+                auto background = [&] {
+                    renderer->begin_canvas_scene();
+                    if (inset) {
+                        // Red can only enter the inset by sampling the surrounding sentinel.
+                        renderer->clear(true, 255, 0, 255);
+                        rectangle(float(clip_left), float(clip_top), float(clip_right),
+                                  float(clip_bottom), 0xffa05000);
+                        for (int x = clip_left; x < clip_right; x += 4)
+                            rectangle(float(x), float(clip_top), float(x + 2), float(clip_bottom),
+                                      0xff50dc00);
+                        rectangle(float(clip_left), 23, 39, 46, 0xff30a000);
+                    } else {
+                        renderer->clear(true, 40, 80, 160);
+                        for (int x = 0; x < width; x += 4)
+                            rectangle(float(x), 0, float(x + 2), float(height), 0xff50dcf0);
+                        rectangle(0, 23, 39, 46, 0xff30a050);
+                    }
+                };
+                background();
+                std::vector<uint32_t> baseline, result;
+                int actual_width = 0, actual_height = 0;
+                require(renderer->read_back(&baseline, &actual_width, &actual_height) &&
+                            actual_width == width && actual_height == height,
+                        "Ripple baseline dimensions changed");
+                if (!read_before)
+                    background(); // exercise attachment layout as well as readback layout
+                sdlfe::MenuRipplePass pass;
+                pass.center_x = origin_x + center_x;
+                pass.center_y = origin_y + 36.5f;
+                pass.scale_x = scale_x;
+                pass.scale_y = scale_y;
+                pass.inner = clipped ? 0.f : 4.f;
+                pass.outer = 25;
+                pass.amplitude = 5;
+                pass.wavelength = 3;
+                pass.phase = .7f;
+                pass.has_clip = clipped;
+                pass.clip_left = origin_x + clip_left;
+                pass.clip_top = origin_y + clip_top;
+                pass.clip_right = origin_x + clip_right;
+                pass.clip_bottom = origin_y + clip_bottom;
+                renderer->apply_menu_ripple(pass);
+                require(renderer->read_back(&result, &actual_width, &actual_height) &&
+                            result.size() == baseline.size(),
+                        "Ripple readback failed");
+                require(renderer->quality_statistics().menu_ripple_passes == ++passes,
+                        "Ripple pass count lost a draw or resize");
+                auto smooth = [](double a, double b, double value) {
+                    const double t = std::clamp((value - a) / (b - a), 0.0, 1.0);
+                    return t * t * (3 - 2 * t);
+                };
+                unsigned displaced = 0, edge_samples = 0;
+                for (int y = 0; y < height; ++y) {
+                    for (int x = 0; x < width; ++x) {
+                        const size_t at = size_t(y) * width + x;
+                        const double dx = (x + .5 - center_x) / scale_x;
+                        const double dy = (y + .5 - 36.5) / scale_y;
+                        const double radius = std::hypot(dx, dy);
+                        const bool in_clip =
+                            x >= clip_left && x < clip_right && y >= clip_top && y < clip_bottom;
+                        if (inset && in_clip)
+                            require((result[at] & 255) == 0,
+                                    "Inset ripple sampled the red sentinel outside its clip");
+                        if (!in_clip || radius <= pass.inner || radius >= pass.outer ||
+                            radius <= 1e-4) {
+                            require(result[at] == baseline[at],
+                                    "Ripple changed a pixel outside its circular ring or clip");
+                            continue;
+                        }
+                        const double t = (radius - pass.inner) / (pass.outer - pass.inner);
+                        const double envelope = smooth(0, .25, t) * (1 - smooth(.75, 1, t));
+                        const double guard = pass.inner <= 0 ? smooth(0, 6, radius) : 1;
+                        const double wave = std::sin(radius / pass.wavelength + pass.phase) *
+                                            pass.amplitude * envelope * guard;
+                        const double sx = std::clamp(x + .5 + dx / radius * wave * scale_x,
+                                                     clip_left + .5, clip_right - .5) -
+                                          .5;
+                        const double sy = std::clamp(y + .5 + dy / radius * wave * scale_y,
+                                                     clip_top + .5, clip_bottom - .5) -
+                                          .5;
+                        const int x0 = int(std::floor(sx)), y0 = int(std::floor(sy));
+                        const int x1 = std::min(x0 + 1, width - 1),
+                                  y1 = std::min(y0 + 1, height - 1);
+                        const double fx = sx - x0, fy = sy - y0;
+                        for (unsigned shift : {0U, 8U, 16U}) {
+                            auto channel = [&](int px, int py) {
+                                return double((baseline[size_t(py) * width + px] >> shift) & 255);
+                            };
+                            const double expected =
+                                (channel(x0, y0) * (1 - fx) + channel(x1, y0) * fx) * (1 - fy) +
+                                (channel(x0, y1) * (1 - fx) + channel(x1, y1) * fx) * fy;
+                            require(std::abs(double((result[at] >> shift) & 255) - expected) <= 2,
+                                    "Ripple differed from smooth clamped bilinear displacement");
+                        }
+                        require((result[at] & 0x00ffffff) != 0,
+                                "Ripple sampled black border garbage");
+                        if (result[at] != baseline[at])
+                            ++displaced;
+                        if (x == clip_left)
+                            ++edge_samples;
+                    }
+                }
+                require(displaced > 20 && edge_samples > 0,
+                        "Ripple fixture did not exercise displacement and left edge");
+                // Later draws cover the rippled image, rather than becoming inputs to it.
+                const int draw_left = inset ? 21 : 1;
+                rectangle(float(draw_left), 30, float(draw_left + 6), 36, 0xffe03090);
+                require(renderer->read_back(&result, &actual_width, &actual_height) &&
+                            result[size_t(32) * width + draw_left + 2] == 0xffe03090,
+                        "Draw after ripple lost command order");
+            }
+        }
+    }
+    std::puts("GPU menu ripple: circular bounds, smooth displacement, left edge, clip, order and "
+              "resize passed");
+}
 
 void check_menu_background_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
   platform::MenuBackgroundImage image;
@@ -841,6 +997,23 @@ void check_terrain_surface_normals(SDL_Window *window,
   const auto tex =
       renderer->create_named_texture("ggter1", 128, 128, green_data.data(), 1);
   mw34::materials::clear_active_surface_key();
+  // Issue 461: admission only marks the mission preload pending; reading pages
+  // in texture arrival order re-read pages once a mission outgrew the limit.
+  require(renderer->asset_statistics().world_normal_decoded_bytes == 0 &&
+              renderer->asset_statistics().world_normal_loaded_pages == 0 &&
+              renderer->asset_statistics().world_normal_page_loads == 0,
+          "Authenticated texture admission read its world normal page before the mission preload");
+
+  // The post-load mission callback (empty MissionIdentity covers Instant Action
+  // as well) reads the matching page once and uploads its GPU normal texture
+  // before the first draw.
+  renderer->mission_changed(platform::MissionIdentity{});
+  require(renderer->asset_statistics().world_normal_decoded_bytes == 4 &&
+              renderer->asset_statistics().world_normal_peak_decoded_bytes == 4 &&
+              renderer->asset_statistics().world_normal_loaded_pages == 1 &&
+              renderer->asset_statistics().world_normal_page_loads == 1,
+          "Mission normal preload did not read the matching world normal page exactly once");
+  renderer->clear(true, 0, 0, 0);
 
   platform::DrawState state{};
   state.texture = tex;
@@ -858,6 +1031,10 @@ void check_terrain_surface_normals(SDL_Window *window,
               stats.world_normal_peak_decoded_bytes == 4 &&
               stats.world_normal_loaded_pages == 1,
           "World page decoded-byte/loaded-page accounting is incorrect");
+  // Issue 461: the first world scene and its draws reuse the normal uploaded by
+  // the mission preload instead of reading the page again.
+  require(stats.world_normal_page_loads == 1,
+          "First world scene or draw re-read an already-uploaded world normal page");
 
   // Test3: reject stale bindings on same-handle texture updates
   const auto base_draws = stats.normal_draws;
@@ -921,8 +1098,11 @@ void check_terrain_surface_normals(SDL_Window *window,
   state.texture =
       renderer->create_named_texture("ggter1", 128, 128, green_data.data(), 1);
   mw34::materials::clear_active_surface_key();
+  renderer->mission_changed(platform::MissionIdentity{});
+  renderer->clear(true, 0, 0, 0);
   quad(*renderer, 0, 64, .5f, 0xffffffff, state);
   require(renderer->read_back(&pixels, &width, &height) &&
+              pixels == normal_pixels &&
               renderer->asset_statistics().normal_draws > stats.normal_draws &&
               renderer->asset_statistics().world_normal_decoded_bytes == 4,
           "New-epoch texture did not reload its world normal page");
@@ -1788,6 +1968,10 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       std::filesystem::remove(folder / "textures.bin", error);
       std::filesystem::remove(folder / "normals.bin", error);
       std::filesystem::remove(folder / "materials.bin", error);
+      std::filesystem::remove(folder / "other_textures.bin", error);
+      std::filesystem::remove(folder / "other_normals.bin", error);
+      std::filesystem::remove(folder / "absent_normals.bin", error);
+      std::filesystem::remove(folder / "mixed_mesh.bin", error);
       std::filesystem::remove(folder, error);
     }
   } files{folder};
@@ -1796,13 +1980,15 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       << prepared_fixture::mesh(2, 0xffff0000);
   std::ofstream(folder / "textures.bin", std::ios::binary)
       << prepared_fixture::textures();
+  // Resource-selection checks use normals even when the draw control leaves
+  // normal lighting disabled.
+  std::ofstream(folder / "normals.bin", std::ios::binary)
+      << prepared_fixture::normals(0xffd980d9);
   sdlfe::CoreCriticalAssets options;
   options.textures = (folder / "textures.bin").u8string();
   options.models.push_back(
       {"authored", "0", (folder / "mesh.bin").u8string(), options.textures});
   if (materials) {
-    std::ofstream(folder / "normals.bin", std::ios::binary)
-        << prepared_fixture::normals(0xffd980d9);
     options.normals.push_back(
         {"authored", "0", (folder / "normals.bin").u8string()});
     options.lighting = "normal";
@@ -1829,6 +2015,98 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     std::ofstream(path, std::ios::binary)
         .write(metadata.data(), metadata.size());
   }
+  {
+    std::ofstream(folder / "other_textures.bin", std::ios::binary)
+        << prepared_fixture::textures();
+    std::ofstream(folder / "other_normals.bin", std::ios::binary)
+        << prepared_fixture::normals(0xffd980d9);
+    std::ofstream(folder / "absent_normals.bin", std::ios::binary)
+        << prepared_fixture::normals(0, true);
+    std::ofstream(folder / "mixed_mesh.bin", std::ios::binary)
+        << prepared_fixture::build_valid_v4_mesh(
+               "ltoe01", "control", "panel", .5, .2, -.1, "", true);
+    sdlfe::CoreCriticalAssets selection_options;
+    selection_options.lighting = "normal";
+    selection_options.models.push_back(
+        {"authored", "0", (folder / "mesh.bin").u8string(),
+         (folder / "textures.bin").u8string()});
+    selection_options.models.push_back(
+        {"other", "1", (folder / "mesh.bin").u8string(),
+         (folder / "other_textures.bin").u8string()});
+    selection_options.models.push_back(
+        {"nonormal", "0", (folder / "mesh.bin").u8string(),
+         (folder / "textures.bin").u8string()});
+    selection_options.normals.push_back(
+        {"authored", "0", (folder / "normals.bin").u8string()});
+    selection_options.normals.push_back(
+        {"other", "1", (folder / "other_normals.bin").u8string()});
+    selection_options.normals.push_back(
+        {"nonormal", "0", (folder / "absent_normals.bin").u8string()});
+
+    selection_options.models.push_back(
+        {"mixed", "0", (folder / "mixed_mesh.bin").u8string(),
+         (folder / "textures.bin").u8string()});
+    selection_options.normals.push_back(
+        {"mixed", "0", (folder / "normals.bin").u8string()});
+
+    const cc_mw3_re::PreparedModels selection_models(selection_options);
+    const auto unmatched = selection_models.resources_for_assets(
+        {"", "mech_unmatched.flt", "building_tower.flt"});
+    require(unmatched.matched_source_assets == 0 &&
+                unmatched.textures.empty() && unmatched.normals.empty() &&
+                unmatched.rigid_batches.empty(),
+            "Unmatched source assets selected prepared texture resources");
+
+    const auto authored_exact =
+        selection_models.resources_for_assets({"mech_authored.flt"});
+    require(authored_exact.matched_source_assets == 1 &&
+                authored_exact.textures.size() == 1 &&
+                authored_exact.normals.size() == 1 &&
+                authored_exact.textures[0] != nullptr &&
+                authored_exact.normals[0] != nullptr &&
+                authored_exact.rigid_batches.size() == 1,
+            "Exact prepared source asset did not select expected texture and "
+            "normal pointers");
+
+    // Repeated source asset names and cross-LOD fallback to the same selected
+    // model must deduplicate both model identity and image pointers.
+    const auto authored_deduped = selection_models.resources_for_assets(
+        {"mech_authored.flt", "mech_authored.flt", "mech_authored_1.flt",
+         "mech_unmatched.flt"});
+    require(authored_deduped.matched_source_assets == 2 &&
+                authored_deduped.textures == authored_exact.textures &&
+                authored_deduped.normals == authored_exact.normals &&
+                authored_deduped.rigid_batches == authored_exact.rigid_batches,
+            "Repeated or cross-LOD fallback source assets duplicated prepared "
+            "resource pointers");
+
+    // Mixed-bone geometry stays dynamic while authored images remain selectable.
+    const auto mixed_resources =
+        selection_models.resources_for_assets({"mech_mixed.flt"});
+    require(mixed_resources.matched_source_assets == 1 &&
+                mixed_resources.rigid_batches.empty() &&
+                mixed_resources.textures.size() == 1 &&
+                mixed_resources.normals.size() == 1,
+            "Mixed-bone geometry warmup changed authored image selection");
+
+    const auto other_fallback =
+        selection_models.resources_for_assets({"mech_other.flt"});
+    require(other_fallback.matched_source_assets == 1 &&
+                other_fallback.textures.size() == 1 &&
+                other_fallback.normals.size() == 1 &&
+                other_fallback.textures[0] != authored_exact.textures[0] &&
+                other_fallback.normals[0] != authored_exact.normals[0],
+            "Distance-to-close LOD fallback did not select the other model's "
+            "distinct resource pointers");
+
+    // Explicit no_normal bindings must not select a normal image pointer.
+    const auto absent_normal =
+        selection_models.resources_for_assets({"mech_nonormal.flt"});
+    require(absent_normal.matched_source_assets == 1 &&
+                absent_normal.textures.size() == 1 &&
+                absent_normal.normals.empty(),
+            "Explicit no_normal binding selected a prepared normal resource");
+  }
   require(SDL_SetWindowSize(window, 64, 64) && SDL_SyncWindow(window),
           SDL_GetError());
   std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> root(
@@ -1847,16 +2125,84 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   identity->nodes = {{"actor", 1}, {"control", 1}, {"panel", 1}};
   root->source_asset = control->source_asset = panel->source_asset = identity;
   root->source_asset_root = true;
+  // A valid native source makes accidental warming of the replaced mesh visible.
+  float source_positions[]{-1, -1, 2, 1, -1, 2, 0, 1, 2};
+  std::uint32_t source_indices[]{2, 1, 0};
+  zmod::Material source_material{};
+  source_material.alpha = 255;
+  zmod::Polygon source_polygon{};
+  source_polygon.flags = 3;
+  source_polygon.vertex_indices = source_indices;
+  source_polygon.material = &source_material;
   zmod::Model source_model{};
-  const uint32_t source_count = 3;
+  source_model.vertices = source_positions;
+  source_model.polygons = &source_polygon;
+  const uint32_t source_count = 3, source_polygon_count = 1;
   std::memcpy(source_model.header + 0x14, &source_count, sizeof source_count);
+  std::memcpy(source_model.header + 0x10, &source_polygon_count,
+              sizeof source_polygon_count);
   panel->model = &source_model;
   panel->source_model_vertices = source_count;
   struct ModelPointer {
     zcls::Node *node;
     ~ModelPointer() { node->model = nullptr; }
   } model_pointer{panel};
+  {
+    auto warmup_quality = quality;
+    warmup_quality.anisotropy = "16";
+    auto warmup_renderer =
+        make_check_renderer(window, backend, warmup_quality, options);
+    const auto mips_before = warmup_renderer->quality_statistics().mip_levels;
+    warmup_renderer->mission_changed(platform::MissionIdentity{});
+    require(warmup_renderer->quality_statistics().mip_levels > mips_before,
+            "Prepared albedo was not preloaded or mip-generated at mission boundary");
+
+    // Verify late native source admission after mission boundary: create a 2x2
+    // RGBA native texture while a nonzero unmatched SurfaceKey is active.
+    // Must remain CPU-cold until begin_scene triggers scene-boundary warmup.
+    const mw34::materials::SurfaceKey late_native_surface_key{2, 2, 1,
+                                                              0x11223344ULL};
+    mw34::materials::set_active_surface_key(late_native_surface_key);
+    const uint8_t late_native_rgba[16] = {
+        255, 0, 0, 255,   0, 255, 0, 255,
+        0, 0, 255, 255,   255, 255, 0, 255};
+    const auto late_native_handle =
+        warmup_renderer->create_texture(2, 2, late_native_rgba, 1);
+    mw34::materials::clear_active_surface_key();
+
+    const auto mip_levels_after_creation =
+        warmup_renderer->quality_statistics().mip_levels;
+    warmup_renderer->begin_scene();
+    require(warmup_renderer->quality_statistics().mip_levels ==
+                mip_levels_after_creation,
+            "Unreferenced late native albedo consumed preload VRAM");
+    warmup_renderer->end_scene();
+    const auto mip_levels_after_warmup =
+        warmup_renderer->quality_statistics().mip_levels;
+    mw34::materials::set_active_surface_key(late_native_surface_key);
+    warmup_renderer->update_texture(late_native_handle, 2, 2, late_native_rgba);
+    mw34::materials::clear_active_surface_key();
+    warmup_renderer->begin_scene();
+    require(warmup_renderer->quality_statistics().mip_levels ==
+                mip_levels_after_warmup,
+            "Runtime texture update repeated bulk mission preload");
+    platform::DrawState late_native_state{};
+    late_native_state.texture = late_native_handle;
+    quad(*warmup_renderer, 0, 64, .5f, 0xffffffff, late_native_state);
+    std::vector<uint32_t> late_native_pixels;
+    int late_native_width = 0, late_native_height = 0;
+    require(warmup_renderer->read_back(&late_native_pixels, &late_native_width,
+                                     &late_native_height) &&
+                warmup_renderer->quality_statistics().mip_levels >
+                    mip_levels_after_warmup,
+            "Runtime texture update did not upload through its normal draw");
+    warmup_renderer->end_scene();
+    warmup_renderer->release_texture(late_native_handle);
+  }
   auto renderer = make_check_renderer(window, backend, quality, options);
+  // Preload live-node prepared resources at the mission boundary before the
+  // first draw (covering both normal-disabled and normal-enabled runs).
+  renderer->mission_changed(platform::MissionIdentity{});
   struct RenderBinding {
     platform::Render3D *previous = zvid::render3d();
     ~RenderBinding() { zvid::set_render3d(previous); }
@@ -1916,7 +2262,863 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
             "Prepared model did not render at the output extent");
     return pixels;
   };
+  {
+    // Load-time upload must be reused by the first real prepared draw.
+    auto warmed_options = options;
+    warmed_options.geometry = "gpu";
+    auto warmed_renderer =
+        make_check_renderer(window, backend, quality, warmed_options);
+    warmed_renderer->set_viewport(0, 0, 64, 64);
+    // Leave a frame queued when the mission loads. With --render-thread its
+    // present packet is still on the worker, so the load-time upload has to wait
+    // for it instead of using the shared Vulkan objects at the same time. The
+    // scene stays empty because strict GPU geometry rejects CPU 3D draws.
+    warmed_renderer->begin_scene();
+    warmed_renderer->end_scene();
+    warmed_renderer->mission_changed({});
+    require(!source_model.render_geometry,
+            "Prepared-owned native geometry was warmed unnecessarily");
+    require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+            "First warmup should upload geometry");
+    warmed_renderer->begin_scene();
+    warmed_renderer->end_scene();
+    require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+            "Late warmup should not upload geometry again");
+    const auto warmed_pixels = frame(warmed_renderer.get(), true, true);
+    require(!warmed_pixels.empty(), "Warmed frame should produce pixels");
+    require(warmed_renderer->asset_statistics().gpu_model_draws > 0,
+            "Warmed frame should have GPU model draws");
+    require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+            "First real draw should reuse warm upload");
+    // Tearing the scene down clears the first-world warmup. If it stayed armed,
+    // the next scene would upload the old mission's geometry again right after
+    // its buffers were retired.
+    warmed_renderer->reset_scene_resources();
+    warmed_renderer->begin_scene();
+    warmed_renderer->end_scene();
+    require(warmed_renderer->asset_statistics().geometry_uploads == 1,
+            "Scene reset left the first-world preload armed");
+  }
+  {
+    // A selected skin replaces the primary albedos at draw time. Its textures are
+    // warmed at mission load as well, so the first skinned draw uploads nothing.
+    // Index 0 is the control: it stages only the primary set. The fixture
+    // images are too small for mip counts to show a missed upload, so the
+    // staged-byte comparison is what detects an unwarmed skin.
+    std::uint64_t primary_staged_bytes = 0;
+    auto skin_options = options;
+    skin_options.geometry = "gpu";
+    skin_options.skins.push_back({"authored", "0", options.textures, 1});
+    struct SkinIndex {
+      zcls::Node *node;
+      ~SkinIndex() { node->prepared_skin_index = 0; }
+    } skin_index{panel};
+    for (const int32_t index : {0, 1}) {
+      panel->prepared_skin_index = index;
+      auto skinned = make_check_renderer(window, backend, quality, skin_options);
+      skinned->set_viewport(0, 0, 64, 64);
+      skinned->mission_changed({});
+      const auto staged_bytes =
+          cc_mw3_re::testing::preload_test_state(*skinned).prepared_staged_bytes;
+      if (index == 0)
+        primary_staged_bytes = staged_bytes;
+      else
+        require(staged_bytes > primary_staged_bytes,
+                "Selected skin textures were not staged at mission load");
+      const auto loaded_mips = skinned->quality_statistics().mip_levels;
+      require(!frame(skinned.get(), true, true).empty(), "Skinned frame produced no pixels");
+      require(skinned->quality_statistics().mip_levels == loaded_mips,
+              index ? "First skinned draw uploaded textures again"
+                    : "First primary draw uploaded textures again");
+    }
+  }
   const auto first = frame();
+  {
+    using namespace cc_mw3_re::testing;
+    using mw34::vkscene::PreloadStopReason;
+    constexpr std::uint64_t gib = 1024ULL * 1024ULL * 1024ULL;
+    const auto exact = mw34::vkscene::evaluate_preload_budget(8 * gib, 6 * gib - 256, 256);
+    require(exact.admitted && exact.headroom_bytes == 2 * gib &&
+                !mw34::vkscene::evaluate_preload_budget(8 * gib, 6 * gib - 256, 257).admitted &&
+                !mw34::vkscene::evaluate_preload_budget(8 * gib, ~std::uint64_t{}, 1).admitted &&
+                !mw34::vkscene::evaluate_preload_budget(gib, 0, 1).admitted,
+            "Preload budget boundary, minimum reserve or overflow protection changed");
+
+    // Inspect the backend before and after the fence; completed frontend
+    // mission calls alone cannot expose prematurely published cache state.
+    {
+      using namespace mw34::vkscene;
+      ModelGeometry geometry;
+      geometry.key = 0x4241544348000001ULL;
+      geometry.hash = 1;
+      geometry.vertices.resize(3);
+      const auto texture = [](std::uint64_t key) {
+        return TextureRef{key, 1, 2, 2, TexFormat::rgba8888, {},
+                          {0xff0000ff, 0xff00ff00, 0xffff0000, 0xffffffff}};
+      };
+      Renderer mixed(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
+      mixed.set_preload_batch_cap_for_test(256);
+      mixed.begin_preload();
+      require(mixed.preload_model_geometry(geometry) &&
+                  mixed.preload_texture(texture(11)) && mixed.preload_texture(texture(12)) &&
+                  mixed.preload_texture(texture(13)) && mixed.preload_texture(texture(11)),
+              "Mixed preload batch rejected a small resource");
+      require(mixed.preload_pending_count() == 4 && mixed.preload_batch_submissions() == 0 &&
+                  mixed.uploads == 0 && mixed.model_uploads == 0 &&
+                  mixed.mip_levels_uploaded == 0 && !mixed.model_uploaded(geometry.key) &&
+                  !mixed.texture_resident(11) && !mixed.texture_resident(12),
+              "Queued preload work published completion before its batch fence");
+      mixed.finalize_preload();
+      mixed.end_preload();
+      const auto mixed_image_memory = mixed.texture_memory_for_test(11);
+      const auto mixed_model_memory = mixed.model_memory_for_test(geometry.key);
+      require(mixed_image_memory[3] == 64 * 1024 * 1024 &&
+                  mixed_model_memory[3] == 64 * 1024 * 1024 &&
+                  mixed_model_memory[0] % mixed_model_memory[2] == 0 &&
+                  mixed.model_texture_memory_separate_for_test(geometry.key, 11) &&
+                  mixed.preload_memory_block_count() == 2 &&
+                  mixed.preload_allocation_attempts() == 3,
+              "Mixed preload did not share staging and use separate image/linear memory blocks");
+      require(mixed.preload_batch_submissions() == 1 && mixed.preload_pending_count() == 0 &&
+                  mixed.preload_peak_pending() == 4 && mixed.preload_peak_bytes() == 144 &&
+                  mixed.uploads == 3 && mixed.model_uploads == 1 &&
+                  mixed.mip_levels_uploaded == 3 && mixed.model_uploaded(geometry.key) &&
+                  mixed.texture_resident(11) && mixed.texture_resident(12) &&
+                  mixed.texture_resident(13),
+              "Many geometry and texture uploads did not complete in one real submission");
+      mixed.begin_preload();
+      require(mixed.preload_model_geometry(geometry) && mixed.preload_texture(texture(11)),
+              "Completed immutable resources were not reusable");
+      mixed.finalize_preload();
+      mixed.end_preload();
+      require(mixed.preload_batch_submissions() == 1 && mixed.uploads == 3 &&
+                  mixed.model_uploads == 1,
+              "Resident preload resources repeated an upload or empty submission");
+
+      Renderer pooled;
+      pooled.set_preload_batch_cap_for_test(256);
+      pooled.begin_preload();
+      const auto initial_allocations = pooled.live_allocation_count();
+      require(pooled.preload_texture(texture(101)) && pooled.preload_texture(texture(102)) &&
+                  pooled.preload_texture(texture(103)),
+              "Could not queue pooled image fixtures");
+      const auto first_memory = pooled.texture_memory_for_test(101);
+      const auto second_memory = pooled.texture_memory_for_test(102);
+      const auto third_memory = pooled.texture_memory_for_test(103);
+      require(first_memory[3] == 64 * 1024 * 1024 &&
+                  pooled.texture_memory_shared_for_test(101, 102) &&
+                  pooled.texture_memory_shared_for_test(101, 103) &&
+                  first_memory[0] % first_memory[2] == 0 &&
+                  second_memory[0] % second_memory[2] == 0 &&
+                  third_memory[0] % third_memory[2] == 0 &&
+                  second_memory[0] >= first_memory[0] + first_memory[1] &&
+                  third_memory[0] >= second_memory[0] + second_memory[1] &&
+                  third_memory[0] + third_memory[1] <= third_memory[3] &&
+                  pooled.preload_allocation_attempts() == 2 &&
+                  // Shared staging replaces init's existing 8-byte allocation;
+                  // only the new image block increases the live allocation count.
+                  pooled.live_allocation_count() == initial_allocations + 1,
+              "Pooled images overlapped, lost alignment or repeated native allocations");
+      pooled.finalize_preload();
+      pooled.end_preload();
+      const auto bytes_with_block = pooled.tracked_device_local_bytes();
+      const auto allocations_with_block = pooled.live_allocation_count();
+      pooled.discard_texture_for_test(101);
+      require(pooled.tracked_device_local_bytes() == bytes_with_block &&
+                  pooled.live_allocation_count() == allocations_with_block &&
+                  pooled.preload_memory_block_count() == 1,
+              "Releasing a pooled slice freed memory still owned by other textures");
+      pooled.begin_preload();
+      require(pooled.preload_texture(texture(104)), "Could not reuse a live image block tail");
+      const auto fourth_memory = pooled.texture_memory_for_test(104);
+      require(fourth_memory[0] >= third_memory[0] + third_memory[1],
+              "A pooled allocation reused a released slice in a still-live block");
+      pooled.finalize_preload();
+      pooled.end_preload();
+      pooled.discard_texture_for_test(102);
+      pooled.discard_texture_for_test(103);
+      require(pooled.tracked_device_local_bytes() == bytes_with_block,
+              "A shared block was freed before its final texture release");
+      pooled.discard_texture_for_test(104);
+      require(pooled.preload_memory_block_count() == 0 &&
+                  pooled.tracked_device_local_bytes() + first_memory[3] == bytes_with_block &&
+                  pooled.live_allocation_count() + 1 == allocations_with_block,
+              "Final pooled texture release did not free and untrack the complete block");
+
+      // #496: freeing old textures during play releases a shared block only
+      // whole; freeing part of one would return no memory.
+      Renderer shared_block;
+      shared_block.set_preload_batch_cap_for_test(256);
+      shared_block.begin_preload();
+      require(shared_block.preload_texture(texture(121)) &&
+                  shared_block.preload_texture(texture(122)),
+              "Could not queue the shared-block freeing fixture");
+      shared_block.finalize_preload();
+      shared_block.end_preload();
+      require(shared_block.texture_memory_shared_for_test(121, 122) &&
+                  shared_block.preload_memory_block_count() == 1,
+              "Shared-block freeing fixture did not share one block");
+      shared_block.advance_render_frames_for_test(301);
+      shared_block.mark_texture_used_for_test(122);
+      shared_block.free_unused_textures_for_test(300);
+      require(shared_block.texture_resident(121) && shared_block.texture_resident(122) &&
+                  shared_block.preload_memory_block_count() == 1 &&
+                  !shared_block.texture_awaiting_pixels(121),
+              "An old texture was freed from a block another texture still uses");
+      shared_block.advance_render_frames_for_test(301);
+      shared_block.free_unused_textures_for_test(300);
+      require(!shared_block.texture_resident(121) && !shared_block.texture_resident(122) &&
+                  shared_block.preload_memory_block_count() == 0 &&
+                  shared_block.texture_awaiting_pixels(121) &&
+                  shared_block.texture_awaiting_pixels(122),
+              "A shared block whose textures were all old was not freed whole");
+
+      // #496: a retained shadow caster keeps a pointer to its texture across
+      // frames; freeing the texture must drop the caster from both caster lists.
+      Renderer caster_texture;
+      caster_texture.begin_preload();
+      require(caster_texture.preload_texture(texture(131)),
+              "Could not queue the shadow caster fixture texture");
+      caster_texture.finalize_preload();
+      caster_texture.end_preload();
+      caster_texture.plant_fixture_caster_for_test(131);
+      require(caster_texture.fixture_casters_using_texture_for_test(131) == 2,
+              "Shadow caster fixture was not planted in both lists");
+      caster_texture.advance_render_frames_for_test(301);
+      caster_texture.free_unused_textures_for_test(300);
+      require(!caster_texture.texture_resident(131) &&
+                  caster_texture.fixture_casters_using_texture_for_test(131) == 0,
+              "A freed texture left a shadow caster pointing at it");
+
+      // #496: the same whole-block rule for preloaded models.
+      Renderer shared_models(Renderer::ColorTarget::rgba8, {}, {1, 1, 2, false}, true);
+      auto first_model = geometry, second_model = geometry;
+      first_model.key = 0x4960000000000001ULL;
+      second_model.key = 0x4960000000000002ULL;
+      shared_models.begin_preload();
+      require(shared_models.preload_model_geometry(first_model) &&
+                  shared_models.preload_model_geometry(second_model),
+              "Could not queue the shared-block model fixture");
+      shared_models.finalize_preload();
+      shared_models.end_preload();
+      require(shared_models.preload_memory_block_count() == 1,
+              "Shared-block model fixture did not share one block");
+      shared_models.advance_render_frames_for_test(301);
+      shared_models.mark_model_used_for_test(second_model.key);
+      shared_models.free_unused_model_buffers_for_test(300);
+      require(shared_models.model_uploaded(first_model.key) &&
+                  shared_models.model_uploaded(second_model.key),
+              "An old model was freed from a block another model still uses");
+      shared_models.advance_render_frames_for_test(301);
+      shared_models.free_unused_model_buffers_for_test(300);
+      require(!shared_models.model_uploaded(first_model.key) &&
+                  !shared_models.model_uploaded(second_model.key) &&
+                  shared_models.preload_memory_block_count() == 0,
+              "A shared block whose models were all old was not freed whole");
+
+      // Size the test block from the actual driver requirements, rather than
+      // assuming an image has a fixed allocation size or alignment on all GPUs.
+      const auto stride = ((first_memory[1] + first_memory[2] - 1) / first_memory[2]) * first_memory[2];
+      require(stride && stride * 2 <= 64 * 1024 * 1024,
+              "Small image requirements exceed the authored pool fixture bound");
+      Renderer crossing;
+      crossing.set_preload_batch_cap_for_test(256);
+      crossing.set_preload_memory_block_cap_for_test(stride * 2);
+      crossing.begin_preload();
+      require(crossing.preload_texture(texture(111)) && crossing.preload_texture(texture(112)) &&
+                  crossing.preload_texture(texture(113)) &&
+                  crossing.texture_memory_shared_for_test(111, 112) &&
+                  !crossing.texture_memory_shared_for_test(111, 113) &&
+                  crossing.preload_memory_block_count() == 2 &&
+                  crossing.preload_allocation_attempts() == 3,
+              "Crossing a memory block bound did not allocate a separate bounded block");
+      crossing.finalize_preload();
+      crossing.end_preload();
+      for (const auto key : {111ULL, 112ULL, 113ULL})
+        crossing.discard_texture_for_test(key);
+      require(crossing.preload_memory_block_count() == 0,
+              "Cross-block texture teardown retained pooled device memory");
+
+      Renderer block_budget;
+      block_budget.set_preload_memory_block_cap_for_test(stride * 2);
+      block_budget.begin_preload();
+      const auto initial_block_budget_bytes = block_budget.tracked_device_local_bytes();
+      const auto initial_block_budget_allocations = block_budget.live_allocation_count();
+      PreloadFaultInjection block_cap{};
+      block_cap.override_budget = true;
+      block_cap.synthetic_heap_budget_bytes = kMinimumPreloadHeadroomBytes;
+      block_budget.set_preload_fault(block_cap);
+      const bool block_admitted = block_budget.preload_texture(texture(131));
+      // With no queued work, failed preload releases the initialization staging
+      // allocation. The denied image block must never enter the live ledger.
+      require(!block_admitted && block_budget.preload_stopped() &&
+                  block_budget.preload_stop_info().reason == PreloadStopReason::budget_denied &&
+                  block_budget.preload_stop_info().requested_bytes == stride * 2 &&
+                  block_budget.preload_memory_block_count() == 0 &&
+                  block_budget.live_allocation_count() + 1 == initial_block_budget_allocations &&
+                  block_budget.preload_allocation_attempts() == 1 &&
+                  block_budget.preload_allocation_successes() == 0 &&
+                  block_budget.tracked_device_local_bytes() == initial_block_budget_bytes &&
+                  !block_budget.partial_texture(131),
+              "Pool admission did not account for the complete block before allocating it");
+      block_budget.finalize_preload();
+      block_budget.end_preload();
+
+      for (const auto result : {VK_ERROR_OUT_OF_DEVICE_MEMORY, VK_ERROR_OUT_OF_HOST_MEMORY}) {
+        Renderer pool_oom;
+        pool_oom.set_preload_batch_cap_for_test(256);
+        pool_oom.set_preload_memory_block_cap_for_test(stride * 2);
+        pool_oom.begin_preload();
+        PreloadFaultInjection fault{};
+        fault.override_budget = true;
+        fault.synthetic_heap_budget_bytes = 16 * gib;
+        fault.fail_on_allocation_attempt = 3; // New block after two queued image slices.
+        fault.injected_result = result;
+        pool_oom.set_preload_fault(fault);
+        require(pool_oom.preload_texture(texture(121)) && pool_oom.preload_texture(texture(122)) &&
+                    !pool_oom.preload_texture(texture(123)) && pool_oom.preload_stopped() &&
+                    pool_oom.preload_memory_block_count() == 1 &&
+                    pool_oom.preload_pending_count() == 2 &&
+                    pool_oom.preload_allocation_attempts() == 3 &&
+                    pool_oom.preload_allocation_successes() == 2 &&
+                    !pool_oom.partial_texture(123) && !pool_oom.texture_resident(121),
+                "Pool-growth OOM damaged queued slices or published success before completion");
+        pool_oom.finalize_preload();
+        pool_oom.end_preload();
+        require(pool_oom.texture_resident(121) && pool_oom.texture_resident(122) &&
+                    !pool_oom.texture_resident(123) && pool_oom.uploads == 2 &&
+                    pool_oom.preload_batch_submissions() == 1,
+                "Pool-growth OOM did not safely complete earlier queued texture slices");
+        pool_oom.discard_texture_for_test(121);
+        pool_oom.discard_texture_for_test(122);
+        require(pool_oom.preload_memory_block_count() == 0,
+                "Pool-growth OOM left a shared memory block after final owner release");
+      }
+
+      Renderer limited;
+      limited.set_preload_batch_cap_for_test(32);
+      limited.set_preload_memory_block_cap_for_test(1);
+      limited.begin_preload();
+      require(limited.preload_texture(texture(21)) && limited.preload_texture(texture(22)) &&
+                  limited.preload_texture(texture(23)),
+              "Small batch cap rejected resources that fit individually");
+      require(limited.preload_batch_submissions() == 1 && limited.uploads == 2 &&
+                  limited.preload_pending_count() == 1 && limited.texture_resident(21) &&
+                  !limited.texture_resident(23),
+              "Crossing the batch byte cap did not flush only the earlier resources");
+      limited.finalize_preload();
+      limited.end_preload();
+      require(limited.preload_batch_submissions() == 2 && limited.uploads == 3 &&
+                  limited.preload_peak_bytes() <= 32 && limited.texture_staging_size() == 32 &&
+                  limited.preload_pending_count() == 0,
+              "Preload staging or queued payload exceeded the hard byte cap");
+      limited.begin_preload();
+      TextureRef oversized{24, 1, 4, 4, TexFormat::rgba8888, {},
+                           std::vector<std::uint32_t>(16, 0xffffffff)};
+      require(!limited.preload_texture(oversized) && limited.preload_stopped() &&
+                  !limited.partial_texture(24) && !limited.texture_resident(24) &&
+                  limited.preload_allocation_attempts() == 4,
+              "Oversized optional texture exceeded the cap or left a partial cache entry");
+      require(limited.preload_stop_info().reason == PreloadStopReason::oversized_upload &&
+                  limited.preload_stop_info().requested_bytes > 32,
+              "Oversized optional texture was not reported as an oversized upload");
+      limited.finalize_preload();
+      limited.end_preload();
+
+      for (const auto result : {VK_ERROR_OUT_OF_DEVICE_MEMORY, VK_ERROR_OUT_OF_HOST_MEMORY}) {
+        Renderer interrupted(Renderer::ColorTarget::rgba8, {}, {1, 1, 1, false}, true);
+        interrupted.set_preload_batch_cap_for_test(256);
+        // Force resource allocations to the dedicated path so this fixture
+        // injects native OOM after earlier resources were queued. Pool-growth
+        // OOM and shared-block lifetime are checked separately below.
+        interrupted.set_preload_memory_block_cap_for_test(1);
+        interrupted.begin_preload();
+        PreloadFaultInjection fault{};
+        fault.override_budget = true;
+        fault.synthetic_heap_budget_bytes = 16 * gib;
+        // Geometry local memory, shared staging and the first image succeed.
+        fault.fail_on_allocation_attempt = 4;
+        fault.injected_result = result;
+        interrupted.set_preload_fault(fault);
+        require(interrupted.preload_model_geometry(geometry) &&
+                    interrupted.preload_texture(texture(31)) &&
+                    interrupted.preload_pending_count() == 2 &&
+                    !interrupted.model_uploaded(geometry.key) && !interrupted.texture_resident(31),
+                "OOM fixture did not queue both resource kinds before failure");
+        require(!interrupted.preload_texture(texture(32)) && interrupted.preload_stopped() &&
+                    interrupted.preload_allocation_attempts() == 4 &&
+                    interrupted.preload_allocation_successes() == 3 &&
+                    interrupted.preload_pending_count() == 2 &&
+                    interrupted.preload_batch_submissions() == 0 &&
+                    interrupted.texture_staging_mapped() &&
+                    interrupted.texture_staging_size() == 256 &&
+                    !interrupted.partial_texture(32) && !interrupted.texture_resident(32) &&
+                    !interrupted.model_uploaded(geometry.key) && !interrupted.texture_resident(31),
+                "Midbatch OOM freed queued staging or published a failed upload");
+        interrupted.finalize_preload();
+        interrupted.end_preload();
+        require(interrupted.preload_batch_submissions() == 1 &&
+                    interrupted.preload_pending_count() == 0 && interrupted.uploads == 1 &&
+                    interrupted.model_uploads == 1 && interrupted.model_uploaded(geometry.key) &&
+                    interrupted.texture_resident(31) && !interrupted.texture_resident(32),
+                "Midbatch OOM did not safely complete earlier queued uploads");
+      }
+
+      Renderer abandoned;
+      abandoned.set_preload_batch_cap_for_test(32);
+      abandoned.begin_preload();
+      require(abandoned.preload_texture(texture(41)), "Could not queue abandonment fixture");
+      Scene empty_scene;
+      bool rejected_render = false;
+      try {
+        abandoned.render(empty_scene);
+      } catch (const std::runtime_error &) {
+        rejected_render = true;
+      }
+      require(rejected_render, "Rendering was allowed to reset an open preload command buffer");
+      abandoned.end_preload();
+      require(abandoned.preload_batch_submissions() == 0 &&
+                  abandoned.preload_pending_count() == 0 && !abandoned.partial_texture(41) &&
+                  !abandoned.texture_resident(41) && abandoned.uploads == 0,
+              "Noexcept cleanup submitted abandoned commands or leaked a success state");
+      abandoned.begin_preload();
+      require(abandoned.preload_texture(texture(41)), "Abandoned preload could not be retried");
+      abandoned.finalize_preload();
+      abandoned.end_preload();
+      require(abandoned.preload_batch_submissions() == 1 && abandoned.texture_resident(41),
+              "Retry did not reset abandoned preload recording state");
+    }
+
+    // Insert farther native resources before nearer ones, plus an unused CPU
+    // albedo. Selection must follow live player/proximity, not load/list order.
+    zmod::Model far_model = source_model, near_model = source_model;
+    zmod::Material far_material = source_material, near_material = source_material;
+    zmod::Polygon far_polygon = source_polygon, near_polygon = source_polygon;
+    far_polygon.material = &far_material;
+    near_polygon.material = &near_material;
+    far_model.polygons = &far_polygon;
+    near_model.polygons = &near_polygon;
+    std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> far_node(
+        zcls::object3d_create(), zcls::tree_destroy);
+    std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> near_node(
+        zcls::object3d_create(), zcls::tree_destroy);
+    require(far_node && near_node, "Could not create preload priority nodes");
+    struct ClearModels {
+      zcls::Node *far_node, *near_node;
+      ~ClearModels() { far_node->model = near_node->model = nullptr; }
+    } clear_models{far_node.get(), near_node.get()};
+    far_node->model = &far_model;
+    near_node->model = &near_model;
+    auto far_asset = std::make_shared<zcls::SourceAsset>();
+    auto near_asset = std::make_shared<zcls::SourceAsset>();
+    far_asset->name = "unmatched_far.flt";
+    near_asset->name = "unmatched_near.flt";
+    far_node->source_asset = far_asset;
+    near_node->source_asset = near_asset;
+    zcls::object3d_set_translation(far_node.get(), 100, 0, 0);
+    zcls::object3d_set_translation(near_node.get(), 10, 0, 0);
+    mech3::Mech player{};
+    player.target_node = root.get();
+    struct PlayerBinding {
+      mech3::Mech *previous_player = mech3::world().player;
+      mech3::Mech *previous_mission_player = mech3::world().mission_player;
+      ~PlayerBinding() {
+        mech3::world().player = previous_player;
+        mech3::world().mission_player = previous_mission_player;
+      }
+    } player_binding;
+    mech3::world().player = mech3::world().mission_player = &player;
+    const uint8_t native_pixels[16] = {0, 255, 0, 255, 0, 255, 0, 255,
+                                       0, 255, 0, 255, 0, 255, 0, 255};
+    zimg::TextureEntry far_texture{}, near_texture{};
+    zvid::D3DTexture far_surface{}, near_surface{};
+    far_texture.surface = &far_surface;
+    near_texture.surface = &near_surface;
+    far_material.flags = near_material.flags = 1;
+    far_material.texture = &far_texture;
+    near_material.texture = &near_texture;
+
+    // Match the recovery path's GPU submission and lighting. The fixture's
+    // earlier reference can use CPU geometry, and native albedos are lit.
+    auto recovery_options = options;
+    recovery_options.geometry = "partial";
+    auto recovery_control = make_check_renderer(window, backend, quality, recovery_options);
+    recovery_control->set_viewport(0, 0, 64, 64);
+    mw34::materials::set_active_surface_key({2, 2, 1, 0x11223344ULL});
+    const auto control_native_handle = recovery_control->create_texture(2, 2, native_pixels, 1);
+    mw34::materials::clear_active_surface_key();
+    recovery_control->mission_changed({});
+    const auto expected_recovered = frame(recovery_control.get(), true, true);
+    platform::DrawState control_native_state{};
+    control_native_state.texture = control_native_handle;
+    quad(*recovery_control, 0, 64, .1f, 0xffffffff, control_native_state);
+    std::vector<uint32_t> expected_native;
+    int control_width = 0, control_height = 0;
+    require(recovery_control->read_back(&expected_native, &control_width, &control_height) &&
+                control_width == 64 && control_height == 64 && !expected_native.empty(),
+            "Clean lazy draw control did not render at the fixture extent");
+
+    // Geometry local memory and shared staging are allocations 1 and 2.
+    // Image allocation 3 is prepared albedo; material runs also allocate its
+    // normal before native images. Failing the far native image retains the
+    // completed nearby image, regardless of that earlier allocation count.
+    for (const auto result : {VK_ERROR_OUT_OF_DEVICE_MEMORY, VK_ERROR_OUT_OF_HOST_MEMORY}) {
+      for (std::size_t attempt : {2U, 3U, 4U, 5U}) {
+        auto failure_options = options;
+        failure_options.geometry = "partial";
+        auto failure_renderer = make_check_renderer(window, backend, quality, failure_options);
+        set_preload_memory_block_cap(*failure_renderer, 1);
+        failure_renderer->set_viewport(0, 0, 64, 64);
+        mw34::materials::set_active_surface_key({2, 2, 1, 0x11223344ULL});
+        const auto unused = failure_renderer->create_texture(2, 2, native_pixels, 1);
+        far_surface.handle = failure_renderer->create_texture(2, 2, native_pixels, 1);
+        near_surface.handle = failure_renderer->create_texture(2, 2, native_pixels, 1);
+        mw34::materials::clear_active_surface_key();
+        mw34::vkscene::PreloadFaultInjection fault{};
+        fault.override_budget = true;
+        fault.synthetic_heap_budget_bytes = 16 * gib;
+        fault.fail_on_allocation_attempt = attempt;
+        fault.injected_result = result;
+        set_preload_fault_injection(*failure_renderer, fault);
+        failure_renderer->mission_changed({});
+        const auto stopped = preload_test_state(*failure_renderer);
+        const std::size_t nearby_native_attempt = materials ? 5U : 4U;
+        const bool nearby_native_completed = attempt > nearby_native_attempt;
+        const std::uint64_t expected_native_bytes =
+            nearby_native_completed ? sizeof(native_pixels) : 0;
+        require(stopped.last_preload_stopped && stopped.stop_log_lines == 1 &&
+                    stopped.preload_allocation_attempts == attempt &&
+                    stopped.preload_allocation_successes == attempt - 1 &&
+                    stopped.stop_info.reason == (result == VK_ERROR_OUT_OF_DEVICE_MEMORY
+                        ? PreloadStopReason::out_of_device_memory : PreloadStopReason::out_of_host_memory),
+                "Mid-preload allocation failure did not stop optional warming once");
+        require(!stopped.ordered_prepared_assets.empty() &&
+                    stopped.ordered_prepared_assets.front() == "mech_authored.flt" &&
+                    stopped.ordered_native_handles ==
+                        std::vector<int32_t>{near_surface.handle, far_surface.handle} &&
+                    stopped.native_staged_bytes == expected_native_bytes &&
+                    is_texture_gpu_resident(*failure_renderer, near_surface.handle) ==
+                        nearby_native_completed &&
+                    has_texture_receipt(*failure_renderer, near_surface.handle) ==
+                        nearby_native_completed &&
+                    !is_texture_gpu_resident(*failure_renderer, far_surface.handle) &&
+                    !has_texture_receipt(*failure_renderer, far_surface.handle) &&
+                    !is_texture_gpu_resident(*failure_renderer, unused) &&
+                    !has_texture_receipt(*failure_renderer, unused),
+                "Preload priority or exclusion of unreferenced native albedos changed");
+        require(!has_partial_model_buffer_entry(*failure_renderer, 0x4343000000000001ULL),
+                "Failed geometry allocation poisoned the immutable buffer cache");
+        if (stopped.failed_texture_handle >= 0) {
+          require(!has_partial_texture_cache_entry(*failure_renderer, stopped.failed_texture_handle) &&
+                      !is_texture_gpu_resident(*failure_renderer, stopped.failed_texture_handle) &&
+                      !has_texture_receipt(*failure_renderer, stopped.failed_texture_handle) &&
+                      shared_texture_staging_size(*failure_renderer) <= 64 * 1024 * 1024,
+                  "Failed texture/staging allocation leaked a cache entry or success receipt");
+        }
+        require(stopped.pending_count == 0 && stopped.peak_batch_bytes <= 64 * 1024 * 1024,
+                "Stopped preload left queued resources or exceeded its byte cap");
+        if (attempt >= 4) {
+          require(stopped.batch_submissions == 1 && stopped.peak_pending_count >= 2 &&
+                      stopped.pending_texture_receipt_observations > 0 &&
+                      stopped.premature_texture_receipts == 0 &&
+                      stopped.prepared_staged_bytes > 0 &&
+                      is_model_geometry_gpu_uploaded(*failure_renderer, 0x4343000000000001ULL),
+                  "Frontend OOM did not finalize earlier queued geometry and texture receipts");
+          require(!stopped.completed_texture_handles.empty(),
+                  "Earlier queued prepared texture lost its completed receipt");
+          for (const auto handle : stopped.completed_texture_handles)
+            require(has_texture_receipt(*failure_renderer, handle) &&
+                        is_texture_gpu_resident(*failure_renderer, handle),
+                    "Frontend published a receipt for an incomplete preload image");
+        }
+        failure_renderer->begin_scene();
+        failure_renderer->end_scene();
+        require(preload_test_state(*failure_renderer).preload_allocation_attempts == attempt &&
+                    preload_test_state(*failure_renderer).stop_log_lines == 1,
+                "First-world pass repeated a stopped mission preload");
+        const auto recovered = frame(failure_renderer.get(), true, true);
+        require(recovered == expected_recovered && failure_renderer->asset_statistics().geometry_uploads == 1,
+                "A real lazy draw failed after preload interruption or repeated warm geometry");
+        platform::DrawState native_state{};
+        native_state.texture = near_surface.handle;
+        quad(*failure_renderer, 0, 64, .1f, 0xffffffff, native_state);
+        std::vector<uint32_t> lazy_pixels;
+        int lazy_width = 0, lazy_height = 0;
+        require(failure_renderer->read_back(&lazy_pixels, &lazy_width, &lazy_height) &&
+                    is_texture_gpu_resident(*failure_renderer, near_surface.handle) &&
+                    lazy_width == control_width && lazy_height == control_height &&
+                    lazy_pixels == expected_native,
+                "Deferred native albedo did not upload lazily and draw after preload OOM");
+      }
+    }
+    auto capped = make_check_renderer(window, backend, quality, recovery_options);
+    capped->set_viewport(0, 0, 64, 64);
+    mw34::vkscene::PreloadFaultInjection cap{};
+    cap.override_budget = true;
+    cap.synthetic_heap_budget_bytes = mw34::vkscene::kMinimumPreloadHeadroomBytes;
+    set_preload_fault_injection(*capped, cap);
+    capped->mission_changed({});
+    const auto capped_state = preload_test_state(*capped);
+    require(capped_state.last_preload_stopped &&
+                capped_state.stop_info.reason == PreloadStopReason::budget_denied &&
+                capped_state.stop_info.heap_budget_bytes == capped_state.stop_info.headroom_bytes &&
+                capped_state.prepared_staged_bytes == 0 && capped_state.native_staged_bytes == 0,
+            "Actual preload allocations crossed the synthetic budget cap");
+    require(frame(capped.get(), true, true) == expected_recovered,
+            "Budget-denied resources did not render through the ordinary lazy path");
+
+    // #496: a model buffer that doesn't fit during play must not end the game.
+    // Without a mission preload the prepared model uploads lazily in render().
+    constexpr std::uint64_t play_model_key = 0x4343000000000001ULL;
+    auto play_model_fault = [&](std::size_t failures) {
+      auto renderer_with_fault = make_check_renderer(window, backend, quality, recovery_options);
+      renderer_with_fault->set_viewport(0, 0, 64, 64);
+      mw34::vkscene::PreloadFaultInjection fault{};
+      fault.fail_next_play_model_allocations = failures;
+      fault.injected_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+      set_preload_fault_injection(*renderer_with_fault, fault);
+      return renderer_with_fault;
+    };
+    {
+      // (a) One failure: old buffers are freed, the retry succeeds, the model draws.
+      auto retried = play_model_fault(1);
+      require(frame(retried.get(), true, true) == expected_recovered &&
+                  is_model_geometry_gpu_uploaded(*retried, play_model_key) &&
+                  video_memory_full_log_count(*retried) == 1,
+              "A play-time model allocation failure was not retried");
+    }
+    {
+      // (b) Two failures: the model is left out of this frame (draw and shadow)
+      // without an exception, isn't tried again for 30 render frames, then draws.
+      auto skipped = play_model_fault(2);
+      const auto without_model = frame(skipped.get(), true, true);
+      const auto failed_at = scene_render_frame(*skipped);
+      require(without_model != expected_recovered &&
+                  !is_model_geometry_gpu_uploaded(*skipped, play_model_key) &&
+                  !has_partial_model_buffer_entry(*skipped, play_model_key) &&
+                  video_memory_full_log_count(*skipped) == 1,
+              "A model that still didn't fit was not skipped cleanly");
+      require(frame(skipped.get(), true, true) == without_model &&
+                  !is_model_geometry_gpu_uploaded(*skipped, play_model_key),
+              "A skipped model was tried again before its back-off ended");
+      while (scene_render_frame(*skipped) + 1 < failed_at + 30)
+        frame(skipped.get(), true, true);
+      require(frame(skipped.get(), true, true) == expected_recovered &&
+                  is_model_geometry_gpu_uploaded(*skipped, play_model_key) &&
+                  video_memory_full_log_count(*skipped) == 1,
+              "A skipped model did not draw once its back-off ended");
+    }
+    {
+      // (c) Only models unused for more than the age limit are freed, and a
+      // freed model uploads again from its geometry the next time it is drawn.
+      auto aging = play_model_fault(0);
+      require(frame(aging.get(), true, true) == expected_recovered,
+              "Aging fixture did not draw its model");
+      const auto drawn_at = scene_render_frame(*aging);
+      auto render_without_model = [&](std::uint64_t until_frame) {
+        while (scene_render_frame(*aging) < until_frame) {
+          aging->clear(true, 0, 0, 0);
+          quad(*aging, 0, 64, .1f, 0xffffffff);
+          std::vector<uint32_t> ignored;
+          int ignored_width = 0, ignored_height = 0;
+          require(aging->read_back(&ignored, &ignored_width, &ignored_height),
+                  "Aging fixture frame did not render");
+        }
+      };
+      render_without_model(drawn_at + 300);
+      free_unused_model_buffers(*aging, 300);
+      require(is_model_geometry_gpu_uploaded(*aging, play_model_key),
+              "A model used within the age limit was freed");
+      render_without_model(drawn_at + 301);
+      free_unused_model_buffers(*aging, 300);
+      require(!is_model_geometry_gpu_uploaded(*aging, play_model_key),
+              "A model unused past the age limit was not freed");
+      require(frame(aging.get(), true, true) == expected_recovered &&
+                  is_model_geometry_gpu_uploaded(*aging, play_model_key),
+              "A freed model did not upload again when drawn");
+    }
+
+    // #496: a texture that doesn't fit during play must not end the game either.
+    auto play_texture_fault = [&](std::size_t texture_failures, std::size_t model_failures) {
+      auto renderer_with_fault = make_check_renderer(window, backend, quality, recovery_options);
+      renderer_with_fault->set_viewport(0, 0, 64, 64);
+      mw34::vkscene::PreloadFaultInjection fault{};
+      fault.fail_next_play_texture_allocations = texture_failures;
+      fault.fail_next_play_model_allocations = model_failures;
+      fault.injected_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+      set_preload_fault_injection(*renderer_with_fault, fault);
+      return renderer_with_fault;
+    };
+    auto draw_texture = [&](cc_mw3_re::VulkanFrameRenderer &target, int32_t handle) {
+      target.clear(true, 0, 0, 0);
+      platform::DrawState state{};
+      state.texture = handle;
+      quad(target, 0, 64, .1f, 0xffffffff, state);
+      std::vector<uint32_t> pixels;
+      int pixels_width = 0, pixels_height = 0;
+      require(target.read_back(&pixels, &pixels_width, &pixels_height) && pixels_width == 64 &&
+                  pixels_height == 64,
+              "Texture fault fixture did not render at the fixture extent");
+      return pixels;
+    };
+    // Untextured frames, to age a texture without drawing it.
+    auto age_to = [&](cc_mw3_re::VulkanFrameRenderer &target, std::uint64_t until_frame) {
+      while (scene_render_frame(target) < until_frame)
+        draw_texture(target, -1);
+    };
+    auto texture_control = play_texture_fault(0, 0);
+    const auto plain_texture = texture_control->create_texture(2, 2, native_pixels, 1);
+    const auto expected_texture = draw_texture(*texture_control, plain_texture);
+    const auto expected_white = draw_texture(*texture_control, -1);
+    require(expected_texture != expected_white,
+            "Texture fault fixture can't tell its texture from white");
+    // A renderer whose mission preload uploaded the nearby native albedo, so the
+    // frontend holds a receipt for it and stops sending its pixels.
+    auto preloaded_texture_renderer = [&](std::size_t model_failures) {
+      auto preloaded = play_texture_fault(0, model_failures);
+      mw34::materials::set_active_surface_key({2, 2, 1, 0x11223344ULL});
+      far_surface.handle = preloaded->create_texture(2, 2, native_pixels, 1);
+      near_surface.handle = preloaded->create_texture(2, 2, native_pixels, 1);
+      mw34::materials::clear_active_surface_key();
+      preloaded->mission_changed({});
+      require(has_texture_receipt(*preloaded, near_surface.handle) &&
+                  is_texture_gpu_resident(*preloaded, near_surface.handle),
+              "Texture fault fixture's preload left no receipt for the nearby albedo");
+      return preloaded;
+    };
+    {
+      // (d) One failure: old resources are freed, the retry succeeds, it draws.
+      auto retried = play_texture_fault(1, 0);
+      const auto handle = retried->create_texture(2, 2, native_pixels, 1);
+      require(draw_texture(*retried, handle) == expected_texture &&
+                  is_texture_gpu_resident(*retried, handle) &&
+                  video_memory_full_log_count(*retried) == 1,
+              "A play-time texture allocation failure was not retried");
+    }
+    {
+      // (e) Two failures: white without an exception, not tried again for 30
+      // render frames, then its pixels (asked for again if needed).
+      auto stand_in = play_texture_fault(2, 0);
+      const auto handle = stand_in->create_texture(2, 2, native_pixels, 1);
+      require(draw_texture(*stand_in, handle) == expected_white &&
+                  !is_texture_gpu_resident(*stand_in, handle) &&
+                  !has_partial_texture_cache_entry(*stand_in, handle) &&
+                  texture_awaiting_pixels(*stand_in, handle) &&
+                  video_memory_full_log_count(*stand_in) == 1,
+              "A texture that still didn't fit did not draw white cleanly");
+      const auto failed_at = scene_render_frame(*stand_in);
+      require(draw_texture(*stand_in, handle) == expected_white &&
+                  !is_texture_gpu_resident(*stand_in, handle),
+              "A texture was tried again before its back-off ended");
+      while (scene_render_frame(*stand_in) < failed_at + 30)
+        draw_texture(*stand_in, handle);
+      // The frame that ends the back-off may lack the pixels; the next brings them.
+      draw_texture(*stand_in, handle);
+      require(draw_texture(*stand_in, handle) == expected_texture &&
+                  is_texture_gpu_resident(*stand_in, handle) &&
+                  !texture_awaiting_pixels(*stand_in, handle),
+              "A texture that didn't fit did not draw once its pixels came back");
+    }
+    {
+      // (f) Only textures unused past the age limit are freed, and a freed one
+      // draws its pixels again on its next use.
+      auto aging = play_texture_fault(0, 0);
+      const auto handle = aging->create_texture(2, 2, native_pixels, 1);
+      require(draw_texture(*aging, handle) == expected_texture, "Aging texture did not draw");
+      const auto drawn_at = scene_render_frame(*aging);
+      age_to(*aging, drawn_at + 300);
+      free_unused_textures(*aging, 300);
+      require(is_texture_gpu_resident(*aging, handle),
+              "A texture used within the age limit was freed");
+      age_to(*aging, drawn_at + 301);
+      free_unused_textures(*aging, 300);
+      require(!is_texture_gpu_resident(*aging, handle),
+              "A texture unused past the age limit was not freed");
+      require(draw_texture(*aging, handle) == expected_texture &&
+                  is_texture_gpu_resident(*aging, handle),
+              "A freed texture did not draw its pixels again");
+    }
+    {
+      // (g) A freed texture the frontend holds a receipt for gets its pixels
+      // sent again: white only for frames already queued, then its pixels.
+      auto preloaded = preloaded_texture_renderer(0);
+      require(draw_texture(*preloaded, near_surface.handle) == expected_texture,
+              "Preloaded texture did not draw");
+      age_to(*preloaded, scene_render_frame(*preloaded) + 301);
+      free_unused_textures(*preloaded, 300);
+      require(!is_texture_gpu_resident(*preloaded, near_surface.handle),
+              "Preloaded texture was not freed");
+      const auto first = draw_texture(*preloaded, near_surface.handle);
+      require(first == expected_texture || first == expected_white,
+              "A freed preloaded texture drew neither its pixels nor white");
+      require(draw_texture(*preloaded, near_surface.handle) == expected_texture &&
+                  is_texture_gpu_resident(*preloaded, near_surface.handle) &&
+                  !texture_awaiting_pixels(*preloaded, near_surface.handle),
+              "A freed preloaded texture did not draw its pixels again");
+      require(has_texture_receipt(*preloaded, near_surface.handle),
+              "A re-sent texture's receipt was not restored, so its pixels are copied every frame");
+    }
+    {
+      // #496: a wholly clipped draw can restore a receipt without sending pixels.
+      sdlfe::CoreCriticalAssets clipped_options;
+      clipped_options.models = options.models;
+      auto clipped = make_check_renderer(window, backend, quality, clipped_options);
+      clipped->set_viewport(0, 0, 64, 64);
+      frame(clipped.get());
+      const auto handles = preload_test_state(*clipped).completed_texture_handles;
+      require(handles.size() == 1, "Clipped draw fixture did not bind exactly one texture");
+      const auto handle = handles.front();
+      const auto expected_clipped_texture = draw_texture(*clipped, handle);
+      require(expected_clipped_texture != expected_white,
+              "Clipped draw fixture can't tell its texture from white");
+
+      age_to(*clipped, scene_render_frame(*clipped) + 301);
+      free_unused_textures(*clipped, 300);
+      require(!is_texture_gpu_resident(*clipped, handle) &&
+                  texture_awaiting_pixels(*clipped, handle),
+              "Clipped draw fixture's texture was not freed");
+      const auto before_clip = scene_render_frame(*clipped);
+      auto clipped_context = context;
+      clipped_context.clip_near = context.far_z / 2;
+      clipped->begin_model_draw(clipped_context);
+      clipped->end_model_draw();
+      clipped->flush();
+      require(scene_render_frame(*clipped) == before_clip &&
+                  has_texture_receipt(*clipped, handle) &&
+                  !is_texture_gpu_resident(*clipped, handle),
+              "Clipped draw did not leave a stale texture receipt");
+
+      bool recovered = false;
+      for (int attempt = 0; attempt < 3 && !recovered; ++attempt)
+        recovered = draw_texture(*clipped, handle) == expected_clipped_texture &&
+                    is_texture_gpu_resident(*clipped, handle);
+      require(recovered, "Texture stayed white after a clipped draw left a stale receipt");
+    }
+    {
+      // (h) A model failure never frees a texture the same frame draws, however
+      // old: this one has a receipt, so a freed copy couldn't come back in-frame.
+      auto preloaded = preloaded_texture_renderer(0);
+      require(draw_texture(*preloaded, near_surface.handle) == expected_texture,
+              "Preloaded texture did not draw");
+      age_to(*preloaded, scene_render_frame(*preloaded) + 301);
+      mw34::vkscene::PreloadFaultInjection model_fault{};
+      model_fault.fail_next_play_model_allocations = 1;
+      model_fault.injected_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+      free_unused_model_buffers(*preloaded, 0);
+      set_preload_fault_injection(*preloaded, model_fault);
+      frame(preloaded.get(), false, true);
+      platform::DrawState state{};
+      state.texture = near_surface.handle;
+      quad(*preloaded, 0, 64, .1f, 0xffffffff, state);
+      std::vector<uint32_t> ignored;
+      int ignored_width = 0, ignored_height = 0;
+      require(preloaded->read_back(&ignored, &ignored_width, &ignored_height) &&
+                  video_memory_full_log_count(*preloaded) == 1 &&
+                  is_texture_gpu_resident(*preloaded, near_surface.handle) &&
+                  !texture_awaiting_pixels(*preloaded, near_surface.handle),
+              "A model failure freed a texture drawn in the same frame");
+    }
+  }
   require((first[20 * 64 + 23] & 0xff00) != 0 &&
               (first[20 * 64 + 23] & 255) == 0,
           "Prepared geometry/materials were not drawn or source geometry drew "
@@ -2389,6 +3591,35 @@ void check_campaign_lighting_and_policy() {
               c1m1_lift.sdr_extra_shadow_lift == 0.f &&
               base.sdr_extra_shadow_lift == 0.f,
           "C1M2 SDR tuning leaked into other missions");
+  const std::pair<std::string_view, float> sdr_missions[] = {
+      {"c1m2", 1.4f},      {"c1m3", 11.023497f}, {"c2m2", 1.4f}, {"c2m4", 1.4f},
+      {"c3m5", 6.025114f}, {"c3m6", 1.4f},       {"c4m1", 1.4f}, {"c4m2", 1.4f}};
+  for (const auto &[id, multiplier] : sdr_missions) {
+      const auto mission = resolve_mission_lighting(id);
+      const auto authored = mission_sun_settings(base, mission, true, false);
+      const auto boosted = mw34::sun::display_ambient(authored, true, false);
+      require(std::abs(boosted.ambient - authored.ambient * 1.2f * multiplier) < 1e-6f &&
+                  boosted.ambient_color == authored.ambient_color &&
+                  boosted.strength == authored.strength,
+              "Night or interior mission did not receive extra SDR ambient");
+      require(mw34::sun::display_ambient(authored, true, true).ambient == authored.ambient &&
+                  mw34::sun::display_ambient(authored, false, false).ambient == authored.ambient,
+              "Extra SDR ambient reached HDR or lighting-off mode");
+  }
+  const auto daytime = mission_sun_settings(base, resolve_mission_lighting("c3m1"), true, false);
+  require(mw34::sun::display_ambient(daytime, true, false).ambient == daytime.ambient * 1.2f,
+          "Extra SDR ambient reached a daytime mission");
+  platform::prepared::EnvironmentSelection low_light_pack{};
+  low_light_pack.mission_ambient.emplace(
+      "c3m5", platform::prepared::MissionAmbientOverride{{.2f, .3f, .4f}, .25f});
+  const auto packed_interior = mission_sun_settings(base, resolve_mission_lighting("c3m5"), true,
+                                                    false, &low_light_pack, "c3m5");
+  require(std::abs(mw34::sun::display_ambient(packed_interior, true, false).ambient -
+                   (.25f * 1.2f * 6.025114f)) < 1e-6f &&
+              packed_interior.strength == 0.f,
+          "Hangar SDR ambient did not scale the pack override or gained directional light");
+  const auto bridgehead = mission_sun_settings(base, resolve_mission_lighting("c1m3"), true, false);
+  require(bridgehead.strength == .4875f, "Bridgehead moonlight intensity changed");
   const auto training = resolve_mission_lighting("t1m1");
   const auto lit = mission_sun_settings(base, training, true, false);
   require(lit.azimuth == 95.f && lit.elevation == 6.f && lit.strength == 1.05f,
@@ -2486,8 +3717,8 @@ void check_campaign_lighting_and_policy() {
                 c1m2_builtin.azimuth == 210.0f &&
                 c1m2_builtin.elevation == 25.0f &&
                 c1m2_builtin.color ==
-                    std::array<float, 3>{0.35f, 0.45f, 0.65f} &&
-                c1m2_builtin.strength == 0.28f &&
+                    std::array<float, 3>{0.46f, 0.56f, 0.74f} &&
+                c1m2_builtin.strength == 0.34f &&
                 c1m2_builtin.night_world_gain == 0.24f &&
                 !c1m2_builtin.suppress_sky,
             "Absent c1m2 pack entry did not restore c1m2 built-in ambient and "
@@ -2505,7 +3736,7 @@ void check_campaign_lighting_and_policy() {
     require(c1m2_after_distinct.ambient_color ==
                     std::array<float, 3>{0.18f, 0.22f, 0.32f} &&
                 c1m2_after_distinct.ambient == 0.14f &&
-                c1m2_after_distinct.strength == 0.28f,
+                c1m2_after_distinct.strength == 0.34f,
             "Transition to absent c1m2 leaked previous c1m1 pack ambient");
     for (const auto invalid_identity :
          {platform::MissionIdentity{},
@@ -3022,6 +4253,19 @@ void check_renderer_bridge_config() {
           "normal_maps_enabled false mismatch");
   require(cfg_wsi.sun == false, "sun false mismatch");
   require(cfg_wsi.draw_distance == 800, "draw-distance default mismatch");
+  require(cfg_wsi.vsync == true, "vsync default mismatch");
+
+  sdlfe::CoreCriticalAssets vsync_on_assets{};
+  vsync_on_assets.vsync = true;
+  const auto vsync_on_config = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, vsync_on_assets);
+  require(vsync_on_config.vsync == true, "vsync on propagation mismatch");
+
+  sdlfe::CoreCriticalAssets vsync_off_assets{};
+  vsync_off_assets.vsync = false;
+  const auto vsync_off_config = cc_mw3_re::configure_bridge(
+      sdlfe::RendererBackend::core_critical_wsi, {}, vsync_off_assets);
+  require(vsync_off_config.vsync == false, "vsync off propagation mismatch");
 
   // POM is opt-in and must not disappear when it is the only explicit option.
   sdlfe::CoreCriticalAssets pom_assets{};
@@ -3067,6 +4311,8 @@ void check_renderer_bridge_config() {
       require(test.accepted, "Unsupported POM configuration was accepted");
       require(config.parallax_materials == test.pom,
               "Typed POM option did not reach the renderer bridge");
+      require(config.parallax_quality == (test.pom ? 2U : 0U),
+              "Default POM quality level mismatch");
       require(config.normal_maps_enabled == (pom_assets.lighting == "normal"),
               "POM changed normal-map permission");
     } catch (const std::runtime_error &error) {
@@ -3077,6 +4323,16 @@ void check_renderer_bridge_config() {
     require(rejected != test.accepted,
             "POM configuration acceptance mismatch");
   }
+  for (unsigned quality : {1U, 2U}) {
+    pom_assets = {};
+    pom_assets.lighting = "normal";
+    pom_assets.pom = true;
+    pom_assets.pom_quality = quality;
+    const auto config = cc_mw3_re::configure_bridge(
+        sdlfe::RendererBackend::core_critical_wsi, {}, pom_assets);
+    require(config.parallax_materials && config.parallax_quality == quality,
+            "Explicit POM quality level did not reach the renderer bridge");
+  }
 
   check_campaign_lighting_and_policy();
 
@@ -3085,14 +4341,16 @@ void check_renderer_bridge_config() {
 
 int main(int argc, char **argv) {
   bool geometry_check = false, ultrawide_check = false;
-  bool native_wsi = false, quality_check = false, prepared_check = false,
-       material_check = false, scene_bindings_check = false, pom_check = false,
-       producer_view_check = false;
+  bool native_wsi = false, quality_check = false, prepared_check = false, material_check = false,
+       scene_bindings_check = false, pom_check = false, producer_view_check = false,
+       menu_ripple_check = false;
   sdlfe::CoreCriticalQuality quality;
   for (int i = 1; i < argc; ++i) {
     const std::string_view option(argv[i]);
     if (option == "--render-thread")
       threaded_checks = true;
+    else if (option == "--menu-ripple")
+        menu_ripple_check = true;
     else if (option == "--wsi")
       native_wsi = true;
     else if (option == "--prepared")
@@ -3114,10 +4372,11 @@ int main(int argc, char **argv) {
       quality.anisotropy = "16";
       quality_check = true;
     } else {
-      std::fprintf(stderr, "usage: mw3ccvulkan_checks [--wsi] "
-                           "[--prepared|--materials|--scene-bindings|--producer-view|--pom] "
-                           "[--quality MODE]\n");
-      return 1;
+        std::fprintf(
+            stderr, "usage: mw3ccvulkan_checks [--wsi] "
+                    "[--menu-ripple|--prepared|--materials|--scene-bindings|--producer-view|--pom] "
+                    "[--quality MODE]\n");
+        return 1;
     }
   }
   if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -3207,8 +4466,10 @@ int main(int argc, char **argv) {
     const auto backend = native_wsi
                              ? sdlfe::RendererBackend::core_critical_wsi
                              : sdlfe::RendererBackend::core_critical_dxgi;
-    if (producer_view_check)
-      check_producer_views(window, backend);
+    if (menu_ripple_check)
+        check_menu_ripple_gpu(window, backend);
+    else if (producer_view_check)
+        check_producer_views(window, backend);
     else if (scene_bindings_check)
       check_scene_bindings(window, backend);
     else if (pom_check) {
@@ -3240,6 +4501,7 @@ int main(int argc, char **argv) {
                     "mismatch");
       }
       check_gpu_prepared(window, backend);
+      check_gpu_prepared_skin_eviction(window, backend);
     } else if (prepared_check) {
       if (material_check && threaded_checks) {
         check_sealed_environment(window, backend);
@@ -3253,6 +4515,7 @@ int main(int argc, char **argv) {
       check_native_fixture_gpu(window, backend);
       check_scene(window, backend);
       check_menu_background_gpu(window, backend);
+      check_menu_ripple_gpu(window, backend);
     }
     if (native_wsi || material_check)
       check_fullscreen_resize(window, backend);

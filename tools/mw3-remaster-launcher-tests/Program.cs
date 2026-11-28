@@ -2,10 +2,20 @@ using System.IO;
 using MW3RemasterLauncher.Core;
 using System.Text.Json.Nodes;
 
+// Manual check (#503): run one AI Arena match through the launcher's own catalog,
+// validation and native launch path, with the player's saved settings and packs.
+// Usage: --run-arena-match SETUP.ccarena.json LAUNCHER_DIR
+if (args.Length == 3 && args[0] == "--run-arena-match")
+{
+    await ArenaSetupChecks.RunManualMatch(args[1], args[2]);
+    return;
+}
+
 if (args.Length == 2 && args[0] == "--modular-content-only") { await ModProfilesChecks.Run(args[1]); return; }
 
 if(args.Length==3 && args[0]=="--check-update-notification") { UpdateNotificationUiChecks.Run(args[1],args[2]); return; }
 
+if(args.Length==1 && args[0]=="--benchmark-only") { BenchmarkRunnerChecks.Run(); return; }
 if(args.Length==1 && args[0]=="--steam-only") { SteamShortcutChecks.Run(); return; }
 if(args.Length==4 && args[0]=="--add-steam-shortcut")
 {
@@ -13,6 +23,8 @@ if(args.Length==4 && args[0]=="--add-steam-shortcut")
     File.WriteAllText(args[3],System.Text.Json.JsonSerializer.Serialize(result));
     Console.WriteLine("Steam shortcut verified and installed for the selected local profile.");return;
 }
+
+if (args.Length == 1 && args[0] == "--asset-pack-updates-only") { await AssetPackUpdateChecks.Run(); return; }
 
 if(args.Length==1 && args[0]=="--online-updates-only") { OnlineUpdateChecks.Run(); await UpdateDownloadChecks.Run(); return; }
 if(args.Length==1 && args[0]=="--playtest-support-only")
@@ -64,6 +76,13 @@ if (args.Length == 2 && args[0] == "--verify-media-tools")
     return;
 }
 
+if (args.Length == 2 && args[0] == "--verify-native-preview")
+{
+    var contract = Mw3ReRuntimeContract.ReadStructure(Path.GetFullPath(args[1]));
+    Console.WriteLine($"Verified MW3-RE native preview closure: {contract.BuildId}");
+    return;
+}
+
 if (args.Length == 4 && args[0] == "--prepare-installed-renderer")
 {
     var path = Path.GetFullPath(args[3]);
@@ -80,9 +99,15 @@ if (args.Length == 4 && args[0] == "--prepare-controller-launch")
     File.WriteAllText(path, GameRunner.SerializeLaunchProfile(launch)); return;
 }
 
+if (args.Length == 1 && args[0] == "--native-preview-signing-only")
+{
+    NativePreviewSigningChecks.Run();
+    return;
+}
 if (args.Length == 1 && args[0] == "--runtime-layout-only")
 {
     NativeRuntimeLayoutChecks.Run();
+    NativePreviewSigningChecks.Run();
     return;
 }
 if (args.Length == 1 && args[0] == "--mw3-re-contract-only")
@@ -119,6 +144,10 @@ if (args.Length == 1 && args[0] == "--joystick-only")
 {
     JoystickSelectionChecks.Run(); return;
 }
+if (args.Length == 1 && args[0] == "--arena-only")
+{
+    ArenaSetupChecks.Run(); return;
+}
 if (args.Length == 2 && args[0] == "--preview-controller")
 {
     var thread = new Thread(() =>
@@ -131,7 +160,12 @@ if (args.Length == 2 && args[0] == "--preview-controller")
 
 if (args.Length == 1 && args[0] == "--controls-only")
 {
-    ControlProfileChecks.Run(); NativeControlChecks.Run(); return;
+    ControlProfileChecks.Run();
+    NativeControlChecks.Run();
+    var tempRoot = Directory.CreateTempSubdirectory("MW3ControlsUi-");
+    try { GraphicsSetupUiChecks.RunControlsUi(tempRoot.FullName); }
+    finally { tempRoot.Delete(recursive: true); }
+    return;
 }
 if (args.Length == 3 && args[0] == "--preview-controls")
 {
@@ -410,10 +444,21 @@ OriginalSupportChecks.Run();
 PlayerRegistryChecks.Run();
 ControlProfileChecks.Run();
 NativeControlChecks.Run();
+var tempUi = Directory.CreateTempSubdirectory("MW3LauncherUi-");
+try
+{
+    var tempHeadlights = tempUi.CreateSubdirectory("headlights");
+    var tempControls = tempUi.CreateSubdirectory("controls");
+    GraphicsSetupUiChecks.RunControlsAndHeadlights(tempHeadlights.FullName, tempControls.FullName);
+}
+finally { tempUi.Delete(recursive: true); }
 ControllerChecks.Run();
 JoystickSelectionChecks.Run();
 SaveBackupChecks.Run();
+BenchmarkRunnerChecks.Run();
+ArenaSetupChecks.Run();
 NativeRuntimeLayoutChecks.Run();
+NativePreviewSigningChecks.Run();
 await RuntimeUpdateChecks.Run();
 }
 

@@ -4,6 +4,9 @@
 #include "gamez/zclass/cls_zbd.h"
 #include "gamez/zclass/class.h"
 #include "gamez/zclass/cls_node.h"
+#include "gamez/zclass/list.h"
+#include "gamez/zclass/cls_data.h"
+#include "mech3/mech.h"
 #include "gamez/zclass/visual_distance.h"
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zinput/zinput.h"
@@ -18,6 +21,8 @@
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
 #include "render_worker.hpp"
+
+#include "frontend/sdl/arena_benchmark.h"
 #include "renderer/campaign_sun_settings.hpp"
 #include "renderer/effect_light_observations.hpp"
 #include "renderer/flare_alpha.hpp"
@@ -27,10 +32,14 @@
 #include "renderer/headlight_spotlight.hpp"
 #include "renderer/material_normals.hpp"
 #include "renderer/mech_headlights.hpp"
+#include "renderer/resource_timing.hpp"
 #include "gamez/zmodel/gmod_geometry.h"
+#include "gamez/zmodel/gmod_const.h"
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/native_fixture_sources.hpp"
 #include "renderer/fixture_observation_emission.hpp"
+#include "platform/loading.hpp"
+#include "platform/render3d.h"
 #include "platform/prepared_visuals.h"
 #include "platform/sha256.hpp"
 #include "renderer/surface_detail_bindings.hpp"
@@ -61,6 +70,7 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <cmath>
 #include <chrono>
 #include <unordered_set>
+#include <set>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -473,6 +483,7 @@ public:
         sun_explicit_(assets.sun_explicit),
         environment_(assets.environment),
         bridge_config_(configure_bridge(backend, quality, assets)),
+        benchmark_run_(assets.benchmark_run),
         prepared_(sanitize_prepared_assets(assets), assets.materials),
         geometry_mode_(parse_geometry(assets.geometry)),
         geometry_debug_(assets.geometry_debug_normals),
@@ -568,6 +579,238 @@ public:
       worker_->drain();
     return presented_frames_.load();
   }
+  void benchmark_load() override {
+    drain();
+    renderer_->memory_pressure = {};
+  }
+
+  bool benchmark_ready() override {
+    if (benchmark_run_ && benchmark_run_->strict()) {
+      if (!wait_benchmark_idle()) {
+        benchmark_run_->invalidate({}, "timed out waiting for strict benchmark startup");
+        return false;
+      }
+      last_present_job_ = 0;
+      // Startup runs outside the recorded window. Tick zero starts with
+      // fresh observation IDs and no retained fixtures or effect lights.
+      local_lights_clear();
+    } else {
+      drain();
+    }
+    if (!benchmark_run_ || !worker_ || !native_wsi_ || !window_bound_ ||
+        bridge_config_.vsync || !renderer_->immediate_swapchain())
+      return false;
+
+    int width = 0, height = 0, drawable_width = 0, drawable_height = 0;
+    SDL_GetWindowSize(window_, &width, &height);
+    SDL_GetWindowSizeInPixels(window_, &drawable_width, &drawable_height);
+    const auto size = [](unsigned width, unsigned height) {
+      return std::to_string(width) + "x" + std::to_string(height);
+    };
+    const auto& config = bridge_config_;
+    const auto loaded = prepared_.loaded_assets();
+    const auto detail_role = [&](unsigned role) {
+      const auto& bindings = surface_normals_.detail_bindings;
+      return std::any_of(bindings.begin(), bindings.end(),
+                         [role](const auto& entry) { return entry.second.role == role; });
+    };
+    const bool lights = config.effect_lights && !local_catalog_.empty();
+    const bool fixtures = fixture_producer_enabled() && lights;
+    const bool headlights = config.mech_headlights && !headlight_catalog_.empty() &&
+                            (headlight_key_ || headlight_mouse_);
+    const bool water = config.water_detail && detail_role(1) && detail_role(2);
+    const bool clouds = config.cloud_detail && detail_role(3);
+    try {
+      sdlfe::benchmark::require_loaded_models(benchmark_run_->expected_model_lods, loaded.lods);
+    } catch (const std::exception& error) {
+      benchmark_run_->invalidate({}, error.what());
+      return false;
+    }
+    for (const auto& pack : benchmark_run_->packs)
+      benchmark_run_->prepared_chassis += pack.model_chassis;
+    benchmark_run_->settings.merge(sdlfe::benchmark::Settings{
+        {"backend", "vulkan-wsi"}, {"present_mode", "IMMEDIATE"}, {"vsync", "off"},
+        {"render_worker", "on"}, {"window", size(width, height)},
+        {"drawable", size(drawable_width, drawable_height)},
+        {"internal", size(resident_width_, resident_height_)},
+        {"antialiasing", config.antialiasing}, {"anisotropy", config.anisotropy},
+        {"draw_distance", std::to_string(config.draw_distance)},
+        {"geometry", config.geometry}, {"lighting", config.lighting},
+        {"sun", std::to_string(lighting_.enabled)}, {"sun_shadows", std::to_string(lighting_.shadows)},
+        {"dynamic_lighting", std::to_string(lights && fixtures)},
+        {"water_detail", std::to_string(water)}, {"cloud_detail", std::to_string(clouds)},
+        {"effect_lights", std::to_string(lights)}, {"fixture_lights", std::to_string(fixtures)},
+        {"mech_headlights", std::to_string(headlights)},
+        {"prepared_model_lods", std::to_string(loaded.lods)},
+        {"prepared_normal_lods", std::to_string(loaded.normals)},
+        {"prepared_material_lods", std::to_string(loaded.materials)},
+        {"prepared_skin_bindings", std::to_string(loaded.skins)},
+        {"environment_regions", std::to_string(environment_ ? environment_->regions.size() : 0)},
+        {"effect_catalog_entries", std::to_string(local_catalog_.size())},
+        {"headlight_catalog_entries", std::to_string(headlight_catalog_.size())},
+        {"surface_detail_bindings", std::to_string(surface_normals_.detail_bindings.size())},
+        {"hdr", std::to_string(display_hdr_)},
+        {"samples_x", std::to_string(config.samples_x)},
+        {"samples_y", std::to_string(config.samples_y)},
+        {"fxaa", std::to_string(config.fxaa)},
+        {"af_level", std::to_string(config.af_level)},
+        {"buffer_reserve", std::to_string(config.buffer_reserve)},
+        {"tl_combine", std::to_string(config.tl_combine)},
+        {"fixture_shadows", std::to_string(config.fixture_shadows)},
+        {"fixture_atlas_reuse", std::to_string(config.fixture_atlas_reuse)},
+        {"fixture_atlas_tracked", std::to_string(config.fixture_atlas_tracked)},
+        {"fixture_atlas_audit", std::to_string(config.fixture_atlas_audit)},
+        {"shadow_batch", std::to_string(config.shadow_batch)},
+        {"world_scale_percent", std::to_string(config.world_scale_percent)},
+        {"geometry_debug_normals", std::to_string(config.geometry_debug_normals)},
+        {"temporal_inputs", std::to_string(config.temporal_inputs)},
+        {"environment_packs_explicit", std::to_string(config.environment_packs_explicit)},
+        {"texture_staging", config.texture_staging}, {"sky_debug", config.sky_debug},
+        {"parallax", std::to_string(config.parallax_materials)},
+        {"prepared_cache", std::to_string(prepared_cache_enabled_)},
+        {"flare_style_modern", std::to_string(modern_flare_style_)}});
+    benchmark_lighting_settings();
+    benchmark_run_->gpu = renderer_->device_name;
+    benchmark_run_->driver = renderer_->driver_version;
+    benchmark_swapchain_ = renderer_->swapchain_generation;
+    const bool fullscreen = (SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN) != 0;
+    benchmark_run_->settings["window_mode_effective"] = fullscreen ? "desktop-fullscreen" : "windowed";
+    if (fullscreen != (benchmark_run_->settings.at("window_mode_requested") != "windowed")) {
+      benchmark_run_->invalidate({}, "effective window mode differs from request");
+      return false;
+    }
+    const int expected_width = benchmark_run_->width;
+    const int expected_height = benchmark_run_->height;
+    if (width != expected_width || height != expected_height ||
+        drawable_width != expected_width || drawable_height != expected_height ||
+        resident_width_ != unsigned(expected_width) || resident_height_ != unsigned(expected_height)) {
+      benchmark_run_->invalidate({}, "effective window, drawable or internal size differs from request");
+      return false;
+    }
+    if (!(SDL_GetWindowFlags(window_) & SDL_WINDOW_INPUT_FOCUS)) {
+      benchmark_run_->invalidate({}, "benchmark window lacks input focus");
+      return false;
+    }
+    benchmark_finish();
+    return !benchmark_run_->failed();
+  }
+
+  void benchmark_lighting_settings() {
+    const auto lighting = display_lighting();
+    const auto detail = surface_detail_settings();
+    auto& settings = benchmark_run_->settings;
+    const auto record = [&](const char* key, auto value) {
+      char buffer[48];
+      const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+      settings[key] = std::string(buffer, result.ptr);
+    };
+    const auto record_color = [&](const char* key, const std::array<float, 3>& color) {
+      for (size_t channel = 0; channel < color.size(); ++channel) {
+        const auto name = std::string(key) + "." + std::to_string(channel);
+        record(name.c_str(), color[channel]);
+      }
+    };
+    record("sun_azimuth", lighting.azimuth);
+    record("sun_elevation", lighting.elevation);
+    record("sun_strength", lighting.strength);
+    record("ambient", lighting.ambient);
+    record("normal_strength", lighting.normal_strength);
+    record("ground_normal_strength", lighting.ground_normal_strength);
+    record("shadow_range", lighting.shadow_range);
+    record("shadow_bias", lighting.shadow_bias);
+    record("shadow_darkness", lighting.shadow_darkness);
+    record("shadow_size", lighting.shadow_size);
+    record("sky_source", lighting.sky_source);
+    record("sky_brightness", lighting.sky_brightness);
+    record("glow_strength", lighting.glow_strength);
+    record("glow_focus", lighting.glow_focus);
+    record("anti_brightness", lighting.anti_brightness);
+    record("anti_saturation", lighting.anti_saturation);
+    record("anti_haze", lighting.anti_haze);
+    record("horizon_low", lighting.horizon_low);
+    record("horizon", lighting.horizon);
+    record("rain_wetness", lighting.rain_wetness);
+    record("dust_intensity", lighting.dust_intensity);
+    record("heat_shimmer", lighting.heat_shimmer);
+    record("lava_glow", lighting.lava_glow);
+    record("valley_fog_density", lighting.valley_fog_density);
+    record("valley_fog_altitude", lighting.valley_fog_altitude);
+    record("night_world_gain", lighting.night_world_gain);
+    record("sdr_shadow_lift", lighting.sdr_shadow_lift);
+    record("sdr_extra_shadow_lift", lighting.sdr_extra_shadow_lift);
+    record("weather_enabled", int(lighting.weather_enabled));
+    record("shadow_debug", int(lighting.shadow_debug));
+    record("sky_active", int(lighting.sky_active));
+    record("haze_active", int(lighting.haze_active));
+    record("sky_manual", int(lighting.sky_manual));
+    record("haze_manual", int(lighting.haze_manual));
+    record("sky_shading", int(lighting.sky_shading));
+    record("suppress_sky", int(lighting.suppress_sky));
+    record_color("sun_color", lighting.color);
+    record_color("ambient_color", lighting.ambient_color);
+    record_color("sky_tint", lighting.sky_tint);
+    record_color("haze_scale", lighting.haze_scale);
+    record_color("haze_color", lighting.haze_color);
+    record_color("glow_color", lighting.glow_color);
+    record("water_strength", detail.water_strength);
+    record("cloud_strength", detail.cloud_strength);
+    record("detail_scale", detail.scale);
+    record("detail_speed", detail.speed);
+  }
+
+  void set_benchmark_time(double time) override {
+    benchmark_time_ = time;
+    benchmark_effects_ = {};
+  }
+  bool wait_benchmark_present(double deadline) override {
+    if (!last_present_job_ || !wait_strict_job(last_present_job_, deadline)) return false;
+    last_present_job_ = 0;
+    return true;
+  }
+
+  bool wait_benchmark_idle() override {
+    if (!worker_) return true;
+    const auto job = worker_->statistics().submitted;
+    const double deadline = benchmark_run_->now() + sdlfe::benchmark::kStrictPresentTimeoutSeconds;
+    return wait_strict_job(job, deadline);
+  }
+
+  bool wait_strict_job(std::size_t job, double deadline) {
+    // A timeout fails the run, so later waits return immediately to keep shutdown bounded.
+    if (strict_wait_timed_out_) return false;
+    using Clock = std::chrono::steady_clock;
+    // The run can use an injected clock with a different epoch.
+    const auto remaining = std::chrono::duration<double>(std::max(0.0, deadline - benchmark_run_->now()));
+    const auto until = Clock::now() + std::chrono::duration_cast<Clock::duration>(remaining);
+    strict_wait_timed_out_ = !worker_->wait_for_job_until(job, until);
+    return !strict_wait_timed_out_;
+  }
+
+  void record_strict_present(sdlfe::benchmark::FrameTag tag,
+                             sdlfe::benchmark::PresentReceipt receipt,
+                             const vk::Renderer::ResidentPresentResult& status) {
+    sdlfe::benchmark::StrictPresent sample{tag.sequence, receipt, {}, {}};
+    sdlfe::benchmark::hash_strict_pixels(sample, status.pixels.data(), status.pixels.size(),
+                                       status.rgba_pixels,
+                                       benchmark_run_->captures(tag.sequence));
+    benchmark_run_->record_strict_present(std::move(sample));
+  }
+  void set_benchmark_effects(unsigned beams, unsigned explosions) override {
+    benchmark_effects_.beams = beams;
+    benchmark_effects_.explosions = explosions;
+  }
+
+  void benchmark_finish() override {
+    const auto pressure = renderer_->memory_pressure;
+    benchmark_run_->pressure = {{"recoveries", pressure.recoveries},
+                                {"model_omissions", pressure.model_omissions},
+                                {"texture_substitutions", pressure.texture_substitutions},
+                                {"preload_stops", pressure.preload_stops}};
+    if (pressure.recoveries || pressure.model_omissions ||
+        pressure.texture_substitutions || pressure.preload_stops)
+      benchmark_run_->invalidate({}, "video memory pressure during scene");
+  }
+
   void drain() override {
     if (!producer_failed_) {
       flush();
@@ -630,7 +873,8 @@ public:
       worker_->drain();
     return {retired_quality_.fxaa_passes + renderer_->fxaa_passes,
             retired_quality_.anisotropic_samplers + renderer_->af_samplers,
-            retired_quality_.mip_levels + renderer_->mip_levels_uploaded};
+            retired_quality_.mip_levels + renderer_->mip_levels_uploaded,
+            retired_quality_.menu_ripple_passes + renderer_->menu_ripple_passes};
   }
   AssetStatistics asset_statistics() const override {
     if (worker_)
@@ -653,9 +897,12 @@ public:
                 std::count_if(surface_normals_.cache.pages.begin(),
                               surface_normals_.cache.pages.end(),
                               [](const auto &page) { return page.loaded; })),
+            surface_normals_.cache.page_loads,
             binding_rejected_mismatch_,
             native_fingerprint_evaluations_,
-            deferred_material_admissions_};
+            deferred_material_admissions_,
+            std::uint64_t(native_geometry_.size()),
+            native_geometry_prune_passes_};
   }
   // Capacity the current producer Scene retains from earlier packets (adopted from the pool).
   std::size_t retained_scene_capacity_bytes() const {
@@ -679,6 +926,41 @@ public:
     return {entry.width, entry.height, entry.source_width, entry.source_height,
             entry.generated_rgba, entry.pixels};
   }
+  void set_preload_fault_for_test(const vk::PreloadFaultInjection &fault) {
+    drain();
+    renderer_->set_preload_fault(fault);
+  }
+  void set_preload_batch_cap_for_test(std::uint64_t bytes) {
+    drain();
+    renderer_->set_preload_batch_cap_for_test(bytes);
+  }
+  void set_preload_memory_block_cap_for_test(std::uint64_t bytes) {
+    if (worker_)
+      worker_->drain();
+    renderer_->set_preload_memory_block_cap_for_test(bytes);
+  }
+  testing::PreloadTestState preload_state_for_test() {
+    drain();
+    auto result = preload_test_state_;
+    result.last_preload_stopped = renderer_->preload_stopped();
+    result.stop_info = renderer_->preload_stop_info();
+    result.preload_allocation_attempts = renderer_->preload_allocation_attempts();
+    result.preload_allocation_successes = renderer_->preload_allocation_successes();
+    result.batch_submissions = renderer_->preload_batch_submissions();
+    result.peak_batch_bytes = renderer_->preload_peak_bytes();
+    result.pending_count = renderer_->preload_pending_count();
+    result.peak_pending_count = renderer_->preload_peak_pending();
+    result.tracked_device_local_bytes = renderer_->tracked_device_local_bytes();
+    result.live_allocation_count = renderer_->live_allocation_count();
+    for (const auto &receipt : submitted_textures_)
+      result.completed_texture_handles.push_back(int32_t((receipt.first - 1) / 2));
+    return result;
+  }
+  bool texture_receipt_for_test(int32_t handle, bool sharp) {
+    drain();
+    return submitted_textures_.count(std::uint64_t(handle) * 2 + unsigned(sharp) + 1) != 0;
+  }
+  vk::Renderer &backend_for_test() { drain(); return *renderer_; }
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
 #include "prepared_gpu_adapter.inc"
@@ -692,11 +974,26 @@ public:
       return found->second;
     }
     const auto &norm_img = surface_normal_image(normal_index);
+    mw34::timing::ScopedDuration upload_timer(
+        producer_resource_timing_.page_upload_target());
     const auto handle = create_texture(
         int(norm_img.width), int(norm_img.height),
         reinterpret_cast<const uint8_t *>(norm_img.pixels32.data()), 1);
     surface_normal_textures_.emplace(normal_index, handle);
     return handle;
+  }
+
+  bool has_environment_pom_sources() const {
+    if (!bridge_config_.parallax_materials || !environment_)
+      return false;
+    if (!environment_->material_targets.empty())
+      return true;
+    for (const auto &[region, resources] : environment_->resources) {
+      if (resources.count(::platform::prepared::EnvironmentRole::surface_materials) ||
+          resources.count(::platform::prepared::EnvironmentRole::ground_materials))
+        return true;
+    }
+    return false;
   }
 
   std::shared_ptr<const ::platform::DeferredMaterialBinding>
@@ -706,8 +1003,7 @@ public:
       return {};
     const bool normal_admission = lighting_.normals &&
         (!bridge_config_.native_material_sidecar.empty() ||
-         (bridge_config_.parallax_materials && environment_ &&
-          !environment_->material_targets.empty()));
+         has_environment_pom_sources());
     const auto fixture = capture_fixture_polygon(texture);
     if (!normal_admission && !fixture)
       return {};
@@ -724,6 +1020,10 @@ public:
     if (normal_admission) {
       receipt->surface_parameters = native_surface_parameters(key, texture);
       receipt->height_binding = native_height_binding(key, texture);
+      if (receipt->height_binding && receipt->surface_parameters[3] < 0.5f) {
+        const auto &record = receipt->height_binding->material;
+        receipt->surface_parameters = {record.roughness, record.reflectivity, record.metallic, 1.f};
+      }
       receipt->normal_index = surface_normal_index(receipt->key, true, texture);
     }
     return receipt;
@@ -744,8 +1044,7 @@ public:
     return fixture_producer_enabled() || fixture_trace_run().open() ||
            (lighting_.normals &&
             (!bridge_config_.native_material_sidecar.empty() ||
-             (bridge_config_.parallax_materials && environment_ &&
-              !environment_->material_targets.empty()) ||
+             has_environment_pom_sources() ||
              bridge_config_.trace_native_bindings));
   }
   bool wants_model_context() const override {
@@ -769,6 +1068,63 @@ public:
     native_context_ = {};
     if(fixture_trace_run().open()) fixture_trace_pose_ = {};
   }
+  void select_terrain_cell(int32_t world, int32_t x, int32_t z) override {
+    VisualFloatScope float_scope;
+    if (!bridge_config_.parallax_materials || !lighting_.normals || !environment_ ||
+        !environment_->streamed_heights || world < 0 || x < 0 || z < 0 ||
+        current_mission_id_.empty() ||
+        ::platform::prepared::environment_region(current_mission_id_) != "operation1") {
+      streamed_height_cache_.reset();
+      streamed_height_cell_.reset();
+      return;
+    }
+    const auto &index = *environment_->streamed_heights;
+    const auto &budget = prepared_.surface_budget();
+    if (!streamed_height_cache_) {
+      streamed_height_cache_ =
+          std::make_unique<mw34::materials::StreamedHeightCache>(budget, index.images);
+      streamed_height_cell_.reset();
+    }
+    const auto cell = std::make_tuple(zcls::world_source_epoch(), std::uint32_t(world), x, z);
+    const bool changed = streamed_height_cell_ != cell;
+    if (!changed && (streamed_height_deferred_.empty() || budget->used() >= streamed_height_sample_))
+      return;
+    if (changed) {
+      std::vector<std::size_t> desired;
+      std::set<std::size_t> seen;
+      for (int distance = 0; distance <= 2; ++distance)
+        for (int dx = -1; dx <= 1; ++dx)
+          for (int dz = -1; dz <= 1; ++dz) {
+            if (std::abs(dx) + std::abs(dz) != distance)
+              continue;
+            const auto subset = index.subsets.find({std::uint32_t(world), x + dx, z + dz});
+            if (subset != index.subsets.end())
+              for (auto id : subset->second)
+                if (seen.insert(id).second)
+                  desired.push_back(id);
+          }
+      streamed_height_cache_->select(desired);
+      streamed_height_deferred_ = std::move(desired);
+      streamed_height_cell_ = cell;
+    }
+    std::size_t admitted = 0;
+    std::vector<std::size_t> deferred;
+    for (auto id : streamed_height_deferred_) {
+      if (streamed_height_cache_->acquire(id))
+        ++admitted;
+      else
+        deferred.push_back(id);
+    }
+    streamed_height_deferred_.swap(deferred);
+    streamed_height_sample_ = budget->used();
+    std::fprintf(stderr,
+                 "[C1_HEIGHT_STREAM] world=%d cell=%d,%d available=%zu deferred=%zu "
+                 "decoded_bytes=%llu peak_decoded_bytes=%llu\n",
+                 world, x, z, admitted, streamed_height_deferred_.size(),
+                 static_cast<unsigned long long>(streamed_height_sample_),
+                 static_cast<unsigned long long>(budget->peak()));
+  }
+
   void begin_model_draw(const ::platform::ModelDrawContext &context) override {
     // Visual retargeting/fog must not leak exception flags or rounding state
     // into the native polygon producer that resumes after this callback.
@@ -785,9 +1141,11 @@ public:
     fixture_model_scope(context);
     if(fixture_trace_run().open()) fixture_trace_model(context);
     ensure_extent();
-    const auto draws = prepared_.draw(context);
+    const auto draws = prepared_.draw(context, false, lab_preview_lighting_);
     if (!draws.replace)
       return;
+    if (benchmark_run_ && benchmark_run_->armed())
+      ++benchmark_run_->prepared_model_draws;
     if (scene_.hud && !scene_.draws.empty()) {
       flush();
       ensure_extent();
@@ -805,6 +1163,10 @@ public:
   // Typed mission-change callback from the native missions object: owns the
   // canonical mission ID and the resolved campaign lighting/policy. Unknown or
   // failed identities clear any prior state (no stale profile).
+  void mission_scene_changed(const ::platform::MissionIdentity& identity, bool world_loaded) override {
+    mission_world_loaded_ = world_loaded;
+    mission_changed(identity);
+  }
   void mission_changed(const ::platform::MissionIdentity &identity) override {
     VisualFloatScope fp_guard;
     // Drop unsubmitted CPU work before the old drain path can publish it. The
@@ -830,12 +1192,18 @@ public:
     staging_first_flush_pending_ = true;
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
+    // An arena match (#507) may borrow a campaign mission's lighting for its
+    // chosen time of day. Only the lighting uses the borrowed id: the mission
+    // identity (terrain materials, effect lights) stays the arena map's own.
+    const std::string &arena_lighting = ::platform::arena_lighting_mission();
+    const std::string lighting_id =
+        arena_lighting.empty() ? id : arena_lighting;
     mw34::campaign::ResolvedMissionLighting resolved{};
-    if (!id.empty())
-      resolved = mw34::campaign::resolve_mission_lighting(id);
+    if (!lighting_id.empty())
+      resolved = mw34::campaign::resolve_mission_lighting(lighting_id);
     lighting_ = mw34::campaign::mission_sun_settings(
         base_lighting_, resolved, campaign_enabled_, sun_explicit_,
-        environment_.get(), id);
+        environment_.get(), lighting_id);
     display_hdr_ = window_hdr_enabled();
     if (renderer_)
       renderer_->update_lighting_settings(display_lighting());
@@ -844,6 +1212,8 @@ public:
         identity.number != current_mission_identity_.number;
     current_mission_identity_ = identity;
     if (id != current_mission_id_ || identity_changed) {
+      streamed_height_cache_.reset();
+      streamed_height_cell_.reset();
       current_mission_id_ = id;
       current_mission_lighting_ = resolved;
       if (lighting_.enabled && identity.world_index >= 0 &&
@@ -861,6 +1231,16 @@ public:
     } else {
       current_mission_lighting_ = resolved;
     }
+    preload_test_state_ = {};
+    // reset_preload() clears state the render worker's packets also read. The
+    // drain above already idled it; drain again here so this stays true if the
+    // code between them ever queues work.
+    if (worker_)
+      worker_->drain();
+    if (renderer_)
+      renderer_->reset_preload();
+    preload_mission_normal_textures();
+    first_world_preload_pending_ = true;
   }
   void set_lab_preview_lighting(bool on) override {
     VisualFloatScope fp_guard;
@@ -876,6 +1256,24 @@ public:
     drain();
     renderer_->update_lighting_settings(display_lighting());
   }
+  void set_skin_cache_budget_for_test(std::size_t bytes) const {
+    prepared_.set_skin_cache_budget_for_test(bytes);
+  }
+  // Skin slots waiting for retire_skin_textures: queued stale slots plus slots
+  // whose texture set no longer has an owner.
+  std::size_t pending_skin_retirements_for_test() const {
+    std::size_t pending = retiring_skin_textures_.size();
+    for (const auto &[image, owner] : prepared_skin_owners_)
+      if (owner.expired())
+        ++pending;
+    return pending;
+  }
+  std::array<float, 6> last_model_projection_for_test() const {
+    for (auto draw = scene_.draws.rbegin(); draw != scene_.draws.rend(); ++draw)
+      if (draw->model)
+        return draw->model->projection;
+    throw std::runtime_error("No model draw in the producer scene");
+  }
   bool display_lighting_is_stock_for_test() const {
     const auto shown = display_lighting();
     const auto stock = mw34::sun::display_ambient(base_lighting_, campaign_enabled_, display_hdr_);
@@ -885,9 +1283,17 @@ public:
            shown.strength == stock.strength && shown.ambient == stock.ambient;
   }
   void reset_scene_resources() override {
+    // Clear pending preload before the empty mission callback so scene teardown
+    // does not warm old mission textures right before resetting them.
+    surface_normals_.preload_pending = false;
+    prepared_preload_pending_ = false;
     // Reset the owned mission identity/result via the callback with the empty
-    // identity before the scene resources are reset.
+    // identity before the scene resources are reset. The torn-down world no
+    // longer gates local lights on (non-campaign maps rely on this flag).
+    mission_world_loaded_ = false;
     mission_changed(::platform::MissionIdentity{});
+    first_world_preload_pending_ = false;
+    prepared_preload_pending_ = true;
     reset_pending_ = true;
     prepared_.clear_skin_cache();
     retire_skin_textures();
@@ -1014,10 +1420,11 @@ public:
       std::fprintf(
           stderr,
           "World normal pages: %llu decoded bytes, %llu peak decoded bytes, "
-          "%llu loaded pages (536870912-byte limit)\n",
+          "%llu loaded pages, %llu page reads (536870912-byte limit)\n",
           (unsigned long long)assets.world_normal_decoded_bytes,
           (unsigned long long)assets.world_normal_peak_decoded_bytes,
-          (unsigned long long)assets.world_normal_loaded_pages);
+          (unsigned long long)assets.world_normal_loaded_pages,
+          (unsigned long long)assets.world_normal_page_loads);
     const auto &cache = prepared_draw_cache_.statistics();
     if (cache.hits || cache.misses || cache.bypasses)
       std::fprintf(stderr,
@@ -1036,12 +1443,37 @@ public:
           static_cast<unsigned long long>(assets.gpu_model_draws),
           static_cast<unsigned long long>(assets.cpu_clipped_triangles),
           static_cast<unsigned long long>(assets.named_textures));
+    if (prepared_.skin_texture_loads() > 0 || prepared_.skin_cache_evictions() > 0)
+      std::fprintf(
+          stderr,
+          "Prepared skins: %zu loads, %zu evictions, %zu bytes (budget %zu)\n",
+          prepared_.skin_texture_loads(), prepared_.skin_cache_evictions(),
+          prepared_.skin_cache_bytes(), prepared_.skin_cache_budget());
     if (lighting_.enabled)
       std::fprintf(
           stderr,
           "Prepared materials: %llu per-pixel draws, %llu normal-map draws\n",
           static_cast<unsigned long long>(assets.lit_draws),
           static_cast<unsigned long long>(assets.normal_draws));
+    if (bridge_config_.parallax_materials) {
+      const char *quality_label =
+          bridge_config_.parallax_quality == 1U ? "low" : "high";
+      std::fprintf(
+          stderr,
+          "Parallax occlusion mapping (%s): %llu draws, %llu height uploads "
+          "(%llu bytes), %llu cache hits, %llu retired\n",
+          quality_label,
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_draws : 0ULL),
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_uploads : 0ULL),
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_uploaded_bytes : 0ULL),
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_cache_hits : 0ULL),
+          static_cast<unsigned long long>(
+              renderer_ ? renderer_->height_retired_images : 0ULL));
+    }
     cc_mw3_re::platform::unregister_window_handle(native_window_);
   }
 
@@ -1057,6 +1489,55 @@ public:
       throw std::runtime_error("Invalid mw3-re viewport");
     }
     viewport_ = {x, y, width, height};
+  }
+
+  bool supports_gpu_menu_ripple() const override { return true; }
+  void prepare_menu_ripple() override {
+      require_producer_live();
+      const auto prepare = [this] {
+          try {
+              renderer_->prepare_menu_ripple();
+              return std::exception_ptr{};
+          } catch (...) {
+              return std::current_exception();
+          }
+      };
+      const auto failure = worker_ ? worker_->call(prepare) : prepare();
+      if (failure)
+          std::rethrow_exception(failure);
+  }
+  void apply_menu_ripple(const sdlfe::MenuRipplePass &pass) override {
+      require_producer_live();
+      ensure_extent();
+      flush();
+      for (float value : {pass.center_x, pass.center_y, pass.scale_x, pass.scale_y, pass.inner,
+                          pass.outer, pass.amplitude, pass.wavelength, pass.phase, pass.clip_left,
+                          pass.clip_top, pass.clip_right, pass.clip_bottom})
+          if (!std::isfinite(value))
+              return;
+      if (viewport_[2] <= 0 || viewport_[3] <= 0 || pass.scale_x <= 0.f || pass.scale_y <= 0.f ||
+          pass.outer <= 0.f || pass.outer <= pass.inner || pass.wavelength <= 0.f)
+          return;
+      vk::MenuRipplePass vk_pass;
+      vk_pass.center_u = (pass.center_x - viewport_[0]) / viewport_[2];
+      vk_pass.center_v = (pass.center_y - viewport_[1]) / viewport_[3];
+      vk_pass.scale_u = pass.scale_x / viewport_[2];
+      vk_pass.scale_v = pass.scale_y / viewport_[3];
+      vk_pass.inner = pass.inner;
+      vk_pass.outer = pass.outer;
+      vk_pass.amplitude = pass.amplitude;
+      vk_pass.wavelength = pass.wavelength;
+      vk_pass.phase = pass.phase;
+      vk_pass.has_clip = pass.has_clip;
+      vk_pass.clip_u0 = (pass.clip_left - viewport_[0]) / viewport_[2];
+      vk_pass.clip_v0 = (pass.clip_top - viewport_[1]) / viewport_[3];
+      vk_pass.clip_u1 = (pass.clip_right - viewport_[0]) / viewport_[2];
+      vk_pass.clip_v1 = (pass.clip_bottom - viewport_[1]) / viewport_[3];
+      if (worker_)
+          worker_->post([this, vk_pass] { renderer_->apply_menu_ripple(vk_pass); },
+                        sizeof(vk_pass));
+      else
+          renderer_->apply_menu_ripple(vk_pass);
   }
 
   void prepare_canvas_textures(const std::vector<int32_t> &handles) override {
@@ -1088,25 +1569,7 @@ public:
 
   int32_t create_texture(int width, int height, const uint8_t *rgba,
                          uint8_t) override {
-    if (width <= 0 || height <= 0 || unsigned(width) > texture_limit_ ||
-        unsigned(height) > texture_limit_) {
-      throw std::runtime_error("Invalid mw3-re texture size");
-    }
-    const auto free =
-        std::find_if(textures_.begin(), textures_.end(),
-                     [](const Texture &entry) { return entry.pixels.empty(); });
-    const auto handle = int32_t(free - textures_.begin());
-    if (free == textures_.end()) {
-      textures_.emplace_back();
-    }
-    auto &entry = textures_[handle];
-    entry.width = unsigned(width);
-    entry.height = unsigned(height);
-    mw34::materials::SurfaceKey active_key{};
-    if (mw34::materials::get_active_surface_key(&active_key)) {
-      entry.surface_key = active_key;
-    }
-    entry.group_load_epoch = group_load_epoch_;
+    const auto handle = allocate_texture_slot(width, height);
     update_texture(handle, width, height, rgba);
     return handle;
   }
@@ -1151,10 +1614,7 @@ public:
     entry.pixels.resize(std::size_t(width) * height);
     std::memcpy(entry.pixels.data(), rgba,
                 entry.pixels.size() * sizeof(std::uint32_t));
-    entry.surface_key = source_key;
-    entry.group_load_epoch = group_load_epoch_;
-    entry.version = ++texture_version_;
-    entry.fixture_visual_key.reset();
+    publish_texture_update(handle, source_key);
   }
 
   int32_t create_named_texture(const char *name, int width, int height,
@@ -1231,6 +1691,15 @@ public:
   }
   void begin_scene() override {
     begin_scene_housekeeping();
+    // HUD source textures update during play. Bulk warmup belongs to loading
+    // and this first world scene, after late player and IA assets arrive.
+    if (first_world_preload_pending_) {
+      prepared_preload_pending_ = true;
+      if (lighting_.normals)
+        surface_normals_.preload_pending = true;
+      preload_mission_normal_textures();
+      first_world_preload_pending_ = false;
+    }
     local_lights_begin();
   }
   void begin_canvas_scene() override {
@@ -1299,8 +1768,12 @@ private:
   void begin_scene_housekeeping() {
     if (!scene_.draws.empty())
       flush();
+    // The scene is empty here, so releasing skin slots cannot split a draw.
+    retire_skin_textures();
     complete_local_light_packets();
     ensure_extent();
+    // Cleanup once per scene instead of scanning the preloaded cache per draw.
+    prune_native_geometry();
     const bool hdr_enabled = window_hdr_enabled();
     if (hdr_enabled != display_hdr_) {
       drain();
@@ -1379,6 +1852,7 @@ private:
     pending_local_packets_.clear();
     pending_local_bytes_ = 0;
     submitted_textures_.clear();
+    receipts_to_restore_.clear();
     invalidate_scene_bindings();
     deferred_material_binding_.reset();
     native_context_ = {};
@@ -1600,7 +2074,14 @@ private:
                            ? deferred_surface_normal_index(key, state.texture)
                            : -1;
         if (norm_idx >= 0) {
+          const bool first_normal_handle =
+              surface_normal_textures_.find(norm_idx) ==
+              surface_normal_textures_.end();
           int norm_handle = surface_normal_texture(norm_idx);
+          mw34::timing::ScopedDuration upload_timer(
+              first_normal_handle
+                  ? producer_resource_timing_.page_upload_target()
+                  : nullptr);
           draw.normal_texture = int(bind_texture(norm_handle, false));
         } else {
           draw.normal_texture = -1;
@@ -1659,8 +2140,16 @@ private:
         if (binding->normal_index < 0)
           throw std::runtime_error(
               "Validated surface detail role lost its normal image");
-        draw.normal_texture = int(bind_texture(
-            surface_normal_texture(binding->normal_index), false));
+        const bool first_normal_handle =
+            surface_normal_textures_.find(binding->normal_index) ==
+            surface_normal_textures_.end();
+        const int32_t normal_handle =
+            surface_normal_texture(binding->normal_index);
+        mw34::timing::ScopedDuration upload_timer(
+            first_normal_handle
+                ? producer_resource_timing_.page_upload_target()
+                : nullptr);
+        draw.normal_texture = int(bind_texture(normal_handle, false));
       }
     }
     const bool sharp = state.sharp && state.filter == ::platform::TextureFilter::kDefault &&
@@ -1735,6 +2224,10 @@ private:
       const auto &slot = textures_.at(state.texture);
       draw.height_binding = deferred_height_binding(slot.surface_key, state.texture);
       if (draw.height_binding) {
+        if (draw.surface_parameters[3] < 0.5f) {
+          const auto &record = draw.height_binding->material;
+          draw.surface_parameters = {record.roughness, record.reflectivity, record.metallic, 1.f};
+        }
         // projection is selected from the producing view above.
         if (!(projection.near_z > 0) || !(projection.fx_near > 0) ||
             !(projection.fy_near > 0) || !(projection.far_z > projection.near_z) ||
@@ -1904,6 +2397,69 @@ private:
 #include "frame_presentation.inc"
 
 private:
+  int32_t allocate_texture_slot(int width, int height) {
+    if (width <= 0 || height <= 0 || unsigned(width) > texture_limit_ ||
+        unsigned(height) > texture_limit_) {
+      throw std::runtime_error("Invalid mw3-re texture size");
+    }
+    const auto free =
+        std::find_if(textures_.begin(), textures_.end(),
+                     [](const Texture &entry) { return entry.pixels.empty(); });
+    const auto handle = int32_t(free - textures_.begin());
+    if (free == textures_.end()) {
+      textures_.emplace_back();
+    }
+    auto &entry = textures_[handle];
+    entry.width = unsigned(width);
+    entry.height = unsigned(height);
+    mw34::materials::SurfaceKey active_key{};
+    if (mw34::materials::get_active_surface_key(&active_key)) {
+      entry.surface_key = active_key;
+    }
+    entry.group_load_epoch = group_load_epoch_;
+    return handle;
+  }
+
+  void publish_texture_update(int32_t handle, const mw34::materials::SurfaceKey &source_key) {
+    auto &entry = textures_.at(handle);
+    entry.surface_key = source_key;
+    entry.group_load_epoch = group_load_epoch_;
+    entry.version = ++texture_version_;
+    entry.fixture_visual_key.reset();
+    // Preload any matching world normal page once the texture's source identity
+    // is published. No reference to entry is used after this point in case
+    // later texture allocations reallocate textures_.
+    if (source_key.hash != 0)
+      prepared_preload_pending_ = true;
+    if (lighting_.normals && source_key.hash != 0) {
+      VisualFloatScope float_scope;
+      preload_surface_normal(source_key);
+    }
+  }
+
+  int32_t create_owned_texture(int width, int height, std::vector<std::uint32_t> pixels) {
+    const auto handle = allocate_texture_slot(width, height);
+    mw34::materials::SurfaceKey source_key{};
+    mw34::materials::get_active_surface_key(&source_key);
+    if (pixels.size() != std::size_t(width) * height)
+      throw std::runtime_error("Invalid mw3-re texture upload");
+    auto &entry = textures_.at(handle);
+    if (entry.scene_index != no_binding || entry.sharp_index != no_binding) {
+      flush();
+    }
+    // Prepared albedo conversion already owns this complete RGBA plane. Keep
+    // that allocation instead of zeroing and copying a second full image.
+    entry.pixels = std::move(pixels);
+    publish_texture_update(handle, source_key);
+    return handle;
+  }
+
+  // Releases the GPU slots of alternate skin images whose texture set is no longer
+  // owned by anything, plus slots queued by prepared_texture. Call only at a scene
+  // boundary (no draw being emitted): release_texture flushes a scene that still
+  // binds the slot, and a flush in the middle of emitting a draw leaves scene_
+  // empty with a zero extent, so the draw's projection (fx * scene width / viewport)
+  // becomes 0 and the tiled-light stage rejected the frame (c3m3 crash, #395).
   void retire_skin_textures() {
     for (auto it = prepared_skin_owners_.begin(); it != prepared_skin_owners_.end();) {
       if (!it->second.expired()) {
@@ -1912,27 +2468,41 @@ private:
       }
       const auto texture = prepared_textures_.find(it->first);
       if (texture != prepared_textures_.end()) {
-        // release_texture flushes any scene which still references this slot.
         release_texture(texture->second);
         prepared_textures_.erase(texture);
       }
       it = prepared_skin_owners_.erase(it);
     }
+    for (const auto handle : retiring_skin_textures_)
+      release_texture(handle);
+    retiring_skin_textures_.clear();
   }
   int32_t prepared_texture(const ::platform::prepared::Image &image,
       const std::shared_ptr<const ::platform::prepared::Textures> &owner = {}) {
-    retire_skin_textures();
-    const auto found = prepared_textures_.find(&image);
+    auto found = prepared_textures_.find(&image);
+    const auto skin_owner = prepared_skin_owners_.find(&image);
+    // An alternate skin set can be evicted and a new one decoded at the same address
+    // within one scene. The old slot still holds the old pixels and may be bound by
+    // draws already in this scene, so it is queued for release at the next scene
+    // boundary and this image gets a fresh slot.
+    const bool stale_skin_slot = found != prepared_textures_.end() &&
+                                 skin_owner != prepared_skin_owners_.end() &&
+                                 skin_owner->second.lock() != owner;
+    if (stale_skin_slot) {
+      retiring_skin_textures_.push_back(found->second);
+      prepared_textures_.erase(found);
+      prepared_skin_owners_.erase(skin_owner);
+      found = prepared_textures_.end();
+    }
     if (found != prepared_textures_.end()) {
       // PreparedModels owns this immutable image across mission resource
       // resets. A real draw republishes its value identity in the new epoch.
       textures_.at(found->second).group_load_epoch = group_load_epoch_;
       return found->second;
     }
-    const auto pixels = image_pixels(image);
+    auto pixels = image_pixels(image);
     const auto handle =
-        create_texture(int(image.width), int(image.height),
-                       reinterpret_cast<const uint8_t *>(pixels.data()), 1);
+        create_owned_texture(int(image.width), int(image.height), std::move(pixels));
     // The prepared reader preserves a declared hash without checking it. This
     // immutable slot gets an exact key from its complete visible RGB565 plane.
     textures_.at(handle).surface_key = prepared_fixture_key(image);
@@ -2051,6 +2621,11 @@ private:
   void ensure_extent() {
     require_producer_live();
     if (reset_pending_) {
+      if (benchmark_run_ && benchmark_run_->armed()) {
+        benchmark_run_->invalidate(benchmark_run_->next_frame(benchmark_time_.value_or(0)),
+                                   "renderer reset during playback");
+        throw std::runtime_error("Benchmark renderer reset during playback");
+      }
       drain();
       retired_draws_ += renderer_->draws;
       retired_presents_ += renderer_->resident_presents;
@@ -2062,8 +2637,11 @@ private:
                             renderer_->sun_tl_draws;
       retired_normal_draws_ += renderer_->normal_draws;
       retired_geometry_buffers_ += renderer_->retired_model_buffers;
+      const auto pressure = renderer_->memory_pressure;
       initialize_renderer();
+      if (benchmark_run_) renderer_->memory_pressure = pressure;
       submitted_textures_.clear();
+      receipts_to_restore_.clear();
       window_bound_ = false;
       resident_width_ = resident_height_ = 0;
       scene_ = {};
@@ -2073,7 +2651,7 @@ private:
     }
     scene_.detail_settings = surface_detail_settings();
     scene_.detail_time = mw34::detail::presentation_time(
-        detail_frame_++, bridge_config_.detail_fixed_time);
+        detail_frame_++, bridge_config_.detail_fixed_time, benchmark_time_);
     if (scene_.width) {
       return;
     }
@@ -2110,7 +2688,541 @@ private:
     scene_.clears.push_back(std::move(clear));
   }
 
+  void prune_native_geometry() {
+    ++native_geometry_prune_passes_;
+    for (auto iterator = native_geometry_.begin();
+         iterator != native_geometry_.end();) {
+      if (iterator->second.source.expired())
+        iterator = native_geometry_.erase(iterator);
+      else
+        ++iterator;
+    }
+  }
+
+  std::shared_ptr<const vk::ModelGeometry> native_model_geometry(const std::shared_ptr<const cc::geometry::Resource> &source) {
+    const auto found = native_geometry_.find(source->identity);
+    if (found != native_geometry_.end() &&
+        !found->second.source.expired() && found->second.geometry)
+      return found->second.geometry;
+    // Cache misses still reclaim dead snapshots before allocating replacements.
+    prune_native_geometry();
+    auto &cached = native_geometry_[source->identity];
+    if (!cached.geometry) {
+      cached.source = source;
+      auto geometry = std::make_shared<vk::ModelGeometry>();
+      geometry->key = 0x4700000000000000ULL | source->identity;
+      geometry->vertices = source->vertices;
+      geometry->indices = source->indices;
+      geometry->source = source;
+      geometry->hash = 0xcbf29ce484222325ULL;
+      const auto hash = [&](const void *data, std::size_t bytes) {
+        const auto *input = static_cast<const unsigned char *>(data);
+        for (std::size_t i = 0; i < bytes; ++i) {
+          geometry->hash ^= input[i];
+          geometry->hash *= 0x100000001b3ULL;
+        }
+      };
+      hash(geometry->vertices.data(),
+           geometry->vertices.size() * sizeof(vk::ModelVertex));
+      hash(geometry->indices.data(),
+           geometry->indices.size() * sizeof(std::uint32_t));
+      cached.geometry = std::move(geometry);
+    }
+    return cached.geometry;
+  }
+
+  void preload_native_model_geometry(const std::vector<const zcls::Node *> &nodes) {
+    VisualFloatScope guard;
+    if (!renderer_ || (geometry_mode_ != cc::geometry::Mode::gpu &&
+                       geometry_mode_ != cc::geometry::Mode::partial))
+      return;
+    std::unordered_set<zmod::Model *> seen_models;
+    for (const auto *node : nodes) {
+      if (renderer_->preload_stopped())
+        break;
+      if (!node->model)
+        continue;
+      // Prepared-owned nodes never enter the native GPU draw path.
+      ::platform::ModelDrawContext binding_context;
+      binding_context.node = node;
+      if (prepared_.has_binding(binding_context))
+        continue;
+      auto &model = *node->model;
+      if (!seen_models.insert(&model).second)
+        continue;
+      if (!zmod::rigid_source_supported(model, zmod::RigidGeometryEligibility{}))
+        continue;
+      if (model.render_geometry) {
+        bool materials_match = model.render_materials.size() == model.count(0x10);
+        if (materials_match) {
+          for (size_t index = 0; index < model.render_materials.size(); ++index) {
+            if (model.render_materials[index] != model.polygons[index].material) {
+              materials_match = false;
+              break;
+            }
+          }
+        }
+        if (!materials_match) {
+          model.invalidate_render_geometry();
+        }
+      }
+      if (!model.render_geometry) {
+        auto registered = zmod::register_rigid_source(model);
+        model.render_geometry = std::move(registered.resource);
+        model.render_materials = std::move(registered.original_materials);
+      }
+      const auto geometry = native_model_geometry(model.render_geometry);
+      preload_checkpoint();
+      renderer_->preload_model_geometry(*geometry);
+    }
+  }
+
+  static std::vector<const zcls::Node *> ordered_live_nodes() {
+    std::vector<const zcls::Node *> nodes;
+    std::unordered_set<const zcls::ListItem *> visited;
+    for (auto *item = zcls::list_head(zcls::kAllNodes); item; item = item->next) {
+      if (!visited.insert(item).second)
+        throw std::runtime_error("Malformed cycle detected in kAllNodes list");
+      // Allocated MechLib nodes belong to this canonical list without the
+      // serialized world-file kNodeLive bit. Never filter on that bit.
+      if (!item->removable && item->node)
+        nodes.push_back(item->node);
+    }
+    const auto *player = mech3::world().mission_player
+                             ? mech3::world().mission_player : mech3::world().player;
+    const auto *player_node = player ? static_cast<const zcls::Node *>(player->target_node) : nullptr;
+    const auto player_asset = player_node ? player_node->source_asset : nullptr;
+    const auto position = [](const zcls::Node *node) {
+      std::array<double, 3> point{};
+      // Read existing local transforms; selection must not update native poses
+      // or camera state. Unknown/shared ancestry gets a stable lower priority.
+      for (unsigned depth = 0; node && depth < 128; ++depth) {
+        if (node->cls() == 5 && node->data) {
+          const auto *data = static_cast<const zcls::Object3d *>(node->data);
+          const auto x = point[0], y = point[1], z = point[2];
+          for (unsigned axis = 0; axis < 3; ++axis)
+            point[axis] = x * data->get<float>(0x30 + axis * 4) +
+                          y * data->get<float>(0x3c + axis * 4) +
+                          z * data->get<float>(0x48 + axis * 4) +
+                          data->get<float>(0x54 + axis * 4);
+        }
+        if (!node->parent_count())
+          return point;
+        if (node->parent_count() != 1 || !node->parents)
+          break;
+        node = node->parents[0];
+      }
+      return std::array<double, 3>{std::numeric_limits<double>::infinity(), 0, 0};
+    };
+    const auto origin = position(player_node);
+    const auto rank = [&](const zcls::Node *node) {
+      const bool player_owned = player_asset && node->source_asset &&
+                                player_asset->name == node->source_asset->name;
+      const auto point = position(node);
+      double distance = 0;
+      for (unsigned axis = 0; axis < 3; ++axis) {
+        const auto delta = point[axis] - origin[axis];
+        distance += delta * delta;
+      }
+      if (!std::isfinite(distance))
+        distance = std::numeric_limits<double>::infinity();
+      return std::make_pair(player_owned ? 0 : 1, distance);
+    };
+    std::stable_sort(nodes.begin(), nodes.end(), [&](const auto *left, const auto *right) {
+      return rank(left) < rank(right);
+    });
+    return nodes;
+  }
+
+  static std::vector<std::string>
+  live_node_source_assets(const std::vector<const zcls::Node *> &nodes) {
+    std::vector<std::string> assets;
+    std::set<std::string> seen;
+    for (const auto *node : nodes)
+      if (node->source_asset && !node->source_asset->name.empty() &&
+          seen.insert(node->source_asset->name).second)
+        assets.push_back(node->source_asset->name);
+    return assets;
+  }
+
+  // Selected per-instance skin indices for each live prepared asset. Zero is the
+  // primary texture set, which resources_for_assets already covers.
+  static std::map<std::string, std::set<int32_t>>
+  live_node_skin_indices(const std::vector<const zcls::Node *> &nodes) {
+    std::map<std::string, std::set<int32_t>> skins;
+    for (const auto *node : nodes)
+      if (node->source_asset && !node->source_asset->name.empty() &&
+          node->prepared_skin_index != 0)
+        skins[node->source_asset->name].insert(node->prepared_skin_index);
+    return skins;
+  }
+
+  std::vector<int32_t>
+  live_native_texture_handles(const std::vector<const zcls::Node *> &nodes) const {
+    std::vector<int32_t> handles;
+    std::set<int32_t> seen;
+    const auto append = [&](const zimg::TextureEntry *texture) {
+      if (!texture || !texture->surface)
+        return;
+      const auto handle = static_cast<const zvid::D3DTexture *>(texture->surface)->handle;
+      if (handle < 0 || std::size_t(handle) >= textures_.size())
+        return;
+      const auto &slot = textures_[std::size_t(handle)];
+      if (!slot.pixels.empty() && slot.group_load_epoch == group_load_epoch_ &&
+          slot.surface_key.hash && seen.insert(handle).second)
+        handles.push_back(handle);
+    };
+    for (const auto *node : nodes) {
+      if (!node->model || !node->model->polygons)
+        continue;
+      ::platform::ModelDrawContext context;
+      context.node = node;
+      if (prepared_.has_binding(context))
+        continue; // These original albedos never reach the replaced draw path.
+      for (std::size_t index = 0; index < node->model->count(0x10); ++index) {
+        const auto *material = node->model->polygons[index].material;
+        if (!material || !(material->flags & 1))
+          continue;
+        append(material->texture);
+        if ((material->flags & 4) && material->cycle && material->cycle->textures)
+          for (std::size_t frame = 0; frame < material->cycle->added; ++frame)
+            append(material->cycle->textures[frame]);
+      }
+    }
+    return handles;
+  }
+
+  enum class PreloadTextureStage { prepared, world, native };
+  struct PendingTextureReceipt {
+    std::uint64_t key{};
+    std::array<std::uint64_t, 3> stamp{};
+    std::uint64_t bytes{};
+    PreloadTextureStage stage{};
+  };
+  // The mission preload runs on the game thread inside the mission-load session
+  // and can take several seconds. Pump window messages between uploads so
+  // Windows does not mark the game "Not responding". The observer only pumps
+  // events and draws its own loading window; it never touches this renderer.
+  // Outside a loading session the call is a no-op.
+  static void preload_checkpoint() noexcept { ::platform::loading::checkpoint(); }
+
+  void preload_texture_handle(int32_t handle, PreloadTextureStage stage,
+                              std::vector<PendingTextureReceipt> &pending) {
+    preload_checkpoint();
+    const std::uint64_t texture_key = std::uint64_t(handle) * 2 + 1;
+    const auto &entry = textures_.at(std::size_t(handle));
+    const unsigned texture_width = entry.width;
+    const unsigned texture_height = entry.height;
+    const std::uint64_t texture_version = entry.version;
+    const std::array<std::uint64_t, 3> receipt_stamp{
+        texture_version, texture_width, texture_height};
+    const auto existing_receipt = submitted_textures_.find(texture_key);
+    if (existing_receipt != submitted_textures_.end() &&
+        existing_receipt->second == receipt_stamp)
+      return;
+
+    for (const auto &receipt : pending)
+      if (receipt.key == texture_key && receipt.stamp == receipt_stamp)
+        return;
+    // Reserve the host receipt before accepting GPU work. Publication waits
+    // until explicit successful finalization, including earlier cap flushes.
+    if (pending.size() == pending.capacity())
+      pending.reserve(std::max<std::size_t>(16, pending.size() * 2));
+    const std::uint64_t staged_bytes =
+        std::uint64_t(entry.pixels.size()) * sizeof(std::uint32_t);
+    vk::TextureRef texture_ref{texture_key,
+                               texture_version,
+                               texture_width,
+                               texture_height,
+                               vk::TexFormat::rgba8888,
+                               {},
+                               entry.pixels};
+    if (!renderer_->preload_texture(texture_ref)) {
+      preload_test_state_.failed_texture_handle = handle;
+      return;
+    }
+    pending.push_back({texture_key, receipt_stamp, staged_bytes, stage});
+    if (!renderer_->texture_completed(texture_key, texture_version, texture_width, texture_height)) {
+      ++preload_test_state_.pending_texture_receipt_observations;
+      const auto published = submitted_textures_.find(texture_key);
+      if (published != submitted_textures_.end() && published->second == receipt_stamp)
+        ++preload_test_state_.premature_texture_receipts;
+    }
+  }
+
+  // Warming is optional. Budget/OOM stops the mission's remaining warmup;
+  // real draws retain their existing lazy upload path and exact cache keys.
+  void preload_mission_normal_textures() {
+    VisualFloatScope guard;
+    const bool world_normals = surface_normals_.preload_pending &&
+                               lighting_.enabled && lighting_.normals;
+    const bool prepared_assets = prepared_preload_pending_ && !prepared_.empty();
+    if (!surface_normals_.preload_pending && !prepared_preload_pending_)
+      return;
+    surface_normals_.preload_pending = false;
+    prepared_preload_pending_ = false;
+    if (!renderer_ || producer_failed_ || renderer_->preload_stopped())
+      return;
+    struct PreloadTimingGuard {
+      const bool enabled;
+      std::chrono::steady_clock::time_point start_time{};
+
+      explicit PreloadTimingGuard(bool is_enabled) : enabled(is_enabled) {
+        if (!enabled)
+          return;
+        start_time = std::chrono::steady_clock::now();
+        const auto start_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                start_time.time_since_epoch())
+                .count();
+        fprintf(stderr, "[PRELOAD_TIMING] start_us=%lld\n",
+                static_cast<long long>(start_us));
+      }
+
+      ~PreloadTimingGuard() {
+        if (!enabled)
+          return;
+        const auto end_time = std::chrono::steady_clock::now();
+        const auto end_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                end_time.time_since_epoch())
+                .count();
+        const auto elapsed_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                end_time - start_time)
+                .count();
+        fprintf(stderr, "[PRELOAD_TIMING] end_us=%lld elapsed_us=%lld\n",
+                static_cast<long long>(end_us),
+                static_cast<long long>(elapsed_us));
+      }
+    } timing_guard{producer_resource_timing_.enabled};
+    if (worker_)
+      worker_->drain();
+    if (reset_pending_)
+      ensure_extent();
+    renderer_->begin_preload();
+    struct PreloadGuard {
+      vk::Renderer &renderer;
+      ~PreloadGuard() { renderer.end_preload(); }
+    } preload_guard{*renderer_};
+    struct ActiveKeyGuard {
+      mw34::materials::SurfaceKey key{};
+      bool active = mw34::materials::get_active_surface_key(&key);
+      ActiveKeyGuard() { mw34::materials::clear_active_surface_key(); }
+      ~ActiveKeyGuard() {
+        if (active)
+          mw34::materials::set_active_surface_key(key);
+        else
+          mw34::materials::clear_active_surface_key();
+      }
+    } key_guard;
+    std::uint64_t prepared_bytes = 0, world_bytes = 0, native_bytes = 0;
+    std::uint64_t prepared_cpu_nanoseconds = 0;
+    const auto prepared_cpu_target = producer_resource_timing_.enabled
+                                         ? &prepared_cpu_nanoseconds
+                                         : nullptr;
+    std::vector<PendingTextureReceipt> pending_receipts;
+    std::size_t matched_assets = 0, albedos = 0, normals = 0, native_count = 0;
+    try {
+      const auto nodes = ordered_live_nodes();
+      const auto assets = live_node_source_assets(nodes);
+      const auto skin_indices = live_node_skin_indices(nodes);
+      const auto native_handles = live_native_texture_handles(nodes);
+      auto normal_handles = native_handles;
+      if (world_normals) {
+        // Live nearby pages go first. Retain the previous ample-memory sweep
+        // for other authenticated source pages to keep the first-turn win;
+        // native albedo images themselves still require a live reference.
+        std::set<int32_t> seen(normal_handles.begin(), normal_handles.end());
+        const auto source_count = textures_.size();
+        for (std::size_t index = 0; index < source_count; ++index) {
+          const auto &slot = textures_[index];
+          if (!slot.pixels.empty() && slot.group_load_epoch == group_load_epoch_ &&
+              slot.surface_key.hash && seen.insert(int32_t(index)).second)
+            normal_handles.push_back(int32_t(index));
+        }
+      }
+      preload_test_state_.ordered_prepared_assets = assets;
+      preload_test_state_.ordered_native_handles = native_handles;
+      native_count = native_handles.size();
+
+      // Finish each player/nearby prepared asset before moving to the next:
+      // distant model albedos cannot consume the player's normal-map allowance.
+      if (prepared_assets) {
+        for (const auto &asset : assets) {
+          if (renderer_->preload_stopped())
+            break;
+          const auto resources = prepared_.resources_for_assets({asset});
+          matched_assets += resources.matched_source_assets;
+          albedos += resources.textures.size();
+          normals += lighting_.enabled && lighting_.normals ? resources.normals.size() : 0;
+          if (geometry_mode_ == cc::geometry::Mode::gpu ||
+              geometry_mode_ == cc::geometry::Mode::partial)
+            for (const auto *batch : resources.rigid_batches) {
+              if (renderer_->preload_stopped())
+                break;
+              std::shared_ptr<const vk::ModelGeometry> geometry;
+              {
+                mw34::timing::ScopedDuration cpu_timer(prepared_cpu_target);
+                geometry = prepared_geometry(*batch);
+              }
+              preload_checkpoint();
+      renderer_->preload_model_geometry(*geometry);
+            }
+          for (const auto *image : resources.textures) {
+            if (renderer_->preload_stopped())
+              break;
+            int32_t handle;
+            {
+              mw34::timing::ScopedDuration cpu_timer(prepared_cpu_target);
+              handle = prepared_texture(*image);
+            }
+            preload_texture_handle(handle, PreloadTextureStage::prepared, pending_receipts);
+          }
+          if (lighting_.enabled && lighting_.normals)
+            for (const auto *normal : resources.normals) {
+              if (renderer_->preload_stopped())
+                break;
+              int32_t handle;
+              {
+                mw34::timing::ScopedDuration cpu_timer(prepared_cpu_target);
+                handle = prepared_normal(*normal);
+              }
+              preload_texture_handle(handle, PreloadTextureStage::prepared, pending_receipts);
+            }
+          // A selected skin replaces the primary albedos at draw time. Resolve it
+          // through the same skin cache and prepared texture slots the draw uses,
+          // so its first appearance reuses these uploads. A missing or invalid
+          // skin resolves to nothing and draws the primary set warmed above.
+          const auto selected_skins = skin_indices.find(asset);
+          if (selected_skins != skin_indices.end())
+            for (const auto skin_index : selected_skins->second) {
+              if (renderer_->preload_stopped())
+                break;
+              std::shared_ptr<const ::platform::prepared::Textures> skin;
+              {
+                mw34::timing::ScopedDuration cpu_timer(prepared_cpu_target);
+                skin = prepared_.resolve_skin(asset, skin_index);
+              }
+              if (!skin)
+                continue;
+              std::set<std::uint32_t> bound_images(skin->bindings.begin(), skin->bindings.end());
+              for (const auto image_index : bound_images) {
+                if (renderer_->preload_stopped())
+                  break;
+                int32_t handle;
+                {
+                  mw34::timing::ScopedDuration cpu_timer(prepared_cpu_target);
+                  handle = prepared_texture(skin->images.at(image_index), skin);
+                }
+                preload_texture_handle(handle, PreloadTextureStage::prepared, pending_receipts);
+                ++albedos;
+              }
+            }
+        }
+      }
+      if (world_normals && !renderer_->preload_stopped()) {
+        surface_normals_load();
+        // Copy the keys first: creating a normal handle can reallocate textures_.
+        // Normals already uploaded keep their GPU handle, so skip them; this is
+        // what stops the first world scene from re-reading every page (issue 461).
+        std::vector<mw34::materials::SurfaceKey> keys;
+        keys.reserve(normal_handles.size());
+        for (const auto handle : normal_handles) {
+          const auto key = textures_[std::size_t(handle)].surface_key;
+          const auto known = surface_normals_.cache.bindings.find(key);
+          if (known != surface_normals_.cache.bindings.end() &&
+              (known->second < 0 || surface_normal_textures_.count(known->second)))
+            continue;
+          keys.push_back(key);
+        }
+        // Each page is read once and its images upload while it is resident, so
+        // surface_normal_texture() never has to read the page again.
+        // Page reads are timed where they happen (surface_normal_image() for
+        // uploads); this loop is not wrapped so upload time isn't counted as decode.
+        std::set<int> seen;
+        surface_normals_.cache.preload_keys_grouped(
+            keys,
+            [&](int index) {
+              surface_normals_.peak_decoded_bytes = std::max(
+                  surface_normals_.peak_decoded_bytes, surface_normals_.cache.world_bytes);
+              if (renderer_->preload_stopped() || !seen.insert(index).second)
+                return;
+              preload_texture_handle(surface_normal_texture(index), PreloadTextureStage::world,
+                                     pending_receipts);
+            },
+            [&] { return renderer_->preload_stopped(); });
+      }
+      preload_native_model_geometry(nodes);
+      for (const auto handle : native_handles) {
+        if (renderer_->preload_stopped())
+          break;
+        preload_texture_handle(handle, PreloadTextureStage::native, pending_receipts);
+      }
+    } catch (const std::bad_alloc &) {
+      renderer_->stop_preload_host_allocation();
+    }
+    // Queue/fence failures remain visible outside optional host-allocation handling.
+    renderer_->finalize_preload();
+    try {
+      for (const auto &receipt : pending_receipts) {
+        if (!renderer_->texture_completed(receipt.key, receipt.stamp[0],
+                                          unsigned(receipt.stamp[1]), unsigned(receipt.stamp[2])))
+          continue;
+        submitted_textures_[receipt.key] = receipt.stamp;
+        switch (receipt.stage) {
+        case PreloadTextureStage::prepared:
+          prepared_bytes += receipt.bytes;
+          break;
+        case PreloadTextureStage::world:
+          world_bytes += receipt.bytes;
+          break;
+        case PreloadTextureStage::native:
+          native_bytes += receipt.bytes;
+          break;
+        }
+      }
+    } catch (const std::bad_alloc &) {
+      renderer_->stop_preload_host_allocation();
+    }
+    preload_test_state_.prepared_staged_bytes += prepared_bytes;
+    preload_test_state_.world_normal_staged_bytes += world_bytes;
+    preload_test_state_.native_staged_bytes += native_bytes;
+    if (renderer_->preload_stopped() && !preload_test_state_.stop_log_lines) {
+      const auto &info = renderer_->preload_stop_info();
+      std::fprintf(stderr,
+                   "[PRELOAD] stopped reason=%s result=%d heap=%u requested=%llu "
+                   "usage=%llu budget=%llu headroom=%llu; remaining=lazy\n",
+                   vk::preload_stop_reason_name(info.reason), int(info.vk_result), info.heap_index,
+                   (unsigned long long)info.requested_bytes, (unsigned long long)info.heap_usage_bytes,
+                   (unsigned long long)info.heap_budget_bytes, (unsigned long long)info.headroom_bytes);
+      ++preload_test_state_.stop_log_lines;
+    }
+    if (producer_resource_timing_.enabled)
+      std::fprintf(stderr,
+                   "[RESOURCE_TIMING] owner=producer stage=prepared_preload "
+                   "source_assets=%zu albedos=%zu normals=%zu staged_bytes=%llu "
+                   "world_staged_bytes=%llu native_textures=%zu native_staged_bytes=%llu "
+                   "batch_submissions=%zu peak_batch_bytes=%llu staging_capacity=%llu\n",
+                   matched_assets, albedos, normals, (unsigned long long)prepared_bytes,
+                   (unsigned long long)world_bytes, native_count, (unsigned long long)native_bytes,
+                   renderer_->preload_batch_submissions(),
+                   (unsigned long long)renderer_->preload_peak_bytes(),
+                   (unsigned long long)renderer_->texture_staging_size());
+    if (producer_resource_timing_.enabled)
+      std::fprintf(stderr, "[PRELOAD_PROFILE] prepared_cpu_us=%llu\n",
+                   (unsigned long long)(prepared_cpu_nanoseconds / 1000));
+  }
+
   unsigned bind_texture(int handle, bool sharp) {
+    // #496: the renderer frees textures when video memory runs out during play.
+    // Dropping their receipts makes the next frame that draws one send its
+    // pixels again, which this frontend keeps for every live texture. The
+    // receipt comes back once they are sent, so later frames don't copy them
+    // again; if that upload fails too, the renderer reports the key again.
+    for (const auto freed_key : renderer_->take_freed_texture_keys())
+      if (submitted_textures_.erase(freed_key))
+        receipts_to_restore_.insert(freed_key);
     auto &entry = textures_.at(handle);
     if (entry.pixels.empty()) {
       throw std::runtime_error("mw3-re draw references a released texture");
@@ -2142,6 +3254,8 @@ private:
       // Held readback is already straight RGBA at the output extent. Its
       // nearest SSAA sampling must preserve alpha-zero RGB as well.
       ref.pixels32 = entry.pixels;
+      if (receipts_to_restore_.erase(ref.key))
+        submitted_textures_[ref.key] = {ref.hash, w, h};
     }
     index = unsigned(scene_.textures.size());
     scene_.textures.push_back(std::move(ref));
@@ -2195,15 +3309,24 @@ private:
   bool lab_preview_lighting_{};
   std::shared_ptr<const ::platform::prepared::EnvironmentSelection>
       environment_;
+  std::unique_ptr<mw34::materials::StreamedHeightCache> streamed_height_cache_;
+  std::optional<std::tuple<std::uint64_t, std::uint32_t, int32_t, int32_t>> streamed_height_cell_;
+  std::vector<std::size_t> streamed_height_deferred_;
+  std::uint64_t streamed_height_sample_{};
   std::shared_ptr<const zcls::ZbdObservationSession> observation_session_;
   // Owned current-mission state: canonical mission ID plus resolved campaign
   // lighting/policy. The profile pointer refers only to the static campaign
   // profile database (no borrowed native pointers).
   ::platform::MissionIdentity current_mission_identity_{};
   std::string current_mission_id_;
+  bool mission_world_loaded_{};
   mw34::campaign::ResolvedMissionLighting current_mission_lighting_{};
   // Validate the original request before sanitizing or loading prepared models.
   const RendererBridgeConfig bridge_config_;
+  sdlfe::benchmark::Run* benchmark_run_{};
+  std::optional<double> benchmark_time_;
+  sdlfe::benchmark::EffectCounts benchmark_effects_;
+  uint64_t benchmark_swapchain_{};
   PreparedModels prepared_;
   const cc::geometry::Mode geometry_mode_;
   const bool geometry_debug_;
@@ -2213,6 +3336,7 @@ private:
     std::shared_ptr<const vk::ModelGeometry> geometry;
   };
   std::map<std::uint64_t, NativeGeometry> native_geometry_;
+  std::uint64_t native_geometry_prune_passes_{};
   std::unique_ptr<vk::Renderer> renderer_;
   // Declared after renderer_: join before destroying the backend, including
   // unwinding. Only the producer accesses textures and builds the next scene.
@@ -2220,9 +3344,13 @@ private:
   // Submission number of the last queued resident present (0 = none), so the producer keeps at
   // most one presented frame in flight.
   std::size_t last_present_job_ = 0;
+  bool strict_wait_timed_out_ = false;
   std::mutex recycle_mutex_;
   std::vector<vk::Scene> recycled_scenes_;
   std::map<std::uint64_t, std::array<std::uint64_t, 3>> submitted_textures_;
+  // Receipts dropped because the renderer freed the texture (#496), restored
+  // once its pixels have been sent again.
+  std::set<std::uint64_t> receipts_to_restore_;
   const sdlfe::FrameShape *shape_{};
   vk::Scene scene_{};
   ::platform::ProducerView producer_view_{};
@@ -2241,6 +3369,8 @@ private:
   std::map<const ::platform::prepared::Image *, int32_t> prepared_textures_;
   std::map<const ::platform::prepared::Image *,
            std::weak_ptr<const ::platform::prepared::Textures>> prepared_skin_owners_;
+  // Stale alternate skin slots, released by retire_skin_textures at the next scene boundary.
+  std::vector<int32_t> retiring_skin_textures_;
   std::map<const ::platform::prepared::NormalImage *, int32_t>
       prepared_normals_;
   std::map<const ::platform::prepared::Batch *,
@@ -2248,6 +3378,9 @@ private:
       prepared_geometry_;
   std::uint64_t group_load_epoch_{1};
   std::map<int, int32_t> surface_normal_textures_;
+  testing::PreloadTestState preload_test_state_;
+  bool prepared_preload_pending_{true};
+  bool first_world_preload_pending_{false};
   bool logged_first_normal_trace_{false};
   // Names survive handle reuse/reloads; unknown names use the upload handle.
   // Stop after four distinct flare textures, with no growing set or log spam.
@@ -2264,6 +3397,7 @@ private:
   int32_t present_window_width_{}, present_window_height_{};
   bool window_bound_{}, presented_{}, reported_resident_{}, reset_pending_{};
   const bool cpu_profile_ = cpu_profile_requested();
+  mw34::timing::ProducerResourceTiming producer_resource_timing_{};
   std::uint64_t render_ticks_{}, transport_ticks_{};
   std::uint64_t detail_frame_{};
   std::uint64_t worker_render_ticks_{}, worker_present_ticks_{};
@@ -2282,12 +3416,13 @@ private:
 RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
                                       const sdlfe::CoreCriticalQuality &quality,
                                       const sdlfe::CoreCriticalAssets &assets) {
-  if (assets.pom &&
+  const bool pom_requested = assets.pom || assets.pom_quality != 0U;
+  if (pom_requested &&
       (backend != sdlfe::RendererBackend::core_critical_dxgi &&
        backend != sdlfe::RendererBackend::core_critical_wsi))
     throw std::runtime_error(
         "--cc-pom 1 requires a Core Critical Vulkan backend");
-  if (assets.pom && assets.lighting != "normal")
+  if (pom_requested && assets.lighting != "normal")
     throw std::runtime_error("--cc-pom 1 requires --cc-lighting normal");
   const bool water_detail_requested =
       assets.water_detail_explicit && assets.water_detail;
@@ -2342,7 +3477,9 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
     config.stock_headlights = assets.stock_headlights;
     config.headlight_bindings = assets.headlight_bindings;
   }
-  config.parallax_materials = assets.pom;
+  config.parallax_materials = pom_requested;
+  config.parallax_quality =
+      pom_requested ? (assets.pom_quality ? assets.pom_quality : 2U) : 0U;
   // These explicit launch options own surface detail for this session. They
   // are not inferred from development environment variables.
   config.water_detail = assets.water_detail_explicit && assets.water_detail;
@@ -2363,7 +3500,17 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.world_scale_percent = 100;
   config.remaster_width = 0;
   config.remaster_height = 0;
-  config.vsync = true;
+  config.vsync = assets.vsync;
+  // A scored benchmark needs v-sync off whatever the player chose. The line
+  // above stays verbatim: stage_mw3_re_runtime.py detects the vsync capability
+  // from it.
+  if (assets.benchmark_run) config.vsync = false;
+  config.require_immediate_present = assets.benchmark_run != nullptr;
+  config.strict_swapchain_readback = assets.benchmark_run && assets.benchmark_run->strict();
+  if (assets.benchmark_run && (config.cpu_profile || config.gpu_profile ||
+                              config.vk_validation || config.detail_fixed_time ||
+                              config.buffer_growth_trace || config.trace_native_bindings))
+    throw std::runtime_error("Benchmark does not allow active renderer diagnostics");
   config.temporal_inputs = false;
   config.gpu_models = (assets.geometry != "legacy");
   config.geometry = assets.geometry;
@@ -2475,6 +3622,27 @@ testing::StagingTestState testing::staging_state(VulkanFrameRenderer &renderer) 
     return typed->staging_state_for_test();
 }
 
+void testing::set_skin_cache_budget(VulkanFrameRenderer &renderer, std::size_t bytes) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    typed->set_skin_cache_budget_for_test(bytes);
+}
+
+std::size_t testing::pending_skin_retirements(VulkanFrameRenderer &renderer) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->pending_skin_retirements_for_test();
+}
+
+std::array<float, 6> testing::last_model_projection(VulkanFrameRenderer &renderer) {
+    auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+    if (!typed)
+        throw std::runtime_error("Renderer is not a FrameRenderer");
+    return typed->last_model_projection_for_test();
+}
+
 bool testing::display_lighting_is_stock(VulkanFrameRenderer &renderer) {
     auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
     if (!typed)
@@ -2488,6 +3656,62 @@ testing::NamedTextureTestState testing::named_texture_state(
     if (!typed)
         throw std::runtime_error("Renderer is not a FrameRenderer");
     return typed->named_texture_state_for_test(handle);
+}
+
+static FrameRenderer &preload_impl(VulkanFrameRenderer &renderer) {
+  auto *typed = dynamic_cast<FrameRenderer *>(&renderer);
+  if (!typed)
+    throw std::runtime_error("Renderer is not a FrameRenderer");
+  return *typed;
+}
+void set_preload_fault_injection(VulkanFrameRenderer &renderer, const vk::PreloadFaultInjection &fault) {
+  preload_impl(renderer).set_preload_fault_for_test(fault);
+}
+void set_preload_batch_cap(VulkanFrameRenderer &renderer, std::uint64_t bytes) {
+  preload_impl(renderer).set_preload_batch_cap_for_test(bytes);
+}
+void set_preload_memory_block_cap(VulkanFrameRenderer &renderer, std::uint64_t bytes) {
+  preload_impl(renderer).set_preload_memory_block_cap_for_test(bytes);
+}
+PreloadTestState preload_test_state(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).preload_state_for_test();
+}
+bool has_texture_receipt(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
+  return preload_impl(renderer).texture_receipt_for_test(handle, sharp);
+}
+bool is_texture_gpu_resident(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
+  return preload_impl(renderer).backend_for_test().texture_resident(std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
+}
+bool has_partial_texture_cache_entry(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
+  return preload_impl(renderer).backend_for_test().partial_texture(std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
+}
+bool is_model_geometry_gpu_uploaded(VulkanFrameRenderer &renderer, std::uint64_t key) {
+  return preload_impl(renderer).backend_for_test().model_uploaded(key);
+}
+bool has_partial_model_buffer_entry(VulkanFrameRenderer &renderer, std::uint64_t key) {
+  return preload_impl(renderer).backend_for_test().partial_model(key);
+}
+std::size_t video_memory_full_log_count(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).backend_for_test().video_memory_full_log_count();
+}
+std::uint64_t scene_render_frame(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).backend_for_test().render_frame();
+}
+void free_unused_model_buffers(VulkanFrameRenderer &renderer, std::uint64_t min_age_frames) {
+  preload_impl(renderer).backend_for_test().free_unused_model_buffers_for_test(min_age_frames);
+}
+void free_unused_textures(VulkanFrameRenderer &renderer, std::uint64_t min_age_frames) {
+  preload_impl(renderer).backend_for_test().free_unused_textures_for_test(min_age_frames);
+}
+bool texture_awaiting_pixels(VulkanFrameRenderer &renderer, int32_t handle, bool sharp) {
+  return preload_impl(renderer).backend_for_test().texture_awaiting_pixels(
+      std::uint64_t(handle) * 2 + unsigned(sharp) + 1);
+}
+std::uint64_t shared_texture_staging_size(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).backend_for_test().texture_staging_size();
+}
+bool shared_texture_staging_mapped(VulkanFrameRenderer &renderer) {
+  return preload_impl(renderer).backend_for_test().texture_staging_mapped();
 }
 
 struct RigidCaptureTestAccess {

@@ -22,8 +22,18 @@ struct EnvironmentSelection;
 }
 
 namespace sdlfe {
+struct MenuRipplePass {
+    float center_x{}, center_y{};
+    float scale_x{1.f}, scale_y{1.f};
+    float inner{}, outer{}, amplitude{}, wavelength{}, phase{};
+    bool has_clip{};
+    float clip_left{}, clip_top{}, clip_right{}, clip_bottom{};
+};
 
 class EditorUiSource;
+namespace benchmark {
+class Run;
+}
 
 enum class RendererBackend { sdl, core_critical_dxgi, core_critical_wsi };
 
@@ -31,6 +41,7 @@ struct CoreCriticalQuality {
   std::string antialiasing = "off";
   std::string anisotropy = "1";
   unsigned draw_distance = 800;
+  unsigned fog_distance = 0;
 };
 
 struct PreparedModelBinding {
@@ -51,8 +62,10 @@ struct CoreCriticalAssets {
   bool environment_packs_explicit = false;
   std::shared_ptr<const platform::prepared::EnvironmentSelection> environment;
   bool render_thread = false;
+  benchmark::Run* benchmark_run = nullptr;
   std::string flare_style = "modern";
   bool pom = false;
+  unsigned pom_quality = 0; // 0 = off, 1 = low, 2 = high
   std::string geometry = "legacy";
   bool geometry_debug_normals = false;
   std::string textures;
@@ -69,6 +82,9 @@ struct CoreCriticalAssets {
   bool cloud_detail_explicit = false, cloud_detail = false;
   bool effect_lights = false, fixture_lights = false, mech_headlights = false;
   std::string effect_light_catalog, stock_headlights, headlight_bindings;
+  bool vsync_explicit = false, vsync = true;
+  // vsync and vsync_explicit are intentionally excluded from empty() because plain SDL
+  // supports vertical synchronization without requiring a Core Critical Vulkan backend.
   bool empty() const {
     return environment_packs.empty() && !environment_packs_explicit &&
            !environment && !sun_explicit &&
@@ -76,7 +92,7 @@ struct CoreCriticalAssets {
            !cloud_detail_explicit && !effect_lights && !fixture_lights &&
            !mech_headlights && effect_light_catalog.empty() &&
            stock_headlights.empty() && headlight_bindings.empty() &&
-           !render_thread && !pom && geometry == "legacy" && !geometry_debug_normals &&
+           !render_thread && !pom && pom_quality == 0 && geometry == "legacy" && !geometry_debug_normals &&
            flare_style == "modern" &&
            textures.empty() && models.empty() && normals.empty() &&
            materials.empty() && skins.empty() && skin_catalog.empty() &&
@@ -88,6 +104,13 @@ struct CoreCriticalAssets {
 class FrameRenderer : public platform::Render3D {
  public:
   virtual bool ok() const = 0;
+  virtual void benchmark_load() {}
+  virtual bool benchmark_ready() { return false; }
+  virtual bool wait_benchmark_present(double) { return false; }
+  virtual bool wait_benchmark_idle() { return true; }
+  virtual void set_benchmark_time(double) {}
+  virtual void set_benchmark_effects(unsigned, unsigned) {}
+  virtual void benchmark_finish() {}
   // Unsupported recorders reject attachment explicitly. Null detach is safe.
   virtual void attach_editor(EditorUiSource* source) {
     if (source) throw std::invalid_argument("renderer: editor attachment unsupported");
@@ -100,6 +123,9 @@ class FrameRenderer : public platform::Render3D {
   virtual void flush() = 0;
   // Optional canvases must discover deferred texture allocation failures before
   // submitting draws, so their CPU fallback can still use the render worker.
+  virtual bool supports_gpu_menu_ripple() const { return false; }
+  virtual void prepare_menu_ripple() {}
+  virtual void apply_menu_ripple(const MenuRipplePass &) {}
   virtual void prepare_canvas_textures(const std::vector<int32_t> &) {}
   virtual void viewport(int* x, int* y, int* w, int* h) const = 0;
   virtual void set_shape(const FrameShape* shape) = 0;

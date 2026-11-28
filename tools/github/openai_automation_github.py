@@ -120,7 +120,7 @@ content{__typename ... on Issue{number title body closed updatedAt repository{na
 labels(first:100){pageInfo{hasNextPage} nodes{name}}
 assignees(first:100){pageInfo{hasNextPage} nodes{login}}}}}}}}}"""
 
-PULL_QUERY = """query($cursor:String){repository(owner:"roswellien",name:"MW3Recomp-Private"){
+PULL_QUERY = """query($cursor:String){repository(owner:"roswellien",name:"CoreCriticalProject"){
 pullRequests(first:100,after:$cursor,states:OPEN){totalCount pageInfo{hasNextPage endCursor}
 nodes{closingIssuesReferences(first:100){pageInfo{hasNextPage}
 nodes{number repository{nameWithOwner}}}}}}}"""

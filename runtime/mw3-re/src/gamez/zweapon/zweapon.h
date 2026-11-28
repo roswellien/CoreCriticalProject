@@ -134,6 +134,9 @@ struct HitHooks {
   // 0x004f0ac0 on the world: what lies within `radius` of `at`, into `out`;
   // 0 when it found something.
   int32_t (*query)(Handle node, const Vec3f3* at, float radius, HitList* out) = nullptr;
+  // Ours (#289): told of every impact before anything else happens, with the
+  // round, what it hit and the soil; the arena log's round ends. Read only.
+  void (*impact_seen)(const Projectile* p, const HitRecord* hit, int32_t soil) = nullptr;
 };
 HitHooks& hit_hooks();
 

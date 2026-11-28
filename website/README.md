@@ -33,6 +33,22 @@ Wrangler serves the static build and discovers the Function in `website/function
 For a static-only preview, use `python -m http.server 4173 --directory dist`
 from `website/`.
 
+## Web-sized images and fonts
+
+Pages load WebP images and WOFF2 fonts generated from the original PNG plates and
+TTF fonts, which stay in the repository as the source. After replacing or adding an
+original, regenerate the web files from the repository root and commit them:
+
+```powershell
+pip install pillow fonttools brotli
+python website/tools/optimize_assets.py
+```
+
+New artwork must be listed in the script and referenced as `.webp` with a
+`srcset`. Fonts are converted without subsetting, so the Orbitron and Russo One
+Reserved Font Names remain valid. The Mod Studio tour links each screenshot to its
+full-quality PNG.
+
 ## Publish
 
 The existing `core-critical` Pages project is connected to this repository with
@@ -133,19 +149,19 @@ the visitor must complete the PIN login and the Pages Function must also
 validate the resulting signed Access token. An identity provider can be enabled
 as an alternative login method if desired.
 
-Choose the admin email before enabling the archive; it is not hard-coded in
-this repository. For the current single-admin authorization check, set the one
-allowed email in `CRASH_REPORT_ADMIN_EMAIL`. The Access Allow policy and this
-Pages production variable must match. Configure the remaining Pages production
-variables to match the Access application:
+Add each approved admin email to the archive's Access Allow policy. Set
+`CRASH_REPORT_ADMIN_EMAIL` to the same addresses as a comma-separated list.
+An existing single address remains valid. Configure the remaining Pages
+production variables to match the Access application.
 
 - `CRASH_REPORT_ACCESS_ISSUER=https://<team>.cloudflareaccess.com`.
 - `CRASH_REPORT_ACCESS_AUD=<application-audience-tag>`.
-- `CRASH_REPORT_ADMIN_EMAIL=<admin-email>`.
+- `CRASH_REPORT_ADMIN_EMAIL=<admin-email>[,<admin-email>...]`.
 
 The Pages Function independently verifies the Access JWT signature, issuer,
-audience, expiration and exact admin email before querying D1. The Access
-application provides the login flow; its signed JWT reaches the function as
+audience, expiration and exact match to an approved admin email before querying
+D1. The Access application provides the login flow. Its signed JWT reaches the
+function as
 `Cf-Access-Jwt-Assertion`. Keep the app's email allow policy and the function's
 email variable aligned. Requests through a Pages preview or direct Pages URL
 without a valid admin JWT receive no report data. D1 remains bound only to

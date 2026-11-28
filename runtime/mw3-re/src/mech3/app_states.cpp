@@ -14,9 +14,12 @@
 #include <cstdio>
 
 #include "crt/msvc_math.h"
+#include "gamez/zclass/camera.h"
+#include "gamez/zutil/ztimer.h"
 #include "gamez/zvideo/zvid_format.h"
 #include "mech3/app.h"
 #include "mech3/pilot.h"
+#include "mech3/spectator_seat.h"
 
 namespace mech3 {
 
@@ -31,6 +34,7 @@ States& states() {
 void reset_states() {
   delete g_states;
   g_states = new States;
+  set_launch_spectator(false);  // ours (#287): a spectator launch ends with its run
 }
 
 Engine& State::e() { return app().engine(); }
@@ -275,7 +279,10 @@ bool CoreState::enter() {
   if (a().lock_system_keys()) en.lock_system_keys(1);
   en.options_apply_all();
   const Handle pilot = en.pilot();
-  if (pilot == 0 || en.field32(pilot, 0x14) == 0) a().replace(a().state(2), 0);
+  // Ours (#287): a spectator's launch has no vehicle by design (the arena's
+  // seat), so only the pilot's absence sends it back to the menu.
+  const bool no_vehicle = pilot != 0 && en.field32(pilot, 0x14) == 0;
+  if (pilot == 0 || (no_vehicle && !launch_spectator())) a().replace(a().state(2), 0);
   paused_ = 0;
   en.set_screen_mode(en.in_game_vmode());
   pick_renderer();
@@ -310,8 +317,9 @@ void CoreState::pick_renderer() {
 // silent; docs/discoveries.md).
 void CoreState::start_mission() {
   Engine& en = e();
+  const bool strict = en.replay_strict();
   en.timer_update();
-  en.sleep(30);
+  if (!strict) en.sleep(30);
   en.timer_update();
   en.debug_mark("Dummy Frame");
   en.video_show_cursor(1);
@@ -324,8 +332,11 @@ void CoreState::start_mission() {
     en.camera_set_5ea53c(0);
     en.camera_set_hse_test(0);  // the objects' hidden-surface test off with a card
   }
-  const float dt = en.frame_dt();
-  en.lists_update();
+  // The dummy view supplies the fade's still. Strict effects and action lists
+  // start at tick zero, and the fade must not tune LOD using wall-clock time.
+  const float dt = strict ? 0.0f : en.frame_dt();
+  if (strict) zcls::scene_walk().lod_dynamic = 0;
+  else en.lists_update();
   render_rect_ = en.render_rect();
   display_rect_ = en.display_rect();
   window_rect_ = en.window_rect();
@@ -350,6 +361,11 @@ void CoreState::start_mission() {
   }
   if (cockpit) en.node_set_active(en.vehicle_node(veh), 0);
   en.view_reset(en.player_view());
+  // Model draws read the global scaled step for texture cycles and lights.
+  // Freeze it for the still so those phases do not advance before tick zero.
+  float& frame_step = ztimer::state().dt;
+  const float saved_frame_step = frame_step;
+  if (strict) frame_step = 0.0f;
   en.vcall(en.player_view(), 0x08, {zgame::bits(dt)});
   en.vcall(en.player_view(), 0x04, {});
   if (cockpit) {
@@ -358,6 +374,7 @@ void CoreState::start_mission() {
     const Handle part = en.cockpit_node(veh);
     en.view_draw_node(en.field32(v, 0x4), part, en.field32(v, 0x14));
   }
+  if (strict) frame_step = saved_frame_step;
   en.ai_reset(0x604038);
   if (en.video_mode() != 0) {
     en.video_begin_3d();
@@ -368,6 +385,10 @@ void CoreState::start_mission() {
   }
   if (en.pixel_double() != 0) en.video_double(0, 0);
   en.nav_prebuild();  // ours (W58)
+  // Ours (#287): after the grid, so a bot's first step finds it; a 3D replay
+  // (#289) makes its puppets instead.
+  if (en.replay_on()) en.replay_start();
+  else en.arena_start();
   en.input_reset();
   elapsed_ = 0;
   en.debug_mark(" L e t s  P l a y ! ");
@@ -408,15 +429,31 @@ void CoreState::start_mission() {
 bool CoreState::frame() {
   Engine& en = e();
   elapsed_ = en.frame_dt() + elapsed_;
+  // Ours (#289): a 3D replay polls without the command callbacks, so no game
+  // command fires (replay_hooks.h).
+  const bool replay = en.replay_on();
   if (!paused_) {
-    en.input_poll(1);
+    en.input_poll(replay ? 0 : 1);
     if (!a().fullscreen() && (a().input_mode_ & 0xc) == 8) {
       int32_t x = 0, y = 0;
       en.cursor_pos(&x, &y);
       en.mouse_set_pos(x, y);
     }
   }
-  en.lists_update();
+  if (replay && !en.replay_before_lists()) return false;
+  struct ReplayFrameScope {
+    Engine* engine;
+    ~ReplayFrameScope() {
+      if (engine) engine->replay_after_frame();
+    }
+  } replay_frame{replay ? &en : nullptr};
+  if (!replay || en.replay_advance_lists()) {
+    en.lists_update();
+    if (replay) en.replay_after_lists();  // update the replay time and puppets
+  }
+  // The view's draw call emits the world synchronously. Strict ticks need
+  // their camera after the puppets are posed and before any draw path runs.
+  if (replay && en.replay_strict()) en.replay_camera();
   en.sound_update(0, 1);
   const Handle view = en.player_view();
   const Handle target = en.field32(view, 0x64);
@@ -448,6 +485,7 @@ bool CoreState::frame() {
 bool CoreState::update() {
   Engine& en = e();
   if (frame()) a().push(a().state(3), 0);
+  en.arena_tick();  // ours (#287): an arena match's end, after the frame's play
   if (en.vmode() != globals().last_vmode) {
     pick_renderer();
     globals().last_vmode = en.vmode();
@@ -485,10 +523,17 @@ void zoom_pass(Engine& en, Handle veh) {
   en.hud_zoom_pass(en.pilot_hud(en.field32(veh, 0x684)), en.frame_dt());
 }
 void world_tick(Engine& en) {
+  // Ours (#289): a 3D replay simulates nothing; only its camera runs.
+  if (en.replay_on()) {
+    en.camera_update();
+    if (!en.replay_strict()) en.replay_camera();
+    return;
+  }
   en.sensors_update();
   en.missions_update(0x6098d0, en.frame_dt());
   en.pilot_update(en.pilot(), en.frame_dt());
   en.camera_update();
+  en.spectator_camera();  // ours (#529): a watched arena match's camera, after the view's
 }
 }  // namespace
 
@@ -664,6 +709,7 @@ bool CoreState::draw_hardware(Handle veh, bool flag) {
   en.video_begin_3d();
   hud(en);
   hud_static(en, veh);
+  if (en.replay_on()) en.replay_draw();  // ours (#289): the replay's overlays and bar
   // FIX (A), playtest W44/W46: the quit box (the exe's update after the frame,
   // 0x00481e70) draws here, with the HUD's 2D, else nothing showed it.
   en.vcall(message_box_, 0x00, {zgame::bits(en.frame_dt())});

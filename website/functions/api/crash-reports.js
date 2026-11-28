@@ -2,6 +2,7 @@ const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_ISSUE_BODY_CHARS = 48_000;
 const MAX_ISSUE_REPORT_CHARS = 20_000;
 const MAX_FULL_LOG_REPEATS = 3;
+const MAX_QUOTED_PATH_CHARS = 4096;
 const DEFAULT_DAILY_ISSUE_LIMIT = 20;
 const ARCHIVE_SAVE_FAILED_LOG =
     "Crash report archive save to table crash_report_archive failed; check that website/migrations/0002_crash_report_archive.sql is applied:";
@@ -10,17 +11,355 @@ const ARCHIVE_FAILED_NOTE =
 const GENERIC_FAILURES = [
     "The launch or game ended unexpectedly. Open Logs for details.",
     "No launch details were recorded.",
+    "No specific failure was recorded.",
 ];
 
+const MIN_INT32 = -2_147_483_648;
+const MAX_INT32 = 2_147_483_647;
+const LOG_ORDER = ["native_crash", "native_run", "native_stderr", "launcher", "native_stdout"];
+
+// Only the legacy host fault record may retain a module basename and numeric suffix.
+const NATIVE_MODULE_SUFFIX_LINE =
+    /^(HOST EXCEPTION (?:0x)?[0-9a-f]{1,8} at )((?:[A-Z]:[\\/]|\\\\)[^\r\n\t"<>|:]{1,1024}?)(\.(?:exe|dll)[ \t]*\+0x[0-9a-f]{1,16}(?: \(access [0-9]+ address (?:0x)?[0-9a-f]{1,16}\))?)(?=\r?$)/gim;
+
+const OPENING_QUOTE_DELIMITERS = new Set(["(", "[", "{", "=", ",", ";", ":", '"', "`", "<"]);
+const CLOSING_QUOTE_DELIMITERS = new Set([
+    ".",
+    ",",
+    ";",
+    ":",
+    "!",
+    "?",
+    ")",
+    "]",
+    "}",
+    '"',
+    "`",
+    ">",
+]);
+const DISALLOWED_PATH_CHARS = new Set(["\r", "\n", "\t", '"', "<", ">", "|"]);
+const TRAILING_WORD_STOP_CHARS = new Set([
+    "/",
+    "\\",
+    ":",
+    "=",
+    "(",
+    "[",
+    "{",
+    ",",
+    ";",
+    "!",
+    "?",
+    '"',
+    "`",
+]);
+const CONTINUATION_AFTER_CHARS = new Set([" ", ".", ",", ";", "!", "?", ")", "]"]);
+const EXT_DISALLOWED_FOLLOWERS = new Set(["'", "=", ":", ")", "]", "}", '"', "`", ">"]);
+
+function isWhiteSpace(c) {
+    return /\s/.test(c);
+}
+
+function isAsciiLetter(c) {
+    const code = c.charCodeAt(0);
+    return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function isAsciiLetterOrDigit(c) {
+    const code = c.charCodeAt(0);
+    return (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57);
+}
+
+function isDrivePathStart(text, start) {
+    return (
+        start + 2 < text.length &&
+        isAsciiLetter(text[start]) &&
+        text[start + 1] === ":" &&
+        (text[start + 2] === "\\" || text[start + 2] === "/")
+    );
+}
+
+function isUncPathStart(text, start) {
+    return (
+        start + 2 < text.length &&
+        text[start] === "\\" &&
+        text[start + 1] === "\\" &&
+        !DISALLOWED_PATH_CHARS.has(text[start + 2]) &&
+        text[start + 2] !== "'"
+    );
+}
+
+function isQuotedPathOpeningBoundary(text, quoteIndex) {
+    if (quoteIndex === 0) return true;
+    const prev = text[quoteIndex - 1];
+    return isWhiteSpace(prev) || OPENING_QUOTE_DELIMITERS.has(prev);
+}
+
+function isQuotedPathClosingBoundary(text, quoteIndex) {
+    if (quoteIndex + 1 >= text.length) return true;
+    const next = text[quoteIndex + 1];
+    return isWhiteSpace(next) || CLOSING_QUOTE_DELIMITERS.has(next);
+}
+
+function hasFileExtension(text, segmentStart, segmentEnd) {
+    let lastDot = -1;
+    for (let i = segmentEnd - 1; i >= segmentStart; i--) {
+        if (text[i] === ".") {
+            lastDot = i;
+            break;
+        }
+    }
+    if (lastDot <= segmentStart || lastDot >= segmentEnd - 1) return false;
+    const extLength = segmentEnd - lastDot - 1;
+    if (extLength > 8) return false;
+    let hasLetter = false;
+    for (let i = lastDot + 1; i < segmentEnd; i++) {
+        const c = text[i];
+        if (!isAsciiLetterOrDigit(c)) return false;
+        if (isAsciiLetter(c)) hasLetter = true;
+    }
+    return hasLetter;
+}
+
+function isMixedForwardSlashContinuation(text, lastSlash, end, slashCount) {
+    if (slashCount <= 0 || lastSlash + 1 >= end) return false;
+    if (hasFileExtension(text, lastSlash + 1, end)) return true;
+    if (slashCount < 2) return false;
+    for (let i = lastSlash + 1; i < end; i++) {
+        if (isWhiteSpace(text[i])) return false;
+    }
+    return true;
+}
+
+function findContinuationClosingQuote(
+    text,
+    start,
+    expectedSeparator,
+    requirePathSeparator,
+    allowWhitespace,
+    scanLimit,
+) {
+    let sawSeparator = false;
+    let forwardSlashCount = 0;
+    let lastForwardSlash = -1;
+    for (let i = start; i < scanLimit; i++) {
+        const c = text[i];
+        if (DISALLOWED_PATH_CHARS.has(c) || c === ":") return -1;
+        if (!allowWhitespace && isWhiteSpace(c)) return -1;
+        if (c === expectedSeparator || c === "\\") {
+            sawSeparator = true;
+        } else if (c === "/") {
+            forwardSlashCount++;
+            lastForwardSlash = i;
+        }
+        if (c !== "'") continue;
+
+        if (isQuotedPathClosingBoundary(text, i)) {
+            if (!requirePathSeparator || sawSeparator) return i;
+            return isMixedForwardSlashContinuation(text, lastForwardSlash, i, forwardSlashCount)
+                ? i
+                : -1;
+        }
+
+        // An opening quote after a delimiter starts a separate quoted token,
+        // not a continuation.
+        if (isQuotedPathOpeningBoundary(text, i)) return -1;
+    }
+    return -1;
+}
+
+function scanSingleTrailingWordQuote(text, start, scanLimit) {
+    if (start >= scanLimit) return -1;
+    let length = 0;
+    for (let i = start; i < scanLimit; i++) {
+        const c = text[i];
+        if (DISALLOWED_PATH_CHARS.has(c) || isWhiteSpace(c)) return -1;
+        if (TRAILING_WORD_STOP_CHARS.has(c)) return -1;
+        if (c === "'") {
+            if (!isQuotedPathClosingBoundary(text, i)) {
+                length++;
+                continue;
+            }
+            return length > 0 ? i : -1;
+        }
+        length++;
+    }
+    return -1;
+}
+
+// Keep scanning past apostrophes followed by whitespace or punctuation inside a path
+// (such as "Players' Choice\mw3.exe" or "v1'.txt") without crossing into another quoted token.
+function continuePastInternalApostrophe(text, quoteIndex, expectedSeparator, scanLimit) {
+    if (quoteIndex + 1 >= scanLimit) return -1;
+
+    const after = text[quoteIndex + 1];
+    if (CONTINUATION_AFTER_CHARS.has(after)) {
+        const candidate = findContinuationClosingQuote(
+            text,
+            quoteIndex + 1,
+            expectedSeparator,
+            true,
+            true,
+            scanLimit,
+        );
+        if (candidate >= 0) return candidate;
+    }
+
+    if (
+        (after === "." || after === ",") &&
+        quoteIndex + 2 < scanLimit &&
+        !isWhiteSpace(text[quoteIndex + 2]) &&
+        !EXT_DISALLOWED_FOLLOWERS.has(text[quoteIndex + 2])
+    ) {
+        const candidate = findContinuationClosingQuote(
+            text,
+            quoteIndex + 2,
+            expectedSeparator,
+            false,
+            false,
+            scanLimit,
+        );
+        if (candidate >= 0) return candidate;
+    }
+
+    if (after === " ") {
+        const componentEnd = scanSingleTrailingWordQuote(text, quoteIndex + 2, scanLimit);
+        if (componentEnd >= 0) return componentEnd;
+    }
+
+    return -1;
+}
+
+function findSingleQuotedPathClose(
+    text,
+    pathStart,
+    initialScanIndex,
+    expectedSeparator,
+    scannedNoCloseUntil,
+) {
+    const scanLimit = Math.min(text.length, pathStart + MAX_QUOTED_PATH_CHARS);
+    let index = Math.max(initialScanIndex, scannedNoCloseUntil);
+    while (index < scanLimit) {
+        const c = text[index];
+        if (DISALLOWED_PATH_CHARS.has(c)) {
+            return { closeQuote: -1, noCloseBefore: index, scannedNoCloseUntil: index };
+        }
+        if (c !== "'") {
+            index++;
+            continue;
+        }
+
+        if (!isQuotedPathClosingBoundary(text, index)) {
+            index++;
+            continue;
+        }
+
+        // Extend continuation lookahead past scanLimit so an apostrophe near the
+        // 4096-char boundary cannot truncate a following valid quoted path mid-segment.
+        let closeQuote = index;
+        while (true) {
+            const continuationLimit = Math.min(text.length, closeQuote + MAX_QUOTED_PATH_CHARS);
+            const continuedQuote = continuePastInternalApostrophe(
+                text,
+                closeQuote,
+                expectedSeparator,
+                continuationLimit,
+            );
+            if (continuedQuote < 0) {
+                return { closeQuote, noCloseBefore: -1, scannedNoCloseUntil: -1 };
+            }
+            closeQuote = continuedQuote;
+        }
+    }
+
+    return {
+        closeQuote: -1,
+        noCloseBefore: scanLimit === text.length ? text.length : -1,
+        scannedNoCloseUntil: scanLimit,
+    };
+}
+
+function scrubSingleQuotedPaths(text) {
+    const parts = [];
+    let copyFrom = 0;
+    let index = 0;
+    let noCloseBefore = -1;
+    let scannedNoCloseUntil = -1;
+    while (index < text.length) {
+        if (text[index] !== "'" || !isQuotedPathOpeningBoundary(text, index)) {
+            index++;
+            continue;
+        }
+
+        const pathStart = index + 1;
+        let replacement = null;
+        let expectedSeparator = "\\";
+        if (isDrivePathStart(text, pathStart)) {
+            replacement = "'<local-path>'";
+            expectedSeparator = text[pathStart + 2] === "/" ? "/" : "\\";
+        } else if (isUncPathStart(text, pathStart)) {
+            replacement = "'<network-path>'";
+        }
+
+        if (replacement === null) {
+            index++;
+            continue;
+        }
+
+        if (pathStart < noCloseBefore) {
+            index++;
+            continue;
+        }
+
+        const result = findSingleQuotedPathClose(
+            text,
+            pathStart,
+            pathStart + 3,
+            expectedSeparator,
+            scannedNoCloseUntil,
+        );
+        if (result.closeQuote < 0) {
+            if (result.noCloseBefore > noCloseBefore) noCloseBefore = result.noCloseBefore;
+            if (result.scannedNoCloseUntil > scannedNoCloseUntil) {
+                scannedNoCloseUntil = result.scannedNoCloseUntil;
+            }
+            index++;
+            continue;
+        }
+
+        parts.push(text.slice(copyFrom, index), replacement);
+        copyFrom = result.closeQuote + 1;
+        index = copyFrom;
+    }
+
+    if (parts.length === 0) return text;
+    parts.push(text.slice(copyFrom));
+    return parts.join("");
+}
+
 function redactPaths(value) {
-    return value
-        .replace(/\b[A-Za-z]:[\\/][^\r\n\t"<>|]*/g, "<local-path>")
+    let text = value.replace(NATIVE_MODULE_SUFFIX_LINE, (_full, prefix, pathPart, suffix) => {
+        const token = pathPart.startsWith("\\\\") ? "<network-path>" : "<local-path>";
+        const lastSep = Math.max(pathPart.lastIndexOf("\\"), pathPart.lastIndexOf("/"));
+        const stem = lastSep >= 0 ? pathPart.slice(lastSep + 1) : pathPart;
+        if (/^[A-Za-z0-9._-]{1,64}$/.test(stem)) {
+            return `${prefix}${token}/${stem}${suffix}`;
+        }
+        return `${prefix}${token}${suffix}`;
+    });
+    text = scrubSingleQuotedPaths(text);
+    return text
+        .replace(/(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n\t"<>|]*/g, "<local-path>")
         .replace(/\\\\[^\r\n\t"<>|]+/g, "<network-path>");
 }
 
-function hardwareField(source, name) {
+function field(source, name) {
     const camelName = name[0].toLowerCase() + name.slice(1);
     return source?.[camelName] ?? source?.[name];
+}
+
+function hardwareField(source, name) {
+    return field(source, name);
 }
 
 function json(body, status = 200) {
@@ -150,8 +489,8 @@ function validateReport(report) {
         report.mode.length > 80 ||
         !Number.isInteger(report.exit_code) ||
         report.exit_code === 0 ||
-        report.exit_code < -255 ||
-        report.exit_code > 255 ||
+        report.exit_code < MIN_INT32 ||
+        report.exit_code > MAX_INT32 ||
         !report.logs ||
         typeof report.logs !== "object" ||
         Array.isArray(report.logs)
@@ -168,60 +507,99 @@ function validateReport(report) {
         "D7VkAntiAliasing",
         "D7VkAnisotropicFiltering",
     ]) {
-        if (typeof report.settings?.[key] === "string")
-            settings[key] = report.settings[key].slice(0, 80);
+        const value = field(report.settings, key);
+        if (typeof value === "string") settings[key] = redactPaths(value.slice(0, 80));
     }
     for (const key of ["Width", "Height", "AnisotropicFiltering", "DrawDistance", "FogDistance"]) {
-        if (Number.isInteger(report.settings?.[key])) settings[key] = report.settings[key];
+        const value = field(report.settings, key);
+        if (Number.isInteger(value)) settings[key] = value;
     }
-    for (const key of ["LocalCdAudio", "InstantReplay", "PerformanceMonitor", "D7VkAiTextures"]) {
-        if (typeof report.settings?.[key] === "boolean") settings[key] = report.settings[key];
+    for (const key of [
+        "LocalCdAudio",
+        "InstantReplay",
+        "PerformanceMonitor",
+        "RenderThread",
+        "D7VkAiTextures",
+    ]) {
+        const value = field(report.settings, key);
+        if (typeof value === "boolean") settings[key] = value;
     }
 
     const logs = {};
-    for (const name of ["launcher", "native_stderr", "native_stdout"]) {
+    for (const name of LOG_ORDER) {
         const value = report.logs[name];
         if (value !== undefined && typeof value !== "string")
             throw new Error("The crash report logs are invalid.");
         if (value) logs[name] = redactPaths(value.slice(-64 * 1024));
     }
     const packs = Array.isArray(report.packs)
-        ? report.packs.slice(0, 64).map((pack) => ({
-              id: typeof pack?.Id === "string" ? redactPaths(pack.Id.slice(0, 120)) : "",
-              version: typeof pack?.Version === "string" ? pack.Version.slice(0, 80) : "",
-              schema_version: Number.isInteger(pack?.SchemaVersion) ? pack.SchemaVersion : 0,
-              enabled: pack?.IsEnabled === true,
-              priority: Number.isInteger(pack?.Priority) ? pack.Priority : 0,
-          }))
+        ? report.packs.slice(0, 64).map((pack) => {
+              const rawId = field(pack, "Id");
+              const rawVersion = field(pack, "Version");
+              const rawSchema = field(pack, "SchemaVersion") ?? pack?.schema_version;
+              const rawEnabled = field(pack, "IsEnabled") ?? pack?.enabled;
+              const rawPriority = field(pack, "Priority");
+              return {
+                  id: typeof rawId === "string" ? redactPaths(rawId.slice(0, 120)) : "",
+                  version:
+                      typeof rawVersion === "string" ? redactPaths(rawVersion.slice(0, 80)) : "",
+                  schema_version: Number.isInteger(rawSchema) ? rawSchema : 0,
+                  enabled: rawEnabled === true,
+                  priority: Number.isInteger(rawPriority) ? rawPriority : 0,
+              };
+          })
         : [];
     const reportId =
         typeof report.report_id === "string" && /^[a-zA-Z0-9-]{1,64}$/.test(report.report_id)
             ? report.report_id
             : crypto.randomUUID();
-    return {
+    const rawSourceCommit = report.runtime_source_commit ?? report.runtimeSourceCommit;
+    const runtimeSourceCommit =
+        typeof rawSourceCommit === "string" && rawSourceCommit.trim().length > 0
+            ? redactPaths(rawSourceCommit.trim().slice(0, 40))
+            : undefined;
+    const validated = {
         format_version: 1,
         report_id: reportId,
         created_utc: typeof report.created_utc === "string" ? report.created_utc.slice(0, 40) : "",
         launcher_version:
-            typeof report.launcher_version === "string" ? report.launcher_version.slice(0, 80) : "",
+            typeof report.launcher_version === "string"
+                ? redactPaths(report.launcher_version.slice(0, 80))
+                : "",
         runtime_version:
-            typeof report.runtime_version === "string" ? report.runtime_version.slice(0, 80) : "",
+            typeof report.runtime_version === "string"
+                ? redactPaths(report.runtime_version.slice(0, 80))
+                : "",
+        ...(runtimeSourceCommit ? { runtime_source_commit: runtimeSourceCommit } : {}),
         mode: redactPaths(report.mode.slice(0, 80)),
         exit_code: report.exit_code,
-        os: typeof report.os === "string" ? report.os.slice(0, 200) : "",
+        os: typeof report.os === "string" ? redactPaths(report.os.slice(0, 200)) : "",
         architecture:
-            typeof report.architecture === "string" ? report.architecture.slice(0, 80) : "",
+            typeof report.architecture === "string"
+                ? redactPaths(report.architecture.slice(0, 80))
+                : "",
         dotnet_runtime:
-            typeof report.dotnet_runtime === "string" ? report.dotnet_runtime.slice(0, 120) : "",
+            typeof report.dotnet_runtime === "string"
+                ? redactPaths(report.dotnet_runtime.slice(0, 120))
+                : "",
         hardware: validateHardware(report.hardware),
         failure_summary: redactPaths(report.failure_summary.slice(0, 2000)),
         settings,
         packs,
         logs,
     };
+    return validated;
 }
 
 function normalizeReason(reason) {
+    // The native runtime logs raw fault and module-base addresses for debugging. Ignore those
+    // when the crashing instruction has a stable address relative to the executable.
+    const nativeFault =
+        /^(mw3(?:launcher|pm)?: crashed: exception 0x[0-9a-f]{1,8}) at (?:0x)?[0-9a-f]{1,16} module base (?:0x)?[0-9a-f]{1,16} (RVA 0x[0-9a-f]{1,16})(?: \(access violation: ([a-z]+) \([0-9]+\) target (?:0x)?[0-9a-f]{1,16}\))?$/i.exec(
+            reason.trim(),
+        );
+    if (nativeFault) return nativeFault.slice(1).filter(Boolean).join(" ").toLowerCase();
+
     return reason
         .toLowerCase()
         .replace(/0x[0-9a-f]+/gi, "<address>")
@@ -313,13 +691,19 @@ function issueBody(
         );
 
     const logNames = {
-        launcher: "Launcher log",
+        native_crash: "Native crash details (crash.txt)",
+        native_run: "Native run log (mw3.log)",
         native_stderr: "Native standard error",
+        launcher: "Launcher log",
         native_stdout: "Native standard output",
     };
-    const entries = Object.entries(reportLogs).filter(
-        ([, content]) => typeof content === "string" && content.length > 0,
-    );
+    const orderedKeys = [
+        ...LOG_ORDER.filter((key) => key in reportLogs),
+        ...Object.keys(reportLogs).filter((key) => !LOG_ORDER.includes(key)),
+    ];
+    const entries = orderedKeys
+        .map((key) => [key, reportLogs[key]])
+        .filter(([, content]) => typeof content === "string" && content.length > 0);
     if (entries.length === 0)
         return boundIssueBody(
             `${header}\n\n### Recent log excerpts\n\nNo log files were available in this report.`,
@@ -336,8 +720,17 @@ function issueBody(
         const fence = "`".repeat(Math.max(3, maxFenceRun + 1));
         const remaining =
             MAX_ISSUE_BODY_CHARS - body.length - heading.length - fence.length * 2 - 10;
-        const perLogBudget = Math.floor(remaining / remainingEntries);
-        if (perLogBudget < 128) {
+        const perLogBudget =
+            name === "native_crash"
+                ? Math.min(
+                      content.length + 128,
+                      Math.max(
+                          Math.floor(remaining / remainingEntries),
+                          Math.min(remaining, 16_384),
+                      ),
+                  )
+                : Math.floor(remaining / remainingEntries);
+        if (perLogBudget < 128 || remaining < 128) {
             body += "Additional log excerpts omitted to fit GitHub's issue size limit.\n";
             break;
         }
