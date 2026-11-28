@@ -9,10 +9,16 @@ temporary folder, runs the contract 1 check from tools/packs/check_pack.py on it
 and only when that check is clean writes `<id>-<version>.mw3pack` into the output
 folder (the current folder by default).
 
-The source folder is never modified, and the output file must not already exist. A
-pack that fails the check produces no archive; every problem is printed with its
-problem code. Building the same source twice gives a byte-identical archive, because
-the archive's entry order and timestamps are fixed, so a pack's hash is reproducible.
+The source folder is never modified, and the output file must not already exist. The
+build is refused, with no archive, when the source contains a symbolic link or
+junction, an entry that is not a regular file or a folder (a named pipe would make the
+copy hang), or two pack-relative paths that differ only in letter case, which the
+launcher's installer would reject because it compares names without regard to case, or
+when the output folder is the source folder or a folder inside it. A pack that fails
+the check produces no archive; every problem is printed with its problem code.
+Building the same source twice gives a byte-identical archive on any platform,
+because the archive's entry order, the manifest's key order and the timestamps are
+fixed, so a pack's hash is reproducible.
 
 The archive is a ZIP with `pack.json` at its root, the form the launcher's
 PackStorage.Install reads. The manifest's fields are contract 1 in
@@ -23,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -46,6 +53,9 @@ ARCHIVE_SUFFIX = ".mw3pack"
 FIXED_ARCHIVE_DATE_TIME = (1980, 1, 1, 0, 0, 0)
 # A pinned compression level: the library default can differ between zlib builds.
 ARCHIVE_COMPRESSION_LEVEL = 9
+# The finished archive is hashed in chunks of this size, so printing its SHA-256
+# never needs the whole archive in memory at once.
+HASH_CHUNK_SIZE = 1024 * 1024
 
 
 class PackBuildError(Exception):
@@ -57,11 +67,61 @@ class PackBuildError(Exception):
 
 
 class OutputExistsError(Exception):
-    """The archive path this build would write is already taken."""
+    """The build's output path cannot be used: it is taken, or it lies inside the source."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, message: str | None = None) -> None:
         self.path = path
-        super().__init__(f"output already exists: {path}")
+        super().__init__(message if message is not None else f"output already exists: {path}")
+
+
+class UnsafeSourceError(Exception):
+    """The source holds an entry that makes packaging it unsafe or ambiguous."""
+
+
+def _is_junction(path: Path) -> bool:
+    """Whether path is a Windows junction; Path.is_junction exists only from Python 3.12."""
+    is_junction = getattr(path, "is_junction", None)
+    return bool(is_junction and is_junction())
+
+
+def _reject_unsafe_entries(source_folder: Path) -> None:
+    """Refuse a source with a link or an entry that is not a regular file or folder.
+
+    shutil.copytree follows links while copying, so a link inside the source could
+    package a file from outside the source folder, and a named pipe or socket would
+    make the copy hang. The build stops before anything is copied, and the error
+    names the entry.
+    """
+    for directory, dirnames, filenames in os.walk(source_folder, followlinks=False):
+        for name in dirnames + filenames:
+            entry = Path(directory) / name
+            # os.path.islink does not report Windows junctions, so ask Path as well.
+            if os.path.islink(entry) or _is_junction(entry):
+                raise UnsafeSourceError(
+                    f"refusing to build: {entry} is a symbolic link or junction"
+                )
+            if not entry.is_file() and not entry.is_dir():
+                raise UnsafeSourceError(
+                    f"refusing to build: {entry} is not a regular file or a directory"
+                )
+
+
+def find_case_clash(paths: list[str]) -> tuple[str, str] | None:
+    """The first pair of paths that are equal when compared case-insensitively.
+
+    The launcher's installer compares entry names without regard to case, so on a
+    case-sensitive file system a source can hold both `a/skin.bwtex` and
+    `a/Skin.bwtex`: the builder would pack both, and the installer would then reject
+    the archive. Returns the two paths, the earlier one first, or None when no two of
+    them clash.
+    """
+    seen: dict[str, str] = {}
+    for path in paths:
+        folded = path.casefold()
+        if folded in seen:
+            return seen[folded], path
+        seen[folded] = path
+    return None
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -168,7 +228,11 @@ def build_provides(source_folder: Path, manifest: dict[str, Any]) -> dict[str, l
                     parts = value.split(None, 1)
                     add(maps, parts[1].strip() if len(parts) > 1 else _first_word(value))
                 elif key == "campaign":
-                    campaign = _file_inside(source_folder, f"{root}/{value}")
+                    # The runtime's mod loader also accepts backslash separators in
+                    # a campaign reference on Windows; normalize before the pack-path
+                    # check, or the campaign and its missions would be dropped.
+                    campaign_reference = value.replace("\\", "/")
+                    campaign = _file_inside(source_folder, f"{root}/{campaign_reference}")
                     if campaign is None:
                         continue
                     for campaign_key, campaign_value in _mod_file_rows(campaign):
@@ -242,11 +306,33 @@ def build_pack(source_folder: Path, output_dir: Path) -> Path:
     """Build the source folder's `<id>-<version>.mw3pack` inside `output_dir`.
 
     Returns the archive's path. Raises PackBuildError when the assembled pack fails
-    the contract 1 check — no archive is written then — and OutputExistsError when
-    the archive path is already taken. The source folder is never modified.
+    the contract 1 check — no archive is written then —, OutputExistsError when the
+    archive path is already taken or the output folder is the source or inside it, and
+    UnsafeSourceError when the source contains a link, an entry that is not a regular
+    file or a folder, or two pack-relative paths that differ only in letter case. The
+    source folder is never modified.
     """
     source_folder = Path(source_folder)
     output_dir = Path(output_dir)
+    # Resolve both before comparing, so a relative or ".." output cannot disguise
+    # itself: writing into the source would modify it, which the builder never does.
+    # Nothing has been created yet when this refuses the build.
+    source_resolved = source_folder.resolve()
+    output_resolved = output_dir.resolve()
+    if output_resolved == source_resolved or source_resolved in output_resolved.parents:
+        raise OutputExistsError(
+            output_dir, f"output folder is the source folder or inside it: {output_dir}"
+        )
+    _reject_unsafe_entries(source_folder)
+    # The archive's entry names are the source's file paths, so two of them equal
+    # when case is ignored would both be packed and then rejected by the launcher's
+    # installer.
+    clash = find_case_clash(_pack_files(source_folder))
+    if clash is not None:
+        first, second = clash
+        raise UnsafeSourceError(
+            f"refusing to build: {first} and {second} differ only in letter case"
+        )
     manifest = load_source_manifest(source_folder)
 
     name = archive_name(manifest)
@@ -268,9 +354,14 @@ def build_pack(source_folder: Path, output_dir: Path) -> Path:
         provides = build_provides(staging, manifest)
         if provides:
             assembled["provides"] = provides
-        assembled["files"] = fill_file_table.build_file_table(
+        file_table = fill_file_table.build_file_table(
             staging, previous_files if isinstance(previous_files, dict) else {}
         )
+        # build_file_table orders its entries by Path, and Path's order is not the
+        # same on every platform (Windows compares names case-insensitively), so
+        # re-key the table by the plain sorted() path strings: code-point order is
+        # identical everywhere, and so is the manifest serialized from it.
+        assembled["files"] = {path: file_table[path] for path in sorted(file_table)}
         (staging / MANIFEST_NAME).write_bytes(_serialize_manifest(assembled))
 
         problems = check_pack.check_pack(staging)
@@ -288,6 +379,17 @@ def build_pack(source_folder: Path, output_dir: Path) -> Path:
     return archive_path
 
 
+def _file_sha256(path: Path) -> str:
+    """The SHA-256 hex digest of a file, read in chunks rather than all at once."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as file:
+        chunk = file.read(HASH_CHUNK_SIZE)
+        while chunk:
+            digest.update(chunk)
+            chunk = file.read(HASH_CHUNK_SIZE)
+    return digest.hexdigest()
+
+
 def main(arguments: list[str]) -> int:
     if len(arguments) not in (1, 2):
         print(__doc__)
@@ -302,6 +404,10 @@ def main(arguments: list[str]) -> int:
     except OutputExistsError as error:
         print(error)
         return 1
+    except UnsafeSourceError as error:
+        # An unsafe or ambiguous source entry is reported by name; no archive is written.
+        print(error)
+        return 1
     except PackBuildError as error:
         for problem in error.problems:
             print(problem.line())
@@ -312,7 +418,7 @@ def main(arguments: list[str]) -> int:
         # is reported, not silently skipped: no archive is written for it.
         print(f"build failed: {error}")
         return 1
-    digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    digest = _file_sha256(archive_path)
     print(f"wrote {archive_path} (sha256 {digest})")
     return 0
 

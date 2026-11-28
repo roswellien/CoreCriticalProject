@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -70,6 +71,17 @@ def copy_source(fixture: Path, parent: Path, strip_written_fields: bool) -> Path
         manifest.pop("provides", None)
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return source
+
+
+def write_source(folder: Path, manifest: dict, files: dict[str, str]) -> Path:
+    """Create a source folder with its pack.json and text payload files."""
+    folder.mkdir(parents=True)
+    (folder / "pack.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    for relative, content in files.items():
+        path = folder / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    return folder
 
 
 def unpack(archive_path: Path, folder: Path) -> Path:
@@ -226,6 +238,161 @@ class PackBuilderTests(unittest.TestCase):
                 "maps": ["Test World"],
                 "missions": ["testworld/1", "testworld/2"],
                 "campaigns": ["Test Campaign"],
+            },
+        )
+
+    def test_source_containing_a_symbolic_link_is_refused(self) -> None:
+        source = copy_source(
+            EXAMPLES / "valid" / "gameplay-only", self.root, strip_written_fields=True
+        )
+        # A link to a file outside the source: copytree would follow it and package
+        # that outside file.
+        outside = self.root / "outside.txt"
+        outside.write_text("content from outside the source\n", encoding="utf-8")
+        link = source / "mod" / "linked.txt"
+        try:
+            os.symlink(outside, link)
+        except (OSError, NotImplementedError) as error:
+            # Windows refuses to create symlinks without the privilege; then there
+            # is no link to test with here.
+            self.skipTest(f"cannot create a symbolic link: {error}")
+
+        with self.assertRaises(pack_builder.UnsafeSourceError) as raised:
+            pack_builder.build_pack(source, self.output)
+        # The error names the offending entry, and no archive was written.
+        self.assertIn("linked.txt", str(raised.exception))
+        self.assertEqual(written_archives(self.output), [])
+
+        # main reports it too, with exit code 1 and still no archive.
+        printed = io.StringIO()
+        with redirect_stdout(printed):
+            exit_code = pack_builder.main([str(source), str(self.output)])
+        self.assertEqual(exit_code, 1)
+        self.assertIn("linked.txt", printed.getvalue())
+        self.assertEqual(written_archives(self.output), [])
+
+    def test_case_clash_helper_names_both_paths(self) -> None:
+        # The launcher's installer compares entry names without regard to case, so a
+        # source holding both of these must be refused before building. The helper
+        # is tested directly, because a case-sensitive disk is not always at hand.
+        clash = pack_builder.find_case_clash(["a/skin.bwtex", "a/Skin.bwtex"])
+        self.assertEqual(clash, ("a/skin.bwtex", "a/Skin.bwtex"))
+        # The clash is found wherever in the list the pair sits.
+        clash = pack_builder.find_case_clash(["mod/mod.txt", "a/skin.bwtex", "a/SKIN.BWTEX"])
+        self.assertEqual(clash, ("a/skin.bwtex", "a/SKIN.BWTEX"))
+
+    def test_case_clash_helper_finds_no_clash_in_an_ordinary_list(self) -> None:
+        paths = ["pack.json", "mod/mod.txt", "textures/skin.bwtex", "textures/gun.bwtex"]
+        self.assertIsNone(pack_builder.find_case_clash(paths))
+
+    def test_files_table_is_ordered_by_sorted_path_strings(self) -> None:
+        # fill_file_table sorts Path objects, whose order differs by platform
+        # (Windows compares names case-insensitively), so the written manifest must
+        # use plain sorted() on the path strings: "B.txt" (code point 66) comes
+        # before "a.txt" (97) on every platform.
+        source = write_source(
+            self.root / "src",
+            {
+                "schema_version": 3,
+                "game_id": "mw3",
+                "id": "test-order",
+                "name": "Order test",
+                "version": "1.0.0",
+            },
+            {"a.txt": "lowercase a\n", "B.txt": "uppercase B\n"},
+        )
+
+        archive_path = pack_builder.build_pack(source, self.output)
+
+        unpacked = unpack(archive_path, self.root / "unpacked")
+        self.assertEqual(check_pack.check_pack(unpacked), [])
+        built_manifest = json.loads((unpacked / "pack.json").read_text(encoding="utf-8"))
+        file_keys = list(built_manifest["files"])
+        self.assertEqual(file_keys, sorted(file_keys))
+        self.assertEqual(file_keys, ["B.txt", "a.txt"])
+
+    def test_output_folder_equal_to_the_source_is_refused(self) -> None:
+        source = copy_source(
+            EXAMPLES / "valid" / "gameplay-only", self.root, strip_written_fields=True
+        )
+        digest = tree_digest(source)
+
+        with self.assertRaises(pack_builder.OutputExistsError):
+            pack_builder.build_pack(source, source)
+        # Nothing was written: no archive exists and the source is untouched.
+        self.assertEqual(written_archives(source), [])
+        self.assertEqual(tree_digest(source), digest)
+
+        # main reports it through the output error path, with exit code 1.
+        printed = io.StringIO()
+        with redirect_stdout(printed):
+            exit_code = pack_builder.main([str(source), str(source)])
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(written_archives(source), [])
+        self.assertEqual(tree_digest(source), digest)
+
+    def test_output_folder_inside_the_source_is_refused(self) -> None:
+        source = copy_source(
+            EXAMPLES / "valid" / "gameplay-only", self.root, strip_written_fields=True
+        )
+        digest = tree_digest(source)
+        output = source / "out"
+
+        with self.assertRaises(pack_builder.OutputExistsError):
+            pack_builder.build_pack(source, output)
+        self.assertEqual(written_archives(source), [])
+        self.assertEqual(tree_digest(source), digest)
+
+    def test_main_refuses_when_the_default_output_is_the_source_folder(self) -> None:
+        # Running the command from the source folder with no output argument used
+        # to write the archive into the source.
+        source = copy_source(
+            EXAMPLES / "valid" / "gameplay-only", self.root, strip_written_fields=True
+        )
+        digest = tree_digest(source)
+        previous_directory = os.getcwd()
+        os.chdir(source)
+        self.addCleanup(os.chdir, previous_directory)
+
+        printed = io.StringIO()
+        with redirect_stdout(printed):
+            exit_code = pack_builder.main([str(source)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(written_archives(source), [])
+        self.assertEqual(tree_digest(source), digest)
+
+    def test_campaign_row_with_backslash_separators_is_in_provides(self) -> None:
+        # The runtime loads `campaign=campaigns\test.camp` on Windows; the builder
+        # must read the same campaign file, not drop it from provides.
+        source = write_source(
+            self.root / "src",
+            {
+                "schema_version": 3,
+                "game_id": "mw3",
+                "id": "test-backslash-campaign",
+                "name": "Backslash campaign test",
+                "version": "1.0.0",
+                "gameplay": {"root": "mod"},
+            },
+            {
+                "mod/mod.txt": "name=Backslash campaign test\ncampaign=campaigns\\test.camp\n",
+                "mod/campaigns/test.camp": (
+                    "name=Backslash Campaign\nmission=testworld 1\nmission=testworld 2\n"
+                ),
+            },
+        )
+
+        archive_path = pack_builder.build_pack(source, self.output)
+
+        unpacked = unpack(archive_path, self.root / "unpacked")
+        self.assertEqual(check_pack.check_pack(unpacked), [])
+        built_manifest = json.loads((unpacked / "pack.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            built_manifest["provides"],
+            {
+                "missions": ["testworld/1", "testworld/2"],
+                "campaigns": ["Backslash Campaign"],
             },
         )
 

@@ -62,8 +62,10 @@ contract 1 check (`tools/packs/check_pack.py`), and only then writes
 `<id>-<version>.mw3pack` to the output folder (the current folder by default). The
 source folder is never modified, the output file must not already exist, and a pack
 that fails the check produces no archive — each problem is printed with its problem
-code. Building the same source twice gives a byte-identical archive, so a pack's hash
-is reproducible. The manifest's fields are contract 1 in
+code. The build is also refused, with no archive, when the source contains a symbolic
+link or junction, or when the output folder is the source folder or a folder inside it.
+Building the same source twice gives a byte-identical archive on any platform, so a
+pack's hash is reproducible. The manifest's fields are contract 1 in
 [docs/packs/contracts.md](../../../docs/packs/contracts.md), with example packs in
 [tests/fixtures/packs/](../../../tests/fixtures/packs/).
 
