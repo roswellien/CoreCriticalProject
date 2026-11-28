@@ -423,9 +423,9 @@ with 1 when it finds something. Run it before a release and whenever the board
 looks out of date.
 
 The Website tests workflow (`.github/workflows/website.yml`) runs `npm test`
-in `website/`, the crash report service tests, on pushes to `develop` and
-`main` and on PRs, whenever they change `website/**` or the workflow itself. A failing
-test fails the check.
+in `website/`, the crash report service tests. It runs only for pushes to `develop` or
+`main` and for PRs that change `website/**` or the workflow itself. A failing test
+fails the check.
 
 GitHub currently rejects branch-protection and ruleset access for this private
 repository with HTTP 403 as of October 27, 2026, requesting GitHub Pro or a public
