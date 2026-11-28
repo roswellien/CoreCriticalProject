@@ -376,9 +376,11 @@ class PackBuilderTests(unittest.TestCase):
             EXAMPLES / "valid" / "gameplay-only", self.root, strip_written_fields=True
         )
         clashing = ["mod/mod.txt", "mod/MOD.TXT"]
-        with unittest.mock.patch.object(pack_builder, "_pack_files", return_value=clashing):
-            with self.assertRaises(pack_builder.UnsafeSourceError) as raised:
-                pack_builder.build_pack(source, self.output)
+        with (
+            unittest.mock.patch.object(pack_builder, "_pack_files", return_value=clashing),
+            self.assertRaises(pack_builder.UnsafeSourceError) as raised,
+        ):
+            pack_builder.build_pack(source, self.output)
         self.assertIn("mod/MOD.TXT", str(raised.exception))
         self.assertEqual(written_archives(self.output), [])
 
