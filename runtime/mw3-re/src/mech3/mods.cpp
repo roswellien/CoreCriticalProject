@@ -732,6 +732,14 @@ std::vector<std::string> mod_files(const std::string& path) {
     if (f->is_regular_file(ec)) {
       const std::string rel = lower(fs::relative(f->path(), path, ec).generic_string());
       if (mod_own_file(rel)) continue;
+      // Ours: model libraries share model entries, not the whole file. Their
+      // shared headers/materials are validated/combined rather than shadowed.
+      if (rel == "zbd/mechlib.zbd") {
+        for (const auto& name : model_library_entry_names(f->path().string()))
+          if (name != "materials" && name != "version" && name != "format")
+            files.push_back(rel + ": " + name);
+        continue;
+      }
       // An archive kept as its changed entries (entry_archives.h) shares by entry: two mods that change
       // different entries of one archive both apply.
       if (const std::string of = entries_archive_of(rel); !of.empty()) {

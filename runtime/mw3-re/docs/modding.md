@@ -1915,32 +1915,77 @@ text taken, the dll kept in the mod, the names not given.
 
 ### Mech model libraries across mods
 
-When a mounted mod supplies `zbd/mechlib.zbd`, the model library is read entry
-by entry across sources. The write directory wins first, then enabled mods in
-tick-file order (player mods and installed packs have equal rank), then the
-patch and install mounts. A source that lacks an entry leaves later sources
-visible, including the game's own models. Names match without regard to case.
-Each losing entry is named once, with its winning and losing source, when the
-library opens; mission reloads do not repeat the same diagnostic. An archive
-with an unreadable table or entry range is named and left out whole; other
-sources remain available.
+A model library is merged when the write directory or an enabled mod supplies
+`zbd/mechlib.zbd`, `zbd/mechlib.zip`, or model-library JSON. The write directory
+wins first, then enabled mods in tick-file order (player mods and packs have
+equal rank), then the patch and install mounts. A missing entry leaves later
+sources visible. Names match without regard to case. A repeated name within
+one archive uses its first occurrence and is reported as a repeated entry.
+Cross-source collisions name the winner and loser once; mission reloads do
+not repeat identical diagnostics.
 
-`upgrades/mods/entry_archives` builds a temporary, ordinary archive for the
+**Materials follow the model's source.** The lowest-ranked readable materials
+table (normally the game's) starts the combined table, with all its indices
+unchanged, including any duplicate slots. Other sources' materials are added
+only when their content is not already present. The texture-name presence
+pointer is compared as a marker, not as an address. Each source gets its own
+index map. Models supplied with their own readable table are relocated through
+that map before entering the merged library.
+
+`upgrades/mods/model_library_data.h` walks the same node, Object3d, model,
+polygon and optional-array layouts as `cls_mechlib.cpp` and its JSON writer.
+It checks the complete tree before changing any byte. An unparseable tree,
+unsupported lights or trailing data, or an index outside its applicable
+materials table leaves that model out with its source and entry named; a
+valid lower source can still provide the entry. A source with **no materials
+entry of its own inherits the base table**, preserving the existing model-only
+mod feature. Its model bytes are not rewritten. Every index must fit the
+original base table, including its duplicate slots; materials appended by
+other mods do not enlarge that allowed range. A source whose own materials
+entry exists but is unreadable supplies no models. A rejected materials JSON
+entry is still present for this distinction, even if it produced no bytes.
+Other valid sources remain available.
+The original model fingerprint is retained for renderer source matching even
+when material indices have been relocated.
+
+Within a source, a JSON folder entry wins over a zip entry, which wins over
+its binary archive entry. JSON materials and models participate in the same
+material mapping and tick order as binary sources; an earlier archive only
+wins names it actually supplies. Bad JSON is named and its binary entry, if
+present, remains available. As before, a refused JSON model does not fall
+through to a later mod's JSON copy. A model-only JSON folder or zip may omit
+materials and use the base table; an explicit readable binary or JSON table
+instead supplies that source's index map.
+
+An unreadable archive is named and skipped before it can win entries. The
+sum of entry lengths must not exceed the archive's actual data area, so
+repeated/overlapping ranges cannot multiply payload allocations beyond that
+size. Name lookups for the roster and conflict list read only the table.
+JSON is limited to 16 MiB per input entry and 64 MiB of input and decoded
+output per source. Decoded size is checked before conversion, including a
+model referenced by more than one node. Oversized entries are named and left
+out.
+
+`upgrades/mods/entry_archives` builds an ordinary temporary archive for the
 existing bounded model reader. It lives until the library closes and never
-changes the installed game, mod or pack. With no mod model archive, the
-original open path is used. No other archive kind changes its merge rules.
+changes the installed game, mod or pack. Reopening replaces the old stream
+and material state safely. A plain start with no write-directory or mod
+model-library content uses the original opener without a temporary stream.
+Host-path tools also retain the original opener. No other archive kind gains
+whole-archive entry merging.
 
-The shared `version`, `format` and `materials` entries follow the same first
-source rule. Model authors must use a compatible shared material table; this
-merge does not remap a model's material indices or combine material tables.
-Models and materials still pass through the existing bounded readers when
-used. JSON folder and zip overrides keep their existing lookup rules.
+The MODS list reports shared binary model entries instead of claiming that
+one whole `mechlib.zbd` hides another. Multiplayer hashing still reads the
+original source file bytes; the temporary library and its relocated indices
+are not hashed in place of those files.
 
-Asset-free tests in `src/upgrades/mods/tests/test_pack_library.cpp`, named
-`model_library_*`, build small archives from authored bytes and load their
-trees through the game reader. They cover different models, duplicate names,
-write-directory precedence, missing and unreadable archives, and the missing
-model warning. This is archive loading evidence, not a live gameplay playtest.
+Asset-free `model_library_*` tests in
+`src/upgrades/mods/tests/test_pack_library.cpp` build authored archives with
+triangles, child nodes, optional arrays and distinct materials. They inspect
+the loaded polygons' resolved materials and exercise invalid inputs, stream
+ownership, JSON/zip ordering, source fingerprints, conflict reporting and
+hash stability. This is archive/reader evidence, not a live gameplay or
+rendering playtest.
 
 ### Archives by their changed entries (2026-11-11)
 
@@ -2695,10 +2740,12 @@ order, the refusals, the own-archive stop),
 **mech3ax's mechlib JSON (built 2026-11-09).** A mod may hold mechlib's
 entries as unzbd writes them: `zbd\mechlib\mech_thor.flt.json` (a model's
 node tree) and `zbd\mechlib\materials.json` (the shared materials), or
-unzbd's `zbd\mechlib.zip` itself. `mechlib_load` and the materials' read ask
-the enabled mods first to last, the folder then the zip, stopping at a mod
-with its own `zbd\mechlib.zbd`; a model the archive lacks is served too, so a
-new mech's model needs no repacked mechlib.zbd, and a `mech=` row finds its
+unzbd's `zbd\mechlib.zip` itself. The mount now selects entries first to last,
+the folder then the zip then that source's binary entries; an earlier archive
+does not block a later source's other models. The source must also supply a
+materials table only when its models need materials outside the base table;
+model-only JSON retains base-table inheritance, as described in "Mech model
+libraries across mods" above. A new mech's model needs no repacked mechlib.zbd, and a `mech=` row finds its
 `dfn_<name>.zrd` and `mech_<model>.flt` as JSON (a folder's or a zip's) as it
 finds them in an archive. The JSON (`zcls::mechlib_model_from_json`,
 `mechlib_materials_from_json`, `cls_mechlib_json.cpp`) becomes the entry's

@@ -89,6 +89,9 @@ namespace {
 // in `bytes`; false for none, or for one refused (said once in the log), when
 // the archive's entry is read.
 bool mod_entry(const MechLib& lib, const std::string& entry, std::vector<uint8_t>* bytes) {
+  // Ours: the merged stream already selected JSON and binary entries together
+  // and remapped their material indices. A second JSON override would undo it.
+  if (mech3::model_library_is_merged(lib.archive)) return false;
   if (zutl::mounts().mods.empty() || !lib.archive.path) return false;
   std::string dir = zutl::host(lib.archive.path);
   const size_t slash = dir.rfind('/');
@@ -123,6 +126,8 @@ void mechlib_strip(Node* node) {
 
 // Mech3.exe 1.2 @ 0x004fc6d0
 bool mechlib_open(MechLib& lib, const char* path) {
+  // Ours: reopening also replaces the old materials, not just its FILE*.
+  if (lib.archive.file || !lib.materials.empty()) mechlib_close(lib);
   const bool ok = mech3::model_library_open(lib.archive, path);  // Ours: preserves each mounted source's entries.
   uint32_t version = 0, format = 0, size = 4, size2 = 4;
   zutl_zar::read(lib.archive, zutl_zar::find(lib.archive, "version"), &version, &size);
@@ -204,6 +209,9 @@ Node* mechlib_load(MechLib& lib, const char* name) {
     if (!from_mod && index >= 0 && start >= 0 &&
         static_cast<uint64_t>(start) == lib.archive.entries[index].start)
       identity->member_sha256 = member_sha256(f, start, length);
+    // Ours: relocated material indices must not change the source asset key.
+    if (mech3::model_library_is_merged(lib.archive))
+      identity->member_sha256 = mech3::model_library_source_hash(lib.archive, name);
     std::vector<Node*> pending{root};
     for (size_t i = 0; i < pending.size(); ++i) {
       Node* node = pending[i];

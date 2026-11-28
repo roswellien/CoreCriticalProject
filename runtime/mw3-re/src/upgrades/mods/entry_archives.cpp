@@ -15,8 +15,12 @@
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zutil/zutl_zar.h"
 #include "gamez/zutil/zutl_zip.h"
+#include "gamez/zclass/cls_mechlib_json.h"
 #include "mech3/net_save.h"
 #include "upgrades/mods/marked_remove.h"
+#include "upgrades/mods/model_library_data.h"
+#include "upgrades/mods/model_library_json.h"
+#include "platform/sha256.hpp"
 
 namespace fs = std::filesystem;
 
@@ -75,20 +79,32 @@ struct Unconfined {
   ~Unconfined() { zutl::mounts().confined = was; }
 };
 
-// A model library's table must not borrow bytes from its own table or another
-// entry's unterminated name. Reject the whole source before it can win anything.
+// The archive writer appends each payload once. Refuse a table whose sum of
+// lengths exceeds its data area, even if each individual range fits: aliases
+// must not amplify a small file into gigabytes of copies. This pass reads no
+// payload, so roster/conflict lookups have the same bound without loading trees.
+bool model_library_table(const zutl_zar::Archive& archive) {
+  const int64_t end = zutl_zar::data_end(archive);
+  uint64_t total = 0;
+  for (int i = 0; i < archive.count; ++i) {
+    const auto& entry = archive.entries[i];
+    total += entry.length;
+    if (!std::memchr(entry.name, 0, sizeof entry.name) || !entry.name[0] ||
+        entry.start > end || entry.length > end - entry.start || total > static_cast<uint64_t>(end))
+      return false;
+  }
+  return true;
+}
+
 bool model_library_read(const std::string& host, std::vector<ArchiveEntry>* entries) {
   entries->clear();
   const Unconfined unconfined;
   zutl_zar::Archive archive;
   zutl_zar::init(archive);
-  bool readable = zutl_zar::open(archive, host.c_str());
-  const int64_t end = readable ? zutl_zar::data_end(archive) : 0;
+  bool readable = zutl_zar::open(archive, host.c_str()) && model_library_table(archive);
+  std::set<std::string> checked_headers;
   for (int i = 0; readable && i < archive.count; ++i) {
     const auto& entry = archive.entries[i];
-    readable = std::memchr(entry.name, 0, sizeof entry.name) && entry.name[0] &&
-               entry.start <= end && entry.length <= end - entry.start;
-    if (!readable) break;
     ArchiveEntry copy;
     copy.name = entry.name;
     copy.data.resize(entry.length);
@@ -97,7 +113,7 @@ bool model_library_read(const std::string& host, std::vector<ArchiveEntry>* entr
     // Mods may supply just new trees, borrowing the install's headers. An
     // explicitly incompatible header must not poison every other source.
     const std::string name = lower(copy.name);
-    if (readable && (name == "version" || name == "format")) {
+    if (readable && (name == "version" || name == "format") && checked_headers.insert(name).second) {
       uint32_t value = 0;
       if (copy.data.size() == sizeof value) std::memcpy(&value, copy.data.data(), sizeof value);
       readable = value == (name == "version" ? 27u : 1u);
@@ -111,8 +127,12 @@ bool model_library_read(const std::string& host, std::vector<ArchiveEntry>* entr
 
 // ScratchFile uses the system temp folder on Windows, where std::tmpfile can
 // require drive-root permissions. Keep its owner until the library closes.
-std::map<zutl_zar::Archive*, std::unique_ptr<zutl_zip::ScratchFile>>& model_library_streams() {
-  static std::map<zutl_zar::Archive*, std::unique_ptr<zutl_zip::ScratchFile>> streams;
+struct ModelStream {
+  std::unique_ptr<zutl_zip::ScratchFile> scratch;
+  std::map<std::string, std::string> source_hashes;
+};
+std::map<const zutl_zar::Archive*, ModelStream>& model_library_streams() {
+  static std::map<const zutl_zar::Archive*, ModelStream> streams;
   return streams;
 }
 // What the last mount built (entries_merge): by the archive's path in lower case, '/' between its parts.
@@ -195,51 +215,167 @@ std::vector<std::string> archive_entry_names(const std::string& host) {
 }
 
 bool model_library_has(const std::string& host, const std::string& entry) {
-  std::vector<ArchiveEntry> entries;
-  if (!model_library_read(host, &entries)) return false;
-  const std::string wanted = lower(entry);
-  return std::any_of(entries.begin(), entries.end(), [&](const ArchiveEntry& candidate) {
-    return lower(candidate.name) == wanted;
-  });
+  const auto names = model_library_entry_names(host);
+  return std::find(names.begin(), names.end(), lower(entry)) != names.end();
+}
+
+std::vector<std::string> model_library_entry_names(const std::string& host) {
+  const Unconfined unconfined;
+  zutl_zar::Archive archive;
+  zutl_zar::init(archive);
+  std::vector<std::string> names;
+  if (zutl_zar::open(archive, host.c_str()) && model_library_table(archive))
+    for (int i = 0; i < archive.count; ++i) names.push_back(lower(archive.entries[i].name));
+  zutl_zar::destroy(archive);
+  return names;
 }
 
 bool model_library_open(zutl_zar::Archive& archive, const char* path, std::vector<std::string>* log) {
+  // Reopening releases both the old table and its stream before assigning a
+  // replacement. emplace alone would keep the old owner and close the new FILE*.
+  model_library_close(archive);
   const std::string logical = zutl::host(path);
-  bool mod_archive = false;
-  if (lower(logical) == "zbd/mechlib.zbd")
-    for (size_t i = 0; i < zutl::mounts().mods.size(); ++i)
-      mod_archive = mod_archive || !zutl::find_in_mod(i, logical).empty();
-  if (!mod_archive) return zutl_zar::open(archive, path);
+  if (lower(logical) != "zbd/mechlib.zbd") return zutl_zar::open(archive, path);
 
   static std::set<std::string> reported_messages;
   const auto say = [&](const std::string& message) {
     if (log) log->push_back(message);
     else if (reported_messages.insert(message).second) std::fprintf(stderr, "mw3: %s\n", message.c_str());
   };
-  std::vector<ArchiveEntry> winners;
-  std::map<std::string, std::string> owners;
-  // find_all includes the write directory before ticked mods, with no special
-  // rank for installed packs. Do not let an unreadable first file hide the rest.
-  for (const std::string& source : zutl::find_all(path)) {
-    std::vector<ArchiveEntry> entries;
-    if (!model_library_read(source, &entries)) {
-      say("mods: " + source + ": mechlib.zbd cannot be read, its models left out");
+  std::vector<std::string> roots;
+  if (!zutl::mounts().write.empty()) roots.push_back(zutl::mounts().write);
+  for (const auto& root : zutl::mounts().read)
+    if (std::find(roots.begin(), roots.end(), root) == roots.end()) roots.push_back(root);
+  bool needs_merge = false;
+  for (const auto& root : roots) {
+    if (root != zutl::mounts().write && !zutl::is_mod_dir(root)) continue;
+    if (!zutl::any_case(root, "zbd/mechlib.zbd").empty() ||
+        !zutl::any_case(root, "zbd/mechlib.zip").empty() ||
+        !zutl::any_case(root, "zbd/mechlib").empty()) needs_merge = true;
+  }
+  if (!needs_merge) return zutl_zar::open(archive, path);
+
+  struct Source {
+    std::string name;
+    std::map<std::string, ArchiveEntry> entries;
+    std::vector<uint32_t> mapping;
+    bool has_materials = false;
+    bool inherits_base = false;
+    bool materials_present = false;
+  };
+  std::vector<Source> sources;
+  std::set<std::string> refused_json_models;
+  for (const auto& root : roots) {
+    Source source;
+    source.name = (fs::path(root) / "zbd/mechlib.zbd").generic_string();
+    const std::string binary = zutl::any_case(root, "zbd/mechlib.zbd");
+    if (!binary.empty()) {
+      source.name = binary;
+      std::vector<ArchiveEntry> entries;
+      if (!model_library_read(binary, &entries)) {
+        say("mods: " + binary + ": mechlib.zbd cannot be read, its models left out");
+        // An unreadable archive cannot establish that its table is absent.
+        source.materials_present = true;
+      }
+      std::set<std::string> repeated;
+      for (auto& entry : entries) {
+        const std::string name = lower(entry.name);
+        if (name == "materials") source.materials_present = true;
+        if (!source.entries.emplace(name, std::move(entry)).second && repeated.insert(name).second)
+          say("mods: " + binary + ": repeated entry " + name + ", first occurrence used");
+      }
+    }
+    // Folder JSON, then zip JSON, then this source's binary entries. Folding
+    // these here gives them the same source material map and tick precedence.
+    if (root == zutl::mounts().write || zutl::is_mod_dir(root))
+      model_library_json::read(root, &source.entries, say, &source.materials_present, &refused_json_models);
+    if (!source.entries.empty()) sources.push_back(std::move(source));
+  }
+
+  std::vector<model_library_data::Bytes> combined;
+  std::map<model_library_data::Bytes, uint32_t> material_indices;
+  bool base_found = false;
+  std::vector<uint32_t> base_mapping;
+  // Lowest ranked readable table is the base. Keep ALL its slots (even equal
+  // ones) so stock indices remain unchanged. Other tables reuse equal content.
+  for (auto source = sources.rbegin(); source != sources.rend(); ++source) {
+    const auto table = source->entries.find("materials");
+    std::vector<model_library_data::Bytes> records;
+    if (table == source->entries.end()) continue;
+    if (!model_library_data::materials(table->second.data, &records)) {
+      say("mods: " + source->name + ": no readable materials table; its model entries will be left out");
       continue;
     }
-    std::set<std::string> reported;
-    for (ArchiveEntry& entry : entries) {
-      const std::string name = lower(entry.name);
-      const auto owner = owners.emplace(name, source);
-      if (owner.second) winners.push_back(std::move(entry));
-      else if (reported.insert(name).second)
-        say("mods: zbd/mechlib.zbd: entry " + name + " from " + source +
-            " ignored; " + owner.first->second + " wins");
+    source->has_materials = true;
+    for (auto& record : records) {
+      auto key = model_library_data::material_key(record);
+      const auto found = material_indices.find(key);
+      uint32_t index;
+      if (!base_found || found == material_indices.end()) {
+        index = static_cast<uint32_t>(combined.size());
+        combined.push_back(std::move(record));
+        material_indices.emplace(std::move(key), index);
+      } else index = found->second;
+      source->mapping.push_back(index);
     }
+    if (!base_found) base_mapping = source->mapping;
+    base_found = true;
   }
-  if (winners.empty()) {
-    say("mods: zbd/mechlib.zbd: no readable entries in the mounted sources");
+  if (!base_found) {
+    say("mods: zbd/mechlib.zbd: no readable materials table in any source");
     return false;
   }
+  for (auto& source : sources) {
+    if (source.materials_present) continue;
+    // Model-only mods have always indexed the base table. Its identity map
+    // admits only original base slots, not materials appended by another mod.
+    source.mapping = base_mapping;
+    source.has_materials = true;
+    source.inherits_base = true;
+  }
+
+  std::vector<ArchiveEntry> winners;
+  std::map<std::string, std::string> source_hashes;
+  std::map<std::string, std::string> owners;
+  for (auto& source : sources) {
+    for (auto& named : source.entries) {
+      const std::string& name = named.first;
+      auto& entry = named.second;
+      if (name == "materials") continue;
+      const auto previous = owners.find(name);
+      if (previous != owners.end()) {
+        say("mods: zbd/mechlib.zbd: entry " + name + " from " + source.name +
+            " ignored; " + previous->second + " wins");
+        continue;
+      }
+      if (ends_with(name, ".flt")) {
+        // The renderer's source-asset identity refers to the original model,
+        // not to material indices relocated for this particular mount order.
+        platform::integrity::Sha256 hash;
+        hash.update(entry.data.data(), entry.data.size());
+        const std::string digest = hash.hex();
+        std::string why;
+        if (!source.has_materials) why = "unreadable materials table in its source";
+        else if (model_library_data::rewrite(&entry.data, source.mapping, &why, !source.inherits_base)) why.clear();
+        if (source.inherits_base && why == "material index outside its source table")
+          why = "material index outside the base materials table";
+        if (!why.empty()) {
+          say("mods: " + source.name + ": entry " + name + ": " + why + ", left out");
+          continue;  // a valid lower source may still provide this name
+        }
+        source_hashes.emplace(name, digest);
+      }
+      owners.emplace(name, source.name);
+      winners.push_back(std::move(entry));
+    }
+  }
+  ArchiveEntry materials;
+  materials.name = "materials";
+  materials.data.resize(4);
+  model_library_data::put_word(materials.data, 0, static_cast<uint32_t>(combined.size()));
+  for (const auto& record : combined) materials.data.insert(materials.data.end(), record.begin(), record.end());
+  winners.push_back(std::move(materials));
+
   auto scratch = std::make_unique<zutl_zip::ScratchFile>(nullptr, 0);
   if (!scratch->file) {
     say("mods: zbd/mechlib.zbd: cannot create the merged library's temporary file");
@@ -265,19 +401,43 @@ bool model_library_open(zutl_zar::Archive& archive, const char* path, std::vecto
     return false;
   }
   archive = merged;
-  model_library_streams().emplace(&archive, std::move(scratch));
+  model_library_streams().emplace(&archive, ModelStream{std::move(scratch), std::move(source_hashes)});
   return true;
 }
 
 bool model_library_close(zutl_zar::Archive& archive) {
   const auto stream = model_library_streams().find(&archive);
-  if (stream == model_library_streams().end()) return zutl_zar::close(archive);
+  if (stream == model_library_streams().end()) {
+    zutl_zar::destroy(archive);
+    zutl_zar::init(archive);
+    return true;
+  }
+  if (!archive.file) {
+    // A caller used the legacy close directly. It already closed the FILE*,
+    // but cannot remove our ownership record or temporary pathname.
+    const auto path = stream->second.scratch->path;
+    stream->second.scratch->file = nullptr;
+    std::error_code error;
+    fs::remove(path, error);
+  }
   // The ScratchFile owns this stream; the archive owns only its table and path.
   archive.file = nullptr;
   zutl_zar::destroy(archive);
   zutl_zar::init(archive);
   model_library_streams().erase(stream);
   return true;
+}
+
+bool model_library_is_merged(const zutl_zar::Archive& archive) {
+  const auto stream = model_library_streams().find(&archive);
+  return stream != model_library_streams().end() && stream->second.scratch->file == archive.file;
+}
+
+std::string model_library_source_hash(const zutl_zar::Archive& archive, const std::string& name) {
+  const auto stream = model_library_streams().find(&archive);
+  if (stream == model_library_streams().end()) return {};
+  const auto entry = stream->second.source_hashes.find(lower(name));
+  return entry == stream->second.source_hashes.end() ? std::string() : entry->second;
 }
 
 EntriesCut entries_cut(const std::string& mod_file, const std::string& own_file) {
