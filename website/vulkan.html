@@ -5,7 +5,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta
             name="description"
-            content="Explore Core Critical’s Vulkan graphics work: a native rendering backend and a D7VK-based compatibility path for the original MW3 executable."
+            content="Core Critical’s Vulkan renderer draws MW3 at modern resolutions, with optional lighting, shadows, fog, longer view distances and upgraded materials, while the original look stays available."
         />
         <meta name="theme-color" content="#141717" />
         <title>Vulkan Graphics — Core Critical</title>
@@ -58,11 +58,11 @@
                 <div class="overview-intro">
                     <h1 id="page-title">Vulkan<br />Graphics</h1>
                     <p>
-                        A modern graphics path for a classic world. Preserve the original
-                        presentation while exploring configurable improvements.
+                        A modern graphics path for a classic world. Keep the original presentation,
+                        or turn on improvements one at a time.
                     </p>
-                    <a class="button" href="#paths"
-                        >Explore the rendering paths
+                    <a class="button" href="#renderer"
+                        >Explore the renderer
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M12 4v15m-6-6 6 6 6-6" /></svg
                     ></a>
@@ -79,96 +79,89 @@
                     width="2560"
                     height="1440"
                 />
-                <p class="illustration-caption">MechWarrior 3 C1M1 opening beach scene.</p>
+                <p class="illustration-caption">
+                    MechWarrior 3 C1M1 opening beach scene in Core Critical.
+                </p>
             </section>
             <div class="overview-layout section-shell">
                 <aside class="page-index" aria-label="On this page">
                     <h2>Vulkan Graphics</h2>
-                    <a href="#paths">Two rendering paths</a><a href="#options">Graphics options</a
+                    <a href="#renderer">The renderer</a><a href="#options">Graphics options</a
                     ><a href="#progress">Current progress</a><a href="#follow">Follow the work</a>
                 </aside>
                 <div class="overview-body">
-                    <section class="content-section" id="paths">
-                        <h2>Two paths. One modern graphics API.</h2>
-                        <h3>Rendering for the native host</h3>
+                    <section class="content-section" id="renderer">
+                        <h2>The original view, drawn by a modern GPU.</h2>
                         <p>
-                            Vulkan is the selected backend for native recompilation. The priority is
-                            to reproduce the original geometry, cameras, textures, lighting, fog,
-                            and HUD before validating optional enhancements. The experimental host
-                            has already rendered partial Training 1 scenes through this path.
-                        </p>
-                        <h3>Compatibility for the original executable</h3>
-                        <p>
-                            A separate D7VK-based wrapper keeps the original MW3 U.S. retail 1.2
-                            executable running while translating its older graphics interfaces into
-                            a Vulkan rendering path. This work progresses alongside recompilation,
-                            with its own configuration and compatibility checks.
+                            The game still decides what to draw. Core Critical’s Vulkan renderer
+                            takes those draw calls and presents them at your chosen resolution,
+                            window mode and aspect ratio, including ultrawide displays. The original
+                            menus keep their 4:3 layout, centered over a full-window HD background.
                         </p>
                         <p>
-                            The wrapper’s success does not establish native recompilation fidelity.
-                            Each path is tested for the behavior it actually runs.
+                            Every enhancement is optional. With them turned off, the renderer aims
+                            to match the original presentation, so improvements stay a deliberate
+                            choice.
                         </p>
                     </section>
                     <section class="content-section" id="options">
-                        <h2>Keep the original view, or widen it.</h2>
-                        <p>
-                            The prepared wrapper profile supports higher-resolution 4:3 rendering
-                            and widescreen profiles with camera field-of-view correction. It also
-                            exposes multi-sample anti-aliasing and anisotropic filtering controls.
-                        </p>
+                        <h2>Turn on what you want.</h2>
                         <ul class="work-list">
                             <li>
-                                <strong>Resolution and aspect ratio</strong
+                                <strong>Resolution and display</strong
                                 ><span
-                                    >Choose a 4:3 presentation or test corrected widescreen and
-                                    ultrawide views.</span
+                                    >Windowed, fullscreen or borderless play at modern resolutions,
+                                    with ultrawide support, antialiasing and anisotropic
+                                    filtering.</span
                                 >
                             </li>
                             <li>
-                                <strong>Cleaner edges and textures</strong
+                                <strong>Lighting and shadows</strong
                                 ><span
-                                    >Configure MSAA and anisotropic filtering through the wrapper
-                                    pipeline.</span
+                                    >Mission sun and sky lighting, sun shadows, weapon and fixture
+                                    lights, and mech headlights (L by default).</span
                                 >
                             </li>
                             <li>
-                                <strong>Original presentation as a baseline</strong
+                                <strong>View distance and fog</strong
                                 ><span
-                                    >Check enhancements against the original view so improvements
-                                    remain deliberate.</span
+                                    >Scenery distance from the original 800 up to 3200, with haze
+                                    that scales to hide distant pop-in. Targeting and gameplay keep
+                                    the original range.</span
+                                >
+                            </li>
+                            <li>
+                                <strong>Materials and packs</strong
+                                ><span
+                                    >Upgraded mechs, textures, normal maps and water and cloud
+                                    detail from the content packs you enable, plus parallax depth on
+                                    supported surfaces.</span
                                 >
                             </li>
                         </ul>
-                        <p>
-                            The original executable’s front-end screens remain at their fixed 640 ×
-                            480 resolution in the documented setup. Higher-resolution settings apply
-                            to the 3D world.
-                        </p>
                     </section>
                     <section class="content-section" id="progress">
-                        <h2>Working locally. Testing more broadly.</h2>
-                        <p class="progress-date">Development snapshot · 13 October 2026</p>
+                        <h2>Playtesting across more hardware.</h2>
+                        <p class="progress-date">Playtest status · 27 November 2026</p>
                         <p>
-                            The wrapper and launcher are reported operational in the prepared
-                            development profile. Work includes fixes for video initialization and an
-                            Instant Action backbuffer transition.
+                            The renderer ships in every playtest build. Recent work covered GPU
+                            lighting, fog, loading, the menu presentation and recovery from some
+                            video memory failures.
                         </p>
                         <div class="progress-note">
-                            <h3>Compatibility work continues.</h3>
+                            <h3>More to check before release.</h3>
                             <p>
-                                Sustained gameplay, scene transitions, configuration regressions,
-                                and behavior across graphics hardware still need validation. A
-                                portable setup and third-party notices are needed before a wrapper
-                                release.
+                                Longer view distances cost much more GPU time, and lighting, shadows
+                                and parallax still need checking across missions and graphics cards.
+                                Playtest reports guide that work.
                             </p>
                         </div>
                     </section>
                     <section class="content-section" id="follow">
                         <h2>Follow the graphics work.</h2>
                         <p>
-                            Explore the project’s wrapper research and native rendering work on
-                            GitHub. The <a href="tools.html">Launcher &amp; Tools</a> page explains
-                            how local profiles bring these settings together.
+                            Explore the renderer source and daily updates. The Launcher &amp; Tools
+                            page explains how these settings and packs come together.
                         </p>
                         <a class="button" href="https://github.com/roswellien/CoreCriticalProject"
                             >Explore on GitHub
@@ -194,8 +187,7 @@
                 <p>Independent. Open source. Built to endure.</p>
                 <p>Original game files required. <a href="about.html#faq">Read the FAQ</a></p>
                 <p class="art-note">
-                    Game images are development screenshots from Core Critical builds. The Mad Cat
-                    hangar artwork is illustrative.
+                    Game images are development screenshots from Core Critical builds.
                 </p>
             </div>
             <a href="https://github.com/roswellien/CoreCriticalProject">GitHub</a>
