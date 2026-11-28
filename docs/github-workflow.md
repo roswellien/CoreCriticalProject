@@ -397,6 +397,59 @@ For an urgent repair, use the same feature/fix PR and release PR route. Any
 different route requires an explicit owner instruction for that specific case;
 agents must not invent a direct-push exception.
 
+### Launcher publication gate
+
+This gate covers launcher releases and MW3-RE runtime updates. Complete these
+steps on the same Release checklist issue.
+
+1. Before promoting the feed, prepare one GitHub Release draft for the
+   exact release version, against the reviewed `main` SHA recorded at
+   checkout (release step 1) on the release issue with the artifact hashes.
+   For a runtime-only release, also verify the companion ZIP against the
+   signed `.mw3update` metadata, then confirm that the `source_commit` in its
+   `Runtime/metadata/build-observation.json` is that SHA. Check that the
+   source commit contains the
+   [Discord release observer](../.github/workflows/discord-release-detect.yml),
+   and that the sender is activated (`DISCORD_RELEASE_ACTIVATION` set as in
+   [Verify and activate](../tools/github/discord-release-announcement.md#verify-and-activate));
+   a release published while the sender is inactive is skipped and cannot be
+   announced later.
+   For a preview, use the matching `vX.Y.Z-preview` tag and prerelease flag;
+   for a stable build, use `vX.Y.Z`. Check whether the tag or release already
+   exists. If a tag exists, resolve it to its commit (peel an annotated tag)
+   and compare the commit SHA with that recorded SHA before promoting the feed.
+   If it differs, stop and report the mismatch; changing the release target
+   does not override an existing tag. Do not move tags or create duplicates.
+2. Describe player-facing changes in the release notes. End the notes with
+   the [release target marker][release-target-marker] listing every affected
+   target and its numeric signed version. Use `corecritical` for the launcher
+   and `mw3` for the MW3-RE runtime. A target is affected only when a new
+   signed package for it ships in the catalog: list `mw3` only for a new
+   `.mw3update`, and list only `corecritical` for a launcher release that keeps
+   the existing signed runtime entry. The tag's numeric version must match one
+   of the listed versions. A preview's marker has no `-preview` suffix. The
+   gate requires the explicit marker even though the sender can infer a single
+   target from the notes' first paragraph, which serves as the short
+   player-facing Discord summary. Do not attach protected artifacts or include
+   private download references in the announcement summary.
+3. After the existing signing, install and update checks pass, promote the
+   signed feed and verify that every affected live catalog entry matches its
+   tested signed package. Then publish the draft via GitHub's release UI or
+   another authorized maintainer publisher that emits `release: published`.
+   A tag, draft, or publish using Actions' built-in `GITHUB_TOKEN` will not
+   trigger the release announcement.
+4. Check the published release URL, tag, source commit, notes, and release
+   type. Verify the observer and sender ran and record the GitHub Release URL,
+   signed catalog sequence and Discord message URL on the checklist issue.
+   If any step is missing, keep the issue open and report what succeeded and
+   what failed. Follow the
+   [announcement recovery instructions](../tools/github/discord-release-announcement.md#recovery)
+   rather than recreating a tag, deleting a reservation or guessing whether
+   a post was sent.
+
+[release-target-marker]:
+   ../tools/github/discord-release-announcement.md#labeling-releases
+
 ## Synchronize the branches
 
 `develop` advances through feature PRs; `main` advances through release PRs.

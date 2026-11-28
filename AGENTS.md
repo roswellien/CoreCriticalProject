@@ -73,6 +73,8 @@ making the repository public.
 - `CODE_STYLE.md`: how to write and format code.
 - `docs/legal.md`: what may and may not be distributed.
 - `docs/project-status-reporting.md`: how to report progress and what not to claim.
+- [Launcher publication gate](docs/github-workflow.md#launcher-publication-gate):
+  verify the signed feed, GitHub Release and Discord announcement.
 - `docs/release-filenames.md`: required installer and update filenames; follow it
   before naming or publishing any release file.
 - `docs/roadmap.md`: what is planned next.

@@ -8,6 +8,19 @@ inputs and release artifacts outside Git.
 
 ## Launcher release
 
+For an MW3-RE runtime-only update with no new launcher or installer:
+
+- Skip the launcher dependency, publish and installer steps (3 and 4) and
+  installer publication in step 7.
+- In step 5, test the signed runtime update and rollback on an existing
+  supported install instead of a new installer.
+- In step 6, reuse the approved signed launcher `.ccupdate` and matching ZIP;
+  `build_catalog.py` still requires both packages.
+- In step 7, upload only the new runtime objects; confirm the reused launcher
+  objects already exist with the same size and SHA-256. Add only the new
+  runtime paths to `PUBLIC_OBJECTS` and retain all existing entries.
+- Verify the protected Setup listing (step 10) only if it changed.
+
 1. **Start from reviewed source.** Merge the release PR from `develop` to
    `main`, then make a fresh clone of the repository and check out that exact
    merged `main` SHA. Confirm the clone is clean and record the SHA. Read the
@@ -27,8 +40,8 @@ inputs and release artifacts outside Git.
    credentials, or token.
 
    If the MW3-RE runtime changes and existing players need an update, package
-   it with the committed `tools/native-preparation/build_native_update.py`,
-   using the same runtime directory, reviewed `InstallNativeRuntime.exe`,
+   it with the committed `tools/native-preparation/build_precompiled_update.py`,
+   using the same runtime directory, reviewed `InstallPrecompiledRuntime.exe`,
    original-file input directory (read-only), and a fresh output directory:
 
    ```powershell
@@ -126,15 +139,19 @@ inputs and release artifacts outside Git.
    installation. Do not publish until these checks pass.
 
 6. **Prepare the signed online catalog.** Use the committed
-   `tools/update-service/build_catalog.py` with the new launcher metadata and
+   `tools/update-service/build_catalog.py` with the new (or, for a runtime-only
+   release, the approved reused) launcher metadata and
    the current approved signed runtime metadata/package (or the new runtime
    package when it changes). It requires version-matched `.ccupdate`/`.mw3update`
    files and companion ZIPs, the installed `update-trust.json`, the external
-   update signing key, key ID, approved origin and a new catalog sequence:
+   update signing key, key ID, approved origin and a new catalog sequence.
+   For a launcher release, `--launcher` is the fresh `.ccupdate`; for a
+   runtime-only release, it is the approved signed launcher `.ccupdate` (with
+   its companion ZIP beside it) and `--runtime` is the new `.mw3update`:
 
    ```powershell
    python tools/update-service/build_catalog.py `
-     --launcher '<fresh-output>/<version>.ccupdate' `
+     --launcher '<new-or-approved-launcher-output>/<version>.ccupdate' `
      --runtime '<approved-runtime-output>/<runtime-version>.mw3update' `
      --base-url 'https://core-critical-updates.jcblackwell84.workers.dev' `
      --sequence <new-catalog-sequence> --output '<fresh-catalog-output>' `
@@ -152,9 +169,10 @@ inputs and release artifacts outside Git.
    `core-critical-updates`, with R2 binding `UPDATES`; its public base URL is
    `https://core-critical-updates.jcblackwell84.workers.dev`. Use the
    maintainer's authenticated Wrangler session. For each entry in the
-   `objects` array in `publication.json`, upload its exact local file to the listed key, first
-   confirming that an existing immutable key is either absent or already has
-   the same size and SHA-256. The catalog builder names update objects under
+   `objects` array in `publication.json`, upload its exact local file to the
+   listed key unless that immutable key already exists with the same size and
+   SHA-256 (as for a reused, unchanged package). Never upload to an existing
+   key whose size or SHA-256 differs. The catalog builder names update objects under
    `online-updates/launcher/<version>/` and
    `online-updates/mw3/<version>/`. Never overwrite a versioned key with
    different bytes.
@@ -177,20 +195,32 @@ inputs and release artifacts outside Git.
      --file '<fresh-readback-file>' --remote
    ```
 
-   Compare readback byte count and SHA-256 to the local receipt. For public
-   update objects, download them through the Worker and verify full SHA-256,
-   byte count and a resumed Range request as well.
+   Compare readback byte count and SHA-256 to the local receipt.
 
-8. **Promote the feed last.** Extend the existing Worker's `PUBLIC_OBJECTS`
-   allowlist with the four exact new update metadata/package paths and byte
-   counts from `publication.json`, retaining every existing entry. In the
-   Cloudflare dashboard, open Workers & Pages → `core-critical-updates` →
-   Settings → Variables and Secrets. Copy the current `PUBLIC_OBJECTS` JSON
-   object, add one entry for each item in its `objects` array using `public_path`
-   as the property name and `key` and `bytes` as the value, then save and deploy.
-   Keep the `UPDATES` R2 binding connected to `core-critical-playtests`;
-   never replace the allowlist with only the new release. The Worker source is
-   tracked at `tools/update-service/worker.mjs`. Upload the signed catalog first
+   Then extend the existing Worker's `PUBLIC_OBJECTS` allowlist with the new
+   update metadata/package paths and exact byte counts from `publication.json`,
+   retaining every existing entry. In the Cloudflare dashboard, open Workers &
+   Pages → `core-critical-updates` → Settings → Variables and Secrets. Copy the
+   current `PUBLIC_OBJECTS` JSON object, add one entry for each new object
+   listed in `publication.json` using `public_path` as the property name and
+   `key` and `bytes` as the value, then save and deploy. Keep the `UPDATES` R2
+   binding connected to `core-critical-playtests`; never replace the allowlist
+   with only the new release. The Worker source is tracked at
+   `tools/update-service/worker.mjs`. The Worker returns 404 for unlisted
+   paths, so only now download each new update object through the Worker and
+   verify full SHA-256, byte count and a resumed Range request.
+
+8. **Prepare the GitHub Release draft.** Draft the release for the exact
+   version against the recorded source SHA. Check for an existing tag or
+   release and verify that any existing tag resolves to that SHA. Confirm
+   the Discord release observer is present in the source commit and, before
+   promoting the feed, that the Discord sender is activated. Add release
+   notes with the target marker. Follow the
+   [launcher publication gate](github-workflow.md#launcher-publication-gate)
+   for tag, preview and marker rules.
+
+9. **Promote the signed feed.** With the allowlisted objects verified in
+   step 7, upload the signed catalog first
    to its sequence archive key
    `online-updates/catalogs/playtest/<sequence>.json`, then to the live feed
    object `online-updates/catalogs/playtest/catalog.json`. This live object is
@@ -202,16 +232,22 @@ inputs and release artifacts outside Git.
    The exact upload/readback and catalog checks are also documented in
    [`tools/update-service/README.md`](../tools/update-service/README.md).
 
-9. **Verify the protected Setup listing.** Read back both playtest Setup
-   catalog snapshots from these R2 keys: for each of `r1` and `r2`,
-   `packs/2026-10-21-<revision>/index.html`,
-   `packs/2026-10-21-<revision>/packs.json` and
-   `packs/2026-10-21-<revision>/SHA256SUMS.txt`. Verify only the intended
-   setup rows, release fields and checksum lines changed; retain every existing
-   pack, asset and native-update row. Read the objects back after upload, then
-   check the versioned installer URL and download filename through
-   `playtest.corecritical.dev`. Keep this protected installer publication
-   separate from the public update-only feed.
+10. **Verify the protected Setup listing.** Read back both playtest Setup
+    catalog snapshots from these R2 keys: for each of `r1` and `r2`,
+    `packs/2026-10-21-<revision>/index.html`,
+    `packs/2026-10-21-<revision>/packs.json` and
+    `packs/2026-10-21-<revision>/SHA256SUMS.txt`. Verify only the intended
+    setup rows, release fields and checksum lines changed; retain every existing
+    pack, asset and native-update row. Read the objects back after upload, then
+    check the versioned installer URL and download filename through
+    `playtest.corecritical.dev`. Keep this protected installer publication
+    separate from the public update-only feed.
+
+11. **Publish the draft and verify the receipts.** After verifying the live
+    signed feed, publish the draft. Follow the
+    [launcher publication gate](github-workflow.md#launcher-publication-gate)
+    to verify the GitHub Release and Discord announcement and record their
+    URLs and the signed catalog sequence on the release checklist issue.
 
 ## Website deployment
 
