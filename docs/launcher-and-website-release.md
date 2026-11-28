@@ -151,7 +151,7 @@ For an MW3-RE runtime-only update with no new launcher or installer:
 
    ```powershell
    python tools/update-service/build_catalog.py `
-     --launcher '<fresh-output>/<version>.ccupdate' `
+     --launcher '<new-or-approved-launcher-output>/<version>.ccupdate' `
      --runtime '<approved-runtime-output>/<runtime-version>.mw3update' `
      --base-url 'https://core-critical-updates.jcblackwell84.workers.dev' `
      --sequence <new-catalog-sequence> --output '<fresh-catalog-output>' `

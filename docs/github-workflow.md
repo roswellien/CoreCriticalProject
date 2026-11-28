@@ -403,11 +403,12 @@ This gate covers launcher releases and MW3-RE runtime updates. Complete these
 steps on the same Release checklist issue.
 
 1. Before promoting the feed, prepare one GitHub Release draft for the
-   exact release version, against the reviewed source SHA recorded in the
-   build receipt. For a runtime-only release, that SHA is the `source_commit`
-   in `Runtime/metadata/build-observation.json` inside the companion ZIP.
-   Verify the ZIP against the signed `.mw3update` metadata first, then confirm
-   that `source_commit` is the reviewed `main` SHA. Check that the source commit contains the
+   exact release version, against the reviewed `main` SHA recorded at
+   checkout (release step 1) on the release issue with the artifact hashes.
+   For a runtime-only release, also verify the companion ZIP against the
+   signed `.mw3update` metadata, then confirm that the `source_commit` in its
+   `Runtime/metadata/build-observation.json` is that SHA. Check that the
+   source commit contains the
    [Discord release observer](../.github/workflows/discord-release-detect.yml),
    and that the sender is activated (`DISCORD_RELEASE_ACTIVATION` set as in
    [Verify and activate](../tools/github/discord-release-announcement.md#verify-and-activate));
@@ -416,7 +417,7 @@ steps on the same Release checklist issue.
    For a preview, use the matching `vX.Y.Z-preview` tag and prerelease flag;
    for a stable build, use `vX.Y.Z`. Check whether the tag or release already
    exists. If a tag exists, resolve it to its commit (peel an annotated tag)
-   and compare the commit SHA with the signed build receipt before publishing.
+   and compare the commit SHA with that recorded SHA before promoting the feed.
    If it differs, stop and report the mismatch; changing the release target
    does not override an existing tag. Do not move tags or create duplicates.
 2. Describe player-facing changes in the release notes. End the notes with
