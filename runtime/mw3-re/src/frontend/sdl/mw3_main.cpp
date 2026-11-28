@@ -719,14 +719,21 @@ bool parse(int argc, char** argv, Args& a) {
       const bool index_is_digits =
           !index.empty() && index.size() <= 3 && index.find_first_not_of("0123456789") == std::string::npos;
       if (!index_is_digits) {
-        std::fprintf(stderr, "Invalid --cc-model-skin index\n");
+        std::fprintf(stderr, "Invalid --cc-model-skin index: expected an integer from 1 to 7 "
+                             "(retail B-H)\n");
         return false;
       }
       binding.index = std::atoi(index.c_str());
-      // 1-7 are retail B-H; catalog skins follow. Index 0 is the primary set already
-      // given by --cc-model, so it is never a separate binding.
-      if (binding.index < 1 || binding.index > 135 || (binding.lod != "0" && binding.lod != "1")) {
-        std::fprintf(stderr, "Invalid --cc-model-skin index/LOD\n");
+      // Explicit bindings cover retail B-H (1-7), as in the compact binding index.
+      // The primary set (0) comes from --cc-model; catalogue identities are negative
+      // and come from --cc-skin-catalog, independently of the original skin rows.
+      if (binding.index < 1 || binding.index > 7) {
+        std::fprintf(stderr, "Invalid --cc-model-skin index: expected 1-7 (retail B-H); "
+                             "use --cc-skin-catalog for catalogue skins\n");
+        return false;
+      }
+      if (binding.lod != "0" && binding.lod != "1") {
+        std::fprintf(stderr, "Invalid --cc-model-skin LOD: expected 0 or 1\n");
         return false;
       }
       binding.path = argv[++i];

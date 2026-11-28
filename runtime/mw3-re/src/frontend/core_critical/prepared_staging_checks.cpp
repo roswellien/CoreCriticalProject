@@ -5,6 +5,10 @@
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
 #include "platform/prepared_skins.h"
+#include "gamez/zreader/zreader.h"
+#include "mech3/mech_names.h"
+#include "mech3/mech_reader.h"
+#include "mech3/mech_skin.h"
 #include "renderer/normal_codec.hpp"
 #include "renderer/fixture_observation_emission.hpp"
 #include "renderer/surface_materials.hpp"
@@ -12,6 +16,7 @@
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/geometry/resource.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
@@ -748,12 +753,116 @@ void check_prepared_models_surface_materials() {
             require(rejected, "Compact binding index accepted malformed or duplicate metadata");
         }
         asset->name = "mech_authored_1.flt";
-        panel->prepared_skin_index = 8;
+        platform::prepared::for_each_model_skin(
+            *platform::prepared::configured_skin_catalog(), "authored",
+            [&](const auto &, int32_t index) { panel->prepared_skin_index = index; });
         const auto added_distance = skins.draw(context);
         asset->name = "mech_authored.flt";
         const auto added_close = skins.draw(context);
         require(added_distance.batches[0].texture_owner == added_close.batches[0].texture_owner,
                 "Catalog skin shared between LODs decoded twice");
+        require(added_close.batches[0].texture_owner != nullptr,
+                "Catalog skin did not select prepared textures");
+
+        // Exercise real definition loading and skin application, rather than
+        // recreating the Lab's matching or assuming eight native skin rows.
+        {
+            const auto saved_catalog = platform::prepared::configured_skin_catalog();
+            RestoreCatalog restore{saved_catalog};
+            require(mech3::mech_count() == mech3::kBuiltinMechs,
+                    "Skin fixture needs an unmodified roster");
+            struct ClearModRows {
+                ~ClearModRows() { mech3::mech_rows_clear(); }
+            } clear_rows;
+            std::string error;
+            for (const auto &line : {
+                     "thor_b tech=clan mass=70 class=heavy model=thor",
+                     "thor_c tech=clan mass=70 class=heavy model=thor"}) {
+                const bool added = mech3::mech_row_add_line(line, &error);
+                require(added, error.c_str());
+            }
+
+            platform::prepared::SkinCatalog model_catalog;
+            auto model_options = sdlfe::CoreCriticalAssets{};
+            for (int mech = 0; mech < mech3::kBuiltinMechs; ++mech) {
+                const std::string model = mech3::mech_model_name(mech);
+                for (const auto *suffix : {"a", "z"}) {
+                    const bool second_skin = suffix[0] == 'z';
+                    const auto close_path = second_skin ? temp_dir / "skin-1-0" : tex_path;
+                    const auto distance_path = temp_dir / (second_skin ? "skin-2-1" : "skin-1-1");
+                    // Display names must not turn catalogue skins into the
+                    // native definition's special damage-mask entry.
+                    const auto *name = second_skin ? "damage" : "a";
+                    model_catalog.push_back({model + ":" + suffix, name, model,
+                                             {close_path.string(), distance_path.string()}});
+                }
+                for (const auto *lod : {"0", "1"})
+                    model_options.models.push_back(
+                        {model, lod, mesh_path.string(), tex_path.string()});
+            }
+            // A skin aimed at the variant's own name must never attach when
+            // its base model is Thor. Interleave it with the matching records.
+            model_catalog.push_back({"thor_b:a", "Wrong model", "thor_b",
+                                     {tex_path.string(), tex_path.string()}});
+            std::sort(model_catalog.begin(), model_catalog.end(),
+                      [](const auto &a, const auto &b) { return a.id < b.id; });
+            platform::prepared::configured_skin_catalog() =
+                std::make_shared<const platform::prepared::SkinCatalog>(model_catalog);
+            cc_mw3_re::PreparedModels model_skins(model_options);
+
+            const auto check_mech = [&](int mech, int original_count) {
+                std::string definition = "[\"version\",2,\"skins\",[";
+                for (int row = 0; row < original_count; ++row) {
+                    if (row) definition += ',';
+                    definition += "\"Original " + std::to_string(row) + "\",[\"";
+                    definition += row ? "_" + std::to_string(row) : "body";
+                    definition += "\"]";
+                }
+                definition += "]]";
+                mech3::MechDfn dfn(mech, zrdr::parse_json(definition, &error));
+                require(dfn.reader && mech3::read_dfn(dfn),
+                        "Authored skin definition failed to load");
+                const auto &rows = dfn.skins->skins;
+                require(rows.size() == static_cast<size_t>(original_count + 2),
+                        "Model skins were not appended after the mech's original skins");
+                for (int row = 0; row < original_count; ++row) {
+                    const auto expected = "Original " + std::to_string(row);
+                    require(rows[row]->name == expected && rows[row]->prepared_skin_index == row,
+                            "Original skin order or identity changed");
+                }
+                require(std::strcmp(rows[original_count]->name, "a") == 0 &&
+                            std::strcmp(rows[original_count + 1]->name, "damage") == 0 &&
+                            !dfn.skins->damage,
+                        "Catalogue order or model matching changed");
+                for (int row = original_count; row < original_count + 2; ++row) {
+                    std::unique_ptr<mech3::Skin> applied(dfn.skins->mech_skin(row, panel));
+                    require(applied && panel->prepared_skin_index == rows[row]->prepared_skin_index,
+                            "Lab selection lost its catalogue identity during skin application");
+                    for (int lod = 0; lod < 2; ++lod) {
+                        asset->name = "mech_" + std::string(mech3::mech_model_name(mech)) +
+                                      (lod ? "_1.flt" : ".flt");
+                        const auto drawn = model_skins.draw(context);
+                        require(drawn.batches.size() == 1 && drawn.batches[0].texture_owner,
+                                "Lab catalogue selection did not reach the prepared draw");
+                        const auto expected_pixel = (lod ? 17U : 0U) + row - original_count;
+                        require((drawn.batches[0].texture->pixels[0] & 255) == expected_pixel,
+                                "Model skin selected the wrong LOD payload");
+                    }
+                }
+                return rows[original_count]->prepared_skin_index;
+            };
+            int32_t thor_skin = 0;
+            for (int mech = 0; mech < mech3::kBuiltinMechs; ++mech) {
+                const auto identity = check_mech(mech, 8);
+                if (std::strcmp(mech3::mech_name(mech), "thor") == 0) thor_skin = identity;
+            }
+            for (const auto count : {1, 3, 9}) {
+                require(check_mech(mech3::kFirstModMech, count) == thor_skin &&
+                            check_mech(mech3::kFirstModMech + 1, count) == thor_skin,
+                        "Two mod mechs sharing Thor's model did not share its skins");
+            }
+            asset->name = "mech_authored.flt";
+        }
         panel->prepared_skin_index = 999;
         require(skins.draw(context).batches[0].texture == primary,
                 "Unknown skin failed to fall back to primary");

@@ -350,15 +350,15 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
                 !model.skins.emplace(skin.index, PreparedSkinCache::normalize_key(skin.path)).second)
                 throw std::runtime_error("Invalid or duplicate prepared skin selection");
         }
-        int32_t catalog_index = static_cast<int32_t>(platform::prepared::base_skin_count(binding.chassis));
-        for (const auto &skin : *platform::prepared::configured_skin_catalog())
-            if (skin.chassis == binding.chassis) {
+        platform::prepared::for_each_model_skin(
+            *platform::prepared::configured_skin_catalog(), binding.chassis,
+            [&](const auto &skin, int32_t prepared_index) {
                 if (!model.skins.emplace(
-                        catalog_index++,
+                        prepared_index,
                         PreparedSkinCache::normalize_key(
                             skin.textures[model.distance_lod ? 1 : 0])).second)
                     throw std::runtime_error("Prepared catalog skin overrides a selected skin index");
-            }
+            });
         if (!selected.insert(model.source_asset).second)
             throw std::runtime_error("Duplicate prepared model selection");
         const auto mat = surface_materials.find({binding.chassis, binding.lod});
