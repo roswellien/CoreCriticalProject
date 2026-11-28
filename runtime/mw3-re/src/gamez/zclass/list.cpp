@@ -92,8 +92,8 @@ int list_count(int list) {
 
 // Mech3.exe 1.2 @ 0x004f8080
 int push_front(int list, Node* node) {
-  if (list == kChanged && node->get<uint32_t>(0xc4) <= frames().frame) {
-    frames().expiry = frames().frame + 0xa0;
+  if (list == kChanged && node->get<uint32_t>(0xc4) <= frames().step) {  // ours (#485): steps (cls_node.h)
+    frames().expiry = frames().step + 0xa0;
     set_expiry(node);
   }
   ListItem* item = item_alloc();
@@ -479,11 +479,24 @@ int animates_update() {
   });
 }
 
+namespace {
+bool g_drawing_between_steps = false;
+}  // namespace
+
+void set_drawing_between_steps(bool on) { g_drawing_between_steps = on; }
+
 // Mech3.exe 1.2 @ 0x004f7f70: after each action list, and where a frame
 // needs the scene current (the mission start, the camera's move).
 void frame_update() {
-  sequences_update();
-  animates_update();
+  // Ours (#485, docs/fixed-step.md): a frame drawn between fixed steps (the
+  // horizon's move in render_world) brings only the changed nodes current for
+  // drawing. The sequences and animates advance by the timer's dt, the drawn
+  // frame's there, and are simulation: they run in the steps, the draw's share
+  // of them once a step in interp::prepare_cameras, as the exe's one draw a frame.
+  if (!g_drawing_between_steps) {
+    sequences_update();
+    animates_update();
+  }
   update_changed();
 }
 

@@ -24,6 +24,9 @@ int node_bound_box(Node* node);     // 0x004ecc00  +0x74 = model box u children'
 // default; a test may stand others in (null skips the call).
 void update_node(Node* node);       // 0x004f7e00
 void frame_update();                // 0x004f7f70
+// Ours (#485): set by zcls::interp while a frame is drawn between fixed
+// steps; frame_update then leaves the sequences and animates to the steps.
+void set_drawing_between_steps(bool on);
 int update_changed();               // 0x004f7e50
 struct UpdateHooks {
   void* ctx = nullptr;

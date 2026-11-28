@@ -12,6 +12,10 @@ the time goes, and what could be made cheaper. Measured on the Mac
 - `--frame-ms 33` (each frame 33 ms of game time, so a run is in the
   mission after the same number of frames whatever the speed), timed with
   `--frame-times 100` over frames 100..1200 (all in the Core state).
+  Since #485 the mission's simulation runs fixed 1/30 s steps underneath
+  (fixed-step.md): at 33 ms about one frame in a hundred runs no step, so a
+  frame's time mixes drawing with 0 or 1 steps, and numbers from before it
+  are not directly comparable.
 - `--hidden`: no swapchain, so a frame's time is the CPU's (the GPU work is
   submitted, not waited on). A visible window waits for vsync.
 - Scenes: `c4m2 --mech-ahead 100` (rain, the player near the enemy),

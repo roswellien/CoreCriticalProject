@@ -140,6 +140,12 @@ class CoreState : public State {
   bool draw_software(Handle veh, bool flag);  // 0x00481290
   bool draw_doubled(Handle veh, bool flag);   // 0x00481a10
   bool draw_hardware(Handle veh, bool flag);  // 0x00481790
+  // Ours (#485, docs/fixed-step.md): frame()'s simulation half, as one
+  // variable step or as fixed 1/30 s steps, and the fixed step's restart.
+  bool poll_and_run_lists(bool replay);  // false: a 3D replay that has stopped
+  void run_fixed_steps();
+  // resuming: back from the pause menu, the cameras the last frame drew kept.
+  void restart_fixed_step(bool resuming = false);
 
   Handle window_rect_ = 0;            // +0x08
   Handle display_rect_ = 0;           // +0x0c
@@ -149,6 +155,14 @@ class CoreState : public State {
   uint8_t active_ = 0;                // +0x19
   int renderer_ = kNone;              // +0x1c
   Handle message_box_ = 0;            // +0x20
+
+  // Ours (#485): the steps' own running totals of game time, which the
+  // timer's totals read during a step (the frame's are the real clock's).
+  float step_total_scaled_ = 0;
+  float step_total_raw_ = 0;
+  // False with the fixed step: world_tick and the arena's tick have run in
+  // the steps already, not in the drawing paths.
+  bool world_tick_in_draw_ = true;
 };
 
 // 10, unnamed (0x00608ea0, vtable 0x005c40a0): a list of the 0xa7 input

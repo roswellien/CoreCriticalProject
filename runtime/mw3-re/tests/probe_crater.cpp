@@ -102,6 +102,7 @@ void crater_setup(int32_t material, uint32_t frame) {
   zdec::state().quicksand_cycle = &zmod::materials().at(material);
   zdec::state().quicksand_still = &zmod::materials().at(material + 1);
   zcls::frames().frame = frame;
+  zcls::frames().step = frame;  // ours (#485): the node stamps count steps; one a frame in the exe
   zmod::set_vertex_precision(0.001f);
 }
 

@@ -10,6 +10,53 @@ namespace {
 State g_state;
 Host g_default_host;
 platform::Input* g_di = nullptr;
+
+// Ours (#485): the drawn frame's input (DrawnFrameInput). The presses (1) and
+// releases (4) each of the frame's polls left, by key, by mouse button (left,
+// right, middle) and by joystick button (1..10, what joy_button reads).
+constexpr int kMouseButtons = 3;
+constexpr int kJoyButtons = 10;
+constexpr uint32_t kEdges = kPressed | kReleased;
+struct FrameEdges {
+  int polls = 0;
+  uint8_t keys[kKeys] = {};
+  uint8_t mouse[kMouseButtons] = {};
+  uint8_t joy[kJoyButtons] = {};
+};
+FrameEdges g_frame;
+// The polled states a DrawnFrameInput replaced, and the views it wrote.
+struct SavedInput {
+  uint32_t keys[kKeys] = {}, key_views[kKeys] = {};
+  uint32_t mouse[kMouseButtons] = {}, mouse_views[kMouseButtons] = {};
+  uint8_t joy_now[kJoyButtons] = {}, joy_before[kJoyButtons] = {};
+  uint8_t joy_now_view[kJoyButtons] = {}, joy_before_view[kJoyButtons] = {};
+};
+SavedInput g_saved;
+
+uint32_t* mouse_slot(State& s, int i) {
+  if (i == 0) return &s.mouse.left;
+  if (i == 1) return &s.mouse.right;
+  return &s.mouse.middle;
+}
+
+uint8_t edges_of(uint32_t state) { return static_cast<uint8_t>(state & kEdges); }
+
+void keep_frame_edges() {
+  State& s = g_state;
+  ++g_frame.polls;
+  for (int k = 0; k < kKeys; ++k) g_frame.keys[k] |= edges_of(s.keys[k].state);
+  for (int i = 0; i < kMouseButtons; ++i) g_frame.mouse[i] |= edges_of(*mouse_slot(s, i));
+  for (int i = 0; i < kJoyButtons; ++i) g_frame.joy[i] |= edges_of(joy_button(i + 1));
+}
+
+// One button's state as a single poll for the whole frame would leave it: the
+// last poll's with every edge of the frame's polls added; with no poll, the
+// last poll's aged as the next would age it (a release gone, a press held).
+uint32_t frame_view(uint32_t polled, uint8_t edges) {
+  if (g_frame.polls > 0) return polled | edges;
+  if (polled & kReleased) return 0;
+  return (polled & (kPressed | kHeld)) ? kHeld : 0;
+}
 }  // namespace
 
 Host* g_host = &g_default_host;
@@ -152,6 +199,7 @@ void poll(bool callbacks) {
   if (s.mouse_flags == 1 && s.mouse_users != 0) mouse_poll(callbacks);
   if (s.joy_flags == 1 && s.joy_users != 0) joy_read(callbacks);
   if (s.kbd_flags == 1 && s.kbd_users != 0) kbd_read(callbacks);
+  keep_frame_edges();  // ours (#485)
   // An input callback can close a map or open text entry. Remaining edges
   // belong to the context in which the snapshot was taken.
   if (!callbacks || !commands_enabled || text_entry) return;
@@ -159,6 +207,45 @@ void poll(bool callbacks) {
     if (!s.di || !s.map->enabled || s.char_callback) break;
     const auto callback = s.map->callbacks[cmd];
     if (callback && s.di->extended_command_pressed(cmd)) callback(cmd);
+  }
+}
+
+void frame_input_begin() { g_frame = FrameEdges{}; }
+
+DrawnFrameInput::DrawnFrameInput() {
+  State& s = g_state;
+  SavedInput& v = g_saved;
+  for (int k = 0; k < kKeys; ++k) {
+    v.keys[k] = s.keys[k].state;
+    s.keys[k].state = v.key_views[k] = frame_view(v.keys[k], g_frame.keys[k]);
+  }
+  for (int i = 0; i < kMouseButtons; ++i) {
+    v.mouse[i] = *mouse_slot(s, i);
+    *mouse_slot(s, i) = v.mouse_views[i] = frame_view(v.mouse[i], g_frame.mouse[i]);
+  }
+  // A joystick button's state is worked out from this read and the one before
+  // (joy_button), so the view is set as the pair that gives it.
+  for (int i = 0; i < kJoyButtons; ++i) {
+    v.joy_now[i] = s.joy.buttons[i];
+    v.joy_before[i] = s.joy_prev.buttons[i];
+    const uint32_t view = frame_view(joy_button(i + 1), g_frame.joy[i]);
+    const bool now = (view & kPressed) || (!(view & kReleased) && (view & kHeld));
+    const bool before = !(view & kPressed) && (view & (kHeld | kReleased));
+    s.joy.buttons[i] = v.joy_now_view[i] = now ? 0x80 : 0;
+    s.joy_prev.buttons[i] = v.joy_before_view[i] = before ? 0x80 : 0;
+  }
+}
+
+DrawnFrameInput::~DrawnFrameInput() {
+  State& s = g_state;
+  const SavedInput& v = g_saved;
+  for (int k = 0; k < kKeys; ++k)
+    if (s.keys[k].state == v.key_views[k]) s.keys[k].state = v.keys[k];
+  for (int i = 0; i < kMouseButtons; ++i)
+    if (*mouse_slot(s, i) == v.mouse_views[i]) *mouse_slot(s, i) = v.mouse[i];
+  for (int i = 0; i < kJoyButtons; ++i) {
+    if (s.joy.buttons[i] == v.joy_now_view[i]) s.joy.buttons[i] = v.joy_now[i];
+    if (s.joy_prev.buttons[i] == v.joy_before_view[i]) s.joy_prev.buttons[i] = v.joy_before[i];
   }
 }
 

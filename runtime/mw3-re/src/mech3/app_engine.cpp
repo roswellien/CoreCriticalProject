@@ -16,6 +16,8 @@
 #include "mech3/mission_map.h"
 #include "mech3/patch12.h"
 #include "mech3/app.h"
+#include "mech3/app_states.h"
+#include "mech3/fixed_step.h"
 #include "mech3/hud.h"
 #include "mech3/message_panel.h"
 #include "mech3/sensors.h"
@@ -29,6 +31,7 @@
 #include "mech3/app_mech.h"
 #include "mech3/pilot.h"
 #include "mech3/app_hud.h"
+#include "mech3/mech_hud.h"
 #include "mech3/controls_cfg.h"
 #include "mech3/options.h"
 #include "mech3/mods_menu.h"
@@ -214,6 +217,12 @@ GameEngine::GameEngine(const Platform& p, std::string command_line)
   g_engine = this;
   ztimer::set_clock(p_.clock);
   zsnd_cd::set_backend(p_.files, p_.music, "music");
+  if (present_per_step) {
+    steps_present_ = true;
+    after_each_step() = [this] {
+      if (on_present) on_present(frames_presented);
+    };
+  }
   set_options_hooks(&g_options_hooks);
   wire_mission_hooks(this);
   wire_pilot_hooks(this);
@@ -276,6 +285,7 @@ GameEngine::GameEngine(const Platform& p, std::string command_line)
 }
 
 GameEngine::~GameEngine() {
+  if (steps_present_) after_each_step() = nullptr;
   if (p_.screen) p_.screen->cancel_menu_observation();
   game_box() = nullptr;  // ours (upgrades/game_boxes.h): the game's box is gone with the engine
   if (force_) program_force_feedback(nullptr), force_.reset();  // an engine gone without the app's stop: its calls off
@@ -674,7 +684,22 @@ void GameEngine::force_feedback_spring(Handle, int32_t on) {
   if (force_) force_->spring(on != 0);
 }
 void GameEngine::input_set_mode(uint32_t mode) { zin::set_mode(mode); }
-void GameEngine::input_poll(uint8_t callbacks) { zin::poll(callbacks != 0); }
+void GameEngine::input_poll(uint8_t callbacks) {
+  zin::poll(callbacks != 0);
+  for (int32_t key = 0; key < 0x100; ++key)
+    // A press this poll: 1, or 5 when let go again before it (a quick tap).
+    if ((zin::key_state(key) & zin::kPressed) != 0) fresh_keys_[key] = true;
+}
+// Only the plain keys (DIK codes below 0x100) are kept; a key with Alt, Ctrl
+// or Shift (0x100 and up) is never fresh here.
+bool GameEngine::key_pressed_this_frame(int32_t key) {
+  if (key < 0 || key >= 0x100) return false;
+  return fresh_keys_[key];
+}
+void GameEngine::frame_keys_begin() {
+  for (bool& fresh : fresh_keys_) fresh = false;
+  zin::frame_input_begin();
+}
 
 bool GameEngine::replay_on() { return replay_hooks() != nullptr; }
 bool GameEngine::replay_strict() {
@@ -885,7 +910,7 @@ void GameEngine::video_flip(int32_t, int32_t, int32_t, int32_t) {
     p_.screen->overlay_16(buffer_.data(), width_, height_, width_ * 2, true, kLayerKey, nullptr, nullptr);
     p_.render->present();
     ++frames_presented;
-    if (on_present) on_present(frames_presented);
+    call_on_present();
     return;
   }
   if (held_) drop_held();
@@ -901,7 +926,16 @@ void GameEngine::video_flip(int32_t, int32_t, int32_t, int32_t) {
   scene_drawn_ = layer_drawn_ = false;
   layer_blank_ = true;
   ++frames_presented;
-  if (on_present) on_present(frames_presented);
+  call_on_present();
+}
+
+void GameEngine::call_on_present() {
+  if (!on_present) return;
+  // A mission's steps call it themselves (the constructor's after_each_step).
+  const Mech3App* running = app_if_any();
+  const bool in_stepped_mission = fixed_step_enabled() && running && running->current() == &states().core;
+  if (steps_present_ && in_stepped_mission) return;
+  on_present(frames_presented);
 }
 // 0x004f7d80: the zClass action lists, each followed by the frame update
 // (docs/action-lists.md): the player's tick (2), weapon_tick (3), the
@@ -1071,6 +1105,8 @@ void GameEngine::hud_update() {
   if (MessagePanel* p = message_panel()) p->update(dt);  // [0x00603d7c] vt+0x24: its text
   pocket_draw(dt);                                       // 0x0046a410
 }
+void GameEngine::hud_in_steps(bool in_steps) { set_hud_in_steps(in_steps); }
+void GameEngine::hud_step() { program_hud_step(frame_dt()); }
 void GameEngine::hud_draw() {
   mods_edit_frame();  // ours: MODS's EDIT opens the editor on the mission's first frame
   editor_frame();

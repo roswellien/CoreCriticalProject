@@ -11,6 +11,7 @@
 
 #include "check.h"
 #include "gamez/zutil/zutl_path.h"
+#include "mech3/app_engine.h"
 #include "mech3/mission.h"
 #include "platform/platform.h"
 
@@ -49,6 +50,18 @@ struct FakeAlert : platform::Alert {
 struct FakeClock : platform::Clock {
   uint32_t now = 0;
   uint32_t ticks_ms() override { return now += 16; }
+};
+// Ours (#485, docs/fixed-step.md): for the life of one test, an engine made
+// in it calls on_present after each mission step instead of each frame drawn
+// in a mission. For the whole-mission tests that count on_present calls as the
+// game's ticks: each call is one 1/30 s step, however many steps a drawn frame
+// ran (FakeClock's time moves on each time the game reads it, so that varies).
+// The fixed step's own tests cover frames that run no step or several.
+struct PresentOnSteps {
+  PresentOnSteps() { mech3::GameEngine::present_per_step = true; }
+  ~PresentOnSteps() { mech3::GameEngine::present_per_step = false; }
+  PresentOnSteps(const PresentOnSteps&) = delete;
+  PresentOnSteps& operator=(const PresentOnSteps&) = delete;
 };
 // zFMV's clock in the tests: a second a call, so the movie scripts' waits
 // (the Intro's SPLASH, 4 s) pass in a few frames.

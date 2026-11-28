@@ -1229,7 +1229,9 @@ update (vt+0x24), the pocket commander 0x46a410, and a tick of 0x731ac0, the
 text console layer of the interp's debug console (twod.md). The program
 runs it as one call (`GameEngine::hud_update`): the view target's frame,
 the message panel and the pocket commander; the developer pieces are left
-out.
+out. With the fixed step (#485, fixed-step.md) the view target's frame leaves
+out its missile lock and its arms' aim (`hud_step`), which run once per
+1/30 s step instead.
 
 **0x5a6790 / 0x5a67c0 are not the HUD's**: both take the object at
 [0x736328], the manager the mission's weather is added to (0x59fbe0;

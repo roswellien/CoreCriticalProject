@@ -1,0 +1,583 @@
+#include "gamez/zclass/interp.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <unordered_map>
+#include <vector>
+
+#include "gamez/zclass/camera.h"
+#include "gamez/zclass/class.h"
+#include "gamez/zclass/cls_data.h"
+#include "gamez/zclass/cls_node.h"
+#include "gamez/zclass/list.h"
+#include "gamez/zmath/zmth_matrix.h"
+#include "gamez/zmodel/gmod_cull.h"
+
+namespace zcls::interp {
+
+namespace {
+// Object3d data (docs/zclass-world.md): +0x00 flags, +0x30 the local 3x4,
+// +0x60 the cached world 3x4, stale while flag 0x20 is set.
+constexpr int kFlagsOffset = 0x00;
+constexpr int kLocalOffset = 0x30;
+constexpr int kWorldOffset = 0x60;
+constexpr uint32_t kWorldStale = 0x20;
+// Node flag: in the world tree, so node_to_world keeps its cache (0x004ed280).
+constexpr uint32_t kInWorldTree = 0x80000;
+constexpr uint32_t kActive = 4;
+// Node flag 0x2000000 (mech3ax UNK25): set on a node and its subtree when it
+// moves (0x004fb600, node_mark_unk25), which skips a child that still has it;
+// every renderer clears it on the nodes it walks, as do the line queries. The
+// original's one draw after each frame cleared it, so each frame's moves marked
+// the children again; here each step clears it (settle_world_caches) and
+// `restore` gives back what the draws cleared, so how many frames are drawn
+// between two steps (none below 30 fps) never changes what a move marks.
+constexpr uint32_t kChangedMark = 0x2000000;
+constexpr std::size_t kMatrixBytes = 12 * sizeof(float);
+
+struct Transforms {
+  float local[12];
+  float world[12];
+  bool world_valid;
+};
+
+struct Record {
+  Transforms previous;
+  Transforms current;
+  bool has_previous = false;
+  // Set by apply when this node was drawn blended, until restore.
+  bool blended = false;
+  unsigned pass = 0;  // the record() pass that last found this node on list 6
+};
+
+std::unordered_map<const Node*, Record> g_records;
+unsigned g_pass = 0;
+// Every node as the draw found it: its local transform, its cached world
+// matrix and whether that was stale. The draw rebuilds world caches from the
+// (blended) chain, of nodes apply did not blend too (a turret whose hull
+// moved); restore puts each back as it was, so the simulation never reads one.
+struct BeforeDraw {
+  Node* node;
+  uint32_t data_flags;  // the object3d data's flags word (+0x00, the stale flag among them) as found
+  bool blended = false;  // apply wrote applied_local (and maybe the cache)
+  float local[12];
+  float world[12];
+  // What apply wrote. The draw itself may move a node (a camera, for one);
+  // restore puts back only what still holds apply's blend.
+  float applied_local[12];
+};
+std::vector<BeforeDraw> g_before_draw;
+// The records in list 6's order at the last record(): record and apply walk
+// the list in that order, so the i-th live object3d's record is found here
+// without a map lookup while the list has not changed (5,600 nodes in c2m1).
+// Emptied when a record goes (forget), as a freed node's address may come back.
+std::vector<std::pair<const Node*, Record*>> g_order;
+
+// The record of the i-th live object3d on list 6 (record's order), else from
+// the map; null for a node with none.
+Record* find_record(const Node* node, std::size_t i) {
+  if (i < g_order.size() && g_order[i].first == node) return g_order[i].second;
+  auto found = g_records.find(node);
+  return found == g_records.end() ? nullptr : &found->second;
+}
+
+// Cameras (class 1) are placed in the world each step on their own (the
+// player's view: PlayerView::place, a position at data +0x14 and angles at
+// +0x20), not through an object3d's transform, so they are blended here too:
+// set through their setters (0x004f36b0, 0x004f3870), as the game moves them.
+// Unblended, the view moved in 30 Hz jumps at any frame rate while the cockpit
+// in front of it was blended. A camera given a whole matrix (+0x10 bit 1) is
+// drawn as it is.
+constexpr int kCameraFlags = 0x10;
+constexpr int kCameraPosition = 0x14;
+constexpr int kCameraAngles = 0x20;
+constexpr uint32_t kCameraGivenMatrix = 2;
+// A turn past this in one step is a cut (a new view mode), drawn where it is.
+constexpr float kCameraSnapAngle = 1.5707964f;
+
+struct CameraPose {
+  float position[3];
+  float angles[3];
+};
+struct CameraRecord {
+  CameraPose previous;
+  CameraPose current;
+  CameraPose applied;  // what apply set; restore puts back only what still holds it
+  bool has_previous = false;
+  bool blended = false;
+  unsigned pass = 0;
+};
+std::unordered_map<const Node*, CameraRecord> g_cameras;
+std::vector<Node*> g_blended_cameras;
+
+bool is_live_camera(const Node* node) { return node && node->cls() == 1 && node->data; }
+
+// False for a camera given a whole matrix.
+bool read_camera(Node* node, CameraPose* out) {
+  const auto* d = static_cast<const Camera*>(node->data);
+  if (d->get<uint32_t>(kCameraFlags) & kCameraGivenMatrix) return false;
+  for (int i = 0; i < 3; ++i) {
+    out->position[i] = d->get<float>(kCameraPosition + 4 * i);
+    out->angles[i] = d->get<float>(kCameraAngles + 4 * i);
+  }
+  return true;
+}
+
+bool same_pose(const CameraPose& a, const CameraPose& b) { return std::memcmp(&a, &b, sizeof a) == 0; }
+
+void set_camera(Node* node, const CameraPose& p) {
+  camera_set_rotation(node, p.angles[0], p.angles[1], p.angles[2]);
+  camera_set_position(node, p.position[0], p.position[1], p.position[2]);
+}
+
+// The short way from one angle to another, in -pi..pi.
+float angle_step(float from, float to) {
+  constexpr float kTurn = 6.2831853f;
+  return std::remainder(to - from, kTurn);
+}
+
+void record_camera(Node* node) {
+  CameraPose now;
+  if (!read_camera(node, &now)) {
+    g_cameras.erase(node);
+    return;
+  }
+  CameraRecord& r = g_cameras[node];
+  r.pass = g_pass;
+  r.previous = (r.blended || !r.has_previous) ? now : r.current;
+  r.current = now;
+  r.has_previous = true;
+  r.blended = false;
+}
+
+void apply_camera(Node* node, float alpha) {
+  auto found = g_cameras.find(node);
+  if (found == g_cameras.end()) return;
+  CameraRecord& r = found->second;
+  CameraPose now;
+  if (!r.has_previous || !read_camera(node, &now)) return;
+  if (!same_pose(now, r.current)) {  // moved outside a step: drawn as it is
+    r.has_previous = false;
+    return;
+  }
+  if (same_pose(r.previous, r.current)) return;
+  const float* a = r.previous.position;
+  const float* b = r.current.position;
+  const float moved = std::sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]) + (b[2] - a[2]) * (b[2] - a[2]));
+  if (moved > kSnapDistance) return;
+  CameraPose blend;
+  for (int i = 0; i < 3; ++i) {
+    const float turn = angle_step(r.previous.angles[i], r.current.angles[i]);
+    if (std::fabs(turn) > kCameraSnapAngle) return;
+    blend.angles[i] = r.previous.angles[i] + turn * alpha;
+    blend.position[i] = a[i] + (b[i] - a[i]) * alpha;
+  }
+  set_camera(node, blend);
+  read_camera(node, &r.applied);
+  r.blended = true;
+  g_blended_cameras.push_back(node);
+}
+
+// Every camera as the draw found it, its whole data: the draw derives from its
+// place its matrices, world position (+0x2c) and zone list (+0x1e4), which the
+// simulation reads (the weapons' casts, the turrets); restore puts it all
+// back. Each step's camera_prepare works them out from the exact place.
+struct CameraBefore {
+  Node* node;
+  bool posed;          // a camera placed by position and angles (not a whole matrix)
+  CameraPose left;     // as apply left it: its blend, or as found
+  uint8_t data[sizeof(Camera::raw)];
+};
+std::vector<CameraBefore> g_cameras_before;
+// The nodes that follow a camera, moved by the draw (horizon_follow, the
+// camera's +0x08 and +0x0c): put back as they were too.
+std::vector<Node*> g_followers;
+uint8_t g_zones_before[4];  // the zone list the weapons' casts read (zmod::zones)
+// The cameras the last mission frame drew (render_world's, in its order),
+// taken at `restore`: what each step prepares. Kept apart from
+// rendered_cameras, which a pause menu's own drawing may add to.
+std::vector<Node*> g_drawn_cameras;
+StepCameraPlacer g_step_placer = nullptr;
+// The cameras the placer placed in a step: a draw's changes to them never stay.
+std::vector<Node*> g_step_placed;
+// The nodes that had kChangedMark when the draw began.
+std::vector<Node*> g_marked;
+
+bool step_placed(const Node* node) {
+  return std::find(g_step_placed.begin(), g_step_placed.end(), node) != g_step_placed.end();
+}
+
+// Node +0x2c bit 0: the bounding sphere (+0x64..+0x70) is out of date, so the
+// next renderer to walk the node works it out again and clears the bit. A node
+// drawn at a blended place gets it before and after each draw: every draw
+// between two steps then culls it with a sphere from its own place, and the
+// first draw once it stops moving with one from its exact place.
+constexpr int kBoundsFlagsOffset = 0x2c;
+constexpr uint32_t kSphereStale = 1;
+void mark_sphere_stale(Node* node) {
+  node->put<uint32_t>(kBoundsFlagsOffset, node->get<uint32_t>(kBoundsFlagsOffset) | kSphereStale);
+}
+
+bool on_camera_list(const Node* node) {
+  for (ListItem* item = list_head(kCameras); item; item = item->next)
+    if (item->node == node) return true;
+  return false;
+}
+
+void keep_camera(Node* node) {
+  auto* d = static_cast<Camera*>(node->data);
+  CameraBefore& c = g_cameras_before.emplace_back();
+  c.node = node;
+  std::memcpy(c.data, d->raw, sizeof c.data);
+  for (Node* follower : {d->nodes[2], d->nodes[3]})
+    if (follower) g_followers.push_back(follower);
+}
+
+void restore_cameras() {
+  for (Node* node : g_blended_cameras) {
+    auto found = g_cameras.find(node);
+    if (found != g_cameras.end()) found->second.blended = false;
+  }
+  g_blended_cameras.clear();
+  for (const CameraBefore& c : g_cameras_before) {
+    if (!is_live_camera(c.node)) continue;
+    // Placed again during the draw (a HUD view, the debug or arena camera):
+    // its new place and what was worked out from it stand, unless the steps
+    // place it themselves (the zoom window's, set_step_camera_placer).
+    CameraPose now;
+    const bool placed_by_draw = c.posed && read_camera(c.node, &now) && !same_pose(now, c.left);
+    if (placed_by_draw && !step_placed(c.node)) continue;
+    std::memcpy(static_cast<Camera*>(c.node->data)->raw, c.data, sizeof c.data);
+  }
+  g_cameras_before.clear();
+  std::memcpy(zmod::zones().list, g_zones_before, sizeof g_zones_before);
+  g_drawn_cameras = rendered_cameras();
+}
+
+Object3d* object_data(Node* node) { return static_cast<Object3d*>(node->data); }
+
+// Records are only made from list 6 (every node made and not yet freed) and
+// dropped when a slot is freed, so a recorded node is live; this checks the class.
+bool is_live_object3d(const Node* node) { return node && node->cls() == 5 && node->data; }
+
+Transforms read_transforms(Node* node) {
+  Object3d* data = object_data(node);
+  Transforms t;
+  std::memcpy(t.local, data->floats(kLocalOffset), kMatrixBytes);
+  std::memcpy(t.world, data->floats(kWorldOffset), kMatrixBytes);
+  t.world_valid = (data->get<uint32_t>(kFlagsOffset) & kWorldStale) == 0;
+  return t;
+}
+
+bool same_matrix(const float a[12], const float b[12]) { return std::memcmp(a, b, kMatrixBytes) == 0; }
+
+float distance(const float a[12], const float b[12]) {
+  const float dx = a[9] - b[9], dy = a[10] - b[10], dz = a[11] - b[11];
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+// A rotation matrix's rows to a quaternion (w, x, y, z), Shepperd's method.
+void quaternion_of(const float r[9], float q[4]) {
+  const float trace = r[0] + r[4] + r[8];
+  if (trace > 0.0f) {
+    const float s = std::sqrt(trace + 1.0f) * 2.0f;
+    q[0] = 0.25f * s, q[1] = (r[5] - r[7]) / s, q[2] = (r[6] - r[2]) / s, q[3] = (r[1] - r[3]) / s;
+  } else if (r[0] > r[4] && r[0] > r[8]) {
+    const float s = std::sqrt(1.0f + r[0] - r[4] - r[8]) * 2.0f;
+    q[0] = (r[5] - r[7]) / s, q[1] = 0.25f * s, q[2] = (r[3] + r[1]) / s, q[3] = (r[6] + r[2]) / s;
+  } else if (r[4] > r[8]) {
+    const float s = std::sqrt(1.0f + r[4] - r[0] - r[8]) * 2.0f;
+    q[0] = (r[6] - r[2]) / s, q[1] = (r[3] + r[1]) / s, q[2] = 0.25f * s, q[3] = (r[7] + r[5]) / s;
+  } else {
+    const float s = std::sqrt(1.0f + r[8] - r[0] - r[4]) * 2.0f;
+    q[0] = (r[1] - r[3]) / s, q[1] = (r[6] + r[2]) / s, q[2] = (r[7] + r[5]) / s, q[3] = 0.25f * s;
+  }
+}
+
+// The inverse of quaternion_of: a unit quaternion to the matrix's rows.
+void rows_of(const float q[4], float r[9]) {
+  const float w = q[0], x = q[1], y = q[2], z = q[3];
+  r[0] = 1 - 2 * (y * y + z * z), r[1] = 2 * (x * y + w * z), r[2] = 2 * (x * z - w * y);
+  r[3] = 2 * (x * y - w * z), r[4] = 1 - 2 * (x * x + z * z), r[5] = 2 * (y * z + w * x);
+  r[6] = 2 * (x * z + w * y), r[7] = 2 * (y * z - w * x), r[8] = 1 - 2 * (x * x + y * y);
+}
+
+void slerp(const float a[4], const float b[4], float t, float out[4]) {
+  float to[4] = {b[0], b[1], b[2], b[3]};
+  float cosine = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+  if (cosine < 0.0f) {  // the short way round
+    cosine = -cosine;
+    for (float& c : to) c = -c;
+  }
+  float wa = 1.0f - t, wb = t;
+  if (cosine < 0.9995f) {
+    const float angle = std::acos(cosine);
+    const float sine = std::sin(angle);
+    wa = std::sin((1.0f - t) * angle) / sine;
+    wb = std::sin(t * angle) / sine;
+  }
+  float length = 0.0f;
+  for (int i = 0; i < 4; ++i) out[i] = wa * a[i] + wb * to[i], length += out[i] * out[i];
+  length = std::sqrt(length);
+  if (length > 0.0f)
+    for (int i = 0; i < 4; ++i) out[i] /= length;
+}
+}  // namespace
+
+void blend_matrix(const float from[12], const float to[12], float t, float out[12]) {
+  // Each row's length is that axis's scale; the rotation is blended on the unit rows.
+  float unit_from[9], unit_to[9], scale_from[3], scale_to[3];
+  bool flattened = false;  // a row of zero length at either end: no rotation to blend
+  for (int row = 0; row < 3; ++row) {
+    const float* a = from + 3 * row;
+    const float* b = to + 3 * row;
+    scale_from[row] = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+    scale_to[row] = std::sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+    flattened = flattened || !(scale_from[row] > 0.0f) || !(scale_to[row] > 0.0f);
+    for (int c = 0; c < 3; ++c) {
+      unit_from[3 * row + c] = scale_from[row] > 0.0f ? a[c] / scale_from[row] : 0.0f;
+      unit_to[3 * row + c] = scale_to[row] > 0.0f ? b[c] / scale_to[row] : 0.0f;
+    }
+  }
+  // A node scaled to nothing (hidden, or grown from 0 by an effect animation)
+  // has no rotation to take a quaternion of: drawn with the newer rows.
+  if (flattened) {
+    for (int c = 0; c < 9; ++c) out[c] = to[c];
+    for (int c = 9; c < 12; ++c) out[c] = from[c] + (to[c] - from[c]) * t;
+    return;
+  }
+  float quaternion_from[4], quaternion_to[4], quaternion[4], rows[9];
+  quaternion_of(unit_from, quaternion_from);
+  quaternion_of(unit_to, quaternion_to);
+  slerp(quaternion_from, quaternion_to, t, quaternion);
+  rows_of(quaternion, rows);
+  for (int row = 0; row < 3; ++row) {
+    const float scale = scale_from[row] + (scale_to[row] - scale_from[row]) * t;
+    for (int c = 0; c < 3; ++c) out[3 * row + c] = rows[3 * row + c] * scale;
+  }
+  for (int c = 9; c < 12; ++c) out[c] = from[c] + (to[c] - from[c]) * t;
+}
+
+void record() {
+  // List 6 holds every node made and not yet freed; a removed item keeps its
+  // place with no node until the list is purged. A record whose node is no
+  // longer on it is dropped: a whole scene can go without node_slot_free (a
+  // mission's pools reset), and its node addresses may be handed out again.
+  ++g_pass;
+  std::vector<std::pair<const Node*, Record*>> order;
+  order.reserve(g_order.size());
+  for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
+    Node* node = item->node;
+    if (is_live_camera(node)) {
+      record_camera(node);
+      continue;
+    }
+    if (!is_live_object3d(node)) continue;
+    Record* known = find_record(node, order.size());
+    Record& r = known ? *known : g_records[node];
+    order.emplace_back(node, &r);
+    r.pass = g_pass;
+    const Transforms now = read_transforms(node);
+    if (r.blended || !r.has_previous) {
+      // A first record (or one left over from an unfinished draw): both ends are now.
+      r.previous = now;
+    } else {
+      r.previous = r.current;
+    }
+    r.current = now;
+    r.has_previous = true;
+    r.blended = false;
+  }
+  if (g_records.size() != order.size())
+    for (auto it = g_records.begin(); it != g_records.end();) {
+      if (it->second.pass != g_pass) it = g_records.erase(it);
+      else ++it;
+    }
+  g_order = std::move(order);
+  for (auto it = g_cameras.begin(); it != g_cameras.end();) {
+    if (it->second.pass != g_pass) it = g_cameras.erase(it);
+    else ++it;
+  }
+}
+
+void settle_world_caches() {
+  // The changed nodes first (0x004f7e50): each draw then starts with none
+  // queued, so no draw brings a simulation change up to date in its place.
+  update_changed();
+  for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
+    Node* node = item->node;
+    // The draw's clear of the changed mark (kChangedMark), once a step: on
+    // every active node in the world tree, as the original's draw walked them.
+    const uint32_t flags = node->flags();
+    if ((flags & kChangedMark) && (flags & kActive) && (flags & kInWorldTree))
+      node->set_flags(flags & ~kChangedMark);
+    if (!is_live_object3d(node) || !(node->flags() & kInWorldTree)) continue;
+    if (!(object_data(node)->get<uint32_t>(kFlagsOffset) & kWorldStale)) continue;
+    // As class.cpp's world_matrix: the chain onto a matrix of its own, which
+    // brings each stale cache on it up to date (0x004ed280).
+    zmth::Mat34 scratch;
+    zmth::push(&scratch);
+    zmth::load_identity();
+    node_to_world(node, 1);
+    zmth::pop();
+  }
+}
+
+void set_step_camera_placer(StepCameraPlacer placer) { g_step_placer = placer; }
+
+namespace {
+void place_and_prepare(Node* camera) {
+  const bool placed = g_step_placer && g_step_placer(camera);
+  if (placed && !step_placed(camera)) g_step_placed.push_back(camera);
+  camera_prepare(camera);
+}
+}  // namespace
+
+void prepare_cameras() {
+  // Before the mission's first draw (a frame of two steps at below 30 fps
+  // runs both before it), the cameras on the cameras' list a draw would draw.
+  if (g_drawn_cameras.empty()) {
+    for (ListItem* item = list_head(kCameras); item; item = item->next)
+      if (is_live_camera(item->node) && camera_would_draw(item->node))
+        place_and_prepare(item->node);
+    return;
+  }
+  // Still a camera of the engine's: a set kept across the pause menu
+  // (clear(true)) could name one the menu's own pools have since dropped.
+  for (Node* camera : g_drawn_cameras)
+    if (on_camera_list(camera) && is_live_camera(camera)) place_and_prepare(camera);
+}
+
+void apply(float alpha) {
+  set_drawing_between_steps(true);
+  g_before_draw.clear();
+  g_cameras_before.clear();
+  g_followers.clear();
+  rendered_cameras().clear();
+  std::memcpy(g_zones_before, zmod::zones().list, sizeof g_zones_before);
+  // Walked from list 6, never from the records: only a node on the list is
+  // known to be live, so a record is only ever read through a live node.
+  g_marked.clear();
+  for (ListItem* item = list_head(kAllNodes); item; item = item->next) {
+    Node* node = item->node;
+    if (node->flags() & kChangedMark) g_marked.push_back(node);
+    if (is_live_camera(node)) {
+      keep_camera(node);
+      apply_camera(node, alpha);
+      CameraBefore& c = g_cameras_before.back();
+      c.posed = read_camera(node, &c.left);
+      continue;
+    }
+    if (!is_live_object3d(node)) continue;
+    const Transforms now = read_transforms(node);
+    Record* known = find_record(node, g_before_draw.size());
+    BeforeDraw& b = g_before_draw.emplace_back();
+    b.node = node;
+    b.data_flags = object_data(node)->get<uint32_t>(kFlagsOffset);
+    std::memcpy(b.local, now.local, kMatrixBytes);
+    std::memcpy(b.world, now.world, kMatrixBytes);
+    if (!known) continue;
+    Record& r = *known;
+    if (!r.has_previous) continue;
+    // Moved since its last record, outside a step (a placement between frames,
+    // a tool): the records are out of date, so it is drawn as it is and its
+    // records start again at the next step.
+    if (!same_matrix(now.local, r.current.local)) {
+      r.has_previous = false;
+      continue;
+    }
+    const bool local_moved = !same_matrix(r.previous.local, r.current.local);
+    const bool world_moved = r.previous.world_valid && r.current.world_valid &&
+                             !same_matrix(r.previous.world, r.current.world);
+    if (!local_moved && !world_moved) continue;
+    const bool jumped = distance(r.previous.local, r.current.local) > kSnapDistance ||
+                        (world_moved && distance(r.previous.world, r.current.world) > kSnapDistance);
+    if (jumped) continue;
+    Object3d* data = object_data(node);
+    if (local_moved) blend_matrix(r.previous.local, r.current.local, alpha, data->floats(kLocalOffset));
+    if (world_moved && now.world_valid) blend_matrix(r.previous.world, r.current.world, alpha, data->floats(kWorldOffset));
+    std::memcpy(b.applied_local, data->floats(kLocalOffset), kMatrixBytes);
+    b.blended = true;
+    r.blended = true;
+    mark_sphere_stale(node);
+  }
+}
+
+void restore() {
+  for (const BeforeDraw& b : g_before_draw) {
+    Node* node = b.node;
+    if (!is_live_object3d(node)) continue;
+    if (b.blended) {
+      auto found = g_records.find(node);
+      if (found != g_records.end()) found->second.blended = false;
+      mark_sphere_stale(node);  // the draw's sphere is the blended place's
+    }
+    Object3d* data = object_data(node);
+    const uint32_t flags = data->get<uint32_t>(kFlagsOffset);
+    // What apply left in the local transform: its blend, or the node as found.
+    const float* left = b.blended ? b.applied_local : b.local;
+    // Something during the draw moved the node itself (a camera, a placed
+    // mech): its new transform stands. Some movers write the local floats
+    // without marking the cache, so the cache is marked stale and rebuilt.
+    // (Not a node following a camera, the horizon: that the draw moves to the
+    // drawn camera, and each step's camera_prepare to the exact one.)
+    const bool moved = !same_matrix(data->floats(kLocalOffset), left);
+    if (moved && std::find(g_followers.begin(), g_followers.end(), node) == g_followers.end()) {
+      data->put<uint32_t>(kFlagsOffset, flags | kWorldStale);
+      continue;
+    }
+    // As the draw found it, the cache's content and its stale flag both: the
+    // game reads a cache's matrix stale or not (a vehicle's turret turn), so a
+    // stale one the draw rebuilt from the blended chain must not stay either.
+    std::memcpy(data->floats(kLocalOffset), b.local, kMatrixBytes);
+    std::memcpy(data->floats(kWorldOffset), b.world, kMatrixBytes);
+    // The whole word: a node update in the draw also builds the local matrix
+    // from the angles and clears its flag (1), which this local's content undoes.
+    data->put<uint32_t>(kFlagsOffset, b.data_flags);
+  }
+  g_before_draw.clear();
+  // The draw's renderers cleared the mark on what they walked; the steps do that.
+  for (Node* node : g_marked) node->set_flags(node->flags() | kChangedMark);
+  g_marked.clear();
+  restore_cameras();
+  set_drawing_between_steps(false);
+}
+
+void forget(const Node* node) {
+  g_records.erase(node);
+  g_order.clear();
+  g_cameras.erase(node);
+  g_blended_cameras.erase(std::remove(g_blended_cameras.begin(), g_blended_cameras.end(), node), g_blended_cameras.end());
+  g_cameras_before.erase(std::remove_if(g_cameras_before.begin(), g_cameras_before.end(),
+                                        [node](const CameraBefore& c) { return c.node == node; }),
+                         g_cameras_before.end());
+  g_followers.erase(std::remove(g_followers.begin(), g_followers.end(), node), g_followers.end());
+  std::vector<Node*>* const lists[] = {&rendered_cameras(), &g_drawn_cameras, &g_step_placed,
+                                       &g_marked};
+  for (std::vector<Node*>* nodes : lists)
+    nodes->erase(std::remove(nodes->begin(), nodes->end(), node), nodes->end());
+  g_before_draw.erase(std::remove_if(g_before_draw.begin(), g_before_draw.end(),
+                                     [node](const BeforeDraw& b) { return b.node == node; }),
+                      g_before_draw.end());
+}
+
+void clear(bool keep_drawn_cameras) {
+  g_records.clear();
+  g_order.clear();
+  g_cameras.clear();
+  g_blended_cameras.clear();
+  g_cameras_before.clear();
+  g_followers.clear();
+  rendered_cameras().clear();
+  if (!keep_drawn_cameras) {
+    g_drawn_cameras.clear();
+    g_step_placed.clear();
+  }
+  g_marked.clear();
+  g_before_draw.clear();
+  // A draw that threw between apply and restore leaves no frame half drawn here.
+  set_drawing_between_steps(false);
+}
+
+}  // namespace zcls::interp

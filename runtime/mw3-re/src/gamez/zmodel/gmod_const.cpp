@@ -1042,7 +1042,9 @@ float scroll_step(float d, float lo, float hi) {
 // nothing on its axis.
 int model_scroll_tick(Model* m) {
   if (!m) return -1;
-  const uint32_t frame = zcls::frames().frame;
+  // Ours (#485): a script action, run once a simulation step with the step's
+  // dt, so its once-only mark counts steps (docs/fixed-step.md).
+  const uint32_t frame = zcls::frames().step;
   if (hget<uint32_t>(*m, 0x30) == frame) return 0;
   hput<uint32_t>(*m, 0x30, frame);
   const float su = hget<float>(*m, 0x28), sv = hget<float>(*m, 0x2c);

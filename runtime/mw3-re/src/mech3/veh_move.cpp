@@ -11,6 +11,7 @@
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmath/zmth_vector.h"
 #include "gamez/zmodel/gmod_cull.h"
+#include "mech3/step_log.h"
 #include "mech3/veh_basic.h"
 
 #pragma STDC FP_CONTRACT OFF
@@ -590,6 +591,7 @@ void vehicle_move(BasicVehicle& v) {
   zmth::quat_between(kAhead, to, v.orientation);
   v.velocity = {c.velocity.x, c.velocity.y, c.velocity.z};
   v.vec_3c = {c.x70.x, c.x70.y, c.x70.z};
+  step_log_vehicle(v);  // ours (#485): --step-log
 }
 
 // Mech3.exe 1.2 @ 0x004addc0

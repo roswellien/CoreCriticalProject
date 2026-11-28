@@ -52,7 +52,9 @@ void VehBasicHooks::segments(float* segs, int32_t points, zcls::SegmentHits* out
 }
 void VehBasicHooks::node_set_intersect(Handle node, int32_t on) { zcls::node_set_intersect(static_cast<zcls::Node*>(node), on); }
 Handle VehBasicHooks::hit_object(Handle node) { return node_entity(node); }
-uint32_t VehBasicHooks::frame() { return zcls::frames().frame; }
+// [0x0072f338], the exe's frame count; ours (#485): the step count, as this is
+// the simulation's (docs/fixed-step.md).
+uint32_t VehBasicHooks::frame() { return zcls::frames().step; }
 void VehBasicHooks::node_set_active(Handle node, int32_t on) { zcls::node_set_active(static_cast<zcls::Node*>(node), on); }
 void VehBasicHooks::node_set_rotation(Handle node, float x, float y, float z) {
   zcls::object3d_set_rotation(static_cast<zcls::Node*>(node), x, y, z);

@@ -549,7 +549,7 @@ bool Mech::collide() {
     if (!again && net_collision) {
       // A collision the network reported, a few frames old at most.
       const NetCollision& r = *net_collision;
-      const uint32_t f = zcls::frames().frame;
+      const uint32_t f = zcls::frames().step;  // ours (#485): steps, as the simulation counts
       if (r.on && r.active && r.frame == f && r.sent < f && f - 5 < r.sent) {
         CollisionHit e;
         std::memset(&e.hit, 0, sizeof e.hit);

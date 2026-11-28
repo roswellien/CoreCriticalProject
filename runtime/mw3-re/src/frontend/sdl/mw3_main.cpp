@@ -37,7 +37,12 @@
 //                        campaign_chain.h): N missions won, shots in --write-dir
 //   --frame-ms N         each frame shown is N ms on the game's clock, however
 //                        fast it is drawn (ours: scripted runs keep their timing);
-//                        with the network on, no faster than the wall clock
+//                        with the network on, no faster than the wall clock; a
+//                        mission still runs its fixed 1/30 s steps underneath (#485)
+//   --variable-step      one simulation step per frame drawn with the frame's own
+//                        time, as before the fixed step (ours, #485, docs/fixed-step.md)
+//   --step-log FILE      one line set per simulation step: a hash of every object's
+//                        transform and each vehicle's place (ours, #485)
 //   --seed N             rand seeded with N where the game seeds it from the clock (ours)
 //   --window WxH         window size (default 1280x960; with any_resolution the
 //                        frame's shape, and a given size pillarboxes the frame)
@@ -115,6 +120,8 @@
 #include "mech3/game_editor.h"
 #include "mech3/mp_connect.h"
 #include "mech3/options_menu.h"
+#include "mech3/fixed_step.h"
+#include "mech3/step_log.h"
 #include "mech3/game_setup.h"
 #include "frontend/sdl/sdl_force.h"
 #include "frontend/sdl/sdl_input.h"
@@ -290,6 +297,7 @@ struct Args {
   std::string modes;          // --action-chain all / c2 / c2:4 (ours, modes_chain.h)
   bool arena_record_every_update = false;
   int frame_ms = 0;           // --frame-ms N: each frame shown N ms on the game's clock (ours)
+  std::string step_log;       // --step-log FILE: one record per simulation step (ours, #485, step_log.h)
   int64_t seed = -1;          // --seed N: rand seeded with N wherever the game seeds it from the clock (ours)
   int win = 0;  // --win N (ours): the mission won N frames in, by its Exit Mission
   int lose = 0;  // --lose N (ours): the mission aborted N frames in, a failure
@@ -369,7 +377,7 @@ void usage() {
       "    [--cc-controller FILE] (launcher-exported controller profile)\n"
       "    [--cc-input FILE] (launcher-exported extended mouse and combo bindings)\n"
       "    [--pack-library DIR] (installed packs' read-only gameplay mods)\n"
-      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--hd-movie NAME PATH]... [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
+      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--entry ID [--entry-play | --entry-ia | --entry-mission WORLD N [--edit]]] [--entry-pilot NAME] [--open-mods [--mods-entry ID] | --open-ia] [--check-mod DIR] [--mod-report DIR] [--build-anim DIR] [--make-starter mech|weapon|translation|mission|salvage] [--reference FILE] [--editor-guide FILE] [--pick PATH] [--save-pick PATH] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--hd-movie NAME PATH]... [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--mouse-at X,Y@N[c]]... [--then ...] [--click-players X,Y@N/P]... [--click-sessions X,Y@N/S]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--variable-step] [--step-log FILE] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [--benchmark DEF.json --benchmark-scene ID --benchmark-out DIR]\n"
       "    [--benchmark-strict [--benchmark-strict-capture TICK]]\n"
       "    [--arena SETUP.json --seed N --frame-ms N [--arena-record-every-update]] [--replay MATCH.jsonl] [--replay3d MATCH.jsonl]\n"
@@ -479,6 +487,8 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--campaign-chain" && next(1)) a.chain = argv[++i];
     else if (s == "--action-chain" && next(1)) a.modes = argv[++i];
     else if (s == "--frame-ms" && next(1)) a.frame_ms = std::atoi(argv[++i]);
+    else if (s == "--step-log" && next(1)) a.step_log = argv[++i];
+    else if (s == "--variable-step") mech3::set_fixed_step_enabled(false);
     else if (s == "--seed" && next(1)) {
       const char* value = argv[++i];
       char* end = nullptr;
@@ -1854,6 +1864,10 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   // A network run's frames keep the wall clock too: the peers' packets come in
   // real time, and a build that draws fast ran its game clock far ahead of them.
   clock.paced = clock.frame_ms > 0 && (a.net_host || !a.net_join.empty() || a.net_port >= 0 || !a.net_lan.empty() || a.net_soak);
+  if (!a.step_log.empty() && !mech3::step_log_open(a.step_log)) {
+    std::fprintf(stderr, "mw3: --step-log: cannot write %s\n", a.step_log.c_str());
+    return 1;
+  }
   // --seed: every srand(time()) takes N instead (with --frame-ms a run repeats).
   if (a.seed >= 0) {
     crt::rand_fixed_seed() = static_cast<uint32_t>(a.seed);

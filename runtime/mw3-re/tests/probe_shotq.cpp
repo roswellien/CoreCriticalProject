@@ -53,6 +53,7 @@ void options(int32_t first_hit, uint32_t exclude, int32_t static_only, int32_t s
   zcls::SegmentOptions& o = zcls::segment_options();
   o.first_hit = first_hit, o.exclude = exclude, o.static_only = static_only, o.since = since;
   zcls::frames().frame = frame;
+  zcls::frames().step = frame;  // ours (#485): the node stamps count steps; one a frame in the exe
 }
 
 void finish(int32_t* opts_out, float* uv_out) {

@@ -125,6 +125,7 @@ int al_load(const char* path) {
 
 void al_globals(uint32_t frame, float dt) {
   zcls::frames().frame = frame;
+  zcls::frames().step = frame;  // ours (#485): the node stamps count steps; one a frame in the exe
   ztimer::state().dt = dt;
 }
 

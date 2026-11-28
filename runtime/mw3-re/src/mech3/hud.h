@@ -477,6 +477,9 @@ class HudZoomWindow : public HudZoomView {
   // reticle's aim point, in its zone; the text (distance, the aimed object's
   // name). Nothing while hidden with no scale.
   void place_camera();
+  // Ours (#485): place_camera's camera part alone (its place, angles and zone),
+  // which each fixed step runs from the exact scene (program_place_step_camera).
+  void place_camera_pose();
   // +0x28 0x00442f50: the zoom's 3D pass (hud.md section 23). Direct3D only
   // (the software path is not ported, CLAUDE.md Rendering).
   void draw3d(float dt) override;
@@ -524,9 +527,15 @@ class HudReticle : public ztwod::Image {
   float aim_distance = 0.0f;         // +0x924 to the aim point from the near plane (0x00444690)
   zwep::HitRecord hit{};             // +0x928 what the aim hit (its node 0: nothing)
   int32_t lock = 0;                  // +0x950 the missile lock: 0 none, 1 acquiring, 2 waiting, 3 locked, 4 lost
-  float lock_timer = 0.0f;           // +0x954 0.6 after a reset ([0x005e3a0c]); counts down in update
+  float lock_timer = 0.0f;           // +0x954 0.6 after a reset ([0x005e3a0c]); counts down in lock_tick
   float locked_for = 0.0f;           // ours: seconds the lock (state 3) has held, for the shots' log
+  // Ours (#485): `state` as the last step's aim state left it, before the
+  // step's reset to 5: what the zoom window's light (update -> zoom.update)
+  // read in the exe's frame. 0 to 3 like the light's images; 0 as `state`
+  // starts, for a frame drawn before the first step.
+  int32_t state_seen = 0;
   void aim_state(bool over);         // 0x00443d20: the lock and the reticle's image
+  void lock_tick(float dt);          // ours (#485): update's lock timers, on their own
   void* source = nullptr;            // +0x958 (not set by the constructor)
 };
 
@@ -1062,6 +1071,12 @@ ztwod::Rect& triangle_rect();
 ztwod::Rect& radar_rect();     // [0x005e39c8] the radar's polylines' clip (0x0043dd00)  // [0x005e39d8] TARGET's triangle's clip (0x00440510)
 void set_hud_hooks(HudHooks* h);
 
+// Ours (#485, docs/fixed-step.md): set while the fixed step runs the HUD's
+// simulation, the missile lock (Hud::lock_step) and the arms' aim (hud_step),
+// once a step; the drawn frame's HUD update then leaves both out.
+void set_hud_in_steps(bool in_steps);
+bool hud_in_steps();
+
 // The timer (+0x18410): a FontText "00:00:00.00" at (0x244, 0x0f) in
 // mech_string, set as it is made (vtable 0x005bc598, FontText's slots).
 class HudTimer : public ztwod::FontText {
@@ -1083,6 +1098,9 @@ class Hud : public ztwod::Layer {
   bool power_down();             // 0x0043bb20: true when it was on
   void power_up(uint8_t saved);  // 0x0043bb50
   void update(float dt) override;    // +0x00  0x0043c820: the HUD's frame
+  // Ours (#485): update's missile lock (the reticle's aim state, its timers),
+  // once a fixed step while hud_in_steps(); update then leaves it out.
+  void lock_step(float dt);
   void draw3d(float dt);             // 0x0043c6b0: the Direct3D pass (from the mech's 0x0041cd90)
   void data_update(float dt);        // 0x0043c390: the game's numbers into the pieces (from 0x0040f8d0)
   void reset();                      // 0x0043be10

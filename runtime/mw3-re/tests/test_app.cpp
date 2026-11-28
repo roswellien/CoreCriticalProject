@@ -9,6 +9,7 @@
 #include "gamez/zutil/ztimer.h"
 #include "mech3/app.h"
 #include "mech3/app_states.h"
+#include "mech3/fixed_step.h"
 #include "mech3/options.h"
 
 namespace {
@@ -129,13 +130,18 @@ TEST(app_mission_dummy_draw_freezes_the_scaled_step_only_in_strict_mode) {
   EXPECT(engine.draw_steps == std::vector<float>{0.0f});
   EXPECT(ztimer::state().dt == 0.125f);
 
+  // Not strict: the dummy frame's lists and draw on the frame's clock, which
+  // with the fixed step (#485, docs/fixed-step.md) is the step's 1/30 s, not
+  // the time the sleep measured.
   engine.strict = false;
   engine.timer_updates = 0;
   engine.draw_steps.clear();
   core.start_mission();
+  const float frame_step =
+      mech3::fixed_step_enabled() ? static_cast<float>(mech3::FixedStep::kStepSeconds) : 0.125f;
   EXPECT(engine.timer_updates == 2);
-  EXPECT(engine.draw_steps == std::vector<float>{0.125f});
-  EXPECT(ztimer::state().dt == 0.125f);
+  EXPECT(engine.draw_steps == std::vector<float>{frame_step});
+  EXPECT(ztimer::state().dt == frame_step);
   mech3::set_app(previous_app);
   mech3::globals().script = saved_script;
   zcls::scene_walk().lod_dynamic = saved_lod_dynamic;

@@ -55,7 +55,9 @@ constexpr uint32_t kKeyY = 0x15, kKeyN = 0x31, kKeyEscape = 0x01;  // DIK codes
 // while it shows.
 void QuitBox::prompt() {
   // With bug fixes on each fresh Escape press toggles it (held, it stays as it is).
-  if (zfix::options().fixed && e_.key_state(kKeyEscape) != 1) return;
+  // Ours (#485): fresh since the drawn frame began, so each press counts once
+  // however many 1/30 s steps (input polls) the frame ran.
+  if (zfix::options().fixed && !e_.key_pressed_this_frame(kKeyEscape)) return;
   if (active) {
     if (zfix::options().fixed) close();
     return;
@@ -96,8 +98,8 @@ void QuitBox::close() {
 
 void QuitBox::keys() {
   if (!active || !zfix::options().fixed) return;
-  if (e_.key_state(kKeyY) == 1) answer_ok();
-  else if (e_.key_state(kKeyN) == 1) answer_cancel();
+  if (e_.key_pressed_this_frame(kKeyY)) answer_ok();
+  else if (e_.key_pressed_this_frame(kKeyN)) answer_cancel();
 }
 
 }  // namespace mech3

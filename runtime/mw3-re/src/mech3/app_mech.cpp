@@ -206,7 +206,8 @@ class WiredShade : public ShadeHooks {
     const uint32_t v = n->get<uint32_t>(0x2c) & ~0x60u;
     n->put<uint32_t>(0x2c, v | (on & 1 ? 0x60u : 0u));
   }
-  int32_t frame() override { return static_cast<int32_t>(zcls::frames().frame); }
+  // The shades take turns once a simulation step (ours, #485: the step count).
+  int32_t frame() override { return static_cast<int32_t>(zcls::frames().step); }
   void walk_callbacks(bool on) override {
     zcls::scene_walk().pre = on ? +[](zcls::Node* n) { shade_before(id(n)); } : nullptr;
     zcls::scene_walk().post = on ? +[](zcls::Node* n) { shade_after(id(n)); } : nullptr;

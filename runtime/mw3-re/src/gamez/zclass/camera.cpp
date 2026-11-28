@@ -1504,14 +1504,26 @@ int render_subtree(Node* camera_node, Node* node, int32_t hw) {
 // window, clamped at a screen edge for a frame) draws nothing. Drawing it would
 // write a zero focal length into the shared projection before any scene opens.
 // The check runs before the draw changes any state, so nothing needs undoing.
-static bool skip_camera_with_empty_window(Node* camera_node) {
-  // Not a usable camera: leave it to the draw's own handling, as before this check.
-  // Class 1 is the camera class (check_class(node, 1, ...) above), tested here
-  // without check_class's error report.
+namespace {
+enum class CameraWindow { kNotACamera, kNoWindow, kEmpty, kHasArea };
+// Class 1 is the camera class (check_class(node, 1, ...) above) and 3 the
+// window's, tested here without check_class's error report.
+CameraWindow camera_window(Node* camera_node, int32_t* width, int32_t* height) {
+  *width = 0, *height = 0;
   const bool is_camera = camera_node && camera_node->data && camera_node->cls() == 1;
-  if (!is_camera) return false;
+  if (!is_camera) return CameraWindow::kNotACamera;
+  Node* window = cam_of(camera_node)->nodes[1];
+  const bool is_window = window && window->data && window->cls() == 3;
+  if (!is_window) return CameraWindow::kNoWindow;
+  return window_has_area(window, width, height) ? CameraWindow::kHasArea : CameraWindow::kEmpty;
+}
+}  // namespace
+
+static bool skip_camera_with_empty_window(Node* camera_node) {
+  // Not a usable camera or no window: left to the draw's own handling, as
+  // before this check.
   int32_t width = 0, height = 0;
-  if (window_has_area(cam_of(camera_node)->nodes[1], &width, &height)) return false;
+  if (camera_window(camera_node, &width, &height) != CameraWindow::kEmpty) return false;
   log_skipped_empty_window(width, height);
   return true;
 }
@@ -1603,11 +1615,63 @@ int camera_draw_flares(Camera* cam, int32_t from) {
   return 0;
 }
 
+namespace {
+// The cameras render_world drew since rendered_cameras() was last emptied,
+// in the order first drawn (#485: camera_prepare's).
+std::vector<Node*> g_rendered_cameras;
+
+// Part of 0x004f7030: the zones the scene walk starts from. The camera's own
+// list (+0x1e4) while it has one set (+0x1e0, zone mode 1), else the ground's
+// below the camera (the probe), kept in the camera when found.
+void camera_zones(Camera* cam, Node* world) {
+  const int32_t mode = zmod::zones().mode;
+  if (!mode) return;
+  uint8_t* zl = cam->raw + 0x1e4;
+  if (cam->get<int32_t>(0x1e0) != 0 && mode == 1) {
+    std::memcpy(zmod::zones().list, zl, 4);
+  } else {
+    uint32_t zone = 0;
+    zmod::zones().mode = 0;
+    const int32_t hit = g_hooks.zone_probe ? g_hooks.zone_probe(g_hooks.ctx, world, cam->floats(0x2c), &zone) : 0;
+    zmod::zones().mode = mode;
+    if (!hit) {
+      zmod::zone_reset(zl);
+      std::memcpy(zmod::zones().list, zl, 4);
+    } else if (static_cast<uint8_t>(zone) != 0) {
+      std::memcpy(zl, &zone, 4);
+      std::memcpy(zmod::zones().list, &zone, 4);
+    }
+  }
+  g_walk.zone = cam->get<uint32_t>(0x1e4);
+}
+}  // namespace
+
+std::vector<Node*>& rendered_cameras() { return g_rendered_cameras; }
+
+bool camera_would_draw(Node* camera_node) {
+  int32_t width = 0, height = 0;
+  if (camera_window(camera_node, &width, &height) != CameraWindow::kHasArea) return false;
+  return camera_world(camera_node) != nullptr;
+}
+
+void camera_prepare(Node* camera_node) {
+  zmth::Mat34 local;
+  zmth::push(&local);
+  Camera* cam = cam_of(camera_node);
+  g_walk.camera = cam;
+  camera_update(camera_node);
+  horizon_follow();
+  camera_zones(cam, camera_world(camera_node));
+  zmth::pop();
+}
+
 // Mech3.exe 1.2 @ 0x004f7030 (ECX camera node, EDX: after the flush, 0x005a67c0).
 // The Direct3D frame's 3D part: LoD scale, lights, camera, horizon,
 // viewport, zones, then the scene walk between BeginScene and EndScene.
 int render_world(Node* camera_node, int32_t after) {
   if (skip_camera_with_empty_window(camera_node)) return 0;
+  if (std::find(g_rendered_cameras.begin(), g_rendered_cameras.end(), camera_node) == g_rendered_cameras.end())
+    g_rendered_cameras.push_back(camera_node);
   zvid::ProducerWorldScope producer_view;
   zmth::check_stack_at_frame();  // FIX (bug), ours (W59): one imbalance cannot carry
   zmth::Mat34 local;
@@ -1639,27 +1703,8 @@ int render_world(Node* camera_node, int32_t after) {
     if (h.collect_casters) h.collect_casters(h.ctx);
     if (h.caster_directions) h.caster_directions(h.ctx);
   }
-  const int32_t mode = zmod::zones().mode;
   g_walk.lod_level = 0;
-  if (mode) {
-    uint8_t* zl = cam->raw + 0x1e4;
-    if (cam->get<int32_t>(0x1e0) != 0 && mode == 1) {
-      std::memcpy(zmod::zones().list, zl, 4);
-    } else {
-      uint32_t zone = 0;
-      zmod::zones().mode = 0;
-      const int32_t hit = g_hooks.zone_probe ? g_hooks.zone_probe(g_hooks.ctx, world, cam->floats(0x2c), &zone) : 0;
-      zmod::zones().mode = mode;
-      if (!hit) {
-        zmod::zone_reset(zl);
-        std::memcpy(zmod::zones().list, zl, 4);
-      } else if (static_cast<uint8_t>(zone) != 0) {
-        std::memcpy(zl, &zone, 4);
-        std::memcpy(zmod::zones().list, &zone, 4);
-      }
-    }
-    g_walk.zone = cam->get<uint32_t>(0x1e4);
-  }
+  camera_zones(cam, world);
   if (g_hooks.begin_scene) g_hooks.begin_scene(g_hooks.ctx);
   render_scene(world, camera_node, g_walk.camera);
   if (g_hooks.puffers) g_hooks.puffers(g_hooks.ctx);

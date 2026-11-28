@@ -1938,5 +1938,11 @@ needs before it ships: the vehicles move in 30 Hz steps, so at 144 fps they woul
 visibly stutter; the drawn position and rotation need blending between steps (the
 node is set inside the step), and the step's own tests.
 
+**Done for the whole mission simulation in #485** ([fixed-step.md](fixed-step.md)):
+every vehicle, mech and the rest of the mission now steps at a fixed 1/30 s with
+drawn-frame blending, so the short-frame drift above, and the Harassers' nose-down
+stall in c2m1 (#520), no longer depend on the frame rate. `--variable-step` gives the
+old per-frame step for comparison.
+
 Not covered: a fight (the APCs drive their routes with the player idle or held
 near), the other vehicle classes (BASIC, flying), PM.

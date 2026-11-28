@@ -159,6 +159,25 @@ uint32_t joy_unuse();                  // 0x0051b2f0
 uint32_t mouse_use();                  // 0x0051b310
 uint32_t mouse_unuse();                // 0x0051b340
 void poll(bool callbacks);             // 0x0051b360
+
+// Ours (#485, runtime/mw3-re/docs/fixed-step.md): the buttons a drawn frame's
+// own code reads (the windows' clicks, a command's state, Escape) when the
+// fixed step polls only in the steps, so a frame runs any number of polls (none
+// above 30 fps, two or more below). frame_input_begin starts a frame; each poll
+// then keeps its presses and releases. While a DrawnFrameInput is alive, the
+// keys, the mouse buttons and the joystick buttons read as one poll for the
+// whole frame would: a press or release from any of its polls, and with no
+// poll an edge aged as the next poll would age it (so a press is seen once, not
+// on every frame until the next step). At one poll a frame they read as polled.
+// The poll's own states come back after, except where the draw changed them.
+void frame_input_begin();
+class DrawnFrameInput {
+ public:
+  DrawnFrameInput();
+  ~DrawnFrameInput();
+  DrawnFrameInput(const DrawnFrameInput&) = delete;
+  DrawnFrameInput& operator=(const DrawnFrameInput&) = delete;
+};
 uint32_t kbd_not_suspended();          // 0x0051b1f0
 uint32_t joy_not_suspended();          // 0x0051b1e0
 uint32_t mouse_not_suspended();        // 0x0051b1d0

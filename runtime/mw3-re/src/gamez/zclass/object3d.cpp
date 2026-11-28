@@ -35,8 +35,8 @@ int object3d_init(Node* node) {
   if ((node->flags() & 1) == 0) {
     push_front(kChanged, node);
     node->set_flags(node->flags() | 1);
-  } else if (node->get<uint32_t>(0xc4) <= frames().frame) {
-    frames().expiry = frames().frame + 0xa0;
+  } else if (node->get<uint32_t>(0xc4) <= frames().step) {  // ours (#485): steps (cls_node.h)
+    frames().expiry = frames().step + 0xa0;
     set_expiry(node);
   }
   node->set_flags(node->flags() | 2);
@@ -93,8 +93,8 @@ int object3d_set_translation(Node* node, float x, float y, float z) {
   if ((node->flags() & 1) == 0) {
     push_front(kChanged, node);
     node->set_flags(node->flags() | 1);
-  } else if (node->get<uint32_t>(0xc4) <= frames().frame) {
-    frames().expiry = frames().frame + 0xa0;
+  } else if (node->get<uint32_t>(0xc4) <= frames().step) {  // ours (#485): steps (cls_node.h)
+    frames().expiry = frames().step + 0xa0;
     set_expiry(node);
   }
   node->set_flags(node->flags() | 2);
@@ -115,8 +115,8 @@ void touch(Node* node, Object3d* d) {
   if ((node->flags() & 1) == 0) {
     push_front(kChanged, node);
     node->set_flags(node->flags() | 1);
-  } else if (node->get<uint32_t>(0xc4) <= frames().frame) {
-    frames().expiry = frames().frame + 0xa0;
+  } else if (node->get<uint32_t>(0xc4) <= frames().step) {  // ours (#485): steps (cls_node.h)
+    frames().expiry = frames().step + 0xa0;
     set_expiry(node);
   }
   node->set_flags(node->flags() | 2);

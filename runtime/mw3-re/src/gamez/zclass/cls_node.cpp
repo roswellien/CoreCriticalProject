@@ -2,6 +2,8 @@
 
 #include <cstdio>
 #include <cstdlib>
+
+#include "gamez/zclass/interp.h"
 #include <cstring>
 #include <new>
 
@@ -229,6 +231,7 @@ Node* node_alloc() {
 // Mech3.exe 1.2 @ 0x004f8de0. The slot keeps its contents and lists.
 void node_slot_free(Node* node) {
   fixture_source_retire(node);
+  interp::forget(node);  // ours (#485): a node made in this slot starts its own records
   NodePool& p = g_pool;
   int32_t index = -1;
   for (size_t b = 0; b < p.blocks.size(); ++b) {

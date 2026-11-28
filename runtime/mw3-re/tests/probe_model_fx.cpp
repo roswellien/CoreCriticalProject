@@ -24,6 +24,7 @@ extern "C" {
 int32_t probe_mfx_tick(uint8_t* header, int32_t n, const int32_t* counts, const int32_t* textured, float* uvs,
                        uint32_t frame, float dt, int32_t null_model) {
   zcls::frames().frame = frame;
+  zcls::frames().step = frame;  // the exe's one count; ours (#485) keeps steps apart
   ztimer::state().dt = dt;
   if (null_model) return zmod::model_scroll_tick(nullptr);
   zmod::Model m{};

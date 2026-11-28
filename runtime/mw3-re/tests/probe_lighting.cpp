@@ -282,6 +282,7 @@ int probe_light_setter(int which, uint8_t* data, int null_data, float a, float b
   std::memcpy(light.raw, data, sizeof light.raw);
   node.data = null_data ? nullptr : &light;
   zcls::frames().frame = frame;
+  zcls::frames().step = frame;  // ours (#485): the node stamps count steps; one a frame in the exe
   zcls::frames().update_frame = 0;
   float r[3] = {0, 0, 0};
   int res = 0;

@@ -212,6 +212,7 @@ void probe_md_state(const float* st, const uint8_t* fog) {
   s.second_pass = static_cast<int32_t>(st[3]);
   s.priority_scale = st[4];
   zcls::frames().frame = static_cast<uint32_t>(st[5]);
+  zcls::frames().step = zcls::frames().frame;  // ours (#485): the node stamps count steps; one a frame in the exe
   zcls::frames().update_frame = 1;
   ztimer::state().dt = st[6];
   // st[7]: the world's lights (its sun) updated for this view and listed, or none.

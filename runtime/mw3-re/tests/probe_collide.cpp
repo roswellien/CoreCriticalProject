@@ -225,6 +225,7 @@ int32_t probe_collide(uint8_t* mech, int32_t roster, float half, float* transfor
     m.net_collision = &g->net;
   }
   zcls::frames().frame = frame;
+  zcls::frames().step = frame;  // the exe's one count; ours (#485) keeps steps apart
   World& w = world();
   w.player = flags & 1 ? &m : nullptr;
   w.mission_player = flags & 2 ? &m : nullptr;
