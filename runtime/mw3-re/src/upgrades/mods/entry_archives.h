@@ -3,6 +3,10 @@
 #include <string>
 #include <vector>
 
+namespace zutl_zar {
+struct Archive;
+}
+
 // Ours (docs/modding.md, Archives by their changed entries): a mod made for
 // the original carries whole reader archives (zbd\reader.zbd, a mission's
 // readerm<N>.zbd), each many records of which it changed a few; two such
@@ -32,6 +36,27 @@ struct ArchiveEntry {
 // entry lies outside the file.
 bool archive_read_entries(const std::string& host, std::vector<ArchiveEntry>* out);
 std::vector<std::string> archive_entry_names(const std::string& host);
+
+// Only mechlib.zbd merges whole archives by entry. Host paths and starts with
+// no write-directory/mod model-library content keep the original opener. The merged stream belongs to
+// `archive` until model_library_close; its logical path stays unchanged so JSON
+// lookups still use the game's name. Materials are combined from the lowest
+// readable table up and selected models' source indices are relocated safely.
+// A source with no materials entry inherits only the unchanged base indices;
+// a source with an unreadable materials entry supplies no models. Logs name each losing
+// entry and unreadable source once per open; without a sink distinct diagnostics
+// go to stderr once per process so mission reloads do not repeat them.
+bool model_library_open(zutl_zar::Archive& archive, const char* path,
+                        std::vector<std::string>* log = nullptr);
+bool model_library_close(zutl_zar::Archive& archive);
+// True only when this archive currently owns a registered temporary stream.
+bool model_library_is_merged(const zutl_zar::Archive& archive);
+// Before material relocation, for source-asset matching in the renderer.
+std::string model_library_source_hash(const zutl_zar::Archive& archive, const std::string& name);
+// Table-only presence checks, including under the game's path confinement.
+// They do not validate version/material/model payloads; opening does that.
+bool model_library_has(const std::string& host, const std::string& entry);
+std::vector<std::string> model_library_entry_names(const std::string& host);
 
 struct EntriesCut {
   enum What { kLeft, kSame, kCut } what = kLeft;  // left whole; dropped (every entry the install's); cut to its entries

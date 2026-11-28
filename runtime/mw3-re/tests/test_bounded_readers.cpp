@@ -1245,7 +1245,8 @@ TEST(bounded_mechlib_json_in_a_folder_or_a_zip) {
   fs::remove_all(mod + "/zbd/mechlib", ec);
   fs::remove(mod + "/zbd/mechlib.zip", ec);
   fs::copy_file(install + "/zbd/mechlib.zbd", mod + "/zbd/mechlib.zbd", ec);
-  EXPECT(second_y() == -1.0f);  // the mod's own archive stops the search: the later mod's not read
+  // Ours (#664): an earlier whole archive no longer hides a later JSON entry it lacks.
+  EXPECT(second_y() == 9.0f);
   zutl::mounts() = saved;
 }
 
