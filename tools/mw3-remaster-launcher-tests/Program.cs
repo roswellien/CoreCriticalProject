@@ -49,6 +49,7 @@ if (args.Length == 2 && args[0] == "--pack-contract-codes")
     return;
 }
 if (args.Length == 1 && args[0] == "--pack-storage-only") { PackStorageChecks.Run(); return; }
+if (args.Length == 1 && args[0] == "--pack-entry-ticks-only") { PackEntryTickChecks.Run(); return; }
 if (args.Length == 1 && args[0] == "--pack-schema-embedded-only") { PackContractChecks.CheckEmbeddedSchema(); return; }
 if(args.Length==1 && args[0]=="--pack-contracts-only") { PackContractChecks.Run(); return; }
 
@@ -139,6 +140,7 @@ if (args.Length == 1 && args[0] == "--content-only")
     SkinPackChecks.Run();
     PackStorageChecks.Run();
     PackContractChecks.Run();
+    PackEntryTickChecks.Run();
     EnvironmentPackChecks.Run();
     MusicPackChecks.Run();
     ArtworkCinematicChecks.Run();
@@ -443,6 +445,7 @@ if (!profilesOnly)
 {
 PackStorageChecks.Run();
 PackContractChecks.Run();
+PackEntryTickChecks.Run();
 UniversalLauncherChecks.Run();
 SteamShortcutChecks.Run();
 OnlineUpdateChecks.Run();

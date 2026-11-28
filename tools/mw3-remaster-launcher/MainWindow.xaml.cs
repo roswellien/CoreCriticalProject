@@ -528,6 +528,12 @@ namespace MW3RemasterLauncher
             UpdateSummaryDisplay();
         }
 
+        private void BtnPackEntries_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button button && button.Tag is PackManifest pack)
+                new PackEntriesWindow(_libraryPackMgr ?? _packMgr, pack) { Owner = this }.ShowDialog();
+        }
+
         private void BtnMoveUp_Click(object sender, RoutedEventArgs e)
         {
             if (sender is Button btn && btn.Tag is PackManifest pack)
@@ -561,6 +567,10 @@ namespace MW3RemasterLauncher
                         if (Process.GetProcessesByName("entry_commandline").Length > 0)
                             throw new InvalidOperationException("Close MW3-RE before removing content packs.");
                         _packMgr.UninstallPack(pack);
+                        if (_packMgr.EntryWarnings.Count > 0)
+                            MessageBox.Show(this, "Pack uninstalled. Some tick files were left unchanged:\n\n" +
+                                string.Join("\n", _packMgr.EntryWarnings), "Gameplay ticks need attention",
+                                MessageBoxButton.OK, MessageBoxImage.Information);
                     }
                     catch (Exception ex) { MessageBox.Show(ex.Message, "Cannot uninstall pack", MessageBoxButton.OK, MessageBoxImage.Error); return; }
                     _settingsMgr.Current.ActivePacks = _packMgr.GetActivePackIds();
@@ -586,6 +596,15 @@ namespace MW3RemasterLauncher
                 TxtAssetInstallProgress.Text = $"Pack {_assetPackIndex} of {_assetPackCount}: {Path.GetFileName(file)} — {value.Stage}{percent}";
             });
             var pack = await _packMgr.InstallPackAsync(file, progress);
+            if (pack.HasGameplay)
+            {
+                var message = "Other players need the same gameplay pack to join a multiplayer game.";
+                if (pack.DefaultTickWarnings.Count > 0)
+                    message += "\n\nGameplay entry notes:\n" +
+                        string.Join("\n", pack.DefaultTickWarnings);
+                MessageBox.Show(this, message,
+                    "Gameplay pack installed", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
             // Retain successful imports even if a later pack fails.
             _settingsMgr.Current.ActivePacks = _packMgr.GetActivePackIds();
             _settingsMgr.Current.PackSelectionInitialized = true;

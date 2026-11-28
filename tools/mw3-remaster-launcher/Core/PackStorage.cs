@@ -337,7 +337,8 @@ public static class PackStorage
     }
 
     public static PackManifest Install(string root, string archivePath, string gameId = GameCatalog.Mw3,
-        IProgress<PackInstallProgress>? progress = null, PackUpdateExpectation? expectation = null)
+        IProgress<PackInstallProgress>? progress = null, PackUpdateExpectation? expectation = null,
+        Action<PackManifest, bool>? activated = null)
     {
         root = Path.GetFullPath(root);
         EnsureNoLinks(root);
@@ -500,12 +501,19 @@ public static class PackStorage
             ReportProgress("Activating assets", force: true);
             var target = Resolve(root, manifest.Id);
             var previous = Resolve(root, ".rollback-" + manifest.Id);
+            var replacing = Directory.Exists(target);
             // Retain a recoverable previous version until the next successful replacement.
             if (Directory.Exists(previous)) DeleteOwnedTree(previous);
             if (Directory.Exists(target)) Directory.Move(target, previous);
-            try { Directory.Move(stage, target); }
+            try
+            {
+                Directory.Move(stage, target);
+                manifest.DirectoryPath = target;
+                activated?.Invoke(manifest, replacing);
+            }
             catch
             {
+                if (!Directory.Exists(stage) && Directory.Exists(target)) DeleteOwnedTree(target);
                 if (!Directory.Exists(target) && Directory.Exists(previous)) Directory.Move(previous, target);
                 throw;
             }

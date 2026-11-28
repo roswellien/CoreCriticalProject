@@ -116,6 +116,13 @@ namespace MW3RemasterLauncher.Core
     /// </remarks>
     public class PackManifest
     {
+        [JsonIgnore]
+        public bool HasGameplay => SchemaVersion == 3 && Gameplay != null;
+
+        // Transient installation diagnostics; tick choices remain only in the runtime's files.
+        [JsonIgnore]
+        public IReadOnlyList<PackEntryWarning> DefaultTickWarnings { get; internal set; } = [];
+
         // Existing packs without an explicit target are MW3 packs only.
         [JsonPropertyName("game_id")]
         public string GameId { get; set; } = GameCatalog.Mw3;
