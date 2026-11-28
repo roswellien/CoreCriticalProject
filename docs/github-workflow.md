@@ -405,8 +405,9 @@ steps on the same Release checklist issue.
 1. Before promoting the feed, prepare one GitHub Release draft for the
    exact release version, against the reviewed source SHA recorded in the
    build receipt. For a runtime-only release, that SHA is the `source_commit`
-   in the staged runtime's `metadata/build-observation.json`, which the signed
-   `.mw3update` packages; confirm it is the reviewed `main` SHA. Check that the source commit contains the
+   in `Runtime/metadata/build-observation.json` inside the companion ZIP.
+   Verify the ZIP against the signed `.mw3update` metadata first, then confirm
+   that `source_commit` is the reviewed `main` SHA. Check that the source commit contains the
    [Discord release observer](../.github/workflows/discord-release-detect.yml),
    and that the sender is activated (`DISCORD_RELEASE_ACTIVATION` set as in
    [Verify and activate](../tools/github/discord-release-announcement.md#verify-and-activate));

@@ -139,7 +139,8 @@ For an MW3-RE runtime-only update with no new launcher or installer:
    installation. Do not publish until these checks pass.
 
 6. **Prepare the signed online catalog.** Use the committed
-   `tools/update-service/build_catalog.py` with the new launcher metadata and
+   `tools/update-service/build_catalog.py` with the new (or, for a runtime-only
+   release, the approved reused) launcher metadata and
    the current approved signed runtime metadata/package (or the new runtime
    package when it changes). It requires version-matched `.ccupdate`/`.mw3update`
    files and companion ZIPs, the installed `update-trust.json`, the external
