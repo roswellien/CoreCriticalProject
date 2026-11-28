@@ -1,0 +1,31 @@
+name: Website tests
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/website.yml'
+  pull_request:
+    paths:
+      - 'website/**'
+      - '.github/workflows/website.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  # The crash report service tests (website/tests/), which build.yml skips because it ignores
+  # website-only changes. A failing test fails this job.
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.3'
+      # website/package.json has no dependencies yet; add `npm ci` here when it gets some.
+      - name: Run the website tests
+        working-directory: website
+        run: npm test
