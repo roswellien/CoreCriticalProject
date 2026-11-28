@@ -416,9 +416,11 @@ steps on the same Release checklist issue.
    the [release target marker][release-target-marker] listing every affected
    target and its numeric signed version. Use `corecritical` for the launcher
    and `mw3` for the MW3-RE runtime. The tag's numeric version must match one
-   of the listed versions. A preview's marker has no `-preview` suffix. Do not
-   attach protected artifacts or include private download references in the
-   announcement summary.
+   of the listed versions. A preview's marker has no `-preview` suffix. The
+   gate requires the explicit marker even though the sender can infer a single
+   target from the notes' first paragraph, which serves as the short
+   player-facing Discord summary. Do not attach protected artifacts or include
+   private download references in the announcement summary.
 3. After the existing signing, install and update checks pass, promote the
    signed feed and verify that every affected live catalog entry matches its
    tested signed package. Then publish the draft via GitHub's release UI or

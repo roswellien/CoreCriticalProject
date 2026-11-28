@@ -8,6 +8,12 @@ inputs and release artifacts outside Git.
 
 ## Launcher release
 
+For an MW3-RE runtime-only update, skip launcher build and installer steps
+that do not apply. Reuse the approved signed launcher `.ccupdate` and matching
+ZIP in `build_catalog.py`, which still requires both packages. Add only the
+two new runtime object paths to `PUBLIC_OBJECTS` and retain all existing
+entries. Verify the protected Setup listing only if it changed.
+
 1. **Start from reviewed source.** Merge the release PR from `develop` to
    `main`, then make a fresh clone of the repository and check out that exact
    merged `main` SHA. Confirm the clone is clean and record the SHA. Read the
@@ -190,12 +196,13 @@ inputs and release artifacts outside Git.
    for tag, preview and marker rules.
 
 9. **Promote the signed feed.** Extend the existing Worker's `PUBLIC_OBJECTS`
-   allowlist with the four exact new update metadata/package paths and byte
+   allowlist with the new update metadata/package paths and exact byte
    counts from `publication.json`, retaining every existing entry. In the
    Cloudflare dashboard, open Workers & Pages → `core-critical-updates` →
    Settings → Variables and Secrets. Copy the current `PUBLIC_OBJECTS` JSON
-   object, add one entry for each item in its `objects` array using `public_path`
-   as the property name and `key` and `bytes` as the value, then save and deploy.
+   object, add one entry for each new object listed in `publication.json` using
+   `public_path` as the property name and `key` and `bytes` as the value, then
+   save and deploy.
    Keep the `UPDATES` R2 binding connected to `core-critical-playtests`;
    never replace the allowlist with only the new release. The Worker source is
    tracked at `tools/update-service/worker.mjs`. Upload the signed catalog first

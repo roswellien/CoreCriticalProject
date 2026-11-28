@@ -50,5 +50,6 @@ body:
             If shipping the launcher or MW3-RE runtime, matching GitHub Release
             published after live signed feed verification.
         - label: >-
-            If shipping the launcher or MW3-RE runtime, GitHub Release URL and
-            Discord announcement URL recorded on this issue.
+            If shipping the launcher or MW3-RE runtime, GitHub Release URL,
+            signed catalog sequence and Discord announcement URL recorded on
+            this issue.
