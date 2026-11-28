@@ -25,6 +25,10 @@
       "code": "manifest-invalid",
       "found_by": "pack-check"
     },
+    "manifest-invalid-nan": {
+      "code": "manifest-invalid",
+      "found_by": "pack-check"
+    },
     "manifest-unknown-field": {
       "code": "manifest-unknown-field",
       "found_by": "pack-check"
@@ -37,12 +41,32 @@
       "code": "payload-executable",
       "found_by": "pack-check"
     },
+    "visual-duplicate-binding": {
+      "code": "visual-duplicate-binding",
+      "found_by": "pack-check"
+    },
+    "visual-field-missing": {
+      "code": "visual-field-missing",
+      "found_by": "pack-check"
+    },
     "visual-file-undeclared": {
       "code": "visual-file-undeclared",
       "found_by": "pack-check"
     },
+    "visual-kind-target-mismatch": {
+      "code": "visual-kind-target-mismatch",
+      "found_by": "pack-check"
+    },
     "visual-needs-gameplay": {
       "code": "visual-needs-gameplay",
+      "found_by": "pack-check"
+    },
+    "visual-role-missing": {
+      "code": "visual-role-missing",
+      "found_by": "pack-check"
+    },
+    "visual-role-unknown": {
+      "code": "visual-role-unknown",
       "found_by": "pack-check"
     },
     "visual-target-invalid": {

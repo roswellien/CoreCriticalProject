@@ -1,0 +1,29 @@
+{
+  "schema_version": 3,
+  "game_id": "mw3",
+  "id": "example-broken",
+  "name": "Example: a model with no lod",
+  "version": "1.0.0",
+  "author": "Core Critical examples",
+  "description": "An HD model with no lod, a field contract 4 requires of a model.",
+  "visuals": [
+    {
+      "target": "mech-model:thor",
+      "kind": "model",
+      "files": {
+        "mesh": "visuals/close.bwmesh",
+        "textures": "visuals/thor.bwtex"
+      }
+    }
+  ],
+  "files": {
+    "visuals/close.bwmesh": {
+      "sha256": "c59deac13af53eca47dfef12c13c343c9c24e66602f2a9854c5cff9c6317b99b",
+      "bytes": 86
+    },
+    "visuals/thor.bwtex": {
+      "sha256": "c59deac13af53eca47dfef12c13c343c9c24e66602f2a9854c5cff9c6317b99b",
+      "bytes": 86
+    }
+  }
+}

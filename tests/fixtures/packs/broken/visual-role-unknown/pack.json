@@ -1,0 +1,35 @@
+{
+  "schema_version": 3,
+  "game_id": "mw3",
+  "id": "example-broken",
+  "name": "Example: a skin with a mesh file",
+  "version": "1.0.0",
+  "author": "Core Critical examples",
+  "description": "A skin whose files name a mesh, a role contract 4 does not list for a skin.",
+  "provides": {
+    "skins": [
+      "Example Stripe"
+    ]
+  },
+  "visuals": [
+    {
+      "target": "mech-model:thor",
+      "kind": "skin",
+      "name": "Example Stripe",
+      "files": {
+        "textures": "visuals/stripe.bwtex",
+        "mesh": "visuals/mesh.bwmesh"
+      }
+    }
+  ],
+  "files": {
+    "visuals/mesh.bwmesh": {
+      "sha256": "c59deac13af53eca47dfef12c13c343c9c24e66602f2a9854c5cff9c6317b99b",
+      "bytes": 86
+    },
+    "visuals/stripe.bwtex": {
+      "sha256": "c59deac13af53eca47dfef12c13c343c9c24e66602f2a9854c5cff9c6317b99b",
+      "bytes": 86
+    }
+  }
+}
