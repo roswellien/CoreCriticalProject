@@ -33,6 +33,7 @@ namespace MW3RemasterLauncher.Core
         public ObservableCollection<PackManifest> Packs => _packs;
         public string ModsRoot => _modsRoot;
         public List<string> DiscoveryErrors { get; } = new();
+        public List<PackEntryWarning> EntryWarnings { get; } = new();
 
         public PackManager(string basePath, string gameId = GameCatalog.Mw3, PackEntryTicks? entryTicks = null)
         {
@@ -155,26 +156,49 @@ namespace MW3RemasterLauncher.Core
             return PackStorage.Install(_modsRoot, archivePath, GameId, progress,
                 activated: (pack, replacing) =>
                 {
-                    if (!replacing) EntryTicks.InstallDefaults(pack, InstalledGameplayPacks());
+                    if (replacing || !pack.HasGameplay) return;
+                    var sourceWarnings = new List<PackEntryWarning>();
+                    var skipped = EntryTicks.InstallDefaults(pack, InstalledGameplayPacks(sourceWarnings));
+                    pack.DefaultTickWarnings = sourceWarnings.Concat(skipped).ToArray();
                 });
         }
 
-        private IEnumerable<PackManifest> InstalledGameplayPacks()
+        private IEnumerable<PackManifest> InstalledGameplayPacks(ICollection<PackEntryWarning> warnings)
         {
             foreach (var directory in Directory.GetDirectories(_modsRoot))
             {
                 if (Path.GetFileName(directory).StartsWith('.')) continue;
-                var path = Path.Combine(directory, "pack.json");
-                if (!File.Exists(path)) continue;
-                var manifest = PackStorage.ReadManifest(path);
-                if (!manifest.HasGameplay) continue;
-                manifest.DirectoryPath = directory;
+                PackManifest manifest;
+                try
+                {
+                    var path = Path.Combine(directory, "pack.json");
+                    if (!File.Exists(path)) continue;
+                    manifest = PackStorage.ReadManifest(path);
+                    GameCatalog.RequirePackTarget(manifest.GameId, GameId);
+                    if (Path.GetFileName(directory) != manifest.Id)
+                        throw new InvalidDataException("Installed directory and pack ID disagree.");
+                    if (!manifest.HasGameplay) continue;
+                    var gameplay = PackStorage.Resolve(directory, manifest.Gameplay!.Root);
+                    if (!Directory.Exists(gameplay))
+                        throw new InvalidDataException("The gameplay root is missing or is not a folder.");
+                    manifest.DirectoryPath = directory;
+                }
+                catch (Exception error)
+                {
+                    // Like RefreshPacks, isolate every sibling's reader/validation failure.
+                    // This block only reads; it must never abort another pack's installation.
+                    warnings.Add(new(Path.GetFileName(directory), "Ignoring this installed pack: " + error.Message));
+                    continue;
+                }
                 yield return manifest;
             }
         }
 
-        public IReadOnlyList<PackEntryTick> ReadEntryTicks(PackManifest pack) =>
-            EntryTicks.Read(pack, InstalledGameplayPacks());
+        public IReadOnlyList<PackEntryTick> ReadEntryTicks(PackManifest pack)
+        {
+            EntryWarnings.Clear();
+            return EntryTicks.Read(pack, InstalledGameplayPacks(EntryWarnings), EntryWarnings);
+        }
 
         private PackManifest RegisterInstalled(PackManifest manifest, string archivePath, bool autoDeleteSource)
         {
@@ -204,6 +228,7 @@ namespace MW3RemasterLauncher.Core
         public bool UninstallPack(PackManifest pack)
         {
             if (pack == null) return false;
+            EntryWarnings.Clear();
 
             EntryTicks.RequireGameClosed();
             using var gate = GameUpdateGate.Acquire(_dataRoot);
@@ -216,7 +241,8 @@ namespace MW3RemasterLauncher.Core
             {
                 // Only a gameplay pack ever owned tick lines. For any other pack a mod= line with
                 // its ID is a player mod of the same name, which uninstall must leave alone.
-                if (GameId == GameCatalog.Mw3 && pack.HasGameplay) EntryTicks.RemovePack(pack.Id);
+                if (GameId == GameCatalog.Mw3 && pack.HasGameplay)
+                    EntryWarnings.AddRange(EntryTicks.RemovePack(pack.Id));
                 var previous = PackStorage.Resolve(_modsRoot, ".rollback-" + pack.Id);
                 if (Directory.Exists(previous)) PackStorage.DeleteOwnedTree(previous);
                 if (Directory.Exists(target)) PackStorage.DeleteOwnedTree(target);

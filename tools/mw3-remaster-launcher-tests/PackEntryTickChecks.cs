@@ -203,7 +203,7 @@ public static class PackEntryTickChecks
         Console.WriteLine("PASS: byte preservation, exact removal, idempotence, failed replacement, game refusal and session gate.");
     }
 
-    private static void FailedDefaults(string root, bool keepEmptyDirectory = false)
+    private static void FailedDefaults(string root, bool keepEmptyDirectory = false, bool denyReads = false)
     {
         var manager = new PackManager(root);
         WriteEntry(manager.EntryTicks.WriteDirectory, "mp", "mod=other\n"u8.ToArray());
@@ -213,7 +213,8 @@ public static class PackEntryTickChecks
         if (keepEmptyDirectory) Directory.CreateDirectory(iaDirectory);
         var path = TickPath(manager.EntryTicks.WriteDirectory, "zz-failure");
         var failed = false;
-        using (var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (var held = new FileStream(path, FileMode.Open, FileAccess.Read,
+            denyReads ? FileShare.None : FileShare.Read))
         {
             try { manager.InstallPack(Archive(root, "gameplay-only", campaign: true)); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { failed = true; }
@@ -478,6 +479,19 @@ public static class PackEntryTickChecks
         cases.Add(("5-preserve-empty-folder", folder => FailedDefaults(folder, true)));
         cases.Add(("6-running-rollback", folder => RollbackGuards(folder, true)));
         cases.Add(("6-session-rollback", folder => RollbackGuards(folder, false)));
+        cases.Add(("r2-1-refused-defaults", RefusedDefaults));
+        cases.Add(("r2-2-linked-mods", LinkedPlayerMods));
+        cases.Add(("r2-2-linked-campaigns", LinkedCampaigns));
+        foreach (var kind in new[] { "malformed", "mismatched-id", "bad-root", "missing-root" })
+        {
+            cases.Add(($"r2-3-{kind}-install", folder => InvalidSibling(folder, kind, false)));
+            cases.Add(($"r2-3-{kind}-dialog", folder => InvalidSibling(folder, kind, true)));
+        }
+        cases.Add(("r2-campaign-labels", CampaignLabels));
+        cases.Add(("r2-locked-tick-read", folder => FailedDefaults(folder, denyReads: true)));
+        cases.Add(("r2-unreadable-player-mod", UnreadablePlayerMod));
+        foreach (var kind in new[] { "tick-folder", "marker-folder", "entry-file", "campaigns-file" })
+            cases.Add(($"r2-{kind}", folder => TickPathCollision(folder, kind)));
         var failures = new List<Exception>();
         foreach (var (name, check) in cases)
         {
@@ -495,6 +509,190 @@ public static class PackEntryTickChecks
             }
         }
         if (failures.Count != 0) throw new AggregateException("Review regressions failed.", failures);
+    }
+
+    private static void RefusedDefaults(string root)
+    {
+        var manager = new PackManager(root);
+        var ia = TickPath(manager.EntryTicks.WriteDirectory, "ia");
+        Directory.CreateDirectory(Path.GetDirectoryName(ia)!);
+        File.WriteAllText(ia, "mod=player-mod\n");
+        var source = Path.Combine(manager.EntryTicks.WriteDirectory, "mods", "foreign");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "mod.txt"), "name=Foreign campaign\nkind=campaign\n");
+        var custom = Path.GetDirectoryName(TickPath(manager.EntryTicks.WriteDirectory, "foreign"))!;
+        Directory.CreateDirectory(custom);
+        File.WriteAllText(Path.Combine(custom, "player-note.txt"), "Keep this\n");
+        var archive = Archive(root, "gameplay-only");
+        var pack = manager.InstallPack(archive);
+        foreach (var id in new[] { "ia", "foreign" })
+            Assert(pack.DefaultTickWarnings.Any(warning => warning.EntryId == id &&
+                warning.Reason.Contains("game did not put there")),
+                "Skipped default entry and its reason were not returned for " + id);
+        Assert(manager.ReadEntryTicks(pack).Single(tick => tick.Entry.Id == "mp").IsTicked,
+            "An unusable IA/custom entry blocked normal multiplayer defaults.");
+        Assert(File.ReadAllText(ia) == "mod=player-mod\n" &&
+            !File.Exists(Path.Combine(Path.GetDirectoryName(ia)!, "mw3-campaign.txt")),
+            "Default ticks adopted an entry that entry_ensure refuses.");
+        manager.UninstallPack(pack);
+        manager.InstallPack(archive);
+        Assert(File.ReadAllText(ia) == "mod=player-mod\n" &&
+            File.ReadAllText(Path.Combine(custom, "player-note.txt")) == "Keep this\n",
+            "Reinstall after uninstall changed refused entries.");
+    }
+
+    private static void LinkedPlayerMods(string root)
+    {
+        var manager = new PackManager(root);
+        var target = Path.Combine(root, "player-mods-target");
+        var source = Path.Combine(target, "redirected");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "mod.txt"),
+            "name=Redirected mod\nfor=MW3 1.2\ncampaign=Chapter.txt\n");
+        File.WriteAllText(Path.Combine(source, "Chapter.txt"), "name=Redirected chapter\nmission=c1 1\n");
+        Directory.CreateDirectory(manager.EntryTicks.WriteDirectory);
+        var junction = Path.Combine(manager.EntryTicks.WriteDirectory, "mods");
+        CreateJunction(junction, target);
+        try
+        {
+            var original = File.ReadAllBytes(Path.Combine(source, "mod.txt"));
+            var pack = manager.InstallPack(Archive(root, "gameplay-only"));
+            Assert(manager.ReadEntryTicks(pack).Any(tick =>
+                tick.Entry.Id == "redirected~Chapter" && tick.IsTicked),
+                "Read-only redirected player mods were not discovered/default-ticked.");
+            manager.UninstallPack(pack);
+            Assert(File.ReadAllBytes(Path.Combine(source, "mod.txt")).SequenceEqual(original),
+                "Read-only redirected player mod was edited.");
+        }
+        finally { Directory.Delete(junction); }
+    }
+
+    private static void LinkedCampaigns(string root)
+    {
+        var manager = new PackManager(root);
+        var target = Path.Combine(root, "campaigns-target");
+        Directory.CreateDirectory(target);
+        var sentinel = Path.Combine(target, "mods.txt");
+        File.WriteAllText(sentinel, "Leave this target alone\n");
+        Directory.CreateDirectory(manager.EntryTicks.WriteDirectory);
+        var junction = Path.Combine(manager.EntryTicks.WriteDirectory, "campaigns");
+        CreateJunction(junction, target);
+        try
+        {
+            var pack = manager.InstallPack(Archive(root, "gameplay-only"));
+            Assert(pack.DefaultTickWarnings.Any(warning => warning.Reason.Contains("link")),
+                "Linked campaigns warning was not returned after installation.");
+            Assert(manager.ReadEntryTicks(pack).Count == 0,
+                "A linked campaigns root offered writable entries.");
+            Assert(manager.EntryWarnings.Any(warning => warning.Reason.Contains("link")),
+                "Linked campaigns warning was not returned to the dialog.");
+            var refused = false;
+            try { manager.EntryTicks.SetTick(pack, new("ia", "Instant Action"), true); }
+            catch (InvalidOperationException error) when (error.Message.Contains("link")) { refused = true; }
+            Assert(refused, "Explicit toggle through linked campaigns was not visibly refused.");
+            manager.UninstallPack(pack);
+            Assert(manager.EntryWarnings.Any(warning => warning.Reason.Contains("link")),
+                "Skipped uninstall cleanup did not return a linked campaigns warning.");
+            Assert(!Directory.Exists(pack.DirectoryPath) && File.ReadAllText(sentinel) ==
+                "Leave this target alone\n" && Directory.GetFileSystemEntries(target).Length == 1,
+                "Linked campaigns prevented uninstall or caused target writes.");
+        }
+        finally { Directory.Delete(junction); }
+    }
+
+    private static void InvalidSibling(string root, string kind, bool openingDialog)
+    {
+        var manager = new PackManager(root);
+        var archive = Archive(root, "gameplay-only");
+        PackManifest pack = openingDialog ? manager.InstallPack(archive) : null;
+        var sibling = Path.Combine(manager.ModsRoot, "broken-sibling");
+        ZipFile.ExtractToDirectory(archive, sibling);
+        var manifestPath = Path.Combine(sibling, "pack.json");
+        var json = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        json["id"] = kind == "mismatched-id" ? "impostor" : "broken-sibling";
+        if (kind == "bad-root") json["gameplay"]!["root"] = "../elsewhere";
+        if (kind == "missing-root") json["gameplay"]!["root"] = "missing";
+        File.WriteAllText(Path.Combine(sibling, "mod", "mod.txt"),
+            "name=Broken sibling\ncampaign=Ghost.txt\n");
+        File.WriteAllText(manifestPath, kind == "malformed" ? "{" : json.ToJsonString());
+        var before = File.ReadAllBytes(manifestPath);
+        if (!openingDialog) pack = manager.InstallPack(archive);
+        var entries = manager.ReadEntryTicks(pack);
+        Assert(manager.EntryWarnings.Any(warning => warning.EntryId == "broken-sibling"),
+            "Ignored sibling was not reported to the dialog.");
+        if (!openingDialog)
+            Assert(pack.DefaultTickWarnings.Any(warning => warning.EntryId == "broken-sibling"),
+                "Ignored sibling was not reported after install.");
+        Assert(entries.Any(tick => tick.Entry.Id == "ia" && tick.IsTicked),
+            "Bad sibling blocked reading the valid pack's defaults.");
+        Assert(entries.All(tick => !tick.Entry.Id.StartsWith("impostor", StringComparison.Ordinal)),
+            "A mismatched sibling identity supplied campaign entries.");
+        Assert(File.ReadAllBytes(manifestPath).SequenceEqual(before), "Bad sibling was edited.");
+    }
+
+    private static void CampaignLabels(string root)
+    {
+        var manager = new PackManager(root);
+        var source = Path.Combine(manager.EntryTicks.WriteDirectory, "mods", "named");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "mod.txt"),
+            "name=Mod fallback\ncampaign=Chapter.txt\ncampaign=Untitled.txt\ncampaign=Missing.txt\n");
+        File.WriteAllText(Path.Combine(source, "Chapter.txt"), "name=Campaign heading\nmission=c1 1\n");
+        File.WriteAllText(Path.Combine(source, "Untitled.txt"), "mission=c1 1\n");
+        var pack = manager.InstallPack(Archive(root, "gameplay-only"));
+        var entries = manager.ReadEntryTicks(pack);
+        Assert(entries.Single(tick => tick.Entry.Id == "named~Chapter").Entry.Name == "Campaign heading",
+            "Campaign heading did not come from its own name= line.");
+        foreach (var id in new[] { "named~Untitled", "named~Missing" })
+            Assert(entries.Single(tick => tick.Entry.Id == id).Entry.Name == "Mod fallback",
+                "Campaign without a readable name did not fall back to the mod name.");
+        Assert(File.ReadAllText(Path.Combine(manager.EntryTicks.WriteDirectory, "campaigns", "named~Chapter",
+            "mw3-campaign.txt")).StartsWith("\"Campaign heading\" (named~Chapter)", StringComparison.Ordinal),
+            "Campaign marker label disagrees with the dialog.");
+    }
+
+    private static void UnreadablePlayerMod(string root)
+    {
+        var manager = new PackManager(root);
+        var source = Path.Combine(manager.EntryTicks.WriteDirectory, "mods", "locked-source");
+        Directory.CreateDirectory(source);
+        var path = Path.Combine(source, "mod.txt");
+        File.WriteAllText(path, "name=Locked mod\nkind=campaign\n");
+        using var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+        var pack = manager.InstallPack(Archive(root, "gameplay-only"));
+        Assert(pack.DefaultTickWarnings.Any(warning => warning.EntryId == "locked-source"),
+            "Unreadable discovery source did not produce an install warning.");
+        Assert(manager.ReadEntryTicks(pack).Any(tick => tick.Entry.Id == "ia" && tick.IsTicked),
+            "An unreadable player-mod source blocked normal entries.");
+        Assert(manager.EntryWarnings.Any(warning => warning.EntryId == "locked-source"),
+            "Unreadable discovery source did not produce a dialog warning.");
+    }
+
+    private static void TickPathCollision(string root, string kind)
+    {
+        var manager = new PackManager(root);
+        var campaigns = Path.Combine(manager.EntryTicks.WriteDirectory, "campaigns");
+        var entry = Path.Combine(campaigns, "ia");
+        var collision = kind switch
+        {
+            "campaigns-file" => campaigns,
+            "entry-file" => entry,
+            "marker-folder" => Path.Combine(entry, "mw3-campaign.txt"),
+            _ => Path.Combine(entry, "mods.txt")
+        };
+        Directory.CreateDirectory(Path.GetDirectoryName(collision)!);
+        if (kind.EndsWith("file", StringComparison.Ordinal)) File.WriteAllText(collision, "Keep me\n");
+        else Directory.CreateDirectory(collision);
+        var pack = manager.InstallPack(Archive(root, "gameplay-only"));
+        Assert(pack.DefaultTickWarnings.Count > 0, "An unusable tick path was not reported.");
+        var entries = manager.ReadEntryTicks(pack);
+        Assert(kind == "campaigns-file" ? entries.Count == 0 :
+            entries.Any(tick => tick.Entry.Id == "mp" && tick.IsTicked),
+            "An unrelated tick path collision blocked usable defaults.");
+        manager.UninstallPack(pack);
+        Assert(kind.EndsWith("file", StringComparison.Ordinal) ?
+            File.ReadAllText(collision) == "Keep me\n" : Directory.Exists(collision),
+            "An unusable tick path was edited or removed.");
     }
 
     private static void WindowToggle(string root)
@@ -536,6 +734,30 @@ public static class PackEntryTickChecks
                 footer.Children.OfType<Button>().Single().RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 Assert(entries.Children.OfType<CheckBox>().Single(box => (string)box.ToolTip == "ia").IsChecked == true,
                     "Refresh did not display a runtime-form edit made outside the window.");
+                File.Delete(Path.Combine(manager.EntryTicks.WriteDirectory, "campaigns", "ia", "mw3-campaign.txt"));
+                checkbox = entries.Children.OfType<CheckBox>().Single(box => (string)box.ToolTip == "ia");
+                checkbox.IsChecked = false;
+                checkbox.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                Assert(footer.Children.OfType<TextBlock>().Single().Text.Contains("game did not put there") &&
+                    File.ReadAllText(TickPath(manager.EntryTicks.WriteDirectory, "ia")) == "mod=" + pack.Id + "\n",
+                    "Dialog did not visibly refuse editing an unmarked nonempty entry.");
+
+                var campaigns = Path.Combine(manager.EntryTicks.WriteDirectory, "campaigns");
+                var target = Path.Combine(root, "redirected-campaigns");
+                Directory.Move(campaigns, target);
+                try
+                {
+                    CreateJunction(campaigns, target);
+                    try
+                    {
+                        footer.Children.OfType<Button>().Single().RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                        Assert(entries.Children.Count == 0 &&
+                            footer.Children.OfType<TextBlock>().Single().Text.Contains("link"),
+                            "Dialog did not hide entries and explain the linked campaigns folder.");
+                    }
+                    finally { Directory.Delete(campaigns); }
+                }
+                finally { Directory.Move(target, campaigns); }
             }
             catch (Exception error) { failure = error; }
             finally { window?.Close(); }

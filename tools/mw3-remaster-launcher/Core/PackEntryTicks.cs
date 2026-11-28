@@ -6,6 +6,10 @@ namespace MW3RemasterLauncher.Core;
 
 public sealed record PackCampaignEntry(string Id, string Name);
 public sealed record PackEntryTick(PackCampaignEntry Entry, bool IsTicked);
+public sealed record PackEntryWarning(string EntryId, string Reason)
+{
+    public override string ToString() => EntryId + ": " + Reason;
+}
 
 /// <summary>
 /// Reads the runtime's campaigns/&lt;entry&gt;/mods.txt directly. Only exact mod= lines
@@ -13,6 +17,7 @@ public sealed record PackEntryTick(PackCampaignEntry Entry, bool IsTicked);
 /// </summary>
 public sealed class PackEntryTicks
 {
+    private sealed class EntryRefusedException(string message) : InvalidOperationException(message);
     private const string Marker = "mw3-campaign.txt";
     private readonly string dataRoot;
     private readonly Func<bool> gameIsRunning;
@@ -63,19 +68,68 @@ public sealed class PackEntryTicks
         return path;
     }
 
-    private bool TryTickPath(string id, out string path)
+    internal static bool IsDiscoveryFailure(Exception error) => error is InvalidDataException or
+        IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or
+        System.Text.Json.JsonException or System.Security.SecurityException;
+
+    private bool TryTickPath(string id, out string path, out string reason)
     {
         try
         {
             path = TickPath(id);
+            if (File.Exists(Path.GetDirectoryName(path)))
+                throw new EntryRefusedException("The entry path is a file rather than a folder.");
+            if (Directory.Exists(path) || Directory.Exists(Path.Combine(Path.GetDirectoryName(path)!, Marker)))
+                throw new EntryRefusedException("The tick file or ownership marker is a folder.");
+            reason = "";
             return true;
         }
-        catch (Exception error) when (error is InvalidDataException or ArgumentException or
-            NotSupportedException or PathTooLongException)
+        catch (Exception error) when (IsDiscoveryFailure(error) || error is EntryRefusedException)
         {
             // One unusable folder or campaign row must not block the other entries.
             path = "";
+            reason = error is InvalidDataException && error.Message.Contains("Links")
+                ? "The entry, marker or tick file is a link; no tick files were changed."
+                : error.Message;
             return false;
+        }
+    }
+
+    private static void Warn(ICollection<PackEntryWarning>? warnings, string id, string reason) =>
+        warnings?.Add(new(id, reason));
+
+    private bool TryCampaignsDirectory(ICollection<PackEntryWarning>? warnings, out string directory)
+    {
+        directory = Path.Combine(WriteDirectory, "campaigns");
+        try
+        {
+            PackStorage.EnsureNoLinks(directory);
+            if (File.Exists(directory))
+                throw new EntryRefusedException("The campaigns path is a file rather than a folder.");
+            return true;
+        }
+        catch (Exception error) when (IsDiscoveryFailure(error) || error is EntryRefusedException)
+        {
+            var reason = error is InvalidDataException && error.Message.Contains("Links")
+                ? "The campaigns folder or a parent is a link. Gameplay entries are unavailable; no tick files were changed."
+                : "Gameplay entries are unavailable: " + error.Message;
+            Warn(warnings, "All gameplay entries", reason);
+            return false;
+        }
+    }
+
+    private static string[] ReadDirectories(string directory, string source,
+        ICollection<PackEntryWarning>? warnings)
+    {
+        try
+        {
+            if (File.Exists(directory)) throw new IOException("The source path is a file rather than a folder.");
+            return Directory.Exists(directory) ? Directory.GetDirectories(directory) : [];
+        }
+        catch (Exception error) when (IsDiscoveryFailure(error))
+        {
+            Warn(warnings, source, "Cannot list entries here: " + error.Message);
+            return [];
         }
     }
 
@@ -83,48 +137,66 @@ public sealed class PackEntryTicks
     /// Mirrors campaign_entries.cpp's names, including unplayed campaigns and saved copies.
     /// This only locates entries; pack validity and content reporting remain separate.
     /// </summary>
-    public IReadOnlyList<PackCampaignEntry> Entries(IEnumerable<PackManifest> installedPacks)
+    public IReadOnlyList<PackCampaignEntry> Entries(IEnumerable<PackManifest> installedPacks,
+        ICollection<PackEntryWarning>? warnings = null)
     {
+        if (!TryCampaignsDirectory(warnings, out var campaigns)) return [];
         var entries = new Dictionary<string, PackCampaignEntry>(StringComparer.Ordinal);
         void Add(string id, string name)
         {
-            if (TryTickPath(id, out _)) entries.TryAdd(id, new(id, name));
+            if (TryTickPath(id, out _, out var reason)) entries.TryAdd(id, new(id, name));
+            else Warn(warnings, id, reason);
         }
         Add("mw3", "MechWarrior 3");
         Add("ia", "Instant Action");
         Add("mp", "Multiplayer");
 
         var mods = Path.Combine(WriteDirectory, "mods");
-        PackStorage.EnsureNoLinks(mods);
-        if (Directory.Exists(mods))
-            foreach (var directory in Directory.GetDirectories(mods).OrderBy(path => path, StringComparer.Ordinal))
-                AddModEntries(directory, Path.GetFileName(directory), Add);
+        // Player-mod discovery is read-only. Like the runtime, it follows redirected mods folders.
+        foreach (var directory in ReadDirectories(mods, "Player mods", warnings).OrderBy(path => path, StringComparer.Ordinal))
+            AddModEntries(directory, Path.GetFileName(directory), Add, warnings);
         foreach (var pack in installedPacks.Where(pack => pack.HasGameplay))
         {
             // The runtime leaves a pack out when a player's mod already owns its folder name.
             if (Directory.Exists(Path.Combine(mods, pack.Id))) continue;
-            AddModEntries(PackStorage.Resolve(pack.DirectoryPath, pack.Gameplay!.Root), pack.Id, Add);
+            try
+            {
+                AddModEntries(PackStorage.Resolve(pack.DirectoryPath, pack.Gameplay!.Root), pack.Id, Add, warnings);
+            }
+            catch (Exception error) when (IsDiscoveryFailure(error))
+            {
+                Warn(warnings, pack.Id, "Cannot read this pack's campaign entries: " + error.Message);
+            }
         }
 
-        var campaigns = Path.Combine(WriteDirectory, "campaigns");
-        PackStorage.EnsureNoLinks(campaigns);
-        if (Directory.Exists(campaigns))
+        foreach (var directory in ReadDirectories(campaigns, "Saved campaigns", warnings)
+            .OrderBy(path => path, StringComparer.Ordinal))
         {
-            foreach (var directory in Directory.GetDirectories(campaigns).OrderBy(path => path, StringComparer.Ordinal))
+            var id = Path.GetFileName(directory);
+            if (!TryTickPath(id, out _, out var reason))
             {
-                if (!TryTickPath(Path.GetFileName(directory), out _)) continue;
-                if (File.Exists(Path.Combine(directory, Marker)))
-                    Add(Path.GetFileName(directory), Path.GetFileName(directory));
+                Warn(warnings, id, reason);
+                continue;
             }
+            if (File.Exists(Path.Combine(directory, Marker))) Add(id, id);
         }
         return entries.Values.ToList();
     }
 
-    private static void AddModEntries(string directory, string modId, Action<string, string> add)
+    private static void AddModEntries(string directory, string modId, Action<string, string> add,
+        ICollection<PackEntryWarning>? warnings)
+    {
+        try { ReadModEntries(directory, modId, add, warnings); }
+        catch (Exception error) when (IsDiscoveryFailure(error))
+        {
+            Warn(warnings, modId, "Cannot read this mod's campaign entries: " + error.Message);
+        }
+    }
+
+    private static void ReadModEntries(string directory, string modId, Action<string, string> add,
+        ICollection<PackEntryWarning>? warnings)
     {
         var path = Path.Combine(directory, "mod.txt");
-        try { PackStorage.EnsureNoLinks(path); }
-        catch (InvalidDataException) { return; }
         if (!File.Exists(path)) return;
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var campaigns = new List<string>();
@@ -159,15 +231,46 @@ public sealed class PackEntryTicks
             // campaign_load takes the filename without .txt, never an authored title, as the ID.
             var filename = Path.GetFileName(campaign.Replace('\\', '/'));
             var id = filename.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) ? filename[..^4] : filename;
-            add(modId + "~" + id, name + " (" + id + ")");
+            var entryId = modId + "~" + id;
+            var shownName = name;
+            try
+            {
+                // Validate the relative path without rejecting a read-only mods junction.
+                var relative = campaign.Replace('\\', '/');
+                PackStorage.ValidatePath(relative);
+                foreach (var raw in File.ReadLines(Path.Combine(directory,
+                    relative.Replace('/', Path.DirectorySeparatorChar))))
+                {
+                    var line = raw.Trim();
+                    var equals = line.IndexOf('=');
+                    if (equals < 0 || !line[..equals].Trim().Equals("name", StringComparison.OrdinalIgnoreCase)) continue;
+                    var title = line[(equals + 1)..].Trim();
+                    if (title.Length > 0) shownName = title;
+                    break;
+                }
+            }
+            catch (Exception error) when (IsDiscoveryFailure(error))
+            {
+                Warn(warnings, entryId, "Cannot read the campaign title; using the mod name. " + error.Message);
+            }
+            add(entryId, shownName);
         }
     }
 
-    public IReadOnlyList<PackEntryTick> Read(PackManifest pack, IEnumerable<PackManifest> installedPacks)
+    public IReadOnlyList<PackEntryTick> Read(PackManifest pack, IEnumerable<PackManifest> installedPacks,
+        ICollection<PackEntryWarning>? warnings = null)
     {
         if (!pack.HasGameplay) return Array.Empty<PackEntryTick>();
-        return Entries(installedPacks).Select(entry => new PackEntryTick(entry,
-            ContainsTick(ReadBytes(TickPath(entry.Id)), pack.Id))).ToList();
+        var ticks = new List<PackEntryTick>();
+        foreach (var entry in Entries(installedPacks, warnings))
+        {
+            try { ticks.Add(new(entry, ContainsTick(ReadBytes(TickPath(entry.Id)), pack.Id))); }
+            catch (Exception error) when (IsDiscoveryFailure(error))
+            {
+                Warn(warnings, entry.Id, "Cannot read this entry's ticks: " + error.Message);
+            }
+        }
+        return ticks;
     }
 
     private static byte[] ReadBytes(string path)
@@ -230,16 +333,30 @@ public sealed class PackEntryTicks
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
+    private static void CheckEntryOwnership(PackCampaignEntry entry, string directory)
+    {
+        try
+        {
+            var marker = Path.Combine(directory, Marker);
+            if (Directory.Exists(directory) && !File.Exists(marker) &&
+                Directory.EnumerateFileSystemEntries(directory).Any())
+                throw new EntryRefusedException("Cannot change gameplay ticks for " + entry.Id +
+                    ": this folder holds files the game did not put there.");
+        }
+        catch (Exception error) when (IsDiscoveryFailure(error))
+        {
+            // This is still inspection, before any edit. Defaults can skip the entry
+            // when its ownership cannot be checked, just as when ownership is refused.
+            throw new EntryRefusedException("Cannot inspect the entry folder for " + entry.Id + ": " + error.Message);
+        }
+    }
+
     private void EnsureEntry(PackCampaignEntry entry, string directory,
         List<string>? createdFiles, List<string>? createdDirectories)
     {
         RequireGameClosed();
+        CheckEntryOwnership(entry, directory);
         var marker = Path.Combine(directory, Marker);
-        if (Directory.Exists(directory) && !File.Exists(marker) &&
-            Directory.EnumerateFileSystemEntries(directory).Any())
-            throw new InvalidOperationException("Cannot change gameplay ticks for " + entry.Id +
-                ": this folder holds files the game did not put there.");
-
         var missing = new Stack<string>();
         for (var parent = directory; parent != null && !Directory.Exists(parent);
             parent = Path.GetDirectoryName(parent))
@@ -266,7 +383,8 @@ public sealed class PackEntryTicks
     private void WriteTick(PackCampaignEntry entry, string packId, bool ticked,
         List<string>? createdFiles = null, List<string>? createdDirectories = null)
     {
-        if (!TryTickPath(entry.Id, out var path)) return;
+        if (!TryTickPath(entry.Id, out var path, out var reason))
+            throw new EntryRefusedException("Cannot change gameplay ticks for " + entry.Id + ": " + reason);
         EnsureEntry(entry, Path.GetDirectoryName(path)!, createdFiles, createdDirectories);
         var before = ReadBytes(path);
         var after = Change(before, PackStorage.ValidateId(packId), ticked);
@@ -283,21 +401,34 @@ public sealed class PackEntryTicks
     }
 
     // The caller holds GameUpdateGate throughout installation/uninstallation.
-    internal void InstallDefaults(PackManifest pack, IEnumerable<PackManifest> installedPacks)
+    internal IReadOnlyList<PackEntryWarning> InstallDefaults(PackManifest pack,
+        IEnumerable<PackManifest> installedPacks)
     {
-        if (!pack.HasGameplay) return;
-        var entries = Entries(installedPacks.Append(pack)).Where(entry => entry.Id != "mw3").ToList();
-        var originals = entries.Select(entry =>
-        {
-            var path = TickPath(entry.Id);
-            return (Path: path, Existed: File.Exists(path), Bytes: ReadBytes(path));
-        }).ToList();
+        if (!pack.HasGameplay) return [];
+        var warnings = new List<PackEntryWarning>();
+        var sources = installedPacks.Append(pack).DistinctBy(source => source.Id);
+        var entries = Entries(sources, warnings).Where(entry => entry.Id != "mw3").ToList();
+        var originals = new List<(string Path, bool Existed, byte[] Bytes)>();
         var createdFiles = new List<string>();
         var createdDirectories = new List<string>();
         try
         {
             foreach (var entry in entries)
-                WriteTick(entry, pack.Id, true, createdFiles, createdDirectories);
+            {
+                try
+                {
+                    if (!TryTickPath(entry.Id, out var path, out var reason))
+                        throw new EntryRefusedException(reason);
+                    CheckEntryOwnership(entry, Path.GetDirectoryName(path)!);
+                    originals.Add((path, File.Exists(path), ReadBytes(path)));
+                    WriteTick(entry, pack.Id, true, createdFiles, createdDirectories);
+                }
+                catch (EntryRefusedException refusal)
+                {
+                    Warn(warnings, entry.Id, refusal.Message);
+                }
+            }
+            return warnings;
         }
         catch (Exception failure)
         {
@@ -344,16 +475,19 @@ public sealed class PackEntryTicks
         }
     }
 
-    internal void RemovePack(string packId)
+    internal IReadOnlyList<PackEntryWarning> RemovePack(string packId)
     {
         RequireGameClosed();
-        var campaigns = Path.Combine(WriteDirectory, "campaigns");
-        PackStorage.EnsureNoLinks(campaigns);
-        if (!Directory.Exists(campaigns)) return;
-        foreach (var directory in Directory.GetDirectories(campaigns))
+        var warnings = new List<PackEntryWarning>();
+        if (!TryCampaignsDirectory(warnings, out var campaigns)) return warnings;
+        foreach (var directory in ReadDirectories(campaigns, "Saved campaigns", warnings))
         {
             var id = Path.GetFileName(directory);
-            if (!TryTickPath(id, out var path)) continue;
+            if (!TryTickPath(id, out var path, out var reason))
+            {
+                Warn(warnings, id, reason);
+                continue;
+            }
             var official = new[] { "mw3", "ia", "mp" }.Contains(id, StringComparer.OrdinalIgnoreCase);
             if (!official && !File.Exists(Path.Combine(directory, Marker))) continue;
             if (!File.Exists(path)) continue;
@@ -363,5 +497,6 @@ public sealed class PackEntryTicks
             var after = Change(before, PackStorage.ValidateId(packId), false);
             if (!before.AsSpan().SequenceEqual(after)) Replace(path, after);
         }
+        return warnings;
     }
 }

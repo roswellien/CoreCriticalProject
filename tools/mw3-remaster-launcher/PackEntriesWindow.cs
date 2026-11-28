@@ -58,17 +58,19 @@ public sealed class PackEntriesWindow : Window
                     {
                         manager.EntryTicks.SetTick(pack, tick.Entry, checkbox.IsChecked == true);
                         RefreshEntries();
-                        status.Text = "Saved. The game's MODS screen uses these ticks.";
+                        status.Text = "Saved. The game's MODS screen uses these ticks.\n" + status.Text;
                     }
                     catch (Exception error)
                     {
                         RefreshEntries();
-                        status.Text = error.Message;
+                        status.Text = error.Message + "\n" + status.Text;
                     }
                 };
                 entries.Children.Add(checkbox);
             }
             status.Text = "Other players need the same gameplay pack to join a multiplayer game.";
+            if (manager.EntryWarnings.Count > 0)
+                status.Text += "\n\n" + string.Join("\n", manager.EntryWarnings);
         }
         catch (Exception error) { status.Text = "Cannot read gameplay ticks: " + error.Message; }
     }
