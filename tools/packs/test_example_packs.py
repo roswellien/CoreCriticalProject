@@ -273,6 +273,10 @@ class VisualKindRules(unittest.TestCase):
                     "mesh": "visuals/close.bwmesh",
                     "textures": "visuals/thor.bwtex",
                 },
+                # The schema does not look inside options, so a constant placed here
+                # is rejected only by the JSON reader, which is the rule under test.
+                # In a field the schema checks, the schema would reject it anyway.
+                "options": {"value": 0},
             }
         ]
         payloads = {
@@ -284,9 +288,9 @@ class VisualKindRules(unittest.TestCase):
                 folder = self.build_pack(base_manifest(visuals), payloads)
                 manifest_path = folder / "pack.json"
                 text = manifest_path.read_text(encoding="utf-8")
-                self.assertIn('"lod": 0', text)
+                self.assertIn('"value": 0', text)
                 manifest_path.write_text(
-                    text.replace('"lod": 0', f'"lod": {constant}'), encoding="utf-8"
+                    text.replace('"value": 0', f'"value": {constant}'), encoding="utf-8"
                 )
                 problems = check_pack.check_pack(folder)
                 self.assertEqual([problem.code for problem in problems], ["manifest-invalid"])

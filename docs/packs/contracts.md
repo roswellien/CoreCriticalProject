@@ -16,8 +16,10 @@ changes: [Changing a contract](workstreams.md#changing-a-contract).
 | [5. Feed format](#5-feed-format) | 0 (draft) | The catalogue a launcher downloads | Launcher, pack publishers |
 
 A version of 1.x means the contract is fixed enough to build against. It does not mean
-anything is implemented: on 2026-11-27 the pack check covers contract 1 and contract 4's
-kind table, and nothing else is implemented.
+everything is implemented. On 2026-11-27 the pack check covers contract 1 and contract 4's
+kind table, the launcher installs and uninstalls schema 3 packs from a file, and the
+runtime reads gameplay payloads from the pack library. The content report (contract 3)
+and the runtime reading `visuals` itself are not built.
 
 **Shared material**
 
