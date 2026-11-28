@@ -25,6 +25,8 @@ namespace MW3RemasterLauncher.Core
     public class PackManager
     {
         private readonly string _modsRoot;
+        private readonly string _dataRoot;
+        public PackEntryTicks EntryTicks { get; }
         public string GameId { get; }
         private readonly ObservableCollection<PackManifest> _packs = new();
 
@@ -32,8 +34,10 @@ namespace MW3RemasterLauncher.Core
         public string ModsRoot => _modsRoot;
         public List<string> DiscoveryErrors { get; } = new();
 
-        public PackManager(string basePath, string gameId = GameCatalog.Mw3)
+        public PackManager(string basePath, string gameId = GameCatalog.Mw3, PackEntryTicks? entryTicks = null)
         {
+            _dataRoot = Path.GetFullPath(basePath);
+            EntryTicks = entryTicks ?? new PackEntryTicks(basePath);
             GameId = GameCatalog.Get(gameId).Id;
             _modsRoot = Path.GetFullPath(Path.Combine(GameCatalog.PackBase(basePath, GameId), "mods"));
             PackStorage.EnsureNoLinks(_modsRoot);
@@ -132,16 +136,45 @@ namespace MW3RemasterLauncher.Core
                 throw new FileNotFoundException("Asset pack file not found", archivePath);
             }
 
-            var manifest = PackStorage.Install(_modsRoot, archivePath, GameId, progress);
+            var manifest = InstallStoredPack(archivePath, progress);
             return RegisterInstalled(manifest, archivePath, autoDeleteSource);
         }
 
         public async System.Threading.Tasks.Task<PackManifest> InstallPackAsync(string archivePath,
             IProgress<PackInstallProgress>? progress = null)
         {
-            var manifest = await System.Threading.Tasks.Task.Run(() => PackStorage.Install(_modsRoot, archivePath, GameId, progress));
+            var manifest = await System.Threading.Tasks.Task.Run(() => InstallStoredPack(archivePath, progress));
             return RegisterInstalled(manifest, archivePath, false);
         }
+
+        private PackManifest InstallStoredPack(string archivePath, IProgress<PackInstallProgress>? progress)
+        {
+            EntryTicks.RequireGameClosed();
+            using var gate = GameUpdateGate.Acquire(_dataRoot);
+            EntryTicks.RequireGameClosed();
+            return PackStorage.Install(_modsRoot, archivePath, GameId, progress,
+                activated: (pack, replacing) =>
+                {
+                    if (!replacing) EntryTicks.InstallDefaults(pack, InstalledGameplayPacks());
+                });
+        }
+
+        private IEnumerable<PackManifest> InstalledGameplayPacks()
+        {
+            foreach (var directory in Directory.GetDirectories(_modsRoot))
+            {
+                if (Path.GetFileName(directory).StartsWith('.')) continue;
+                var path = Path.Combine(directory, "pack.json");
+                if (!File.Exists(path)) continue;
+                var manifest = PackStorage.ReadManifest(path);
+                if (!manifest.HasGameplay) continue;
+                manifest.DirectoryPath = directory;
+                yield return manifest;
+            }
+        }
+
+        public IReadOnlyList<PackEntryTick> ReadEntryTicks(PackManifest pack) =>
+            EntryTicks.Read(pack, InstalledGameplayPacks());
 
         private PackManifest RegisterInstalled(PackManifest manifest, string archivePath, bool autoDeleteSource)
         {
@@ -172,11 +205,16 @@ namespace MW3RemasterLauncher.Core
         {
             if (pack == null) return false;
 
+            EntryTicks.RequireGameClosed();
+            using var gate = GameUpdateGate.Acquire(_dataRoot);
+            EntryTicks.RequireGameClosed();
+
             var target = PackStorage.Resolve(_modsRoot, PackStorage.ValidateId(pack.Id));
             if (!string.Equals(Path.GetFullPath(pack.DirectoryPath), target, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Cannot uninstall content outside its owned pack directory.");
             using (var storageLock = PackStorage.Lock(_modsRoot))
             {
+                if (GameId == GameCatalog.Mw3) EntryTicks.RemovePack(pack.Id);
                 var previous = PackStorage.Resolve(_modsRoot, ".rollback-" + pack.Id);
                 if (Directory.Exists(previous)) PackStorage.DeleteOwnedTree(previous);
                 if (Directory.Exists(target)) PackStorage.DeleteOwnedTree(target);

@@ -528,6 +528,12 @@ namespace MW3RemasterLauncher
             UpdateSummaryDisplay();
         }
 
+        private void BtnPackEntries_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button button && button.Tag is PackManifest pack)
+                new PackEntriesWindow(_libraryPackMgr ?? _packMgr, pack) { Owner = this }.ShowDialog();
+        }
+
         private void BtnMoveUp_Click(object sender, RoutedEventArgs e)
         {
             if (sender is Button btn && btn.Tag is PackManifest pack)
@@ -586,6 +592,9 @@ namespace MW3RemasterLauncher
                 TxtAssetInstallProgress.Text = $"Pack {_assetPackIndex} of {_assetPackCount}: {Path.GetFileName(file)} — {value.Stage}{percent}";
             });
             var pack = await _packMgr.InstallPackAsync(file, progress);
+            if (pack.HasGameplay)
+                MessageBox.Show(this, "Other players need the same gameplay pack to join a multiplayer game.",
+                    "Gameplay pack installed", MessageBoxButton.OK, MessageBoxImage.Information);
             // Retain successful imports even if a later pack fails.
             _settingsMgr.Current.ActivePacks = _packMgr.GetActivePackIds();
             _settingsMgr.Current.PackSelectionInitialized = true;

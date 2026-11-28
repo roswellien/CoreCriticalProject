@@ -116,6 +116,9 @@ namespace MW3RemasterLauncher.Core
     /// </remarks>
     public class PackManifest
     {
+        [JsonIgnore]
+        public bool HasGameplay => SchemaVersion == 3 && Gameplay != null;
+
         // Existing packs without an explicit target are MW3 packs only.
         [JsonPropertyName("game_id")]
         public string GameId { get; set; } = GameCatalog.Mw3;

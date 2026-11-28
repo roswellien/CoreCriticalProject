@@ -423,6 +423,19 @@
                                                 <TextBlock Text="{Binding RuntimeLabel}" FontSize="11" Foreground="{StaticResource BrushAmber}" Margin="0,4,0,0" />
                                                 <TextBlock Text="{Binding Description}" FontSize="12" Foreground="{StaticResource BrushMuted}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0" />
                                                 <TextBlock Text="{Binding Author, StringFormat='Author: {0}'}" FontSize="11" Foreground="#888880" Margin="0,2,0,0" />
+                                                <Button Content="Gameplay entries..." HorizontalAlignment="Left"
+                                                        Margin="0,8,0,0" Click="BtnPackEntries_Click" Tag="{Binding}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasGameplay}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
                                             </StackPanel>
 
                                             <!-- Priority Reordering Buttons -->
