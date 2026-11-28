@@ -13,9 +13,11 @@ import io
 import json
 import os
 import shutil
+import stat
 import sys
 import tempfile
 import unittest
+import unittest.mock
 import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -188,6 +190,54 @@ class PackBuilderTests(unittest.TestCase):
             pack_builder.build_pack(source, self.output)
         self.assertEqual(first.read_bytes(), original_bytes)
 
+    def test_a_failed_write_leaves_no_partial_archive(self) -> None:
+        source = copy_source(
+            EXAMPLES / "valid" / "gameplay-only", self.root, strip_written_fields=True
+        )
+        # The archive file is created, then the write fails partway through the ZIP.
+        with (
+            unittest.mock.patch.object(
+                zipfile.ZipFile, "writestr", side_effect=OSError("simulated write failure")
+            ),
+            self.assertRaises(OSError),
+        ):
+            pack_builder.build_pack(source, self.output)
+        # Neither the archive nor the temporary .partial file is left behind.
+        self.assertEqual(written_archives(self.output), [])
+        self.assertEqual(list(self.output.rglob(f"*{pack_builder.PARTIAL_SUFFIX}")), [])
+
+        # main reports the failure with exit code 1 and still writes nothing.
+        printed = io.StringIO()
+        with (
+            unittest.mock.patch.object(
+                zipfile.ZipFile, "writestr", side_effect=OSError("simulated write failure")
+            ),
+            redirect_stdout(printed),
+        ):
+            exit_code = pack_builder.main([str(source), str(self.output)])
+        self.assertEqual(exit_code, 1)
+        self.assertIn("build failed", printed.getvalue())
+        self.assertEqual(written_archives(self.output), [])
+        self.assertEqual(list(self.output.rglob(f"*{pack_builder.PARTIAL_SUFFIX}")), [])
+
+    def test_a_temporary_name_from_an_earlier_run_is_never_replaced(self) -> None:
+        # A .partial file that existed before the build is not the builder's to
+        # remove or overwrite: the build refuses instead.
+        source = copy_source(
+            EXAMPLES / "valid" / "gameplay-only", self.root, strip_written_fields=True
+        )
+        self.output.mkdir(parents=True)
+        manifest = json.loads((source / "pack.json").read_text(encoding="utf-8"))
+        name = f"{manifest['id']}-{manifest['version']}.mw3pack"
+        partial = self.output / f"{name}{pack_builder.PARTIAL_SUFFIX}"
+        partial.write_text("left by an interrupted run\n", encoding="utf-8")
+
+        with self.assertRaises(pack_builder.OutputExistsError):
+            pack_builder.build_pack(source, self.output)
+
+        self.assertEqual(partial.read_text(encoding="utf-8"), "left by an interrupted run\n")
+        self.assertEqual(written_archives(self.output), [])
+
     def test_provides_come_from_the_pack_content(self) -> None:
         source = self.root / "src"
         (source / "mod" / "campaigns").mkdir(parents=True)
@@ -271,6 +321,24 @@ class PackBuilderTests(unittest.TestCase):
         self.assertIn("linked.txt", printed.getvalue())
         self.assertEqual(written_archives(self.output), [])
 
+    def test_is_link_reads_the_reparse_point_attribute_on_windows(self) -> None:
+        # Path.is_junction exists only from Python 3.12 — on 3.11 it silently reports
+        # "not a junction" — so on Windows every supported Python must detect a
+        # junction or symbolic link through FILE_ATTRIBUTE_REPARSE_POINT in lstat.
+        reparse_point = unittest.mock.Mock(st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        plain_file = unittest.mock.Mock(st_file_attributes=stat.FILE_ATTRIBUTE_ARCHIVE)
+        with unittest.mock.patch("os.name", "nt"):
+            with unittest.mock.patch("os.lstat", return_value=reparse_point):
+                self.assertTrue(pack_builder._is_link(Path("some/junction")))
+            with unittest.mock.patch("os.lstat", return_value=plain_file):
+                self.assertFalse(pack_builder._is_link(Path("some/folder")))
+        # Other platforms keep using os.path.islink.
+        with (
+            unittest.mock.patch("os.name", "posix"),
+            unittest.mock.patch("os.path.islink", return_value=True),
+        ):
+            self.assertTrue(pack_builder._is_link(Path("some/link")))
+
     def test_case_clash_helper_names_both_paths(self) -> None:
         # The launcher's installer compares entry names without regard to case, so a
         # source holding both of these must be refused before building. The helper
@@ -284,6 +352,35 @@ class PackBuilderTests(unittest.TestCase):
     def test_case_clash_helper_finds_no_clash_in_an_ordinary_list(self) -> None:
         paths = ["pack.json", "mod/mod.txt", "textures/skin.bwtex", "textures/gun.bwtex"]
         self.assertIsNone(pack_builder.find_case_clash(paths))
+
+    def test_case_clash_helper_catches_a_file_beside_a_clashing_folder(self) -> None:
+        # A file `data` beside `DATA/item.txt` cannot be extracted on Windows, so it
+        # clashes even though no two whole paths are equal when case is ignored.
+        clash = pack_builder.find_case_clash(["data", "DATA/item.txt"])
+        self.assertEqual(clash, ("data", "DATA/item.txt"))
+
+    def test_case_clash_helper_catches_two_spellings_of_a_shared_folder(self) -> None:
+        clash = pack_builder.find_case_clash(["Mod/a.txt", "mod/b.txt"])
+        self.assertEqual(clash, ("Mod/a.txt", "mod/b.txt"))
+
+    def test_case_clash_helper_accepts_a_folder_spelled_the_same_way(self) -> None:
+        # Sharing a folder is fine as long as every path spells it the same.
+        paths = ["pack.json", "Mod/a.txt", "Mod/b.txt", "Mod/deep/c.txt"]
+        self.assertIsNone(pack_builder.find_case_clash(paths))
+
+    def test_build_pack_refuses_a_case_clash_in_the_source_listing(self) -> None:
+        # This goes through build_pack itself, so the clash check cannot be dropped
+        # from the build unnoticed: the source listing is patched to hold two
+        # pack-relative paths that differ only in letter case.
+        source = copy_source(
+            EXAMPLES / "valid" / "gameplay-only", self.root, strip_written_fields=True
+        )
+        clashing = ["mod/mod.txt", "mod/MOD.TXT"]
+        with unittest.mock.patch.object(pack_builder, "_pack_files", return_value=clashing):
+            with self.assertRaises(pack_builder.UnsafeSourceError) as raised:
+                pack_builder.build_pack(source, self.output)
+        self.assertIn("mod/MOD.TXT", str(raised.exception))
+        self.assertEqual(written_archives(self.output), [])
 
     def test_files_table_is_ordered_by_sorted_path_strings(self) -> None:
         # fill_file_table sorts Path objects, whose order differs by platform

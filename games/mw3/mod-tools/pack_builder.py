@@ -12,10 +12,15 @@ folder (the current folder by default).
 The source folder is never modified, and the output file must not already exist. The
 build is refused, with no archive, when the source contains a symbolic link or
 junction, an entry that is not a regular file or a folder (a named pipe would make the
-copy hang), or two pack-relative paths that differ only in letter case, which the
-launcher's installer would reject because it compares names without regard to case, or
-when the output folder is the source folder or a folder inside it. A pack that fails
-the check produces no archive; every problem is printed with its problem code.
+copy hang), or two pack-relative paths that collide when letter case is ignored —
+including a file beside a folder of the same name — which the launcher's installer
+would reject because it compares names without regard to case, or when the output
+folder is the source folder or a folder inside it. A pack that fails the check
+produces no archive; every problem is printed with its problem code. The archive is
+written under a temporary name in the output folder and renamed to its final name only
+once the ZIP is closed, so a failed write leaves no partial archive behind and never
+removes or replaces a file that existed before the build.
+
 Building the same source twice gives a byte-identical archive on any platform,
 because the archive's entry order, the manifest's key order and the timestamps are
 fixed, so a pack's hash is reproducible.
@@ -27,10 +32,12 @@ docs/packs/contracts.md; example packs are in tests/fixtures/packs/.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import shutil
+import stat
 import sys
 import tempfile
 import zipfile
@@ -48,6 +55,10 @@ import fill_file_table
 
 MANIFEST_NAME = "pack.json"
 ARCHIVE_SUFFIX = ".mw3pack"
+# The archive is assembled under this temporary name in the output folder and renamed
+# to its final name only after the ZIP is closed, so a failed write leaves no partial
+# archive behind.
+PARTIAL_SUFFIX = ".partial"
 # One fixed timestamp for every archive entry (the earliest the ZIP format holds),
 # so two builds of the same source are byte-identical whatever the clock says.
 FIXED_ARCHIVE_DATE_TIME = (1980, 1, 1, 0, 0, 0)
@@ -78,10 +89,22 @@ class UnsafeSourceError(Exception):
     """The source holds an entry that makes packaging it unsafe or ambiguous."""
 
 
-def _is_junction(path: Path) -> bool:
-    """Whether path is a Windows junction; Path.is_junction exists only from Python 3.12."""
-    is_junction = getattr(path, "is_junction", None)
-    return bool(is_junction and is_junction())
+def _is_link(path: Path) -> bool:
+    """Whether path is a symbolic link or, on Windows, any reparse point such as a junction.
+
+    Path.is_junction exists only from Python 3.12 — on 3.11 it silently reports
+    False, so a junction would be followed — and os.path.islink does not report
+    junctions either. On Windows the reparse point attribute is therefore read
+    straight from lstat: every junction and symbolic link has
+    FILE_ATTRIBUTE_REPARSE_POINT set, on every supported Python.
+    """
+    if os.name == "nt":
+        try:
+            attributes = os.lstat(path).st_file_attributes
+        except OSError:
+            return False
+        return bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    return os.path.islink(path)
 
 
 def _reject_unsafe_entries(source_folder: Path) -> None:
@@ -93,10 +116,12 @@ def _reject_unsafe_entries(source_folder: Path) -> None:
     names the entry.
     """
     for directory, dirnames, filenames in os.walk(source_folder, followlinks=False):
+        # Every directory is checked when its parent is listed, before os.walk
+        # descends into it: followlinks=False only skips what os.path.islink
+        # reports, and on Python 3.11 that misses Windows junctions.
         for name in dirnames + filenames:
             entry = Path(directory) / name
-            # os.path.islink does not report Windows junctions, so ask Path as well.
-            if os.path.islink(entry) or _is_junction(entry):
+            if _is_link(entry):
                 raise UnsafeSourceError(
                     f"refusing to build: {entry} is a symbolic link or junction"
                 )
@@ -107,20 +132,33 @@ def _reject_unsafe_entries(source_folder: Path) -> None:
 
 
 def find_case_clash(paths: list[str]) -> tuple[str, str] | None:
-    """The first pair of paths that are equal when compared case-insensitively.
+    """The first pair of paths that collide when compared without regard to case.
 
     The launcher's installer compares entry names without regard to case, so on a
     case-sensitive file system a source can hold both `a/skin.bwtex` and
-    `a/Skin.bwtex`: the builder would pack both, and the installer would then reject
-    the archive. Returns the two paths, the earlier one first, or None when no two of
-    them clash.
+    `a/Skin.bwtex` — or a file `data` beside a folder `DATA/item.txt`, which cannot be
+    extracted on Windows either — and the builder would pack both, only for the
+    installer to reject the archive. Every parent folder prefix of each path is
+    compared too, not just the whole path, so two spellings of one folder clash and
+    so does a file whose name equals another path's folder. Returns the two paths,
+    the earlier one first, or None when no two of them clash.
     """
-    seen: dict[str, str] = {}
+    # Casefolded prefix -> (the prefix as spelled, the path it came from). A prefix
+    # seen again with the same spelling is just a shared folder, not a clash.
+    seen: dict[str, tuple[str, str]] = {}
     for path in paths:
-        folded = path.casefold()
-        if folded in seen:
-            return seen[folded], path
-        seen[folded] = path
+        prefix = path
+        while True:
+            folded = prefix.casefold()
+            if folded in seen:
+                spelled, earlier_path = seen[folded]
+                if spelled != prefix:
+                    return earlier_path, path
+            else:
+                seen[folded] = (prefix, path)
+            if "/" not in prefix:
+                break
+            prefix = prefix.rsplit("/", 1)[0]
     return None
 
 
@@ -281,11 +319,12 @@ def _pack_files(pack_folder: Path) -> list[str]:
 
 
 def _write_archive(pack_folder: Path, archive_path: Path) -> None:
-    """Write the pack folder as a ZIP archive with `pack.json` at its root.
+    """Write the pack folder as a ZIP archive to archive_path, created exclusively.
 
-    Entry order, timestamps, attributes and compression level are all fixed, so the
-    same folder always gives the same bytes. The launcher's PackStorage.Install
-    reads a plain ZIP like this one.
+    The archive is opened in exclusive-create mode, so a file already sitting at
+    archive_path is never overwritten. Entry order, timestamps, attributes and
+    compression level are all fixed, so the same folder always gives the same bytes.
+    The launcher's PackStorage.Install reads a plain ZIP like this one.
     """
     with zipfile.ZipFile(
         archive_path,
@@ -302,6 +341,27 @@ def _write_archive(pack_folder: Path, archive_path: Path) -> None:
             archive.writestr(info, (pack_folder / relative).read_bytes())
 
 
+def _rename_exclusive(source: Path, destination: Path) -> None:
+    """Rename source to destination, failing when destination already exists.
+
+    os.rename silently replaces an existing destination on POSIX, so the final name
+    is claimed with a hard link first — os.link fails with EEXIST when the name is
+    taken on every platform — and the temporary name is dropped afterwards. Where
+    the file system has no hard links, fall back to os.rename after checking the
+    name is free (on Windows os.rename itself refuses to replace an existing file).
+    """
+    try:
+        os.link(source, destination)
+    except OSError as error:
+        if error.errno == errno.EEXIST:
+            raise FileExistsError(f"output already exists: {destination}") from error
+        if destination.exists() or os.path.islink(destination):
+            raise FileExistsError(f"output already exists: {destination}") from error
+        os.rename(source, destination)
+        return
+    os.unlink(source)
+
+
 def build_pack(source_folder: Path, output_dir: Path) -> Path:
     """Build the source folder's `<id>-<version>.mw3pack` inside `output_dir`.
 
@@ -309,8 +369,10 @@ def build_pack(source_folder: Path, output_dir: Path) -> Path:
     the contract 1 check — no archive is written then —, OutputExistsError when the
     archive path is already taken or the output folder is the source or inside it, and
     UnsafeSourceError when the source contains a link, an entry that is not a regular
-    file or a folder, or two pack-relative paths that differ only in letter case. The
-    source folder is never modified.
+    file or a folder, or two pack-relative paths that collide when letter case is
+    ignored. The source folder is never modified. The archive is written under a
+    temporary name and renamed into place only when complete, so a failed write
+    leaves no partial archive and never replaces an existing file.
     """
     source_folder = Path(source_folder)
     output_dir = Path(output_dir)
@@ -324,9 +386,9 @@ def build_pack(source_folder: Path, output_dir: Path) -> Path:
             output_dir, f"output folder is the source folder or inside it: {output_dir}"
         )
     _reject_unsafe_entries(source_folder)
-    # The archive's entry names are the source's file paths, so two of them equal
-    # when case is ignored would both be packed and then rejected by the launcher's
-    # installer.
+    # The archive's entry names are the source's file paths, so two of them colliding
+    # when case is ignored — whole paths or folder prefixes — would both be packed
+    # and then rejected by the launcher's installer.
     clash = find_case_clash(_pack_files(source_folder))
     if clash is not None:
         first, second = clash
@@ -372,10 +434,26 @@ def build_pack(source_folder: Path, output_dir: Path) -> Path:
             raise OutputExistsError(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         archive_path = output_dir / archive_name(assembled)
+        partial_path = archive_path.with_name(archive_path.name + PARTIAL_SUFFIX)
+        if partial_path.exists() or partial_path.is_symlink():
+            # A temporary name left by an interrupted run is a file that existed
+            # before this build; it is never removed or replaced, so refuse.
+            raise OutputExistsError(partial_path)
         try:
-            _write_archive(staging, archive_path)
+            # The archive is written under the temporary name and renamed to its
+            # final name only after the ZIP is closed, so a write that fails partway
+            # leaves no partial archive and a retry does not meet "output already
+            # exists". The rename refuses to replace a file that existed before.
+            _write_archive(staging, partial_path)
+            _rename_exclusive(partial_path, archive_path)
         except FileExistsError as error:
+            partial_path.unlink(missing_ok=True)
             raise OutputExistsError(archive_path) from error
+        except BaseException:
+            # Whatever went wrong, the temporary archive this build created is
+            # removed; no partial file is left behind.
+            partial_path.unlink(missing_ok=True)
+            raise
     return archive_path
 
 
