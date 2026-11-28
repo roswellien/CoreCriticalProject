@@ -220,9 +220,12 @@ class PackBuilderTests(unittest.TestCase):
         self.assertEqual(written_archives(self.output), [])
         self.assertEqual(list(self.output.rglob(f"*{pack_builder.PARTIAL_SUFFIX}")), [])
 
-    def test_a_temporary_name_from_an_earlier_run_is_never_replaced(self) -> None:
-        # A .partial file that existed before the build is not the builder's to
-        # remove or overwrite: the build refuses instead.
+    def test_a_preexisting_temporary_file_fails_the_build_and_is_never_removed(self) -> None:
+        # A .partial file that existed before the build — another build running,
+        # or an earlier build interrupted — is not this build's to remove or
+        # overwrite: the build fails with a message that names the file and says
+        # it can be deleted by hand, the file keeps its original bytes, and no
+        # archive is written.
         source = copy_source(
             EXAMPLES / "valid" / "gameplay-only", self.root, strip_written_fields=True
         )
@@ -230,12 +233,18 @@ class PackBuilderTests(unittest.TestCase):
         manifest = json.loads((source / "pack.json").read_text(encoding="utf-8"))
         name = f"{manifest['id']}-{manifest['version']}.mw3pack"
         partial = self.output / f"{name}{pack_builder.PARTIAL_SUFFIX}"
-        partial.write_text("left by an interrupted run\n", encoding="utf-8")
+        original_bytes = b"left by an interrupted run\n"
+        partial.write_bytes(original_bytes)
 
-        with self.assertRaises(pack_builder.OutputExistsError):
+        with self.assertRaises(pack_builder.OutputExistsError) as raised:
             pack_builder.build_pack(source, self.output)
 
-        self.assertEqual(partial.read_text(encoding="utf-8"), "left by an interrupted run\n")
+        message = str(raised.exception)
+        self.assertIn(str(partial), message)
+        self.assertIn("another build may be running", message)
+        self.assertIn("earlier build was interrupted", message)
+        self.assertIn("deleted by hand", message)
+        self.assertEqual(partial.read_bytes(), original_bytes)
         self.assertEqual(written_archives(self.output), [])
 
     def test_provides_come_from_the_pack_content(self) -> None:

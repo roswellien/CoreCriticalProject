@@ -42,7 +42,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 MOD_TOOLS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = MOD_TOOLS_DIR.parents[2]
@@ -318,17 +318,18 @@ def _pack_files(pack_folder: Path) -> list[str]:
     )
 
 
-def _write_archive(pack_folder: Path, archive_path: Path) -> None:
-    """Write the pack folder as a ZIP archive to archive_path, created exclusively.
+def _write_archive(pack_folder: Path, archive_file: BinaryIO) -> None:
+    """Write the pack folder as a ZIP archive into the open binary file archive_file.
 
-    The archive is opened in exclusive-create mode, so a file already sitting at
-    archive_path is never overwritten. Entry order, timestamps, attributes and
-    compression level are all fixed, so the same folder always gives the same bytes.
-    The launcher's PackStorage.Install reads a plain ZIP like this one.
+    Entry order, timestamps, attributes and compression level are all fixed, so the
+    same folder always gives the same bytes. The launcher's PackStorage.Install
+    reads a plain ZIP like this one. The caller opens the file — exclusively, so a
+    file already sitting at its path is never overwritten — and closes it once the
+    ZIP is complete.
     """
     with zipfile.ZipFile(
-        archive_path,
-        "x",
+        archive_file,
+        "w",
         compression=zipfile.ZIP_DEFLATED,
         compresslevel=ARCHIVE_COMPRESSION_LEVEL,
     ) as archive:
@@ -357,6 +358,12 @@ def _rename_exclusive(source: Path, destination: Path) -> None:
             raise FileExistsError(f"output already exists: {destination}") from error
         if destination.exists() or os.path.islink(destination):
             raise FileExistsError(f"output already exists: {destination}") from error
+        # Fallback for a file system without hard links: rename after checking the
+        # name is free. On a platform where rename replaces an existing file, a
+        # second process creating the final name between that check and this
+        # rename could be overwritten here; that is accepted, because two builds
+        # of the same pack into the same folder at the same instant is not a
+        # supported use.
         os.rename(source, destination)
         return
     os.unlink(source)
@@ -372,7 +379,9 @@ def build_pack(source_folder: Path, output_dir: Path) -> Path:
     file or a folder, or two pack-relative paths that collide when letter case is
     ignored. The source folder is never modified. The archive is written under a
     temporary name and renamed into place only when complete, so a failed write
-    leaves no partial archive and never replaces an existing file.
+    leaves no partial archive and never replaces an existing file. A temporary name
+    already taken — another build running, or an earlier build interrupted — fails
+    the build and is never removed, because this build did not create it.
     """
     source_folder = Path(source_folder)
     output_dir = Path(output_dir)
@@ -435,24 +444,47 @@ def build_pack(source_folder: Path, output_dir: Path) -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
         archive_path = output_dir / archive_name(assembled)
         partial_path = archive_path.with_name(archive_path.name + PARTIAL_SUFFIX)
-        if partial_path.exists() or partial_path.is_symlink():
-            # A temporary name left by an interrupted run is a file that existed
-            # before this build; it is never removed or replaced, so refuse.
-            raise OutputExistsError(partial_path)
+        # Whether this build created the temporary file: only a file this build
+        # created is removed when the build fails. A .partial that another build
+        # is writing, or that an interrupted earlier build left, was not created
+        # by this build, so it is never removed or replaced.
+        created_partial = False
         try:
-            # The archive is written under the temporary name and renamed to its
-            # final name only after the ZIP is closed, so a write that fails partway
-            # leaves no partial archive and a retry does not meet "output already
-            # exists". The rename refuses to replace a file that existed before.
-            _write_archive(staging, partial_path)
+            # The temporary name is claimed with an exclusive create, so a name
+            # already taken fails here instead of being overwritten.
+            with open(partial_path, "xb") as partial_file:
+                created_partial = True
+                # The archive is written under the temporary name; the with closes
+                # the file, so the ZIP is complete and no handle is left open.
+                _write_archive(staging, partial_file)
+            # The archive is renamed to its final name only once the ZIP is
+            # closed, so a write that fails partway leaves no partial archive and
+            # a retry does not meet "output already exists". The rename refuses
+            # to replace a file that existed before.
             _rename_exclusive(partial_path, archive_path)
         except FileExistsError as error:
-            partial_path.unlink(missing_ok=True)
-            raise OutputExistsError(archive_path) from error
+            if created_partial:
+                # The final name was taken after the earlier exists() check, so
+                # the rename refused it; the temporary file is this build's, so
+                # remove it and report the final path.
+                partial_path.unlink(missing_ok=True)
+                raise OutputExistsError(archive_path) from error
+            # The exclusive create found the temporary name already taken:
+            # another build may be running, or an earlier build was
+            # interrupted and left the file. The file is not this build's to
+            # remove; it can be deleted by hand.
+            raise OutputExistsError(
+                partial_path,
+                f"temporary file already exists: {partial_path}; another build may "
+                "be running or an earlier build was interrupted, and the file can be "
+                "deleted by hand",
+            ) from None
         except BaseException:
             # Whatever went wrong, the temporary archive this build created is
-            # removed; no partial file is left behind.
-            partial_path.unlink(missing_ok=True)
+            # removed, so no partial file is left behind; a file this build did
+            # not create is left alone.
+            if created_partial:
+                partial_path.unlink(missing_ok=True)
             raise
     return archive_path
 
