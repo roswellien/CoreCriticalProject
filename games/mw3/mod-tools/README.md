@@ -7,6 +7,7 @@ Home for MechWarrior 3 modding tools built on the native recompilation (`MW34Rec
 | [Map & mission editor](editor/) | **Working Slice (Phase 1/2)**, 2026-10-20 | Interactive 2D top-down map editor with selection, move, undo/redo, and isolated mod export |
 | [Format Support Matrix](docs/format-support-matrix.md) | **Documented & Tested**, 2026-10-20 | Binary format specifications for ZBD, ZRD, GameZ, and explicit labeling of unresolved fields |
 | [Map and mission editor plan](map-mission-editor-plan.md) | Architectural roadmap, 2026-10-17 | Long-term staged plan from viewer to full mission scripting and terrain sculpting |
+| [Pack builder](pack_builder.py) | **Working**, 2026-11-27 | Turns a folder of authored content into a schema 3 `.mw3pack`; see [Build a pack](#build-a-pack) |
 
 ## Quick Start: Launching the Editor
 
@@ -43,6 +44,30 @@ Run the full verification suite covering format round-trips, mission discovery, 
 ```powershell
 & ".venv-mod-tools/Scripts/python.exe" games/mw3/mod-tools/tests/test_editor_slice.py
 ```
+
+## Build a pack
+
+`pack_builder.py` turns a folder of authored content into a schema version 3
+`.mw3pack` archive, the form the launcher's `PackStorage.Install` reads:
+
+```powershell
+python games/mw3/mod-tools/pack_builder.py <source folder> [output folder]
+```
+
+The source folder holds a `pack.json` without `files` or `provides` plus the payload
+files. The builder writes the `files` table (every file's size and SHA-256), writes
+`provides` from what the pack contains (mech and weapon names from `mod.txt` rows,
+campaign, map and mission names from their lines, skin names from `visuals`), runs the
+contract 1 check (`tools/packs/check_pack.py`), and only then writes
+`<id>-<version>.mw3pack` to the output folder (the current folder by default). The
+source folder is never modified, the output file must not already exist, and a pack
+that fails the check produces no archive — each problem is printed with its problem
+code. The build is also refused, with no archive, when the source contains a symbolic
+link or junction, or when the output folder is the source folder or a folder inside it.
+Building the same source twice gives a byte-identical archive on any platform, so a
+pack's hash is reproducible. The manifest's fields are contract 1 in
+[docs/packs/contracts.md](../../../docs/packs/contracts.md), with example packs in
+[tests/fixtures/packs/](../../../tests/fixtures/packs/).
 
 ## Ground rules for every mod tool
 
