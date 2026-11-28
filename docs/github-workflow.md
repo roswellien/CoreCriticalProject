@@ -404,7 +404,9 @@ steps on the same Release checklist issue.
 
 1. Before promoting the feed, prepare one GitHub Release draft for the
    exact release version, against the reviewed source SHA recorded in the
-   build receipt. Check that the source commit contains the
+   build receipt. For a runtime-only release, that SHA is the `source_commit`
+   in the staged runtime's `metadata/build-observation.json`, which the signed
+   `.mw3update` packages; confirm it is the reviewed `main` SHA. Check that the source commit contains the
    [Discord release observer](../.github/workflows/discord-release-detect.yml),
    and that the sender is activated (`DISCORD_RELEASE_ACTIVATION` set as in
    [Verify and activate](../tools/github/discord-release-announcement.md#verify-and-activate));
@@ -419,7 +421,10 @@ steps on the same Release checklist issue.
 2. Describe player-facing changes in the release notes. End the notes with
    the [release target marker][release-target-marker] listing every affected
    target and its numeric signed version. Use `corecritical` for the launcher
-   and `mw3` for the MW3-RE runtime. The tag's numeric version must match one
+   and `mw3` for the MW3-RE runtime. A target is affected only when a new
+   signed package for it ships in the catalog: list `mw3` only for a new
+   `.mw3update`, and list only `corecritical` for a launcher release that keeps
+   the existing signed runtime entry. The tag's numeric version must match one
    of the listed versions. A preview's marker has no `-preview` suffix. The
    gate requires the explicit marker even though the sender can infer a single
    target from the notes' first paragraph, which serves as the short

@@ -212,7 +212,8 @@ For an MW3-RE runtime-only update with no new launcher or installer:
 8. **Prepare the GitHub Release draft.** Draft the release for the exact
    version against the recorded source SHA. Check for an existing tag or
    release and verify that any existing tag resolves to that SHA. Confirm
-   the Discord release observer is present in the source commit. Add release
+   the Discord release observer is present in the source commit and, before
+   promoting the feed, that the Discord sender is activated. Add release
    notes with the target marker. Follow the
    [launcher publication gate](github-workflow.md#launcher-publication-gate)
    for tag, preview and marker rules.
